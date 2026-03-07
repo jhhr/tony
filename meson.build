@@ -354,8 +354,16 @@ elif system == 'windows'
       'sv-dependency-builds/win64-msvc/include/opus',
     ]
   else
-    # MinGW/GCC x86_64: system headers from msys2; no MediaFoundation
-    # (shobjidl_core.h not available in mingw-w64 headers).
+    # MinGW/GCC x86_64: system headers from msys2.
+    # MediaFoundation IS available in mingw-w64 headers (mfapi.h, mfidl.h,
+    # mfreadwrite.h, etc. all ship with the mingw-w64 packages in msys2).
+    # The only header that was missing was shobjidl_core.h — mingw-w64 ships
+    # the umbrella shobjidl.h instead.  MediaFoundationReadStream.cpp now
+    # includes <shobjidl.h> when built with __MINGW32__, so we can enable
+    # HAVE_MEDIAFOUNDATION here too and get .m4a / .aac / .mp4 support.
+    feature_defines += [
+      '-DHAVE_MEDIAFOUNDATION',
+    ]
     # Several system headers live in versioned subdirectories that code
     # includes without a path prefix, so we add them explicitly.
     # Use run_command to resolve the actual Windows path for the mingw prefix.
@@ -429,10 +437,15 @@ elif system == 'windows'
       '-lws2_32',
     ]
   elif architecture == 'x86_64'
-    # MinGW x86_64: sord/serd have a -0 suffix in the msys2 packages
+    # MinGW x86_64: sord/serd have a -0 suffix in the msys2 packages.
+    # MediaFoundation libraries are available from the mingw-w64 runtime.
     feature_additional_libs += [
       '-lsord-0',
       '-lserd-0',
+      '-lmfplat',
+      '-lmfreadwrite',
+      '-lmfuuid',
+      '-lpropsys',
       '-ladvapi32',
       '-lwinmm',
       '-lws2_32',
