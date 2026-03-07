@@ -136,7 +136,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_withSonification(withSonification),
     m_withSpectrogram(withSpectrogram),
     m_recordingInProgress(false),
-    m_recordingAsSingingTrack(false)
+    m_recordingAsSingingTrack(false),
+    m_paneCountBeforeRecording(0)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -2019,7 +2020,7 @@ MainWindow::analyseNewSingingModel()
 }
 
 void
-MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId)
+MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnalysis)
 {
     if (!m_document) return;
     if (!m_paneStack || m_paneStack->getPaneCount() < 1) return;
@@ -2039,8 +2040,10 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId)
     connect(m_analyser2, SIGNAL(layersChanged()),
             this, SLOT(updateMenuStates()));
 
+    // deferAnalysis=true: only set up waveform/visualisation layers now;
+    // pYIN will be run later by analyseNow() once recording is complete.
     QString error = m_analyser2->newFileLoaded(
-        m_document, singingModelId, m_paneStack, pane);
+        m_document, singingModelId, m_paneStack, pane, deferAnalysis);
 
     if (error != "") {
         QMessageBox::warning(this, tr("Failed to analyse singing track"),
@@ -2055,7 +2058,11 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId)
     updateLayerStatuses();
     updateMenuStates();
 
-    emit activity(tr("Singing track loaded and analysis started"));
+    if (deferAnalysis) {
+        emit activity(tr("Recording singing track — analysis will run when recording stops"));
+    } else {
+        emit activity(tr("Singing track loaded and analysis started"));
+    }
 }
 
 void
@@ -2219,7 +2226,7 @@ MainWindow::record()
     // We do this by temporarily switching to RecordCreateAdditionalModel so
     // that MainWindowBase::record() adds the WritableWaveFileModel as an
     // additional (non-main) model.  Our modelAdded() hook will then pick it
-    // up and route it through setupSingingTrackAnalyser().
+    // up and route it through setupSingingTrackAnalyser() with deferred pYIN.
     //
     // If there is no main model yet (first-time record), fall through with the
     // default RecordReplaceSession behaviour.
@@ -2229,9 +2236,14 @@ MainWindow::record()
     if (haveReference) {
         cerr << "MainWindow::record: reference track loaded — recording as singing track" << endl;
         m_recordingAsSingingTrack = true;
+        // Remember pane count so we can prune the extra pane that
+        // MainWindowBase::record() creates via AddPaneCommand for the
+        // recording's waveform layer.  We want both tracks in pane 0.
+        m_paneCountBeforeRecording = m_paneStack ? m_paneStack->getPaneCount() : 0;
         setAudioRecordMode(RecordCreateAdditionalModel);
     } else {
         m_recordingAsSingingTrack = false;
+        m_paneCountBeforeRecording = 0;
         setAudioRecordMode(RecordReplaceSession);
     }
 
@@ -2240,6 +2252,42 @@ MainWindow::record()
     // Restore the default mode so that a subsequent "standalone" recording
     // (after the singing track session is closed) behaves correctly.
     setAudioRecordMode(RecordReplaceSession);
+
+    // Remove any extra panes that AddPaneCommand created for the recording's
+    // waveform layer.  setupSingingTrackAnalyser() will add a proper waveform
+    // layer for the recording into pane 0, so the auto-created extra pane is
+    // redundant and visually confusing.
+    //
+    // IMPORTANT: do NOT call m_document->deleteLayer() here.  The extra pane
+    // contains a WaveformLayer whose model is the WritableWaveFileModel that
+    // is currently being recorded into.  deleteLayer() calls releaseModel(),
+    // which — since this waveform layer is the only layer referencing it —
+    // destroys the WritableWaveFileModel while the AudioCallbackRecordTarget
+    // is still writing to it, causing a crash.
+    //
+    // Instead, directly detach each layer from the pane view (Pane::removeLayer)
+    // without going through the Document.  The layers remain in the Document's
+    // internal layer list and will be cleaned up when the document is closed or
+    // the model is properly released later (via setupSingingTrackAnalyser which
+    // will take ownership of the model through its own waveform layer).
+    if (m_recordingAsSingingTrack && m_paneStack) {
+        while (m_paneStack->getPaneCount() > m_paneCountBeforeRecording) {
+            Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
+            if (extra) {
+                // Detach layers from this view only — do not delete them or
+                // release their models.  Pane::removeLayer just removes the
+                // layer from the view's display list; it does not touch the
+                // Document model registry.
+                while (extra->getLayerCount() > 0) {
+                    Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
+                    orphan->setLayerDormant(extra, true);
+                    extra->removeLayer(orphan);
+                }
+            }
+            if (m_overview) m_overview->unregisterView(extra);
+            m_paneStack->deletePane(extra);
+        }
+    }
 }
 
 void
@@ -3561,12 +3609,27 @@ MainWindow::modelAdded(ModelId model)
             m_realtimePitchModelId != model) {
             // Guard against race: if modelAdded() fires twice quickly (e.g.
             // for an audio model and its alignment model), only set the
-            // pending id once; analyseNewSingingModel() will clear it when
-            // it runs.
+            // pending id once.
             if (m_pendingSingingModelId.isNone()) {
                 m_pendingSingingModelId = model;
-                // Defer so the model is fully registered before we analyse
-                QTimer::singleShot(0, this, SLOT(analyseNewSingingModel()));
+
+                if (m_recordingAsSingingTrack) {
+                    // The model is a WritableWaveFileModel still being
+                    // recorded into.  Set up m_analyser2 with waveform/
+                    // visualisation layers but defer pYIN until recording
+                    // finishes (analyseNow() will call analyseExistingFile()).
+                    // Defer one event-loop tick so the model is fully
+                    // registered with the document before we touch it.
+                    QTimer::singleShot(0, this, [this, model]() {
+                        m_pendingSingingModelId = {};
+                        setupSingingTrackAnalyser(model, /*deferAnalysis=*/true);
+                    });
+                } else {
+                    // Normal case: a finished audio file was loaded as a
+                    // singing track.  Run full analysis immediately.
+                    // Defer so the model is fully registered before we analyse.
+                    QTimer::singleShot(0, this, SLOT(analyseNewSingingModel()));
+                }
             } else {
                 cerr << "modelAdded: m_pendingSingingModelId already set, ignoring model "
                      << model << endl;
@@ -3684,6 +3747,20 @@ MainWindow::analyseNow()
 void
 MainWindow::analyseNewMainModel()
 {
+    // When recording as a singing track alongside an existing reference track
+    // (RecordCreateAdditionalModel mode), MainWindowBase::record() still emits
+    // audioFileLoaded() at the end — which triggers this slot.  But in that
+    // mode the main model has NOT changed (it is still the reference track),
+    // so there is nothing for this slot to do.  All secondary-track setup is
+    // handled by modelAdded() → setupSingingTrackAnalyser().  Proceeding here
+    // would wrongly call m_analyser->newFileLoaded() on the reference track a
+    // second time, tearing down its existing pitch/note layers and re-running
+    // pYIN — causing errors, crashes, and a corrupt UI state.
+    if (m_recordingAsSingingTrack) {
+        cerr << "analyseNewMainModel: recording-as-singing-track mode, skipping (main model unchanged)" << endl;
+        return;
+    }
+
     auto model = getMainModel();
 
     SVDEBUG << "MainWindow::analyseNewMainModel: main model is " << model << endl;
@@ -3698,27 +3775,6 @@ MainWindow::analyseNewMainModel()
     if (!m_paneStack) {
         cerr << "no pane stack!" << endl;
         return;
-    }
-
-    // When recording as a singing track (RecordCreateAdditionalModel mode),
-    // MainWindowBase::record() creates an extra pane for the recording waveform.
-    // We want both tracks in pane 0, so remove any panes beyond the expected 2
-    // (main pane + time-ruler strip) before doing anything else.
-    // This mirrors the pane-cleanup logic in loadSingingTrack().
-    if (m_recordingAsSingingTrack) {
-        int expectedPanes = 2; // pane 0 (main) + pane 1 (time ruler strip)
-        while (m_paneStack->getPaneCount() > expectedPanes) {
-            Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
-            if (!extra) break;
-            // Remove all layers from the extra pane (force=true avoids undo commands
-            // that would hold dangling pointers to the layer).
-            while (extra->getLayerCount() > 0) {
-                Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
-                m_document->deleteLayer(orphan, true);
-            }
-            m_paneStack->deletePane(extra);
-        }
-        cerr << "analyseNewMainModel: pruned extra recording pane (recording-as-singing-track mode)" << endl;
     }
 
     int pc = m_paneStack->getPaneCount();

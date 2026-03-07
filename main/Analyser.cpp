@@ -84,7 +84,8 @@ Analyser::getAnalysisSettings()
 
 QString
 Analyser::newFileLoaded(Document *doc, ModelId model,
-			PaneStack *paneStack, Pane *pane)
+			PaneStack *paneStack, Pane *pane,
+			bool deferAnalysis)
 {
     m_document = doc;
     m_fileModel = model;
@@ -103,7 +104,7 @@ Analyser::newFileLoaded(Document *doc, ModelId model,
     bool autoAnalyse = settings.value("auto-analysis", true).toBool();
     settings.endGroup();
 
-    return doAllAnalyses(autoAnalyse);
+    return doAllAnalyses(autoAnalyse && !deferAnalysis);
 }
 
 QString

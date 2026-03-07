@@ -56,11 +56,16 @@ public:
     virtual ~Analyser();
 
     // Process new main model, add derived layers; return "" on
-    // success or error string on failure
+    // success or error string on failure.
+    // If deferAnalysis is true, skip running pYIN (waveform and
+    // visualisation layers are still created).  Use this when the
+    // model is a WritableWaveFileModel that is still being recorded
+    // into; call analyseExistingFile() once recording completes.
     QString newFileLoaded(sv::Document *newDocument,
                           sv::ModelId model,
                           sv::PaneStack *paneStack,
-                          sv::Pane *pane);
+                          sv::Pane *pane,
+                          bool deferAnalysis = false);
 
     // Remove any derived layers, process the main model, add derived
     // layers; return "" on success or error string on failure

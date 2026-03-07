@@ -292,7 +292,10 @@ protected:
     virtual void setupToolbars();
 
     // Helpers for the singing / second-track workflow
-    virtual void setupSingingTrackAnalyser(sv::ModelId singingModelId);
+    // deferAnalysis=true skips pYIN (used when the model is a
+    // WritableWaveFileModel still being recorded into).
+    virtual void setupSingingTrackAnalyser(sv::ModelId singingModelId,
+                                           bool deferAnalysis = false);
     virtual void teardownSingingTrackAnalyser();
     virtual void setupRealtimePitchLayer();
     virtual void teardownRealtimePitchLayer();
@@ -312,6 +315,12 @@ protected:
     // closeSession().  When true, analyseNow() routes analysis through
     // m_analyser2 rather than re-analysing the primary reference track.
     bool        m_recordingAsSingingTrack;
+
+    // Pane count saved just before MainWindowBase::record() is called in
+    // singing-track mode.  After record() returns, any panes above this
+    // count are extra panes created by AddPaneCommand for the recording's
+    // waveform layer; we remove them so both tracks share pane 0.
+    int         m_paneCountBeforeRecording;
 
     virtual void octaveShift(bool up);
 
