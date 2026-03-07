@@ -18,11 +18,15 @@
 
 #include "framework/MainWindowBase.h"
 #include "Analyser.h"
+#include "RealtimePitchTracker.h"
+
+#include "data/model/SparseTimeValueModel.h"
 
 namespace sv {
 class VersionTester;
 class ActivityLog;
 class LevelPanToolButton;
+class TimeValueLayer;
 }
 
 class MainWindow : public sv::MainWindowBase
@@ -35,6 +39,12 @@ public:
                bool withSpectrogram = true);
     virtual ~MainWindow();
 
+    /**
+     * Load a second audio file as the "singing" track whose pitch
+     * will be analysed alongside the primary reference track.
+     */
+    void loadSingingTrack(QString path);
+
 signals:
     void canExportPitchTrack(bool);
     void canExportNotes(bool);
@@ -42,12 +52,22 @@ signals:
     void canPlayWaveform(bool);
     void canPlayPitch(bool);
     void canPlayNotes(bool);
+    void canLoadSingingTrack(bool);
+    void canShowRealtimePitch(bool);
 
 public slots:
     virtual bool commitData(bool mayAskUser); // on session shutdown
 
 protected slots:
+    // Override record() so that when a reference track is already loaded we
+    // can switch to RecordCreateAdditionalModel before starting the capture,
+    // causing the recording to be treated as the singing track.
+    virtual void record();
+
+protected slots:
     virtual void openFile();
+    virtual void openSingingTrack();
+    virtual void analyseNewSingingModel();
     virtual void openLocation();
     virtual void openRecentFile();
     virtual void saveSession();
@@ -172,6 +192,11 @@ protected slots:
 
     virtual void analyseNewMainModel();
 
+    // --- Real-time pitch tracking during microphone recording ---
+    virtual void recordingStarted();
+    virtual void onRealtimePitchDetected(sv::sv_frame_t frame, double hz);
+    virtual void recordingFinishedFull();
+
     void moveOneNoteRight();
     void moveOneNoteLeft();
     void selectOneNoteRight();
@@ -181,9 +206,29 @@ protected slots:
     void rewind();
 
 protected:
+    // Primary analyser: the reference/target track loaded by the user.
     Analyser      *m_analyser;
 
+    // Secondary analyser: the singing/recording track.
+    // Null until a second audio file is loaded or a recording is completed.
+    Analyser      *m_analyser2;
+
+    // Real-time pitch tracker: active only during microphone recording.
+    RealtimePitchTracker *m_realtimePitchTracker;
+
+    // The transient layer shown during recording (replaced by the full
+    // pYIN analysis once recording is complete).
+    sv::TimeValueLayer   *m_realtimePitchLayer;
+
+    // Model backing the realtime layer (owned by the document).
+    sv::ModelId           m_realtimePitchModelId;
+
     sv::Overview  *m_overview;
+
+    // Actions/toolbar items for the singing track
+    QAction       *m_showSingingPitch;
+    QAction       *m_showSingingNotes;
+    QAction       *m_loadSingingTrackAction;
     sv::Fader     *m_fader;
     sv::AudioDial *m_playSpeed;
     QPushButton   *m_playSharpen;
@@ -245,6 +290,28 @@ protected:
     virtual void setupAnalysisMenu();
     virtual void setupHelpMenu();
     virtual void setupToolbars();
+
+    // Helpers for the singing / second-track workflow
+    virtual void setupSingingTrackAnalyser(sv::ModelId singingModelId);
+    virtual void teardownSingingTrackAnalyser();
+    virtual void setupRealtimePitchLayer();
+    virtual void teardownRealtimePitchLayer();
+
+    // When loadSingingTrack opens an additional audio file, modelAdded()
+    // stores the resulting ModelId here so analyseNewSingingModel() can
+    // pick it up on the next event-loop iteration.
+    sv::ModelId m_pendingSingingModelId;
+
+    // True while a microphone recording is in progress (set in
+    // recordingStarted(), cleared in recordingFinishedFull()).
+    bool        m_recordingInProgress;
+
+    // True when the current/most-recent recording was captured as a singing
+    // track alongside an existing reference track (RecordCreateAdditionalModel
+    // mode).  Set in record(), cleared in recordingFinishedFull() and
+    // closeSession().  When true, analyseNow() routes analysis through
+    // m_analyser2 rather than re-analysing the primary reference track.
+    bool        m_recordingAsSingingTrack;
 
     virtual void octaveShift(bool up);
 

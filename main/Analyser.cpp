@@ -43,7 +43,8 @@ using std::endl;
 
 using namespace sv;
 
-Analyser::Analyser() :
+Analyser::Analyser(ColorScheme colorScheme) :
+    m_colorScheme(colorScheme),
     m_document(0),
     m_paneStack(0),
     m_pane(0),
@@ -250,6 +251,15 @@ Analyser::addVisualisations()
 {
     if (m_fileModel.isNone()) return "Internal error: Analyser::addVisualisations() called with no model present";
 
+    // The secondary (singing/recording) analyser shares the primary pane.
+    // A spectrogram for the singing track would be visually confusing and
+    // would incorrectly steal the primary analyser's spectrogram layer.
+    // Simply skip the spectrogram for the secondary colour scheme.
+    if (m_colorScheme == SecondaryColors) {
+        m_layers[Spectrogram] = nullptr;
+        return "";
+    }
+
     // A spectrogram, off by default. Must go at the back because it's
     // opaque
 
@@ -286,9 +296,17 @@ Analyser::addVisualisations()
         SpectrogramLayer *existing = qobject_cast<SpectrogramLayer *>
             (m_pane->getLayer(i));
         if (existing) {
-            cerr << "recording existing spectrogram layer" << endl;
-            m_layers[Spectrogram] = existing;
-            return "";
+            // Only claim this spectrogram if it belongs to the main model
+            // (i.e. it is a main-model layer derived from our file model).
+            // In dual-analyser mode the pane is shared, so we must not
+            // steal a spectrogram that was created by the other analyser.
+            ModelId existingModel = existing->getModel();
+            if (existingModel == m_fileModel ||
+                existingModel == m_document->getMainModel()) {
+                cerr << "recording existing spectrogram layer (matching main model)" << endl;
+                m_layers[Spectrogram] = existing;
+                return "";
+            }
         }
     }
 
@@ -315,19 +333,40 @@ Analyser::addWaveform()
     // little space at the bottom.
 
     // As with the spectrogram above, if one exists already we just
-    // use it
+    // use it -- but only if it's associated with our file model.
+    // In dual-track mode, the pane may already have a waveform layer
+    // belonging to the primary analyser; we must not steal it.
     for (int i = 0; i < m_pane->getLayerCount(); ++i) {
         WaveformLayer *existing = qobject_cast<WaveformLayer *>
             (m_pane->getLayer(i));
-        if (existing) {
-            cerr << "recording existing waveform layer" << endl;
+        if (existing && existing->getModel() == m_fileModel) {
+            cerr << "recording existing waveform layer (matching our file model)" << endl;
             m_layers[Audio] = existing;
             return "";
         }
     }
 
-    WaveformLayer *waveform = qobject_cast<WaveformLayer *>
-        (m_document->createMainModelLayer(LayerFactory::Waveform));
+    WaveformLayer *waveform = nullptr;
+
+    if (m_colorScheme == SecondaryColors) {
+        // The secondary analyser's file model is NOT the document main model,
+        // so createMainModelLayer would show the wrong (reference) audio.
+        // Instead create a layer directly and associate it with our model.
+        // The model must already have been registered with the document via
+        // addNonDerivedModel (done in MainWindow::setupSingingTrackAnalyser).
+        Layer *raw = m_document->createLayer(LayerFactory::Waveform);
+        waveform = qobject_cast<WaveformLayer *>(raw);
+        if (waveform) {
+            m_document->setModel(waveform, m_fileModel);
+        }
+    } else {
+        waveform = qobject_cast<WaveformLayer *>
+            (m_document->createMainModelLayer(LayerFactory::Waveform));
+    }
+
+    if (!waveform) {
+        return tr("Internal error: could not create waveform layer");
+    }
 
     waveform->setMiddleLineHeight(0.9);
     waveform->setShowMeans(false); // too small & pale for this
@@ -354,23 +393,46 @@ Analyser::addAnalyses()
     }
     
     // As with the spectrogram above, if these layers exist we use
-    // them
+    // them -- but only if their source model matches our file model.
+    // When two analysers share a pane (dual-track mode), each must
+    // claim only the layers it created, not those from the other
+    // analyser.
     TimeValueLayer *existingPitch = 0;
     FlexiNoteLayer *existingNotes = 0;
     for (int i = 0; i < m_pane->getLayerCount(); ++i) {
         if (!existingPitch) {
-            existingPitch = qobject_cast<TimeValueLayer *>(m_pane->getLayer(i));
+            TimeValueLayer *tvl =
+                qobject_cast<TimeValueLayer *>(m_pane->getLayer(i));
+            if (tvl) {
+                // Accept this layer only if its source model is our
+                // file model (or a model derived from our file model).
+                auto model = ModelById::get(tvl->getModel());
+                if (model && (tvl->getModel() == m_fileModel ||
+                              model->getSourceModel() == m_fileModel)) {
+                    existingPitch = tvl;
+                }
+            }
         }
         if (!existingNotes) {
-            existingNotes = qobject_cast<FlexiNoteLayer *>(m_pane->getLayer(i));
+            FlexiNoteLayer *fnl =
+                qobject_cast<FlexiNoteLayer *>(m_pane->getLayer(i));
+            if (fnl) {
+                auto model = ModelById::get(fnl->getModel());
+                if (model && (fnl->getModel() == m_fileModel ||
+                              model->getSourceModel() == m_fileModel)) {
+                    existingNotes = fnl;
+                }
+            }
         }
     }
     if (existingPitch && existingNotes) {
-        cerr << "recording existing pitch and notes layers" << endl;
+        cerr << "recording existing pitch and notes layers (matching our file model)" << endl;
         m_layers[PitchTrack] = existingPitch;
         m_layers[Notes] = existingNotes;
         return "";
     } else {
+        // Remove any mismatched layers we may have found for our model
+        // (partial state from a previous failed analysis run).
         if (existingPitch) {
             m_document->removeLayerFromView(m_pane, existingPitch);
             m_layers[PitchTrack] = 0;
@@ -493,11 +555,19 @@ Analyser::addAnalyses()
     }
     
     ColourDatabase *cdb = ColourDatabase::getInstance();
+
+    // Choose colors based on color scheme:
+    // Primary (reference/target track): Black pitch, Bright Blue notes
+    // Secondary (singer/recording track): Orange pitch, Bright Purple notes
+    QString pitchColour = (m_colorScheme == SecondaryColors)
+        ? tr("Orange") : tr("Black");
+    QString notesColour = (m_colorScheme == SecondaryColors)
+        ? tr("Bright Purple") : tr("Bright Blue");
     
     TimeValueLayer *pitchLayer = 
         qobject_cast<TimeValueLayer *>(m_layers[PitchTrack]);
     if (pitchLayer) {
-        pitchLayer->setBaseColour(cdb->getColourIndex(tr("Black")));
+        pitchLayer->setBaseColour(cdb->getColourIndex(pitchColour));
         auto params = pitchLayer->getPlayParameters();
         if (params) {
             params->setPlayPan(1);
@@ -510,7 +580,7 @@ Analyser::addAnalyses()
     FlexiNoteLayer *flexiNoteLayer = 
         qobject_cast<FlexiNoteLayer *>(m_layers[Notes]);
     if (flexiNoteLayer) {
-        flexiNoteLayer->setBaseColour(cdb->getColourIndex(tr("Bright Blue")));
+        flexiNoteLayer->setBaseColour(cdb->getColourIndex(notesColour));
         auto params = flexiNoteLayer->getPlayParameters();
         if (params) {
             params->setPlayPan(1);

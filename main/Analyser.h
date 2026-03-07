@@ -42,7 +42,17 @@ class Analyser : public QObject,
     Q_OBJECT
 
 public:
-    Analyser();
+    /**
+     * Color scheme for the pitch track and notes layers.
+     * Primary is used for the reference/target track (black pitch, blue notes).
+     * Secondary is used for the singer/recording track (orange pitch, purple notes).
+     */
+    enum ColorScheme {
+        PrimaryColors,   // Black pitch track, Bright Blue notes
+        SecondaryColors, // Orange pitch track, Bright Purple notes
+    };
+
+    Analyser(ColorScheme colorScheme = PrimaryColors);
     virtual ~Analyser();
 
     // Process new main model, add derived layers; return "" on
@@ -219,6 +229,10 @@ public:
      */
     void takePitchTrackFrom(sv::Layer *layer);
 
+    ColorScheme getColorScheme() const {
+        return m_colorScheme;
+    }
+
     sv::Pane *getPane() {
         return m_pane;
     }
@@ -238,6 +252,8 @@ protected slots:
     void materialiseReAnalysis();
 
 protected:
+    ColorScheme m_colorScheme;
+
     sv::Document *m_document;
     sv::ModelId m_fileModel;
     sv::PaneStack *m_paneStack;

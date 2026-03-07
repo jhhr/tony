@@ -25,6 +25,8 @@
 #include "view/Pane.h"
 #include "view/PaneStack.h"
 #include "data/model/WaveFileModel.h"
+#include "data/model/WritableWaveFileModel.h"
+#include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
 #include "layer/FlexiNoteLayer.h"
 #include "view/ViewManager.h"
@@ -47,7 +49,9 @@
 #include "base/Profiler.h"
 #include "base/UnitDatabase.h"
 #include "layer/ColourDatabase.h"
+#include "layer/LayerFactory.h"
 #include "base/Selection.h"
+#include "data/model/Model.h"
 
 #include "rdf/RDFImporter.h"
 #include "data/fileio/DataFileReaderFactory.h"
@@ -89,9 +93,11 @@
 #include <QDialogButtonBox>
 #include <QActionGroup>
 #include <QRegularExpression>
+#include <QTimer>
 
 #include <iostream>
 #include <cstdio>
+#include <cmath>
 #include <errno.h>
 
 using std::vector;
@@ -108,7 +114,13 @@ MainWindow::MainWindow(AudioMode audioMode,
                    MainWindowBase::MIDI_NONE,
                    int(PaneStack::Option::NoPropertyStacks) |
                    int(PaneStack::Option::NoPaneAccessories)),
+    m_analyser2(nullptr),
+    m_realtimePitchTracker(nullptr),
+    m_realtimePitchLayer(nullptr),
     m_overview(0),
+    m_showSingingPitch(nullptr),
+    m_showSingingNotes(nullptr),
+    m_loadSingingTrackAction(nullptr),
     m_mainMenusCreated(false),
     m_playbackMenu(0),
     m_recentFilesMenu(0), 
@@ -122,7 +134,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_keyReference(new KeyReference()),
     m_selectionAnchor(0),
     m_withSonification(withSonification),
-    m_withSpectrogram(withSpectrogram)
+    m_withSpectrogram(withSpectrogram),
+    m_recordingInProgress(false),
+    m_recordingAsSingingTrack(false)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -308,6 +322,12 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(this, SIGNAL(replacedDocument()), this, SLOT(documentReplaced()));
     connect(this, SIGNAL(sessionLoaded()), this, SLOT(analyseNewMainModel()));
     connect(this, SIGNAL(audioFileLoaded()), this, SLOT(analyseNewMainModel()));
+
+    // Connect record target signals for real-time pitch tracking
+    if (m_recordTarget) {
+        connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
+                this, SLOT(recordingStarted()));
+    }
     m_activityLog->hide();
 
     setAudioRecordMode(RecordReplaceSession);
@@ -333,6 +353,26 @@ MainWindow::MainWindow(AudioMode audioMode,
 
 MainWindow::~MainWindow()
 {
+    // Clean up secondary state that may not have been torn down if the
+    // window was closed without going through closeSession() (e.g. on
+    // application exit via the window close button).
+    if (m_realtimePitchTracker) {
+        m_realtimePitchTracker->stop();
+        delete m_realtimePitchTracker;
+        m_realtimePitchTracker = nullptr;
+    }
+    // m_realtimePitchLayer is a Layer* owned by the Document (registered via
+    // createEmptyLayer / deleteLayer).  The Document is owned by MainWindowBase
+    // and will be destroyed after this destructor returns, so we only null
+    // the pointer here — the Document will release the layer.
+    m_realtimePitchLayer = nullptr;
+
+    // m_analyser2 is a plain heap-allocated QObject (no Qt parent, not owned
+    // by the Document).  We must delete it explicitly.
+    if (m_analyser2) {
+        delete m_analyser2;
+        m_analyser2 = nullptr;
+    }
     delete m_analyser;
     delete m_keyReference;
     Profiles::getInstance()->dump();
@@ -433,6 +473,16 @@ MainWindow::setupFileMenu()
     connect(action, SIGNAL(triggered()), this, SLOT(saveSessionInAudioPath()));
     connect(this, SIGNAL(canSaveAs(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
+
+    menu->addSeparator();
+
+    m_loadSingingTrackAction = new QAction(il.load("fileopen"), tr("Load &Singing Track..."), this);
+    m_loadSingingTrackAction->setShortcut(tr("Ctrl+Shift+R"));
+    m_loadSingingTrackAction->setStatusTip(tr("Load a second audio file to analyse as the singing track, overlaid on the reference track"));
+    connect(m_loadSingingTrackAction, SIGNAL(triggered()), this, SLOT(openSingingTrack()));
+    connect(this, SIGNAL(canPlay(bool)), m_loadSingingTrackAction, SLOT(setEnabled(bool)));
+    m_keyReference->registerShortcut(m_loadSingingTrackAction);
+    menu->addAction(m_loadSingingTrackAction);
 
     menu->addSeparator();
 
@@ -1074,7 +1124,7 @@ MainWindow::setupToolbars()
                                                tr("Record"));
     recordAction->setCheckable(true);
     recordAction->setShortcut(tr("Ctrl+Space"));
-    recordAction->setStatusTip(tr("Record a new audio file"));
+    recordAction->setStatusTip(tr("Record a new audio file. If a reference track is already loaded, the recording is added as the singing track alongside it."));
     connect(recordAction, SIGNAL(triggered()), this, SLOT(record()));
     connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
 	    recordAction, SLOT(setChecked(bool)));
@@ -1216,6 +1266,16 @@ MainWindow::setupToolbars()
     toolbar = addToolBar(tr("Show and Play"));
     addToolBar(Qt::BottomToolBarArea, toolbar);
 
+    // "Reference:" label before the reference-track button group
+    {
+        QLabel *refLabel = new QLabel(tr(" Reference:"));
+        QFont f = refLabel->font();
+        f.setPointSize(f.pointSize() - 1);
+        refLabel->setFont(f);
+        refLabel->setEnabled(false); // greyed out — purely decorative
+        toolbar->addWidget(refLabel);
+    }
+
     m_showAudio = toolbar->addAction(il.load("waveform"), tr("Show Audio"));
     m_showAudio->setCheckable(true);
     connect(m_showAudio, SIGNAL(triggered()), this, SLOT(showAudioToggled()));
@@ -1284,6 +1344,52 @@ MainWindow::setupToolbars()
     } else {
         m_playNotes = 0;
     }
+
+    // Singing track pitch track — preceded by a "Singing:" section label
+    spacer = new QLabel;
+    spacer->setFixedWidth(m_viewManager->scalePixelSize(30));
+    toolbar->addWidget(spacer);
+
+    {
+        QLabel *singLabel = new QLabel(tr("Singing:"));
+        QFont f = singLabel->font();
+        f.setPointSize(f.pointSize() - 1);
+        singLabel->setFont(f);
+        singLabel->setEnabled(false); // greyed out — purely decorative
+        toolbar->addWidget(singLabel);
+    }
+
+    // Use the "record" (microphone) icon to visually distinguish this from
+    // the reference pitch button which uses "values".
+    m_showSingingPitch = toolbar->addAction(il.load("record"), tr("Show Singing Pitch Track"));
+    m_showSingingPitch->setCheckable(true);
+    m_showSingingPitch->setToolTip(tr("Show/hide the singing track pitch (orange)"));
+    connect(m_showSingingPitch, &QAction::triggered, this, [this](bool checked) {
+        if (m_analyser2) {
+            m_analyser2->setVisible(Analyser::PitchTrack, checked);
+        }
+        if (m_realtimePitchLayer) {
+            m_realtimePitchLayer->showLayer(m_paneStack->getPane(0), checked);
+        }
+    });
+    connect(this, SIGNAL(canShowRealtimePitch(bool)), m_showSingingPitch, SLOT(setEnabled(bool)));
+    m_showSingingPitch->setEnabled(false);
+
+    // Singing track notes
+    spacer = new QLabel;
+    spacer->setFixedWidth(m_viewManager->scalePixelSize(10));
+    toolbar->addWidget(spacer);
+
+    m_showSingingNotes = toolbar->addAction(il.load("notes"), tr("Show Singing Notes"));
+    m_showSingingNotes->setCheckable(true);
+    m_showSingingNotes->setToolTip(tr("Show/hide the singing track notes (purple)"));
+    connect(m_showSingingNotes, &QAction::triggered, this, [this](bool checked) {
+        if (m_analyser2) {
+            m_analyser2->setVisible(Analyser::Notes, checked);
+        }
+    });
+    connect(this, SIGNAL(canShowRealtimePitch(bool)), m_showSingingNotes, SLOT(setEnabled(bool)));
+    m_showSingingNotes->setEnabled(false);
 
     // Spectrogram
     spacer = new QLabel;
@@ -1479,6 +1585,11 @@ MainWindow::updateMenuStates()
     emit canPlayPitch(havePitchTrack && haveMainModel && havePlayTarget);
     emit canPlayNotes(haveNotes && haveMainModel && havePlayTarget);
 
+    // Enable singing-track toolbar buttons whenever a singing track analyser
+    // or a realtime (recording) pitch layer is active.
+    bool haveSinging = (m_analyser2 != nullptr) || (m_realtimePitchLayer != nullptr);
+    emit canShowRealtimePitch(haveSinging);
+
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
         m_showCandidatesAction->setStatusTip(tr("Remove the display of alternate pitch candidates for the selected region"));
@@ -1625,6 +1736,31 @@ MainWindow::updateLayerStatuses()
     m_notesLPW->setPan(m_analyser->getPan(Analyser::Notes));
 
     m_showSpect->setChecked(m_analyser->isVisible(Analyser::Spectrogram));
+
+    // Singing track controls: enabled when either a second analyser
+    // (post-recording full analysis) or the realtime pitch layer is active
+    bool haveSingingTrack = (m_analyser2 != nullptr) || (m_realtimePitchLayer != nullptr);
+
+    if (m_showSingingPitch) {
+        m_showSingingPitch->setEnabled(haveSingingTrack);
+        if (m_analyser2) {
+            m_showSingingPitch->setChecked(m_analyser2->isVisible(Analyser::PitchTrack));
+        } else if (m_realtimePitchLayer && m_paneStack && m_paneStack->getPaneCount() > 0) {
+            m_showSingingPitch->setChecked(
+                !m_realtimePitchLayer->isLayerDormant(m_paneStack->getPane(0)));
+        } else {
+            m_showSingingPitch->setChecked(false);
+        }
+    }
+
+    if (m_showSingingNotes) {
+        m_showSingingNotes->setEnabled(m_analyser2 != nullptr);
+        if (m_analyser2) {
+            m_showSingingNotes->setChecked(m_analyser2->isVisible(Analyser::Notes));
+        } else {
+            m_showSingingNotes->setChecked(false);
+        }
+    }
 }
 
 void
@@ -1720,6 +1856,13 @@ MainWindow::closeSession()
 {
     if (!checkSaveModified()) return;
 
+    // Tear down singing track and realtime pitch layer before panes/document
+    // are destroyed, so they can cleanly remove their layers from the pane.
+    teardownRealtimePitchLayer();
+    teardownSingingTrackAnalyser();
+    m_pendingSingingModelId = {};
+    m_recordingAsSingingTrack = false;
+
     m_analyser->fileClosed();
 
     while (m_paneStack->getPaneCount() > 0) {
@@ -1781,6 +1924,419 @@ MainWindow::openFile()
         QMessageBox::critical(this, tr("Failed to open file"),
                               tr("<b>Audio required</b><p>Please load at least one audio file before importing annotation data"));
     }
+}
+
+void
+MainWindow::openSingingTrack()
+{
+    QString path = getOpenFileName(FileFinder::AudioFile);
+    if (path.isEmpty()) return;
+
+    loadSingingTrack(path);
+}
+
+void
+MainWindow::loadSingingTrack(QString path)
+{
+    // Load a second audio file as the "singing" track.
+    // This opens the file as an additional model alongside the main
+    // (reference) model, then runs pYIN on it in the secondary colour scheme.
+
+    if (!m_document) {
+        QMessageBox::warning(this, tr("No session"),
+                             tr("<b>No session open</b><p>Please open a reference audio file first."));
+        return;
+    }
+
+    emit activity(tr("Load singing track \"%1\"").arg(path));
+
+    // Record the pane count before opening so we can remove any extra panes
+    // that openPath(CreateAdditionalModel) creates via AddPaneCommand.
+    // We want both tracks to share pane 0, not appear in separate panes.
+    int paneCountBefore = m_paneStack ? m_paneStack->getPaneCount() : 0;
+
+    FileOpenStatus status = openPath(path, CreateAdditionalModel);
+
+    if (status == FileOpenFailed) {
+        QMessageBox::critical(this, tr("Failed to open singing track"),
+                              tr("<b>File open failed</b><p>File \"%1\" could not be opened").arg(path));
+        return;
+    } else if (status == FileOpenWrongMode) {
+        QMessageBox::critical(this, tr("Failed to open singing track"),
+                              tr("<b>Audio required</b><p>Could not open \"%1\" as audio").arg(path));
+        return;
+    }
+
+    // openPath(CreateAdditionalModel) will have called AddPaneCommand which
+    // added a new pane for the singing track's waveform layer.  We do NOT
+    // want that extra pane — both tracks must overlay pane 0.  Remove any
+    // panes above the original count (except the time-ruler pane at index 1
+    // which was already there).  We delete from the top down so that index
+    // arithmetic stays valid.
+    if (m_paneStack) {
+        while (m_paneStack->getPaneCount() > paneCountBefore) {
+            Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
+            // Delete any layers that ended up in this extra pane.
+            // setupSingingTrackAnalyser will create proper layers in pane 0,
+            // so these auto-created layers (e.g. the waveform from
+            // addOpenedAudioModel) are not needed and would otherwise
+            // become orphans in the document layer list.
+            if (m_document && extra) {
+                while (extra->getLayerCount() > 0) {
+                    Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
+                    // Use deleteLayer with force=true: this removes the layer
+                    // from the view directly (without creating an undo command)
+                    // and then deletes it from the document.  We must NOT call
+                    // removeLayerFromView first, as that would push a
+                    // RemoveLayerCommand onto the undo stack holding a pointer
+                    // to a layer we are about to delete — a guaranteed crash on
+                    // undo.
+                    m_document->deleteLayer(orphan, true);
+                }
+            }
+            if (m_overview) m_overview->unregisterView(extra);
+            m_paneStack->deletePane(extra);
+        }
+    }
+
+    // analyseNewSingingModel() is triggered on the next event-loop tick via
+    // the QTimer::singleShot(0, ...) in modelAdded().  It picks up the model
+    // id from m_pendingSingingModelId, which was set in modelAdded() when the
+    // audio file was registered with the document.
+}
+
+void
+MainWindow::analyseNewSingingModel()
+{
+    // Called when a new audio model has been added (by loadSingingTrack)
+    // and we want to run the secondary (singing-track) analysis on it.
+    if (m_pendingSingingModelId.isNone()) return;
+
+    ModelId singingModelId = m_pendingSingingModelId;
+    m_pendingSingingModelId = {};
+
+    setupSingingTrackAnalyser(singingModelId);
+}
+
+void
+MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId)
+{
+    if (!m_document) return;
+    if (!m_paneStack || m_paneStack->getPaneCount() < 1) return;
+
+    // Reuse the main pane (pane 0) so both pitch tracks overlay each other
+    Pane *pane = m_paneStack->getPane(0);
+    if (!pane) return;
+
+    // Tear down any previous secondary analyser
+    teardownSingingTrackAnalyser();
+
+    // Create the secondary analyser with the singing-track colour scheme
+    m_analyser2 = new Analyser(Analyser::SecondaryColors);
+
+    connect(m_analyser2, SIGNAL(layersChanged()),
+            this, SLOT(updateLayerStatuses()));
+    connect(m_analyser2, SIGNAL(layersChanged()),
+            this, SLOT(updateMenuStates()));
+
+    QString error = m_analyser2->newFileLoaded(
+        m_document, singingModelId, m_paneStack, pane);
+
+    if (error != "") {
+        QMessageBox::warning(this, tr("Failed to analyse singing track"),
+                             tr("<b>Analysis failed</b><p>%1</p>").arg(error));
+        delete m_analyser2;
+        m_analyser2 = nullptr;
+        return;
+    }
+
+    // Re-stack layers so the primary pitch track stays on top
+    m_analyser->getLayer(Analyser::PitchTrack);  // ensure primary is on top
+    updateLayerStatuses();
+    updateMenuStates();
+
+    emit activity(tr("Singing track loaded and analysis started"));
+}
+
+void
+MainWindow::teardownSingingTrackAnalyser()
+{
+    if (!m_analyser2) return;
+
+    m_analyser2->fileClosed();
+    delete m_analyser2;
+    m_analyser2 = nullptr;
+}
+
+void
+MainWindow::setupRealtimePitchLayer()
+{
+    // Create a SparseTimeValueModel and TimeValueLayer to display a
+    // live pitch estimate during microphone recording.
+    //
+    // At the time this is called (triggered by recordStatusChanged(true)),
+    // MainWindowBase::record() has already:
+    //   1. Created a WritableWaveFileModel for the recording.
+    //   2. Set it as the document main model.
+    //   3. Emitted audioFileLoaded() -> analyseNewMainModel() which added panes.
+    //
+    // So getMainModelId() returns the WritableWaveFileModel being filled.
+    // RealtimePitchTracker polls that model via getData() on a QTimer.
+
+    if (!m_document) return;
+    if (!m_paneStack || m_paneStack->getPaneCount() < 1) return;
+
+    Pane *pane = m_paneStack->getPane(0);
+    if (!pane) return;
+
+    // Remove any stale realtime layer from a previous recording session.
+    teardownRealtimePitchLayer();
+
+    // The audio source is the WritableWaveFileModel being recorded into.
+    // In RecordReplaceSession mode it is the document's main model.
+    // In RecordCreateAdditionalModel mode (recording as singing track) the
+    // main model is still the reference track, so we must search for the
+    // WritableWaveFileModel among all document models instead.
+    ModelId audioSourceId;
+
+    if (m_recordingAsSingingTrack && m_document) {
+        // Scan document models for any WritableWaveFileModel (the recording).
+        ModelId mainId = getMainModelId();
+        for (ModelId mid : m_document->getModels()) {
+            if (mid == mainId) continue;
+            if (ModelById::isa<WritableWaveFileModel>(mid)) {
+                audioSourceId = mid;
+                cerr << "setupRealtimePitchLayer: found singing-track recording model "
+                     << mid << endl;
+                break;
+            }
+        }
+        if (audioSourceId.isNone()) {
+            // Fall back to main model in case the search failed.
+            audioSourceId = mainId;
+            cerr << "setupRealtimePitchLayer: could not find singing-track recording "
+                    "model, falling back to main model" << endl;
+        }
+    } else {
+        audioSourceId = getMainModelId();
+    }
+
+    if (audioSourceId.isNone()) {
+        cerr << "setupRealtimePitchLayer: no audio source model found, cannot set up realtime tracker" << endl;
+        return;
+    }
+
+    // Determine sample rate from the audio source model.
+    sv_samplerate_t sr = 44100;
+    if (auto audioModel = ModelById::getAs<WritableWaveFileModel>(audioSourceId)) {
+        sr = audioModel->getSampleRate();
+    } else if (auto wfm = getMainModel()) {
+        sr = wfm->getSampleRate();
+    }
+
+    // Create a SparseTimeValueModel to receive pitch estimates.
+    // Resolution 512 frames matches the YIN hop size in RealtimePitchTracker.
+    auto pitchModel = std::make_shared<SparseTimeValueModel>(sr, 512, false);
+    pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
+    m_realtimePitchModelId = ModelById::add(pitchModel);
+    m_document->addNonDerivedModel(m_realtimePitchModelId);
+
+    // Create a TimeValueLayer to display the pitch estimates.
+    // createEmptyLayer creates the layer with an appropriate empty model
+    // registered with the document; we then use document->setModel() to
+    // replace that empty model with our SparseTimeValueModel.
+    Layer *rawLayer = m_document->createEmptyLayer(LayerFactory::TimeValues);
+    m_realtimePitchLayer = qobject_cast<TimeValueLayer *>(rawLayer);
+
+    if (!m_realtimePitchLayer) {
+        cerr << "setupRealtimePitchLayer: failed to create TimeValueLayer" << endl;
+        // Release the pitch model we just added; the Document will not hold
+        // a reference to it since we never called setModel yet.
+        ModelById::release(m_realtimePitchModelId);
+        m_realtimePitchModelId = {};
+        return;
+    }
+
+    // Associate our pre-filled SparseTimeValueModel with the layer.
+    // The model was already registered via addNonDerivedModel above.
+    m_document->setModel(m_realtimePitchLayer, m_realtimePitchModelId);
+    m_realtimePitchLayer->setVerticalScale(TimeValueLayer::AutoAlignScale);
+    m_realtimePitchLayer->setPlotStyle(TimeValueLayer::PlotPoints);
+
+    // Singing/recording track uses the "Orange" colour so it is visually
+    // distinct from the reference track (black) and notes (blue).
+    ColourDatabase *cdb = ColourDatabase::getInstance();
+    m_realtimePitchLayer->setBaseColour(cdb->getColourIndex(tr("Orange")));
+
+    m_document->addLayerToView(pane, m_realtimePitchLayer);
+
+    // Create and start the pitch tracker.
+    // It will poll audioSourceId (the WritableWaveFileModel) for new frames
+    // on each QTimer tick and write estimates into m_realtimePitchModelId.
+    m_realtimePitchTracker = new RealtimePitchTracker(
+        audioSourceId, m_realtimePitchModelId, this);
+    connect(m_realtimePitchTracker, &RealtimePitchTracker::pitchDetected,
+            this, &MainWindow::onRealtimePitchDetected);
+    m_realtimePitchTracker->start();
+
+    cerr << "setupRealtimePitchLayer: realtime pitch tracking started "
+         << "(audio source model " << audioSourceId << ", sr=" << sr << ")" << endl;
+}
+
+void
+MainWindow::teardownRealtimePitchLayer()
+{
+    if (m_realtimePitchTracker) {
+        m_realtimePitchTracker->stop();
+        delete m_realtimePitchTracker;
+        m_realtimePitchTracker = nullptr;
+    }
+
+    if (m_realtimePitchLayer) {
+        if (m_paneStack && m_paneStack->getPaneCount() > 0) {
+            Pane *pane = m_paneStack->getPane(0);
+            if (pane) {
+                m_document->removeLayerFromView(pane, m_realtimePitchLayer);
+            }
+        }
+        m_document->deleteLayer(m_realtimePitchLayer, false);
+        m_realtimePitchLayer = nullptr;
+    }
+
+    // Note: we do NOT call ModelById::release(m_realtimePitchModelId) here.
+    // The Document owns the SparseTimeValueModel we added via addNonDerivedModel,
+    // and deleteLayer() above will have already released the model if no other
+    // layer is referencing it.  Calling release() a second time would be a
+    // double-free.
+    m_realtimePitchModelId = {};
+}
+
+void
+MainWindow::record()
+{
+    // If a reference track is already loaded, record the microphone input as
+    // the singing track rather than replacing the whole session.
+    // We do this by temporarily switching to RecordCreateAdditionalModel so
+    // that MainWindowBase::record() adds the WritableWaveFileModel as an
+    // additional (non-main) model.  Our modelAdded() hook will then pick it
+    // up and route it through setupSingingTrackAnalyser().
+    //
+    // If there is no main model yet (first-time record), fall through with the
+    // default RecordReplaceSession behaviour.
+
+    bool haveReference = (getMainModel() != nullptr);
+
+    if (haveReference) {
+        cerr << "MainWindow::record: reference track loaded — recording as singing track" << endl;
+        m_recordingAsSingingTrack = true;
+        setAudioRecordMode(RecordCreateAdditionalModel);
+    } else {
+        m_recordingAsSingingTrack = false;
+        setAudioRecordMode(RecordReplaceSession);
+    }
+
+    MainWindowBase::record();
+
+    // Restore the default mode so that a subsequent "standalone" recording
+    // (after the singing track session is closed) behaves correctly.
+    setAudioRecordMode(RecordReplaceSession);
+}
+
+void
+MainWindow::recordingStarted()
+{
+    // recordStatusChanged(bool) is emitted both when recording starts
+    // (true) and stops (false). We only want to act when it starts.
+    if (!m_recordTarget) return;
+    if (!m_recordTarget->isRecording()) {
+        // Recording stopped - nothing to do here; recordingFinishedFull()
+        // is called from analyseNow() once pYIN completes.
+        return;
+    }
+
+    cerr << "MainWindow::recordingStarted: scheduling realtime pitch layer setup" << endl;
+    m_recordingInProgress = true;
+
+    // TIMING: recordStatusChanged(true) is emitted from within
+    // AudioCallbackRecordTarget::startRecording(), which is called by
+    // MainWindowBase::record() BEFORE setMainModel() and BEFORE
+    // emit audioFileLoaded() -> analyseNewMainModel() creates the panes.
+    // If we call setupRealtimePitchLayer() directly here, m_paneStack will
+    // have zero panes and the setup will silently bail out.
+    //
+    // Fix: defer via QTimer::singleShot(0) so the slot runs on the next
+    // event-loop iteration, by which time record() has finished completely
+    // (including emit audioFileLoaded() -> panes created).
+    QTimer::singleShot(0, this, [this]() {
+        if (!m_recordingInProgress) {
+            // Recording was stopped before we got a chance to set up —
+            // nothing to do.
+            return;
+        }
+        cerr << "MainWindow::recordingStarted (deferred): setting up realtime pitch layer" << endl;
+        setupRealtimePitchLayer();
+        updateLayerStatuses();
+        updateMenuStates();
+    });
+}
+
+void
+MainWindow::onRealtimePitchDetected(sv::sv_frame_t /*frame*/, double hz)
+{
+    // The pitch has already been written into the SparseTimeValueModel by
+    // RealtimePitchTracker; the view repaints automatically via dataChanged().
+    // Here we show a human-readable pitch in the status bar so the singer
+    // gets immediate textual feedback during recording.
+
+    if (hz <= 0.0) {
+        getStatusLabel()->setText(tr("Recording — pitch: (unvoiced)"));
+        return;
+    }
+
+    // Convert Hz to MIDI note number and cents deviation.
+    // MIDI note 69 = A4 = 440 Hz.
+    double midiNote = 12.0 * std::log2(hz / 440.0) + 69.0;
+    int nearestNote = int(std::round(midiNote));
+    int cents = int(std::round((midiNote - nearestNote) * 100.0));
+
+    // Note names (no flats — sharps only for display simplicity).
+    static const char *noteNames[] = {
+        "C", "C#", "D", "D#", "E", "F",
+        "F#", "G", "G#", "A", "A#", "B"
+    };
+    int noteIndex = ((nearestNote % 12) + 12) % 12;
+    int octave    = (nearestNote / 12) - 1;
+    QString noteName = QString("%1%2").arg(noteNames[noteIndex]).arg(octave);
+
+    QString centsStr;
+    if (cents == 0) {
+        centsStr = tr("in tune");
+    } else if (cents > 0) {
+        centsStr = tr("+%1 cents").arg(cents);
+    } else {
+        centsStr = tr("%1 cents").arg(cents);
+    }
+
+    getStatusLabel()->setText(
+        tr("Recording — singing: %1 (%2 Hz, %3)")
+        .arg(noteName)
+        .arg(hz, 0, 'f', 1)
+        .arg(centsStr));
+}
+
+void
+MainWindow::recordingFinishedFull()
+{
+    // Called after analyseNow() has completed for the newly recorded audio.
+    // At this point the full pYIN analysis of the recording is available.
+    // We can remove the coarse realtime pitch layer (the "live" orange dots)
+    // because the full pYIN pitch track now covers the same audio.
+    cerr << "MainWindow::recordingFinishedFull: pYIN done, removing realtime pitch layer" << endl;
+    m_recordingInProgress = false;
+    m_recordingAsSingingTrack = false;
+    teardownRealtimePitchLayer();
+    updateLayerStatuses();
+    updateMenuStates();
 }
 
 void
@@ -2997,6 +3553,25 @@ MainWindow::modelAdded(ModelId model)
     auto dtvm = ModelById::getAs<DenseTimeValueModel>(model);
     if (dtvm) {
         cerr << "A dense time-value model (such as an audio file) has been loaded" << endl;
+        // If there is already a main model and this is a new additional
+        // audio model (not the realtime pitch model), treat it as the
+        // singing track to be analysed with the secondary colour scheme.
+        ModelId mainId = getMainModelId();
+        if (!mainId.isNone() && model != mainId &&
+            m_realtimePitchModelId != model) {
+            // Guard against race: if modelAdded() fires twice quickly (e.g.
+            // for an audio model and its alignment model), only set the
+            // pending id once; analyseNewSingingModel() will clear it when
+            // it runs.
+            if (m_pendingSingingModelId.isNone()) {
+                m_pendingSingingModelId = model;
+                // Defer so the model is fully registered before we analyse
+                QTimer::singleShot(0, this, SLOT(analyseNewSingingModel()));
+            } else {
+                cerr << "modelAdded: m_pendingSingingModelId already set, ignoring model "
+                     << model << endl;
+            }
+        }
     }
 }
 
@@ -3027,6 +3602,61 @@ void
 MainWindow::analyseNow()
 {
     cerr << "analyseNow called" << endl;
+
+    // When the user recorded a singing track alongside an existing reference
+    // track (RecordCreateAdditionalModel mode), the recording becomes an
+    // additional model, not the main model.  In that case we must route
+    // analysis through m_analyser2 (which was set up by setupSingingTrackAnalyser
+    // via modelAdded() when the WritableWaveFileModel was registered).
+    // We must NOT re-analyse the primary reference track here.
+    if (m_recordingAsSingingTrack) {
+        cerr << "analyseNow: recording was singing track — routing to m_analyser2" << endl;
+        if (m_analyser2) {
+            CommandHistory::getInstance()->startCompoundOperation
+                (tr("Analyse Singing Track"), true);
+
+            QString error = m_analyser2->analyseExistingFile();
+
+            CommandHistory::getInstance()->endCompoundOperation();
+
+            if (error != "") {
+                QMessageBox::warning
+                    (this,
+                     tr("Failed to analyse singing track"),
+                     tr("<b>Analysis failed</b><p>%1</p>").arg(error),
+                     QMessageBox::Ok);
+            }
+        } else {
+            // m_analyser2 may still be pending setup (modelAdded fires async).
+            // Defer the analysis until the secondary analyser is ready.
+            cerr << "analyseNow: m_analyser2 not ready yet, deferring singing-track analysis" << endl;
+            QTimer::singleShot(200, this, [this]() {
+                if (m_analyser2) {
+                    CommandHistory::getInstance()->startCompoundOperation
+                        (tr("Analyse Singing Track"), true);
+                    QString error = m_analyser2->analyseExistingFile();
+                    CommandHistory::getInstance()->endCompoundOperation();
+                    if (error != "") {
+                        QMessageBox::warning
+                            (this,
+                             tr("Failed to analyse singing track"),
+                             tr("<b>Analysis failed</b><p>%1</p>").arg(error),
+                             QMessageBox::Ok);
+                    }
+                } else {
+                    cerr << "analyseNow (deferred): m_analyser2 still null, singing-track analysis skipped" << endl;
+                }
+            });
+        }
+
+        // Clean up the realtime pitch layer; the full pYIN analysis of the
+        // singing recording (via m_analyser2) now covers the same audio.
+        if (m_realtimePitchTracker || m_realtimePitchLayer) {
+            recordingFinishedFull();
+        }
+        return;
+    }
+
     if (!m_analyser) return;
 
     CommandHistory::getInstance()->startCompoundOperation
@@ -3042,6 +3672,12 @@ MainWindow::analyseNow()
              tr("Failed to analyse audio"),
              tr("<b>Analysis failed</b><p>%1</p>").arg(error),
              QMessageBox::Ok);
+    }
+
+    // If this analyseNow was triggered by recording completion, clean up
+    // the realtime pitch layer now that the full pYIN analysis is available.
+    if (m_realtimePitchTracker || m_realtimePitchLayer) {
+        recordingFinishedFull();
     }
 }
 
@@ -3062,6 +3698,27 @@ MainWindow::analyseNewMainModel()
     if (!m_paneStack) {
         cerr << "no pane stack!" << endl;
         return;
+    }
+
+    // When recording as a singing track (RecordCreateAdditionalModel mode),
+    // MainWindowBase::record() creates an extra pane for the recording waveform.
+    // We want both tracks in pane 0, so remove any panes beyond the expected 2
+    // (main pane + time-ruler strip) before doing anything else.
+    // This mirrors the pane-cleanup logic in loadSingingTrack().
+    if (m_recordingAsSingingTrack) {
+        int expectedPanes = 2; // pane 0 (main) + pane 1 (time ruler strip)
+        while (m_paneStack->getPaneCount() > expectedPanes) {
+            Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
+            if (!extra) break;
+            // Remove all layers from the extra pane (force=true avoids undo commands
+            // that would hold dangling pointers to the layer).
+            while (extra->getLayerCount() > 0) {
+                Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
+                m_document->deleteLayer(orphan, true);
+            }
+            m_paneStack->deletePane(extra);
+        }
+        cerr << "analyseNewMainModel: pruned extra recording pane (recording-as-singing-track mode)" << endl;
     }
 
     int pc = m_paneStack->getPaneCount();
@@ -3117,7 +3774,35 @@ MainWindow::analyseNewMainModel()
         m_analyser->setAudible(Analyser::PitchTrack, false);
         m_analyser->setAudible(Analyser::Notes, false);
     }
-   
+
+    // Session restore: if the loaded session contained a second audio model
+    // (i.e. a previously loaded singing track), set up the secondary analyser
+    // for it now.  We scan all document models for a WaveFileModel that is
+    // not the main model and not already being tracked as a singing model.
+    // We only do this if we don't already have a secondary analyser (it may
+    // have been set up already e.g. via modelAdded() during session load).
+    if (!m_analyser2 && m_document) {
+        ModelId mainId = getMainModelId();
+        ModelId foundSinging;
+        for (ModelId mid : m_document->getModels()) {
+            if (mid == mainId) continue;
+            if (mid == m_realtimePitchModelId) continue;
+            if (ModelById::isa<WaveFileModel>(mid)) {
+                foundSinging = mid;
+                break;
+            }
+        }
+        if (!foundSinging.isNone()) {
+            cerr << "analyseNewMainModel: found existing singing track model "
+                 << foundSinging << " in session, setting up secondary analyser" << endl;
+            // Defer so that the primary analyser's layers are fully in place
+            // before the secondary analyser tries to share the same pane.
+            QTimer::singleShot(0, this, [this, foundSinging]() {
+                setupSingingTrackAnalyser(foundSinging);
+            });
+        }
+    }
+
     updateLayerStatuses();
     documentRestored();
 }

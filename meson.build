@@ -83,7 +83,7 @@ boost_dep = dependency('boost')
 if system == 'linux'
 
   rc = []
-  
+
   bzip2_dep = dependency('bzip2', required: false)
 
   if not bzip2_dep.found()
@@ -109,7 +109,7 @@ if system == 'linux'
   jack_dep = dependency('jack', version: '>= 0.100')
   libpulse_dep = dependency('libpulse', version: '>= 0.9')
   alsa_dep = dependency('alsa')
-  
+
   portaudio_dep = dependency('portaudio-2.0', version: '>= 19', required: false)
 
   feature_dependencies = [
@@ -168,11 +168,11 @@ if system == 'linux'
   svcore_moc_args = [
     '-DHAVE_MAD'
   ]
-  
+
   vamp_symbol_args += [
     '-Wl,--version-script=' + meson.current_source_dir() / 'vamp-plugin-sdk/vamp-plugin.map'
   ]
-  
+
 elif system == 'darwin'
 
   svdeps_dir = meson.current_source_dir() / 'sv-dependency-builds/osx'
@@ -182,7 +182,7 @@ elif system == 'darwin'
   else
     svdeps_libdir = svdeps_dir / 'lib'
   endif
-  
+
   rc = []
 
   general_defines += [
@@ -191,7 +191,7 @@ elif system == 'darwin'
   general_link_args += [
     '-mmacosx-version-min=10.15'
   ]
-  
+
   feature_defines = [
     '-DHAVE_BZ2',
     '-DHAVE_SNDFILE',
@@ -206,7 +206,7 @@ elif system == 'darwin'
     '-DHAVE_VDSP',
     '-D__MACOSX_CORE__', # for RtMidi
   ]
-    
+
   # vDSP will be used in preference to FFTW most of the time, but
   # FFTW supports more fft lengths - without it we can end up with a
   # very slow implementation for unusual lengths.
@@ -228,9 +228,9 @@ elif system == 'darwin'
     svcore_moc_args += [
       '-DHAVE_MAD',
     ]
-    
+
   endif
-    
+
   feature_dependencies = [
     vamphostsdk_dep,
   ]
@@ -276,18 +276,21 @@ elif system == 'darwin'
       '-lid3tag',
     ]
   endif
-  
+
   vamp_symbol_args += [
     '-exported_symbols_list', meson.current_source_dir() / 'vamp-plugin-sdk/vamp-plugin.list'
   ]
-  
+
 elif system == 'windows'
 
   if architecture == 'x86'
     svdeps_dir = meson.current_source_dir() / 'sv-dependency-builds/win32-mingw'
-  else 
+  elif compiler == 'msvc'
     svdeps_dir = meson.current_source_dir() / 'sv-dependency-builds/win64-msvc'
-  endif # architecture
+  else
+    # MinGW/GCC x86_64: use system libraries from msys2, no svdeps needed
+    svdeps_dir = ''
+  endif # architecture / compiler
 
   windows = import('windows')
   rc = windows.compile_resources('icons/tony.rc')
@@ -299,7 +302,20 @@ elif system == 'windows'
     '-D_USE_MATH_DEFINES',
     '-D_HAS_STD_BYTE=1',
   ]
-  
+
+  if compiler != 'msvc'
+    # MinGW + C++17: rpcndr.h (via <windows.h>) unconditionally typedefs
+    # "unsigned char byte", which collides with the C++17 std::byte enum.
+    # Fix by force-including a header that pre-includes <windows.h> with
+    # WIN32_LEAN_AND_MEAN (which skips rpcndr.h), setting the include
+    # guard so that subsequent #include <windows.h> directives are no-ops
+    # and rpcndr.h is never processed.
+    _fix_header = meson.current_source_dir() / 'main/mingw_byte_fix.h'
+    general_defines += [
+      '-include', _fix_header,
+    ]
+  endif
+
   feature_defines = [
     '-DHAVE_BZ2',
     '-DHAVE_FFTW3',
@@ -327,7 +343,8 @@ elif system == 'windows'
       'sv-dependency-builds/win32-mingw/include',
       'sv-dependency-builds/win32-mingw/include/opus',
     ]
-  else
+  elif compiler == 'msvc'
+    # MSVC x86_64: use pre-built dependency tree and MediaFoundation
     feature_defines += [
       '-DHAVE_MEDIAFOUNDATION',
     ]
@@ -336,19 +353,39 @@ elif system == 'windows'
       'sv-dependency-builds/win64-msvc/include',
       'sv-dependency-builds/win64-msvc/include/opus',
     ]
-  endif # architecture
-
-  if buildtype.startswith('release')
-    feature_additional_libpaths =  [
-      '-L' + svdeps_dir / 'lib',
-    ]
   else
-    feature_additional_libpaths =  [
-      '-L' + svdeps_dir / 'lib/debug',
-      '-L' + svdeps_dir / 'lib',
+    # MinGW/GCC x86_64: system headers from msys2; no MediaFoundation
+    # (shobjidl_core.h not available in mingw-w64 headers).
+    # Several system headers live in versioned subdirectories that code
+    # includes without a path prefix, so we add them explicitly.
+    # Use run_command to resolve the actual Windows path for the mingw prefix.
+    _mingw_prefix = run_command('sh', '-c', 'echo $MINGW_PREFIX', check: true).stdout().strip()
+    if _mingw_prefix == ''
+      _mingw_prefix = 'C:/msys64/mingw64'
+    endif
+    feature_include_dirs = [
+      _mingw_prefix + '/include/opus',       # opusfile.h includes <opus_multistream.h>
+      _mingw_prefix + '/include/sord-0',     # dataquay includes <sord/sord.h>
+      _mingw_prefix + '/include/serd-0',     # dataquay includes <serd/serd.h>
     ]
+  endif # architecture / compiler
+
+  if architecture == 'x86' or compiler == 'msvc'
+    if buildtype.startswith('release')
+      feature_additional_libpaths = [
+        '-L' + svdeps_dir / 'lib',
+      ]
+    else
+      feature_additional_libpaths = [
+        '-L' + svdeps_dir / 'lib/debug',
+        '-L' + svdeps_dir / 'lib',
+      ]
+    endif
+  else
+    # MinGW x86_64: all libs come from the msys2 system prefix
+    feature_additional_libpaths = []
   endif
-  
+
   feature_additional_libs = [
     feature_additional_libpaths,
     '-lbz2',
@@ -377,7 +414,8 @@ elif system == 'windows'
       '-lwinmm',
       '-lws2_32',
     ]
-  elif architecture == 'x86_64'
+  elif compiler == 'msvc'
+    # MSVC x86_64 with MediaFoundation
     feature_additional_libs += [
 #      '-NODEFAULTLIB:LIBCMT',
       '-lsord',
@@ -390,23 +428,39 @@ elif system == 'windows'
       '-lwinmm',
       '-lws2_32',
     ]
-  else 
+  elif architecture == 'x86_64'
+    # MinGW x86_64: sord/serd have a -0 suffix in the msys2 packages
+    feature_additional_libs += [
+      '-lsord-0',
+      '-lserd-0',
+      '-ladvapi32',
+      '-lwinmm',
+      '-lws2_32',
+    ]
+  else
     error('Build for architecture ' + architecture + ' is not supported on this platform')
-  endif # architecture
-  
+  endif # architecture / compiler
+
   svcore_moc_args = [
     '-DHAVE_MAD',
     '-DQ_OS_WIN',
   ]
 
-  vamp_symbol_args += [
-    '-EXPORT:vampGetPluginDescriptor'
-  ]
+  if compiler == 'msvc'
+    vamp_symbol_args += [
+      '-EXPORT:vampGetPluginDescriptor'
+    ]
+  else
+    # MinGW/GCC: use GNU ld syntax to export the Vamp entry point
+    vamp_symbol_args += [
+      '-Wl,--export-dynamic-symbol=vampGetPluginDescriptor'
+    ]
+  endif
 
 else
     error('This operating system ("' + system + '") is not supported by this build file')
 endif # system
-    
+
 all_include_dirs = include_directories(
   [
     'bqvec',
@@ -918,7 +972,7 @@ svgui_moc_files = qt.preprocess(
   'svgui/widgets/WindowShapePreview.h',
   'svgui/widgets/WindowTypeSelector.h',
 ])
-  
+
 svapp_files = [
   'svapp/align/Align.cpp',
   'svapp/align/ExternalProgramAligner.cpp',
@@ -1023,12 +1077,14 @@ tony_main_files = [
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
+  'main/RealtimePitchTracker.cpp',
 ]
 
 tony_main_moc_files = qt.preprocess(
   moc_headers: [
   'main/MainWindow.h',
   'main/Analyser.h',
+  'main/RealtimePitchTracker.h',
 ])
 
 qt_resource_files = qt.preprocess(
