@@ -348,6 +348,13 @@ protected:
     // freeing it.
     sv::ModelId m_currentRecordingModelId;
 
+    // Round-trip hardware latency (output + input, in frames at the model
+    // sample rate) stored when a singing-track recording is made with the
+    // "play reference while recording" toggle on.  Applied as a negative
+    // start-frame offset to the singing model so its timeline aligns with
+    // the reference during playback.  Reset to 0 at the start of each recording.
+    sv::sv_frame_t  m_recordingLatencyFrames;
+
     // Extra panes created by MainWindowBase::record() via AddPaneCommand
     // that we want to hide immediately but cannot delete yet because
     // m_analyser2 hasn't been set up yet (it is deferred via QTimer::singleShot).

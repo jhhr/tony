@@ -140,7 +140,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingInProgress(false),
     m_recordingAsSingingTrack(false),
     m_paneCountBeforeRecording(0),
-    m_currentRecordingModelId()
+    m_currentRecordingModelId(),
+    m_recordingLatencyFrames(0)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -2591,6 +2592,7 @@ MainWindow::record()
         m_recordingInProgress = false;
 
         m_recordingAsSingingTrack = true;
+        m_recordingLatencyFrames = 0; // reset; will be computed in recordingStarted()
         // Remember pane count so we can prune the extra pane that
         // MainWindowBase::record() creates via AddPaneCommand for the
         // recording's waveform layer.  We want both tracks in pane 0.
@@ -2700,6 +2702,21 @@ MainWindow::recordingStarted()
             m_playRefWhileRecording && m_playRefWhileRecording->isChecked() &&
             m_playSource && !m_playSource->isPlaying()) {
             cerr << "MainWindow::recordingStarted: starting reference playback" << endl;
+
+            // Measure round-trip hardware latency so we can compensate the
+            // singing recording's timeline after the take.
+            // output latency = time from play() call until audio exits the speaker
+            // input latency  = time from sound entering the mic until it arrives here
+            // The singer's response to reference frame 0 arrives in the recording
+            // at approximately frame (outputLatency + inputLatency), so we will
+            // shift the model's start frame by -(outputLatency + inputLatency).
+            sv_frame_t outputLatency = m_playSource->getTargetPlayLatency();
+            sv_frame_t inputLatency  = m_recordTarget ? m_recordTarget->getSystemRecordLatency() : 0;
+            m_recordingLatencyFrames = outputLatency + inputLatency;
+            cerr << "MainWindow::recordingStarted: output latency=" << outputLatency
+                 << " input latency=" << inputLatency
+                 << " round-trip compensation=" << m_recordingLatencyFrames << " frames" << endl;
+
             m_viewManager->setPlaybackFrame(0);
             m_playSource->play(0);
         }
@@ -4071,6 +4088,23 @@ MainWindow::analyseNow()
     // We must NOT re-analyse the primary reference track here.
     if (m_recordingAsSingingTrack) {
         cerr << "analyseNow: recording was singing track — routing to m_analyser2" << endl;
+
+        // Apply round-trip latency compensation: shift the singing model's
+        // global start frame backward by the round-trip hardware latency so
+        // the singer's audio (which arrives late due to output + input latency)
+        // aligns with the reference during playback.  This must happen before
+        // pYIN analysis so that all derived layers (pitch, notes) inherit the
+        // same timeline offset.  Only applied when reference playback was
+        // active during the recording (m_recordingLatencyFrames > 0).
+        if (m_recordingLatencyFrames > 0 && !m_currentRecordingModelId.isNone()) {
+            auto wfm = ModelById::getAs<WritableWaveFileModel>(m_currentRecordingModelId);
+            if (wfm) {
+                cerr << "analyseNow: applying latency compensation: setStartFrame("
+                     << -m_recordingLatencyFrames << ")" << endl;
+                wfm->setStartFrame(-m_recordingLatencyFrames);
+            }
+        }
+
         if (m_analyser2) {
             CommandHistory::getInstance()->startCompoundOperation
                 (tr("Analyse Singing Track"), true);
