@@ -123,6 +123,12 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_playSingingAudio(nullptr),
     m_playRefWhileRecording(nullptr),
     m_loadSingingTrackAction(nullptr),
+    m_backgroundMusicModelId(),
+    m_backgroundMusicLayer(nullptr),
+    m_loadBackgroundMusicAction(nullptr),
+    m_playBackgroundMusic(nullptr),
+    m_bgMusicLPW(nullptr),
+    m_loadingBackgroundMusic(false),
     m_mainMenusCreated(false),
     m_playbackMenu(0),
     m_recentFilesMenu(0), 
@@ -278,6 +284,12 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioLPW->setObjectName(tr("Audio Track Level and Pan"));
     connect(m_audioLPW, SIGNAL(levelChanged(float)), this, SLOT(audioGainChanged(float)));
     connect(m_audioLPW, SIGNAL(panChanged(float)), this, SLOT(audioPanChanged(float)));
+
+    m_bgMusicLPW = new LevelPanToolButton(frame);
+    m_bgMusicLPW->setIncludeMute(false);
+    m_bgMusicLPW->setObjectName(tr("Background Music Level and Pan"));
+    connect(m_bgMusicLPW, SIGNAL(levelChanged(float)), this, SLOT(backgroundMusicGainChanged(float)));
+    connect(m_bgMusicLPW, SIGNAL(panChanged(float)), this, SLOT(backgroundMusicPanChanged(float)));
 
     if (m_withSonification) {
 
@@ -488,6 +500,12 @@ MainWindow::setupFileMenu()
     connect(this, SIGNAL(canPlay(bool)), m_loadSingingTrackAction, SLOT(setEnabled(bool)));
     m_keyReference->registerShortcut(m_loadSingingTrackAction);
     menu->addAction(m_loadSingingTrackAction);
+
+    m_loadBackgroundMusicAction = new QAction(il.load("fileopen"), tr("Load &Background Music..."), this);
+    m_loadBackgroundMusicAction->setStatusTip(tr("Load an audio file to play as background music alongside the reference track (not analysed)"));
+    connect(m_loadBackgroundMusicAction, SIGNAL(triggered()), this, SLOT(openBackgroundMusic()));
+    connect(this, SIGNAL(canPlay(bool)), m_loadBackgroundMusicAction, SLOT(setEnabled(bool)));
+    menu->addAction(m_loadBackgroundMusicAction);
 
     menu->addSeparator();
 
@@ -1445,6 +1463,34 @@ MainWindow::setupToolbars()
     });
     connect(this, SIGNAL(canPlay(bool)), m_playRefWhileRecording, SLOT(setEnabled(bool)));
 
+    // Background music section: an additional audio track that plays
+    // alongside the reference track but is never analysed.
+    spacer = new QLabel;
+    spacer->setFixedWidth(m_viewManager->scalePixelSize(30));
+    toolbar->addWidget(spacer);
+
+    {
+        QLabel *bgLabel = new QLabel(tr("Background:"));
+        QFont f = bgLabel->font();
+        f.setPointSize(f.pointSize() - 1);
+        bgLabel->setFont(f);
+        bgLabel->setEnabled(false);
+        toolbar->addWidget(bgLabel);
+    }
+
+    m_playBackgroundMusic = toolbar->addAction(il.load("speaker"), tr("Mix Background Music"));
+    m_playBackgroundMusic->setCheckable(true);
+    m_playBackgroundMusic->setChecked(true);
+    m_playBackgroundMusic->setToolTip(
+        tr("Enable/disable mixing the background music track during playback and recording"));
+    m_playBackgroundMusic->setEnabled(false);
+    connect(m_playBackgroundMusic, SIGNAL(triggered()), this, SLOT(backgroundMusicToggled()));
+
+    m_bgMusicLPW->setImageSize(lpwSize);
+    m_bgMusicLPW->setBigImageSize(bigLpwSize);
+    m_bgMusicLPW->setEnabled(false);
+    toolbar->addWidget(m_bgMusicLPW);
+
     // Spectrogram
     spacer = new QLabel;
     spacer->setFixedWidth(m_viewManager->scalePixelSize(30));
@@ -1833,6 +1879,25 @@ MainWindow::updateLayerStatuses()
             m_playSingingAudio->setChecked(true); // default on when track arrives
         }
     }
+
+    // Background music toggle: enabled when a background music track is loaded
+    if (m_playBackgroundMusic) {
+        bool haveBgMusic = (m_backgroundMusicLayer != nullptr);
+        m_playBackgroundMusic->setEnabled(haveBgMusic);
+        if (m_bgMusicLPW) m_bgMusicLPW->setEnabled(haveBgMusic);
+        if (haveBgMusic) {
+            auto params = m_backgroundMusicLayer->getPlayParameters();
+            bool audible = params ? params->isPlayAudible() : true;
+            m_playBackgroundMusic->setChecked(audible);
+            if (m_bgMusicLPW) {
+                m_bgMusicLPW->setEnabled(audible);
+                m_bgMusicLPW->setLevel(params ? params->getPlayGain() : 1.f);
+                m_bgMusicLPW->setPan(params ? params->getPlayPan() : 0.f);
+            }
+        } else {
+            m_playBackgroundMusic->setChecked(true); // default on when track arrives
+        }
+    }
 }
 
 void
@@ -1932,6 +1997,7 @@ MainWindow::closeSession()
     // are destroyed, so they can cleanly remove their layers from the pane.
     teardownRealtimePitchLayer();
     teardownSingingTrackAnalyser();
+    teardownBackgroundMusic();
     m_pendingSingingModelId = {};
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
@@ -2095,6 +2161,174 @@ MainWindow::analyseNewSingingModel()
     m_pendingSingingModelId = {};
 
     setupSingingTrackAnalyser(singingModelId);
+}
+
+void
+MainWindow::openBackgroundMusic()
+{
+    QString path = getOpenFileName(FileFinder::AudioFile);
+    if (path.isEmpty()) return;
+    loadBackgroundMusic(path);
+}
+
+void
+MainWindow::loadBackgroundMusic(QString path)
+{
+    if (!m_document) {
+        QMessageBox::warning(this, tr("No session"),
+                             tr("<b>No session open</b><p>Please open a reference audio file first."));
+        return;
+    }
+
+    emit activity(tr("Load background music \"%1\"").arg(path));
+
+    // Tear down any previously loaded background music track.
+    teardownBackgroundMusic();
+
+    // Record the pane count before opening so we can remove the extra pane
+    // that openPath(CreateAdditionalModel) creates via AddPaneCommand.
+    // The background music doesn't need its own pane.
+    int paneCountBefore = m_paneStack ? m_paneStack->getPaneCount() : 0;
+
+    // Set the flag so modelAdded() captures the new model ID and skips
+    // singing-track analysis for this model.
+    m_loadingBackgroundMusic = true;
+    FileOpenStatus status = openPath(path, CreateAdditionalModel);
+    m_loadingBackgroundMusic = false;
+
+    if (status == FileOpenFailed) {
+        m_backgroundMusicModelId = {};
+        QMessageBox::critical(this, tr("Failed to open background music"),
+                              tr("<b>File open failed</b><p>File \"%1\" could not be opened").arg(path));
+        return;
+    } else if (status == FileOpenWrongMode) {
+        m_backgroundMusicModelId = {};
+        QMessageBox::critical(this, tr("Failed to open background music"),
+                              tr("<b>Audio required</b><p>Could not open \"%1\" as audio").arg(path));
+        return;
+    }
+
+    if (m_backgroundMusicModelId.isNone()) {
+        cerr << "loadBackgroundMusic: modelAdded did not capture a model ID — aborting" << endl;
+        return;
+    }
+
+    // Create the WaveformLayer for the background music BEFORE removing the
+    // orphan layers from the extra pane.  This ensures the background music
+    // model has at least one layer referencing it when the orphan is deleted,
+    // so Document::releaseModel() does not free it prematurely.
+    //
+    // Use createLayer() (not createEmptyLayer()) — the same path that
+    // Analyser::addWaveform() uses for the secondary analyser — then
+    // immediately rebind it to the background music model with setModel().
+    if (m_paneStack && m_paneStack->getPaneCount() > 0) {
+        Pane *pane = m_paneStack->getPane(0);
+        if (pane && m_document) {
+            Layer *rawLayer = m_document->createLayer(LayerFactory::Waveform);
+            m_backgroundMusicLayer = qobject_cast<WaveformLayer *>(rawLayer);
+            if (m_backgroundMusicLayer) {
+                m_document->setModel(m_backgroundMusicLayer, m_backgroundMusicModelId);
+                ColourDatabase *cdb = ColourDatabase::getInstance();
+                m_backgroundMusicLayer->setBaseColour(
+                    cdb->getColourIndex(tr("Green")));
+                m_document->addLayerToView(pane, m_backgroundMusicLayer);
+
+                // The waveform is only needed to register the model with
+                // the play source — we don't want it rendered on screen.
+                m_backgroundMusicLayer->showLayer(pane, false);
+
+                // Set initial audibility from the toggle state.
+                auto params = m_backgroundMusicLayer->getPlayParameters();
+                if (params) {
+                    bool wantAudible = !m_playBackgroundMusic ||
+                                       m_playBackgroundMusic->isChecked();
+                    params->setPlayAudible(wantAudible);
+                }
+
+                cerr << "loadBackgroundMusic: waveform layer added for model "
+                     << m_backgroundMusicModelId << endl;
+            } else {
+                cerr << "loadBackgroundMusic: failed to create WaveformLayer — aborting" << endl;
+                return;
+            }
+        }
+    }
+
+    // Remove the extra pane that openPath(CreateAdditionalModel) created.
+    // Now safe to delete the orphan WaveformLayer: our new layer already
+    // holds a reference to the model so Document::releaseModel() will not
+    // free it when the orphan is deleted.
+    if (m_paneStack) {
+        while (m_paneStack->getPaneCount() > paneCountBefore) {
+            Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
+            if (m_document && extra) {
+                while (extra->getLayerCount() > 0) {
+                    Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
+                    m_document->deleteLayer(orphan, true);
+                }
+            }
+            if (m_overview) m_overview->unregisterView(extra);
+            m_paneStack->deletePane(extra);
+        }
+    }
+
+    updateLayerStatuses();
+    updateMenuStates();
+}
+
+void
+MainWindow::teardownBackgroundMusic()
+{
+    if (m_backgroundMusicLayer) {
+        // Explicitly remove from play source before deleting the layer, so
+        // the model is removed from the mix even if layerInAView(false) is not
+        // triggered through the normal path.
+        if (m_playSource && !m_backgroundMusicModelId.isNone()) {
+            m_playSource->removeModel(m_backgroundMusicModelId);
+        }
+        if (m_document) {
+            m_document->deleteLayer(m_backgroundMusicLayer, true);
+        }
+        m_backgroundMusicLayer = nullptr;
+    }
+    m_backgroundMusicModelId = {};
+}
+
+void
+MainWindow::backgroundMusicToggled()
+{
+    if (!m_backgroundMusicLayer) return;
+    auto params = m_backgroundMusicLayer->getPlayParameters();
+    if (!params) return;
+    bool wantAudible = m_playBackgroundMusic && m_playBackgroundMusic->isChecked();
+    params->setPlayAudible(wantAudible);
+    if (m_bgMusicLPW) m_bgMusicLPW->setEnabled(wantAudible);
+    cerr << "backgroundMusicToggled: background music "
+         << (wantAudible ? "unmuted" : "muted") << endl;
+}
+
+void
+MainWindow::backgroundMusicGainChanged(float gain)
+{
+    if (!m_backgroundMusicLayer) return;
+    auto params = m_backgroundMusicLayer->getPlayParameters();
+    if (!params) return;
+    if (gain == 0.f) {
+        params->setPlayAudible(false);
+        if (m_playBackgroundMusic) m_playBackgroundMusic->setChecked(false);
+    } else {
+        params->setPlayAudible(true);
+        if (m_playBackgroundMusic) m_playBackgroundMusic->setChecked(true);
+        params->setPlayGain(gain);
+    }
+}
+
+void
+MainWindow::backgroundMusicPanChanged(float pan)
+{
+    if (!m_backgroundMusicLayer) return;
+    auto params = m_backgroundMusicLayer->getPlayParameters();
+    if (params) params->setPlayPan(pan);
 }
 
 void
@@ -4010,6 +4244,14 @@ MainWindow::modelAdded(ModelId model)
     auto dtvm = ModelById::getAs<DenseTimeValueModel>(model);
     if (dtvm) {
         cerr << "A dense time-value model (such as an audio file) has been loaded" << endl;
+
+        // If we're loading background music, capture the model ID and return —
+        // do NOT treat it as a singing track or queue any secondary analysis.
+        if (m_loadingBackgroundMusic) {
+            m_backgroundMusicModelId = model;
+            return;
+        }
+
         // If there is already a main model and this is a new additional
         // audio model (not the realtime pitch model), treat it as the
         // singing track to be analysed with the secondary colour scheme.
@@ -4274,6 +4516,7 @@ MainWindow::analyseNewMainModel()
         for (ModelId mid : m_document->getModels()) {
             if (mid == mainId) continue;
             if (mid == m_realtimePitchModelId) continue;
+            if (mid == m_backgroundMusicModelId) continue;
             if (ModelById::isa<WaveFileModel>(mid)) {
                 foundSinging = mid;
                 break;

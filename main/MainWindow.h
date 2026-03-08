@@ -69,6 +69,7 @@ protected slots:
 protected slots:
     virtual void openFile();
     virtual void openSingingTrack();
+    virtual void openBackgroundMusic();
     virtual void analyseNewSingingModel();
     virtual void openLocation();
     virtual void openRecentFile();
@@ -106,6 +107,9 @@ protected slots:
     virtual void playPitchToggled();
     virtual void playNotesToggled();
     virtual void playSingingAudioToggled();
+    virtual void backgroundMusicToggled();
+    virtual void backgroundMusicGainChanged(float gain);
+    virtual void backgroundMusicPanChanged(float pan);
 
     virtual void editDisplayExtents();
 
@@ -234,6 +238,19 @@ protected:
     QAction       *m_playSingingAudio;
     QAction       *m_playRefWhileRecording;
     QAction       *m_loadSingingTrackAction;
+
+    // Background music track: an additional audio file that plays alongside
+    // the reference track but is never analysed.  The toggle enables/disables
+    // mixing during both normal playback and recording.
+    sv::ModelId        m_backgroundMusicModelId;
+    sv::WaveformLayer *m_backgroundMusicLayer;
+    QAction           *m_loadBackgroundMusicAction;
+    QAction           *m_playBackgroundMusic;
+    sv::LevelPanToolButton *m_bgMusicLPW;
+    // True while loadBackgroundMusic() is calling openPath() so that
+    // modelAdded() can capture the model ID without treating it as a singing
+    // track or queuing a secondary analysis.
+    bool               m_loadingBackgroundMusic;
     sv::Fader     *m_fader;
     sv::AudioDial *m_playSpeed;
     QPushButton   *m_playSharpen;
@@ -304,6 +321,11 @@ protected:
     virtual void teardownSingingTrackAnalyser();
     virtual void setupRealtimePitchLayer();
     virtual void teardownRealtimePitchLayer();
+
+    // Background music helpers: load/tear-down a non-analysed audio track
+    // that plays alongside the reference track.
+    void loadBackgroundMusic(QString path);
+    void teardownBackgroundMusic();
 
     // Drain m_pendingExtraPanes: delete orphan layers and the pane widgets
     // that were deferred from record()'s pane-cleanup step.  Must be called
