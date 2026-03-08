@@ -120,6 +120,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_overview(0),
     m_showSingingPitch(nullptr),
     m_showSingingNotes(nullptr),
+    m_playSingingAudio(nullptr),
+    m_playRefWhileRecording(nullptr),
     m_loadSingingTrackAction(nullptr),
     m_mainMenusCreated(false),
     m_playbackMenu(0),
@@ -1393,6 +1395,55 @@ MainWindow::setupToolbars()
     connect(this, SIGNAL(canShowRealtimePitch(bool)), m_showSingingNotes, SLOT(setEnabled(bool)));
     m_showSingingNotes->setEnabled(false);
 
+    // Singing track audio playback toggle
+    spacer = new QLabel;
+    spacer->setFixedWidth(m_viewManager->scalePixelSize(10));
+    toolbar->addWidget(spacer);
+
+    m_playSingingAudio = toolbar->addAction(il.load("speaker"), tr("Play Singing Audio"));
+    m_playSingingAudio->setCheckable(true);
+    m_playSingingAudio->setChecked(true);
+    m_playSingingAudio->setToolTip(tr("Enable/disable playback of the recorded singing audio"));
+    connect(m_playSingingAudio, SIGNAL(triggered()), this, SLOT(playSingingAudioToggled()));
+    connect(this, SIGNAL(canShowRealtimePitch(bool)), m_playSingingAudio, SLOT(setEnabled(bool)));
+    m_playSingingAudio->setEnabled(false);
+
+    // Play reference track while recording — lets the singer hear the
+    // reference audio through headphones to time their performance.
+    spacer = new QLabel;
+    spacer->setFixedWidth(m_viewManager->scalePixelSize(30));
+    toolbar->addWidget(spacer);
+
+    {
+        QLabel *recLabel = new QLabel(tr("While recording:"));
+        QFont f = recLabel->font();
+        f.setPointSize(f.pointSize() - 1);
+        recLabel->setFont(f);
+        recLabel->setEnabled(false);
+        toolbar->addWidget(recLabel);
+    }
+
+    m_playRefWhileRecording = toolbar->addAction(il.load("speaker"),
+                                                  tr("Play Reference While Recording"));
+    m_playRefWhileRecording->setCheckable(true);
+    {
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        m_playRefWhileRecording->setChecked(
+            settings.value("playrefwhilerecording", false).toBool());
+        settings.endGroup();
+    }
+    m_playRefWhileRecording->setToolTip(
+        tr("Play the reference track through speakers/headphones during recording "
+           "so you can time your singing against it"));
+    connect(m_playRefWhileRecording, &QAction::toggled, this, [this](bool on) {
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        settings.setValue("playrefwhilerecording", on);
+        settings.endGroup();
+    });
+    connect(this, SIGNAL(canPlay(bool)), m_playRefWhileRecording, SLOT(setEnabled(bool)));
+
     // Spectrogram
     spacer = new QLabel;
     spacer->setFixedWidth(m_viewManager->scalePixelSize(30));
@@ -1717,6 +1768,15 @@ MainWindow::playNotesToggled()
 }
 
 void
+MainWindow::playSingingAudioToggled()
+{
+    if (m_analyser2) {
+        m_analyser2->toggleAudible(Analyser::Audio);
+    }
+    updateLayerStatuses();
+}
+
+void
 MainWindow::updateLayerStatuses()
 {
     m_showAudio->setChecked(m_analyser->isVisible(Analyser::Audio));
@@ -1761,6 +1821,15 @@ MainWindow::updateLayerStatuses()
             m_showSingingNotes->setChecked(m_analyser2->isVisible(Analyser::Notes));
         } else {
             m_showSingingNotes->setChecked(false);
+        }
+    }
+
+    if (m_playSingingAudio) {
+        m_playSingingAudio->setEnabled(m_analyser2 != nullptr);
+        if (m_analyser2) {
+            m_playSingingAudio->setChecked(m_analyser2->isAudible(Analyser::Audio));
+        } else {
+            m_playSingingAudio->setChecked(true); // default on when track arrives
         }
     }
 }
@@ -2617,12 +2686,24 @@ MainWindow::recordingStarted()
     // (including emit audioFileLoaded() -> panes created).
     QTimer::singleShot(0, this, [this]() {
         if (!m_recordingInProgress) {
-            // Recording was stopped before we got a chance to set up —
-            // nothing to do.
             return;
         }
         cerr << "MainWindow::recordingStarted (deferred): setting up realtime pitch layer" << endl;
         setupRealtimePitchLayer();
+
+        // If the "play reference while recording" toggle is on, start
+        // playback from frame 0 so the singer hears the reference track.
+        // The audio IO was already resumed by record() so m_playSource
+        // can be started directly without calling MainWindowBase::play()
+        // (which would stop recording if isRecording() is true).
+        if (m_recordingAsSingingTrack &&
+            m_playRefWhileRecording && m_playRefWhileRecording->isChecked() &&
+            m_playSource && !m_playSource->isPlaying()) {
+            cerr << "MainWindow::recordingStarted: starting reference playback" << endl;
+            m_viewManager->setPlaybackFrame(0);
+            m_playSource->play(0);
+        }
+
         updateLayerStatuses();
         updateMenuStates();
     });
@@ -2684,6 +2765,16 @@ MainWindow::recordingFinishedFull()
     m_recordingAsSingingTrack = false;
     m_currentRecordingModelId = {};
     teardownRealtimePitchLayer();
+
+    // Stop reference playback that was started for the singer's benefit.
+    // Suspend the audio IO so it doesn't keep consuming CPU while idle.
+    if (m_playSource && m_playSource->isPlaying()) {
+        cerr << "MainWindow::recordingFinishedFull: stopping reference playback" << endl;
+        m_playSource->stop();
+        if (m_audioIO) m_audioIO->suspend();
+        else if (m_playTarget) m_playTarget->suspend();
+    }
+
     updateLayerStatuses();
     updateMenuStates();
 }

@@ -105,6 +105,7 @@ protected slots:
     virtual void playAudioToggled();
     virtual void playPitchToggled();
     virtual void playNotesToggled();
+    virtual void playSingingAudioToggled();
 
     virtual void editDisplayExtents();
 
@@ -230,6 +231,8 @@ protected:
     // Actions/toolbar items for the singing track
     QAction       *m_showSingingPitch;
     QAction       *m_showSingingNotes;
+    QAction       *m_playSingingAudio;
+    QAction       *m_playRefWhileRecording;
     QAction       *m_loadSingingTrackAction;
     sv::Fader     *m_fader;
     sv::AudioDial *m_playSpeed;
