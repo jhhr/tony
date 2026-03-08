@@ -178,6 +178,53 @@ Analyser::fileClosed()
     m_reAnalysingSelection = Selection();
 }
 
+void
+Analyser::removeAllLayers()
+{
+    cerr << "Analyser::removeAllLayers" << endl;
+
+    // First discard any re-analysis candidate layers (these are not in
+    // m_layers, but they are registered with the document).
+    discardPitchCandidates();
+
+    // Remove and delete each layer this analyser owns, in reverse stacking
+    // order (Notes on top, then PitchTrack, Spectrogram, Audio at bottom).
+    // We iterate over a fixed order rather than the map itself because
+    // deleteLayer() can trigger layerAboutToBeDeleted() which modifies m_layers.
+    static const Component order[] = { Notes, Spectrogram, PitchTrack, Audio };
+
+    for (Component c : order) {
+        auto it = m_layers.find(c);
+        if (it == m_layers.end() || !it->second) continue;
+
+        Layer *layer = it->second;
+        it->second = nullptr; // clear before deleteLayer fires the slot
+
+        if (m_document) {
+            // Use deleteLayer(force=true) directly — do NOT call
+            // removeLayerFromView first.
+            //
+            // removeLayerFromView creates a RemoveLayerCommand in the undo
+            // history with m_added=false.  If deleteLayer then destroys the
+            // layer object, that command holds a dangling pointer.  When
+            // CommandHistory is later cleared (e.g. on closeSession) the
+            // RemoveLayerCommand destructor checks !m_added and calls
+            // m_d->deleteLayer(m_layer) on the already-deleted layer —
+            // use-after-free / crash, and the old model stays alive in the
+            // undo entry, causing its orange dots to reappear.
+            //
+            // deleteLayer(force=true) removes the layer from all views
+            // internally (without generating any undo command), then
+            // releases the model if unreferenced and deletes the layer.
+            // This is the correct path for a silent, non-undoable replace.
+            m_document->deleteLayer(layer, true);
+        }
+    }
+
+    // fileClosed() clears the rest of the state (candidates, selection, etc.)
+    fileClosed();
+}
+
 bool
 Analyser::getDisplayFrequencyExtents(double &min, double &max)
 {

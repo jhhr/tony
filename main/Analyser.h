@@ -73,6 +73,14 @@ public:
 
     // Discard any layers etc associated with the current document
     void fileClosed();
+
+    // Remove all layers this analyser owns from the pane and delete them
+    // from the document, then call fileClosed().  Use this instead of
+    // fileClosed() when the analyser is being torn down while the document
+    // is still alive (e.g. when replacing a singing-track recording).
+    // Unlike fileClosed(), this actually cleans up the view and the document
+    // model registry so no orphan layers or models remain.
+    void removeAllLayers();
 		       
     void setIntelligentActions(bool);
 

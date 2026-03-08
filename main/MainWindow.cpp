@@ -137,7 +137,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_withSpectrogram(withSpectrogram),
     m_recordingInProgress(false),
     m_recordingAsSingingTrack(false),
-    m_paneCountBeforeRecording(0)
+    m_paneCountBeforeRecording(0),
+    m_currentRecordingModelId()
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -1862,6 +1863,7 @@ MainWindow::closeSession()
     teardownRealtimePitchLayer();
     teardownSingingTrackAnalyser();
     m_pendingSingingModelId = {};
+    m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
 
     m_analyser->fileClosed();
@@ -1892,6 +1894,12 @@ MainWindow::closeSession()
         m_overview->unregisterView(pane);
         m_paneStack->deletePane(pane);
     }
+
+    // m_pendingExtraPanes holds panes that were moved to m_hiddenPanes via
+    // hidePane() in record().  The getHiddenPaneCount() loop above already
+    // handled them — they are now deleted.  Clear our list so the pointers
+    // are not used again.
+    m_pendingExtraPanes.clear();
 
     delete m_document;
     m_document = 0;
@@ -2025,7 +2033,11 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     if (!m_document) return;
     if (!m_paneStack || m_paneStack->getPaneCount() < 1) return;
 
-    // Reuse the main pane (pane 0) so both pitch tracks overlay each other
+    // Reuse the main pane (pane 0) so both pitch tracks overlay each other.
+    // NOTE: when called from the recording flow, m_pendingExtraPanes may hold
+    // extra panes that were hidden but not yet deleted (see record()).  We must
+    // check getPaneCount() AFTER accounting for those hidden panes.  Pane 0
+    // is always the main analysis pane created by analyseNewMainModel().
     Pane *pane = m_paneStack->getPane(0);
     if (!pane) return;
 
@@ -2050,8 +2062,25 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
                              tr("<b>Analysis failed</b><p>%1</p>").arg(error));
         delete m_analyser2;
         m_analyser2 = nullptr;
+        // Do NOT drain m_pendingExtraPanes here — nothing holds a reference
+        // to the recording model at this point, so deleteLayer(orphan, true)
+        // would free the live WritableWaveFileModel mid-capture → crash.
+        // The hidden extra pane will be cleaned up by closeSession()'s
+        // getHiddenPaneCount() loop, or on the next successful recording.
         return;
     }
+
+    // m_analyser2->newFileLoaded() has now created its own WaveformLayer
+    // referencing singingModelId.  This means it is safe to delete the orphan
+    // WaveformLayer that MainWindowBase::record() put in the extra pane:
+    // Document::releaseModel() will not free singingModelId because
+    // m_analyser2's layer still holds a reference to it.
+    //
+    // We must do this BEFORE calling m_paneStack->deletePane(), because
+    // deleteLayer(force=true) iterates Document::m_layerViewMap to remove the
+    // layer from any views — and that map still contains the live pane pointer.
+    // After deletePane() the pointer would be dangling → crash.
+    drainPendingExtraPanes();
 
     // Re-stack layers so the primary pitch track stays on top
     m_analyser->getLayer(Analyser::PitchTrack);  // ensure primary is on top
@@ -2066,11 +2095,126 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
 }
 
 void
+MainWindow::drainPendingExtraPanes()
+{
+    // This helper is called from setupSingingTrackAnalyser() after m_analyser2
+    // has been initialised with its own WaveformLayer referencing the recording
+    // model.  At that point it is safe to call deleteLayer(orphan, true) on the
+    // extra pane's waveform layer because:
+    //   (a) m_analyser2's WaveformLayer holds a reference to the model, so
+    //       Document::releaseModel() will not free it.
+    //   (b) The extra pane widget is still alive (we haven't called deletePane
+    //       yet), so Document::m_layerViewMap iteration in deleteLayer(true) is
+    //       valid and won't dereference a dangling pointer.
+    //
+    // It is also called from teardownSingingTrackAnalyser() and closeSession()
+    // as a safety net — in those contexts m_document may be null so we just
+    // call deletePane() to destroy the widget without touching the document.
+    if (m_pendingExtraPanes.empty()) return;
+
+    cerr << "MainWindow::drainPendingExtraPanes: draining "
+         << m_pendingExtraPanes.size() << " pending extra pane(s)" << endl;
+
+    for (Pane *extra : m_pendingExtraPanes) {
+        if (!extra) continue;
+
+        if (m_document) {
+            // The extra pane created by MainWindowBase::record() in
+            // RecordCreateAdditionalModel mode contains two layers:
+            //
+            //   1. m_timeRulerLayer — a SHARED layer that also lives in pane 0.
+            //      We must NOT call deleteLayer() on it; that would remove the
+            //      ruler from every view including pane 0.  Instead, use
+            //      removeLayerFromView(extra, layer) so only the extra pane's
+            //      entry is removed from m_layerViewMap (this creates an undo
+            //      command, but the layer pointer remains valid so no crash).
+            //
+            //   2. The orphan WaveformLayer from createImportedLayer() — unique
+            //      to this pane, with the WritableWaveFileModel as its model.
+            //      deleteLayer(force=true) is safe here because:
+            //        (a) m_analyser2 was set up before this drain, so its
+            //            WaveformLayer still holds a reference to the model
+            //            → releaseModel() will not free the live recording.
+            //        (b) The extra pane widget is still alive → m_layerViewMap
+            //            iteration in deleteLayer(true) is valid.
+            //
+            // We distinguish them by whether the model is a WritableWaveFileModel.
+            int layerCount = extra->getLayerCount();
+            for (int i = layerCount - 1; i >= 0; --i) {
+                Layer *lay = extra->getLayer(i);
+                if (!lay) continue;
+
+                ModelId layerModel = lay->getModel();
+
+                if (ModelById::isa<WritableWaveFileModel>(layerModel)) {
+                    // Orphan recording waveform: full delete (safe because
+                    // m_analyser2's WaveformLayer still holds the model ref).
+                    // deleteLayer(force=true) iterates m_layerViewMap and calls
+                    // view->removeLayer() — the pane is still alive here so
+                    // the pointer is valid.
+                    cerr << "MainWindow::drainPendingExtraPanes: deleteLayer orphan "
+                         << lay << " [" << lay->objectName().toStdString()
+                         << "] (WritableWaveFileModel)" << endl;
+                    m_document->deleteLayer(lay, true);
+                } else {
+                    // Shared layer (e.g. TimeRuler): we cannot call deleteLayer
+                    // because that would remove the layer from ALL views.  We
+                    // also cannot call removeLayerFromView because that pushes a
+                    // RemoveLayerCommand onto the undo stack with a raw pointer
+                    // to the extra pane — if undo is later triggered the pane
+                    // is already destroyed → crash.
+                    //
+                    // Instead, use detachLayerFromView (no undo command): removes
+                    // the layer from the pane's display list AND updates
+                    // m_layerViewMap so deletePane() leaves no dangling pointer.
+                    cerr << "MainWindow::drainPendingExtraPanes: detachLayerFromView "
+                         << lay << " [" << lay->objectName().toStdString()
+                         << "] (shared layer, keeping in other views)" << endl;
+                    m_document->detachLayerFromView(extra, lay);
+                }
+            }
+        }
+
+        // Now destroy the pane widget.  By this point all WritableWaveFileModel
+        // layers have been deleted from the document and m_layerViewMap no
+        // longer references this pane for them.  Shared layers were properly
+        // detached via removeLayerFromView.  deletePane() can safely destroy
+        // the widget without leaving dangling pointers in m_layerViewMap.
+        if (m_paneStack) {
+            m_paneStack->deletePane(extra);
+        }
+    }
+
+    m_pendingExtraPanes.clear();
+}
+
+void
 MainWindow::teardownSingingTrackAnalyser()
 {
     if (!m_analyser2) return;
 
-    m_analyser2->fileClosed();
+    // removeAllLayers() removes each layer from the pane and deletes it from
+    // the document (releasing the model if unreferenced), then calls
+    // fileClosed() to clear the analyser's internal state.  This is the
+    // correct teardown when the document is still alive (e.g. when replacing
+    // a previous singing-track recording with a new one).
+    //
+    // NOTE: we do NOT call drainPendingExtraPanes() here.  The pending extra
+    // panes always belong to the most-recently-started recording (the one
+    // about to begin, not the one being torn down).  Draining them here would
+    // call deleteLayer(orphan) while m_analyser2 for the NEW recording doesn't
+    // exist yet, so nothing would hold the new model reference → crash.
+    // drainPendingExtraPanes() is called from setupSingingTrackAnalyser() once
+    // m_analyser2 is set up and its WaveformLayer holds the model reference.
+    // closeSession() handles any residual hidden panes via its own
+    // getHiddenPaneCount() loop using removeLayerFromView + deletePane.
+    if (m_document) {
+        m_analyser2->removeAllLayers();
+    } else {
+        // Document is already gone (e.g. closeSession destroyed it); just
+        // clear the in-memory state without touching the document.
+        m_analyser2->fileClosed();
+    }
     delete m_analyser2;
     m_analyser2 = nullptr;
 }
@@ -2107,22 +2251,44 @@ MainWindow::setupRealtimePitchLayer()
     ModelId audioSourceId;
 
     if (m_recordingAsSingingTrack && m_document) {
-        // Scan document models for any WritableWaveFileModel (the recording).
-        ModelId mainId = getMainModelId();
-        for (ModelId mid : m_document->getModels()) {
-            if (mid == mainId) continue;
-            if (ModelById::isa<WritableWaveFileModel>(mid)) {
-                audioSourceId = mid;
-                cerr << "setupRealtimePitchLayer: found singing-track recording model "
-                     << mid << endl;
-                break;
+        // Use the model ID captured in modelAdded() when the recording
+        // WritableWaveFileModel was first registered.  Do NOT scan all
+        // document models here: a previous recording's WritableWaveFileModel
+        // may still be registered (because its orphan waveform layer, which
+        // was view-detached but not deleted from m_document->m_layers, holds
+        // a reference that prevents releaseModel() from freeing it).  A scan
+        // would find that stale model first and point the tracker at the
+        // completed old recording, replaying its entire pitch content as dots.
+        if (!m_currentRecordingModelId.isNone()) {
+            audioSourceId = m_currentRecordingModelId;
+            cerr << "setupRealtimePitchLayer: using captured recording model "
+                 << audioSourceId << endl;
+        } else {
+            // Fallback: m_currentRecordingModelId not yet set (modelAdded
+            // deferred lambda hasn't fired).  Scan as last resort but prefer
+            // the model with the fewest frames (most recently started).
+            ModelId mainId = getMainModelId();
+            sv_frame_t fewestFrames = -1;
+            for (ModelId mid : m_document->getModels()) {
+                if (mid == mainId) continue;
+                if (ModelById::isa<WritableWaveFileModel>(mid)) {
+                    auto wfm = ModelById::getAs<WritableWaveFileModel>(mid);
+                    sv_frame_t frames = wfm ? wfm->getFrameCount() : 0;
+                    if (audioSourceId.isNone() || frames < fewestFrames) {
+                        audioSourceId = mid;
+                        fewestFrames = frames;
+                    }
+                }
             }
-        }
-        if (audioSourceId.isNone()) {
-            // Fall back to main model in case the search failed.
-            audioSourceId = mainId;
-            cerr << "setupRealtimePitchLayer: could not find singing-track recording "
-                    "model, falling back to main model" << endl;
+            if (audioSourceId.isNone()) {
+                audioSourceId = mainId;
+                cerr << "setupRealtimePitchLayer: could not find singing-track "
+                        "recording model, falling back to main model" << endl;
+            } else {
+                cerr << "setupRealtimePitchLayer: fallback scan found recording "
+                     << "model " << audioSourceId
+                     << " (fewest frames=" << fewestFrames << ")" << endl;
+            }
         }
     } else {
         audioSourceId = getMainModelId();
@@ -2200,13 +2366,26 @@ MainWindow::teardownRealtimePitchLayer()
     }
 
     if (m_realtimePitchLayer) {
-        if (m_paneStack && m_paneStack->getPaneCount() > 0) {
-            Pane *pane = m_paneStack->getPane(0);
-            if (pane) {
-                m_document->removeLayerFromView(pane, m_realtimePitchLayer);
-            }
+        // Use deleteLayer(force=true) directly — do NOT call
+        // removeLayerFromView first.
+        //
+        // removeLayerFromView creates a RemoveLayerCommand in the undo
+        // history with m_added=false.  If deleteLayer then destroys the
+        // layer object, that command holds a dangling pointer.  When
+        // CommandHistory is later cleared (e.g. on the next closeSession)
+        // the RemoveLayerCommand destructor checks !m_added and calls
+        // m_d->deleteLayer(m_layer) on the already-deleted layer —
+        // use-after-free / crash, and the old SparseTimeValueModel can
+        // stay alive inside the undo entry long enough that its orange
+        // dots reappear during the next recording.
+        //
+        // deleteLayer(force=true) removes the layer from all views
+        // internally (without generating any undo command), then
+        // releases the model if unreferenced and deletes the layer.
+        // This is the correct path for a silent, non-undoable teardown.
+        if (m_document) {
+            m_document->deleteLayer(m_realtimePitchLayer, true);
         }
-        m_document->deleteLayer(m_realtimePitchLayer, false);
         m_realtimePitchLayer = nullptr;
     }
 
@@ -2221,6 +2400,17 @@ MainWindow::teardownRealtimePitchLayer()
 void
 MainWindow::record()
 {
+    // If recording is already in progress this click is a STOP request, not a
+    // start request.  Delegate straight to the base class (which calls stop())
+    // without doing any pre-flight teardown.  The teardown would destroy
+    // m_analyser2 and remove the live recording model from m_playSource while
+    // audio is still being captured — causing a crash or a null m_analyser2
+    // when recordCompleted() fires analyseNow() moments later.
+    if (m_recordTarget && m_recordTarget->isRecording()) {
+        MainWindowBase::record();
+        return;
+    }
+
     // If a reference track is already loaded, record the microphone input as
     // the singing track rather than replacing the whole session.
     // We do this by temporarily switching to RecordCreateAdditionalModel so
@@ -2235,6 +2425,102 @@ MainWindow::record()
 
     if (haveReference) {
         cerr << "MainWindow::record: reference track loaded — recording as singing track" << endl;
+
+        // If a previous singing-track recording (or loaded singing file) is
+        // still active, discard it now before we start capturing a new one.
+        // teardownRealtimePitchLayer() stops any live tracker still running
+        // (edge case: user re-records before pYIN finished on the last one).
+        // teardownSingingTrackAnalyser() removes the old recording's layers
+        // from the pane and releases its model so the document is clean.
+        // m_pendingSingingModelId is cleared so the modelAdded() race guard
+        // doesn't block the new recording's model from being registered.
+        if (m_realtimePitchTracker || m_realtimePitchLayer) {
+            cerr << "MainWindow::record: tearing down leftover realtime pitch layer" << endl;
+            teardownRealtimePitchLayer();
+        }
+
+        // Pre-flight orphan cleanup: delete the WaveformLayer that
+        // MainWindowBase::record() created via createImportedLayer() for the
+        // previous singing recording, and remove that model from m_playSource.
+        //
+        // This MUST be done before teardownSingingTrackAnalyser() (which calls
+        // removeAllLayers() and would otherwise release the singing model while
+        // the orphan layer still holds a reference) AND before deletePane()
+        // (which would destroy the extra pane and leave a dangling pointer in
+        // m_document->m_layerViewMap for the orphan layer — causing a crash in
+        // deleteLayer(true) when it tries to call removeLayer on the dead pane).
+        //
+        // At this point the extra pane is still alive (deletePane hasn't run),
+        // so m_layerViewMap contains a valid pane pointer, and deleteLayer(true)
+        // is safe.
+        //
+        // Two cases arise depending on when the user presses Record again:
+        //
+        // (A) User re-records while pYIN is still running (or before
+        //     recordingFinishedFull() has fired): m_currentRecordingModelId
+        //     is still set to the previous recording's WritableWaveFileModel.
+        //
+        // (B) User re-records after pYIN has completed: recordingFinishedFull()
+        //     already cleared m_currentRecordingModelId to {}.  However,
+        //     m_analyser2 is still alive and its getMainModelId() still returns
+        //     the previous singing model's ID (fileClosed() clears m_layers but
+        //     NOT m_fileModel).  We use that ID for the orphan scan instead.
+        //
+        // In both cases we identify orphan layers by scanning all document
+        // layers for any layer whose model matches the previous singing model ID,
+        // excluding layers that m_analyser2 owns (those are cleaned up by
+        // removeAllLayers() inside teardownSingingTrackAnalyser() below).
+        {
+            ModelId prevSingingModelId = m_currentRecordingModelId;
+            if (prevSingingModelId.isNone() && m_analyser2) {
+                prevSingingModelId = m_analyser2->getMainModelId();
+                if (!prevSingingModelId.isNone()) {
+                    cerr << "MainWindow::record: m_currentRecordingModelId cleared "
+                         << "(post-pYIN re-record); using m_analyser2 model id "
+                         << prevSingingModelId << " for orphan cleanup" << endl;
+                }
+            }
+
+            if (m_document && !prevSingingModelId.isNone()) {
+                std::vector<Layer *> orphans;
+                for (Layer *layer : m_document->getLayers()) {
+                    if (layer->getModel() != prevSingingModelId) continue;
+                    // Skip layers owned by m_analyser2 — removeAllLayers() handles those.
+                    bool ownedByAnalyser2 = false;
+                    if (m_analyser2) {
+                        for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
+                            if (m_analyser2->getLayer(static_cast<Analyser::Component>(c)) == layer) {
+                                ownedByAnalyser2 = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!ownedByAnalyser2) {
+                        orphans.push_back(layer);
+                    }
+                }
+                for (Layer *orphan : orphans) {
+                    cerr << "MainWindow::record: deleting orphan layer " << orphan
+                         << " referencing previous singing model "
+                         << prevSingingModelId << endl;
+                    m_document->deleteLayer(orphan, true);
+                }
+                // Explicitly remove from play source — belt-and-suspenders in case
+                // deleteLayer(true)'s layerInAView(false) path didn't fire.
+                if (m_playSource) {
+                    m_playSource->removeModel(prevSingingModelId);
+                }
+                m_currentRecordingModelId = {};
+            }
+        }
+
+        if (m_analyser2) {
+            cerr << "MainWindow::record: tearing down previous singing-track analyser" << endl;
+            teardownSingingTrackAnalyser();
+        }
+        m_pendingSingingModelId = {};
+        m_recordingInProgress = false;
+
         m_recordingAsSingingTrack = true;
         // Remember pane count so we can prune the extra pane that
         // MainWindowBase::record() creates via AddPaneCommand for the
@@ -2258,34 +2544,48 @@ MainWindow::record()
     // layer for the recording into pane 0, so the auto-created extra pane is
     // redundant and visually confusing.
     //
-    // IMPORTANT: do NOT call m_document->deleteLayer() here.  The extra pane
-    // contains a WaveformLayer whose model is the WritableWaveFileModel that
-    // is currently being recorded into.  deleteLayer() calls releaseModel(),
-    // which — since this waveform layer is the only layer referencing it —
-    // destroys the WritableWaveFileModel while the AudioCallbackRecordTarget
-    // is still writing to it, causing a crash.
+    // WHY WE CANNOT DELETE THE ORPHAN LAYER HERE:
+    // At this point m_analyser2 has NOT yet been created — its setup is deferred
+    // via QTimer::singleShot(0) queued inside modelAdded().  The orphan
+    // WaveformLayer in the extra pane is currently the ONLY layer referencing
+    // the WritableWaveFileModel being recorded into.  Calling
+    // deleteLayer(orphan, true) would invoke Document::releaseModel(), which
+    // would destroy the live recording model mid-capture — crash.
     //
-    // Instead, directly detach each layer from the pane view (Pane::removeLayer)
-    // without going through the Document.  The layers remain in the Document's
-    // internal layer list and will be cleaned up when the document is closed or
-    // the model is properly released later (via setupSingingTrackAnalyser which
-    // will take ownership of the model through its own waveform layer).
+    // WHY WE CANNOT CALL Pane::removeLayer() + deletePane() HERE:
+    // Pane::removeLayer() removes the layer from the View's internal display
+    // list but does NOT update Document::m_layerViewMap.  After deletePane()
+    // destroys the widget, m_layerViewMap still contains the now-dangling pane
+    // pointer.  On the next recording attempt, the pre-flight orphan cleanup
+    // calls deleteLayer(orphan, true), which iterates m_layerViewMap and calls
+    // (*j)->removeLayer(layer) on the stale pointer — use-after-free crash.
+    //
+    // SOLUTION: use PaneStack::hidePane() to move the extra pane out of the
+    // visible list (so getPaneCount() drops back and the UI doesn't show it)
+    // while keeping the widget alive with valid m_layerViewMap entries.
+    // Store the pane in m_pendingExtraPanes.  setupSingingTrackAnalyser() will
+    // drain that list once m_analyser2 is set up and its WaveformLayer holds a
+    // reference to the recording model, at which point deleteLayer(orphan, true)
+    // is safe (the model won't be freed because m_analyser2's layer still refs it)
+    // and deletePane() can safely destroy the now-clean pane widget.
     if (m_recordingAsSingingTrack && m_paneStack) {
         while (m_paneStack->getPaneCount() > m_paneCountBeforeRecording) {
             Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
-            if (extra) {
-                // Detach layers from this view only — do not delete them or
-                // release their models.  Pane::removeLayer just removes the
-                // layer from the view's display list; it does not touch the
-                // Document model registry.
-                while (extra->getLayerCount() > 0) {
-                    Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
-                    orphan->setLayerDormant(extra, true);
-                    extra->removeLayer(orphan);
-                }
-            }
+            if (!extra) break;
+
+            // Unregister from the overview before hiding so it stops rendering.
             if (m_overview) m_overview->unregisterView(extra);
-            m_paneStack->deletePane(extra);
+
+            // hidePane() moves the pane from the visible list to m_hiddenPanes,
+            // calls pw->hide() on the widget, and updates getPaneCount() — so
+            // this while loop will terminate correctly.
+            m_paneStack->hidePane(extra);
+
+            // Store for deferred cleanup in setupSingingTrackAnalyser().
+            m_pendingExtraPanes.push_back(extra);
+
+            cerr << "MainWindow::record: hiding extra pane " << extra
+                 << " — deferred deletion queued for setupSingingTrackAnalyser" << endl;
         }
     }
 }
@@ -2382,6 +2682,7 @@ MainWindow::recordingFinishedFull()
     cerr << "MainWindow::recordingFinishedFull: pYIN done, removing realtime pitch layer" << endl;
     m_recordingInProgress = false;
     m_recordingAsSingingTrack = false;
+    m_currentRecordingModelId = {};
     teardownRealtimePitchLayer();
     updateLayerStatuses();
     updateMenuStates();
@@ -3618,8 +3919,13 @@ MainWindow::modelAdded(ModelId model)
                     // recorded into.  Set up m_analyser2 with waveform/
                     // visualisation layers but defer pYIN until recording
                     // finishes (analyseNow() will call analyseExistingFile()).
-                    // Defer one event-loop tick so the model is fully
-                    // registered with the document before we touch it.
+                    // Also store the model ID so setupRealtimePitchLayer()
+                    // can target this exact model rather than scanning all
+                    // document models (which would wrongly pick up a previous
+                    // recording's WritableWaveFileModel that is still
+                    // registered because its orphan waveform layer prevents
+                    // releaseModel() from freeing it).
+                    m_currentRecordingModelId = model;
                     QTimer::singleShot(0, this, [this, model]() {
                         m_pendingSingingModelId = {};
                         setupSingingTrackAnalyser(model, /*deferAnalysis=*/true);

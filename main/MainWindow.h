@@ -20,6 +20,8 @@
 #include "Analyser.h"
 #include "RealtimePitchTracker.h"
 
+#include <vector>
+
 #include "data/model/SparseTimeValueModel.h"
 
 namespace sv {
@@ -300,6 +302,15 @@ protected:
     virtual void setupRealtimePitchLayer();
     virtual void teardownRealtimePitchLayer();
 
+    // Drain m_pendingExtraPanes: delete orphan layers and the pane widgets
+    // that were deferred from record()'s pane-cleanup step.  Must be called
+    // after m_analyser2 has created its WaveformLayer (so deleteLayer won't
+    // free the recording model), and while the pane widgets are still alive
+    // (so m_layerViewMap iteration in deleteLayer(force=true) is valid).
+    // Also called as a safety net from teardownSingingTrackAnalyser() and
+    // closeSession() to avoid leaking widgets.
+    void drainPendingExtraPanes();
+
     // When loadSingingTrack opens an additional audio file, modelAdded()
     // stores the resulting ModelId here so analyseNewSingingModel() can
     // pick it up on the next event-loop iteration.
@@ -321,6 +332,28 @@ protected:
     // count are extra panes created by AddPaneCommand for the recording's
     // waveform layer; we remove them so both tracks share pane 0.
     int         m_paneCountBeforeRecording;
+
+    // The WritableWaveFileModel being recorded into in the current (or most
+    // recent) singing-track recording.  Set in modelAdded() when
+    // m_recordingAsSingingTrack is true, cleared in closeSession() and
+    // recordingFinishedFull().  Used by setupRealtimePitchLayer() to
+    // identify the correct audio source model without scanning all document
+    // models — a scan would incorrectly pick up a previous recording's
+    // WritableWaveFileModel that is still registered in the document because
+    // its orphan waveform layer (view-detached but still in m_document's
+    // layer list) holds a reference that prevents releaseModel() from
+    // freeing it.
+    sv::ModelId m_currentRecordingModelId;
+
+    // Extra panes created by MainWindowBase::record() via AddPaneCommand
+    // that we want to hide immediately but cannot delete yet because
+    // m_analyser2 hasn't been set up yet (it is deferred via QTimer::singleShot).
+    // Stored here so that setupSingingTrackAnalyser() can properly delete
+    // them — AFTER m_analyser2 has created its own WaveformLayer referencing
+    // the recording model, making it safe to call deleteLayer(orphan, true)
+    // on the extra pane's waveform layer without releasing the recording model.
+    // Also drained by teardownSingingTrackAnalyser() and closeSession().
+    std::vector<sv::Pane *> m_pendingExtraPanes;
 
     virtual void octaveShift(bool up);
 
