@@ -19,11 +19,14 @@
 #include "data/model/Model.h"
 #include "base/Event.h"
 
+#include "bqfft/FFT.h"
+
 #include <cmath>
 #include <algorithm>
 #include <iostream>
 
 using namespace sv;
+using namespace breakfastquay;
 using std::cerr;
 using std::endl;
 using std::vector;
@@ -39,12 +42,12 @@ RealtimePitchTracker::RealtimePitchTracker(ModelId audioSourceId,
       m_threshold(0.15),
       m_running(false),
       m_nextFrameToProcess(0),
-      m_timer(new QTimer(this))
+      m_timer(new QTimer(this)),
+      m_fft(nullptr)
 {
-    // Poll for new audio every ~50 ms on the GUI thread.
-    // At 44100 Hz this gives us roughly 2205 new samples per tick,
-    // enough for 4+ YIN hops (kHopSize = 512).
-    m_timer->setInterval(50);
+    // Poll for new audio every ~20 ms. Smaller interval reduces the lag
+    // between the singer producing a note and the dot appearing on screen.
+    m_timer->setInterval(20);
     connect(m_timer, &QTimer::timeout,
             this, &RealtimePitchTracker::pollAndProcess);
 }
@@ -52,6 +55,7 @@ RealtimePitchTracker::RealtimePitchTracker(ModelId audioSourceId,
 RealtimePitchTracker::~RealtimePitchTracker()
 {
     stop();
+    delete m_fft;
 }
 
 void
@@ -59,6 +63,9 @@ RealtimePitchTracker::start()
 {
     m_nextFrameToProcess = 0;
     m_running = true;
+    // Reset FFT so it is recreated fresh for the new recording's sample rate.
+    delete m_fft;
+    m_fft = nullptr;
     m_timer->start();
     cerr << "RealtimePitchTracker: started" << endl;
 }
@@ -96,6 +103,10 @@ RealtimePitchTracker::pollAndProcess()
 
     double sr = audioModel->getSampleRate();
 
+    // Lag range: larger lag → lower frequency
+    int minLag = std::max(1, (int)std::floor(sr / m_maxFreq));
+    int maxLag = std::min(kWindowSize / 2 - 2, (int)std::ceil(sr / m_minFreq));
+
     // Process as many complete windows as are available, starting
     // from where we left off last time.
     sv_frame_t pos = m_nextFrameToProcess;
@@ -113,7 +124,18 @@ RealtimePitchTracker::pollAndProcess()
 
         std::vector<float> raw(rawFv.begin(), rawFv.end());
 
-        double hz = yinPitch(raw, sr, m_minFreq, m_maxFreq, m_threshold);
+        // --- FFT-based YIN ---
+        vector<double> diff;
+        yinDifferenceFFT(raw, diff);
+        yinCMND(diff);
+        double lagSamples = yinFindPitch(diff, minLag, maxLag, m_threshold);
+
+        double hz = 0.0;
+        if (lagSamples > 0.0) {
+            double candidate = sr / lagSamples;
+            if (candidate >= m_minFreq && candidate <= m_maxFreq)
+                hz = candidate;
+        }
 
         // Frame position of the centre of the analysis window
         sv_frame_t centreFrame = pos + kWindowSize / 2;
@@ -131,31 +153,78 @@ RealtimePitchTracker::pollAndProcess()
 }
 
 // ---------------------------------------------------------------------------
-// YIN algorithm
+// YIN algorithm — FFT-accelerated difference function
 // Reference: de Cheveigné & Kawahara, "YIN, a fundamental frequency
 // estimator for speech and music", JASA 111(4), 2002.
-// We implement Steps 1–5 (difference function, cumulative mean
-// normalised difference, absolute threshold + parabolic interpolation).
+// The difference function (Step 2) uses FFT-based autocorrelation
+// (O(n log n)) instead of the direct sum (O(n²)).
+// Steps 3–5 (CMND, absolute threshold, parabolic interpolation) are
+// the same as the original formulation.
 // ---------------------------------------------------------------------------
 
 void
-RealtimePitchTracker::yinDifference(const vector<float> &buf,
-                                     vector<double> &diff)
+RealtimePitchTracker::yinDifferenceFFT(const vector<float> &buf,
+                                        vector<double> &diff)
 {
-    int windowSize = (int)buf.size();
-    int halfSize   = windowSize / 2;
-    diff.assign(halfSize, 0.0);
+    // buf has size kWindowSize (= 2 * halfSize).
+    // YIN treats the first halfSize samples as the "signal" and uses
+    // lags 0..halfSize-1, requiring access up to buf[halfSize + tau].
+    int frameSize = (int)buf.size();  // kWindowSize
+    int halfSize  = frameSize / 2;    // yinBufferSize
+    int fftBins   = halfSize + 1;     // complex bins from real FFT of frameSize
 
-    // d[0] is defined as 0
-    diff[0] = 0.0;
+    // Lazy-create FFT (reused across hops — same size every call).
+    if (!m_fft) {
+        m_fft = new FFT(frameSize);
+    }
 
+    // --- Power terms (iterative, O(n)) ---
+    // powerTerms[tau] = sum_{j=tau}^{halfSize+tau-1} buf[j]^2
+    vector<double> powerTerms(halfSize);
+    powerTerms[0] = 0.0;
+    for (int j = 0; j < halfSize; ++j)
+        powerTerms[0] += double(buf[j]) * double(buf[j]);
     for (int tau = 1; tau < halfSize; ++tau) {
-        double sum = 0.0;
-        for (int j = 0; j < halfSize; ++j) {
-            double delta = double(buf[j]) - double(buf[j + tau]);
-            sum += delta * delta;
-        }
-        diff[tau] = sum;
+        powerTerms[tau] = powerTerms[tau-1]
+            - double(buf[tau-1])          * double(buf[tau-1])
+            + double(buf[tau + halfSize]) * double(buf[tau + halfSize]);
+    }
+
+    // --- Forward FFT of the full input ---
+    vector<float> audioReal(fftBins), audioImag(fftBins);
+    m_fft->forward(buf.data(), audioReal.data(), audioImag.data());
+
+    // --- Kernel: reversed first half, zero-padded to frameSize ---
+    // Convolving x[0..frameSize-1] with this kernel gives the
+    // YIN-style autocorrelation via the overlap at lag+halfSize-1.
+    vector<float> kernel(frameSize, 0.0f);
+    for (int j = 0; j < halfSize; ++j)
+        kernel[j] = buf[halfSize - 1 - j];
+    vector<float> kernelReal(fftBins), kernelImag(fftBins);
+    m_fft->forward(kernel.data(), kernelReal.data(), kernelImag.data());
+
+    // --- Complex multiply in frequency domain ---
+    vector<float> acfReal(fftBins), acfImag(fftBins);
+    for (int j = 0; j < fftBins; ++j) {
+        acfReal[j] = audioReal[j]*kernelReal[j] - audioImag[j]*kernelImag[j];
+        acfImag[j] = audioReal[j]*kernelImag[j] + audioImag[j]*kernelReal[j];
+    }
+
+    // --- Inverse FFT → time-domain autocorrelation ---
+    vector<float> acfOut(frameSize);
+    m_fft->inverse(acfReal.data(), acfImag.data(), acfOut.data());
+
+    // bqfft inverse is unnormalized (unlike vamp FFT which divides by n).
+    const double scale = 1.0 / frameSize;
+
+    // --- Compute difference function ---
+    // d[tau] = powerTerms[0] + powerTerms[tau] - 2*r[tau]
+    // r[tau] lives at acfOut[tau + halfSize - 1] after the convolution.
+    diff.assign(halfSize, 0.0);
+    diff[0] = 0.0;
+    for (int tau = 1; tau < halfSize; ++tau) {
+        diff[tau] = powerTerms[0] + powerTerms[tau]
+                    - 2.0 * double(acfOut[tau + halfSize - 1]) * scale;
     }
 }
 
@@ -222,31 +291,3 @@ RealtimePitchTracker::yinFindPitch(const vector<double> &cmnd,
     return refined;
 }
 
-double
-RealtimePitchTracker::yinPitch(const vector<float> &window,
-                                double sr,
-                                double minFreq, double maxFreq,
-                                double thresh)
-{
-    int halfSize = (int)window.size() / 2;
-
-    // Lag range: larger lag → lower frequency
-    int minLag = std::max(1, (int)std::floor(sr / maxFreq));
-    int maxLag = std::min(halfSize - 2, (int)std::ceil(sr / minFreq));
-
-    if (minLag >= maxLag) return 0.0;
-
-    vector<double> diff;
-    yinDifference(window, diff);
-    yinCMND(diff);
-
-    double lagSamples = yinFindPitch(diff, minLag, maxLag, thresh);
-    if (lagSamples <= 0.0) return 0.0;
-
-    double hz = sr / lagSamples;
-
-    // Final range check (parabolic interpolation can push slightly out)
-    if (hz < minFreq || hz > maxFreq) return 0.0;
-
-    return hz;
-}

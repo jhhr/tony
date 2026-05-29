@@ -28,6 +28,10 @@ namespace sv {
 class WritableWaveFileModel;
 }
 
+namespace breakfastquay {
+class FFT;
+}
+
 /**
  * RealtimePitchTracker polls a WritableWaveFileModel (the model being
  * filled during a live microphone recording) for new audio samples and
@@ -139,31 +143,27 @@ private:
     sv::sv_frame_t      m_nextFrameToProcess;
 
     // --- Processing parameters ---
-    // Window size and hop size in samples.
-    // At 44 100 Hz: window ≈ 46 ms, hop ≈ 12 ms.
+    // Window size: 2048 samples @ 44100 Hz ≈ 46 ms (two full periods of 60 Hz).
+    // Hop size: 256 samples ≈ 5.8 ms — finer dot density than the old 512.
     static const int    kWindowSize = 2048;
-    static const int    kHopSize    = 512;
+    static const int    kHopSize    = 256;
 
     // --- Timer ---
     QTimer             *m_timer;
 
+    // --- FFT for fast YIN difference function ---
+    breakfastquay::FFT         *m_fft;   // lazy-created on first poll
+
     // --- YIN helpers ---
 
     /**
-     * Run the YIN algorithm on a single window of audio and return
-     * the estimated fundamental frequency in Hz, or 0 if unvoiced.
+     * FFT-based difference function (O(n log n) vs the naive O(n²)).
+     * Computes d[tau] = sum_{j=0}^{halfSize-1} (x[j] - x[j+tau])^2
+     * using the autocorrelation identity and bqfft.
+     * buf must have size kWindowSize; diff is sized to kWindowSize/2.
      */
-    static double yinPitch(const std::vector<float> &window,
-                           double sr,
-                           double minFreq, double maxFreq,
-                           double thresh);
-
-    /**
-     * Step 2: difference function.
-     * d[tau] = sum_{j=0}^{W/2-1} (x[j] - x[j+tau])^2
-     */
-    static void yinDifference(const std::vector<float> &buf,
-                               std::vector<double> &diff);
+    void yinDifferenceFFT(const std::vector<float> &buf,
+                          std::vector<double> &diff);
 
     /**
      * Step 3: cumulative mean normalised difference (in-place).
