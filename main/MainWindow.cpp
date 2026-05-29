@@ -2612,9 +2612,12 @@ MainWindow::setupRealtimePitchLayer()
     }
 
     // Create a SparseTimeValueModel to receive pitch estimates.
-    // Resolution 512 frames matches the YIN hop size in RealtimePitchTracker.
+    // Resolution 256 frames matches the YIN hop size in RealtimePitchTracker.
+    // Unit "Hz" is required so TimeValueLayer::shouldAutoAlign() defers to
+    // the pane's log-frequency coordinate system (same as the pYIN pitch track).
     auto pitchModel = std::make_shared<SparseTimeValueModel>(sr, 512, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
+    pitchModel->setScaleUnits("Hz");
     m_realtimePitchModelId = ModelById::add(pitchModel);
     m_document->addNonDerivedModel(m_realtimePitchModelId);
 
