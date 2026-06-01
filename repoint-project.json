@@ -17,14 +17,14 @@
         "svgui": {
             "vcs": "git",
             "service": "github",
-            "owner": "sonic-visualiser",
-            "branch": "default"
+            "owner": "jhhr",
+            "branch": "tony-customizations"
         },
         "svapp": {
             "vcs": "git",
             "service": "github",
-            "owner": "sonic-visualiser",
-            "branch": "default"
+            "owner": "jhhr",
+            "branch": "tony-customizations"
         },
         "checker": {
             "vcs": "git",
@@ -64,9 +64,10 @@
             "owner": "breakfastquay"
         },
         "bqaudiostream": {
-            "vcs": "hg",
-            "service": "sourcehut",
-            "owner": "breakfastquay"
+            "vcs": "git",
+            "service": "github",
+            "owner": "jhhr",
+            "branch": "master"
         },
         "bqthingfactory": {
             "vcs": "hg",
@@ -98,4 +99,3 @@
         }
     }
 }
-
