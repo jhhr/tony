@@ -15,14 +15,12 @@
 #ifndef REALTIME_PITCH_TRACKER_H
 #define REALTIME_PITCH_TRACKER_H
 
-#include <QObject>
-#include <QTimer>
+#include <QThread>
 
 #include <vector>
 
 #include "base/BaseTypes.h"
 #include "data/model/Model.h"
-#include "data/model/SparseTimeValueModel.h"
 
 namespace sv {
 class WritableWaveFileModel;
@@ -33,148 +31,95 @@ class FFT;
 }
 
 /**
- * RealtimePitchTracker polls a WritableWaveFileModel (the model being
- * filled during a live microphone recording) for new audio samples and
- * estimates pitch in real time using a simplified YIN autocorrelation
- * algorithm.
+ * RealtimePitchTracker runs on a dedicated background QThread and
+ * continuously polls a WritableWaveFileModel for new audio samples,
+ * estimating pitch in real time using FFT-accelerated YIN.
  *
- * Results are written into a SparseTimeValueModel so they can be
- * displayed immediately as a TimeValueLayer overlaid on the main pane,
- * giving the singer real-time visual feedback about their pitch.
- *
- * This is intentionally a low-latency, lower-accuracy alternative to
- * the full pYIN analysis that will be run once recording is complete.
+ * pitch estimates are reported via pitchDetected() signals; the
+ * connection to the GUI thread is automatically a QueuedConnection so
+ * the slot (which writes to the model and updates the status bar) runs
+ * safely on the GUI thread without blocking audio or rendering.
  *
  * Usage:
- *   1. Create a RealtimePitchTracker, providing the ModelId of both:
- *        - the WritableWaveFileModel being recorded into (audio source),
- *        - the SparseTimeValueModel to write pitch estimates into.
- *   2. Call start() when recording begins.
- *   3. The tracker polls automatically via an internal QTimer.
- *   4. Call stop() when recording ends.
+ *   1. Create a RealtimePitchTracker with the ModelId of the
+ *      WritableWaveFileModel being recorded into.
+ *   2. Call start() — the background thread starts immediately.
+ *   3. Call stop() when recording ends — blocks until the thread exits.
  */
-class RealtimePitchTracker : public QObject
+class RealtimePitchTracker : public QThread
 {
     Q_OBJECT
 
 public:
     /**
-     * Construct a tracker.
-     *
      * @param audioSourceId  ModelId of the WritableWaveFileModel being
-     *                       recorded into. The tracker polls this for
-     *                       new samples on each timer tick.
-     * @param pitchModelId   ModelId of the SparseTimeValueModel to write
-     *                       pitch estimates into.
-     * @param parent         Optional Qt parent.
+     *                       recorded into. Polled from the background thread.
+     * @param parent         Optional Qt parent (must live on GUI thread).
      */
     RealtimePitchTracker(sv::ModelId audioSourceId,
-                         sv::ModelId pitchModelId,
                          QObject *parent = nullptr);
 
     virtual ~RealtimePitchTracker();
 
     /**
-     * Start tracking. Resets all internal state.
+     * Start the background polling thread.
      * Must be called from the GUI thread.
      */
     void start();
 
     /**
-     * Stop tracking. No more pitch estimates will be written after
-     * this returns.
+     * Request the background thread to stop and block until it exits.
      * Must be called from the GUI thread.
      */
     void stop();
 
-    /**
-     * Minimum frequency (Hz) that the tracker will report.
-     * Pitches below this are treated as unvoiced. Default: 60 Hz.
-     */
+    /** Minimum frequency (Hz) reported. Default: 60 Hz. */
     void setMinFrequency(double hz) { m_minFreq = hz; }
     double getMinFrequency() const  { return m_minFreq; }
 
-    /**
-     * Maximum frequency (Hz) that the tracker will report.
-     * Pitches above this are treated as unvoiced. Default: 1000 Hz.
-     */
+    /** Maximum frequency (Hz) reported. Default: 1000 Hz. */
     void setMaxFrequency(double hz) { m_maxFreq = hz; }
     double getMaxFrequency() const  { return m_maxFreq; }
 
-    /**
-     * YIN threshold. Lower values are more selective (fewer voiced
-     * detections), higher values yield more detections but more
-     * errors. Default: 0.15.
-     */
+    /** YIN threshold (0–1). Default: 0.15. */
     void setThreshold(double t) { m_threshold = t; }
     double getThreshold() const { return m_threshold; }
 
 signals:
     /**
-     * Emitted each time a new pitch estimate is available.
+     * Emitted from the background thread each time a new voiced pitch
+     * estimate is available. Via Qt::AutoConnection this arrives in the
+     * GUI thread's event loop (QueuedConnection cross-thread).
      *
-     * @param frame  Sample frame at which the pitch was estimated
-     *               (centre of the analysis window), relative to the
-     *               start of the recording.
-     * @param hz     Estimated pitch in Hz, or 0 if unvoiced.
+     * @param frame  Centre frame of the analysis window.
+     * @param hz     Pitch in Hz (always > 0 when emitted).
      */
     void pitchDetected(sv::sv_frame_t frame, double hz);
 
-private slots:
-    /// Called by the internal QTimer; polls the audio model and runs YIN.
-    void pollAndProcess();
+protected:
+    /** The background polling loop — do not call directly. */
+    void run() override;
 
 private:
-    // --- Model IDs ---
-    sv::ModelId         m_audioSourceId;  // WritableWaveFileModel being recorded
-    sv::ModelId         m_pitchModelId;   // SparseTimeValueModel for output
+    sv::ModelId     m_audioSourceId;
 
-    // --- Configuration ---
-    double              m_minFreq;
-    double              m_maxFreq;
-    double              m_threshold;
+    double          m_minFreq;
+    double          m_maxFreq;
+    double          m_threshold;
 
-    // --- State ---
-    bool                m_running;
+    // Window size: 2048 samples @ 44100 Hz ≈ 46 ms.
+    // Hop size: 256 samples ≈ 5.8 ms.
+    static const int kWindowSize = 2048;
+    static const int kHopSize    = 256;
 
-    /// How many input frames we have already processed (exclusive end
-    /// of the last complete hop).  We use this to avoid re-processing
-    /// samples on the next timer tick.
-    sv::sv_frame_t      m_nextFrameToProcess;
+    // --- YIN helpers (all called only from run()) ---
 
-    // --- Processing parameters ---
-    // Window size: 2048 samples @ 44100 Hz ≈ 46 ms (two full periods of 60 Hz).
-    // Hop size: 256 samples ≈ 5.8 ms — finer dot density than the old 512.
-    static const int    kWindowSize = 2048;
-    static const int    kHopSize    = 256;
+    static void yinDifferenceFFT(const std::vector<float> &buf,
+                                  std::vector<double> &diff,
+                                  breakfastquay::FFT *fft);
 
-    // --- Timer ---
-    QTimer             *m_timer;
-
-    // --- FFT for fast YIN difference function ---
-    breakfastquay::FFT         *m_fft;   // lazy-created on first poll
-
-    // --- YIN helpers ---
-
-    /**
-     * FFT-based difference function (O(n log n) vs the naive O(n²)).
-     * Computes d[tau] = sum_{j=0}^{halfSize-1} (x[j] - x[j+tau])^2
-     * using the autocorrelation identity and bqfft.
-     * buf must have size kWindowSize; diff is sized to kWindowSize/2.
-     */
-    void yinDifferenceFFT(const std::vector<float> &buf,
-                          std::vector<double> &diff);
-
-    /**
-     * Step 3: cumulative mean normalised difference (in-place).
-     */
     static void yinCMND(std::vector<double> &diff);
 
-    /**
-     * Steps 4-5: find first dip below threshold with parabolic
-     * interpolation.  Returns fractional lag in samples, or -1 if
-     * no dip found.
-     */
     static double yinFindPitch(const std::vector<double> &cmnd,
                                 int minLag, int maxLag,
                                 double threshold);

@@ -2654,7 +2654,7 @@ MainWindow::setupRealtimePitchLayer()
     // It will poll audioSourceId (the WritableWaveFileModel) for new frames
     // on each QTimer tick and write estimates into m_realtimePitchModelId.
     m_realtimePitchTracker = new RealtimePitchTracker(
-        audioSourceId, m_realtimePitchModelId, this);
+        audioSourceId, this);
     connect(m_realtimePitchTracker, &RealtimePitchTracker::pitchDetected,
             this, &MainWindow::onRealtimePitchDetected);
     m_realtimePitchTracker->start();
@@ -2964,16 +2964,13 @@ MainWindow::recordingStarted()
 }
 
 void
-MainWindow::onRealtimePitchDetected(sv::sv_frame_t /*frame*/, double hz)
+MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
 {
-    // The pitch has already been written into the SparseTimeValueModel by
-    // RealtimePitchTracker; the view repaints automatically via dataChanged().
-    // Here we show a human-readable pitch in the status bar so the singer
-    // gets immediate textual feedback during recording.
-
-    if (hz <= 0.0) {
-        getStatusLabel()->setText(tr("Recording — pitch: (unvoiced)"));
-        return;
+    // Called on the GUI thread via Qt::QueuedConnection (RealtimePitchTracker
+    // emits from its background thread).  Write the point into the model here
+    // so all model mutations stay on the GUI thread.
+    if (auto m = ModelById::getAs<SparseTimeValueModel>(m_realtimePitchModelId)) {
+        m->add(Event(frame, float(hz), tr("")));
     }
 
     // Convert Hz to MIDI note number and cents deviation.

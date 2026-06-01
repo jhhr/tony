@@ -161,6 +161,20 @@ Analyser::doAllAnalyses(bool withPitchTrack)
     loadState(Notes);
     loadState(Spectrogram);
 
+    // The secondary analyser's pitch and note tracks are visual-only (there is
+    // no UI toggle to control their audibility, and sonifying two pitch/note
+    // tracks at once is confusing).  Mute them directly — do NOT call
+    // setAudible(), which would also call saveState() and corrupt the primary
+    // analyser's shared settings key.
+    if (m_colorScheme == SecondaryColors) {
+        for (Component c : { PitchTrack, Notes }) {
+            if (m_layers[c]) {
+                auto params = m_layers[c]->getPlayParameters();
+                if (params) params->setPlayAudible(false);
+            }
+        }
+    }
+
     stackLayers();
 
     emit layersChanged();
