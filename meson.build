@@ -1085,19 +1085,34 @@ chp_plugin = shared_library(
   install: true,
 )
 
-tony_main_files = [
+# main.cpp is kept apart from the rest of main/ so that the rest can be
+# built once, as static libraries, and linked into both the application
+# and the test executables (see main/test/).
+tony_entry_files = [
   'main/main.cpp',
-  'main/Analyser.cpp',
-  'main/MainWindow.cpp',
-  'main/NetworkPermissionTester.cpp',
+]
+
+# No GUI dependencies: usable from a QCoreApplication test.
+tony_core_files = [
   'main/RealtimePitchTracker.cpp',
 ]
 
-tony_main_moc_files = qt.preprocess(
+tony_app_files = [
+  'main/Analyser.cpp',
+  'main/MainWindow.cpp',
+  'main/NetworkPermissionTester.cpp',
+  'main/PaneUtils.cpp',
+]
+
+tony_core_moc_files = qt.preprocess(
+  moc_headers: [
+  'main/RealtimePitchTracker.h',
+])
+
+tony_app_moc_files = qt.preprocess(
   moc_headers: [
   'main/MainWindow.h',
   'main/Analyser.h',
-  'main/RealtimePitchTracker.h',
 ])
 
 qt_resource_files = qt.preprocess(
@@ -1152,16 +1167,61 @@ install_data(
   install_dir : get_option('datadir') / 'icons/hicolor/scalable/apps',
 )
 
+tony_core_lib = static_library(
+  'tonycore',
+  tony_core_moc_files,
+  tony_core_files,
+  dependencies: [
+    svcore_dep,
+    qt_dep,
+    feature_dependencies,
+  ],
+  cpp_args: [
+    feature_defines,
+    general_defines,
+  ],
+)
+
+tony_core_dep = declare_dependency(
+  link_with: tony_core_lib,
+  include_directories: [ 'main' ],
+)
+
+tony_app_lib = static_library(
+  'tonyapp',
+  svgui_moc_files,
+  svapp_moc_files,
+  tony_app_moc_files,
+  svgui_files,
+  svapp_files,
+  tony_app_files,
+  dependencies: [
+    svcore_dep,
+    qt_dep,
+    feature_dependencies,
+  ],
+  cpp_args: [
+    feature_defines,
+    general_defines,
+  ],
+)
+
+tony_app_dep = declare_dependency(
+  link_with: tony_app_lib,
+  include_directories: [ 'main' ],
+)
+
+# link_whole so that the application contains exactly the objects it did
+# when these sources were compiled straight into it.
 executable(
   tony_main_name,
   qt_resource_files,
-  svgui_moc_files,
-  svapp_moc_files,
-  tony_main_moc_files,
-  svgui_files,
-  svapp_files,
-  tony_main_files,
+  tony_entry_files,
   rc,
+  link_whole: [
+    tony_app_lib,
+    tony_core_lib,
+  ],
   dependencies: [
     svcore_dep,
     qt_dep,
@@ -1267,6 +1327,75 @@ svcore_data_fileio_test_exe = executable(
   ],
   win_subsystem: 'console'
 )
+
+# Tony's own tests. Two executables, because they differ in cost and in
+# what they link: test-tony-core needs no GUI and no audio device;
+# test-tony-app creates widgets (offscreen) and links svgui and svapp.
+
+tony_core_test_moc_files = qt.preprocess(
+  moc_headers: [
+  'main/test/TestRealtimeYin.h',
+  'main/test/TestRealtimePitchTracker.h',
+  'main/test/TestLatencyShift.h',
+])
+
+tony_core_test_exe = executable(
+  'test-tony-core',
+  tony_core_test_moc_files,
+  'main/test/PyinReference.cpp',
+  'pyin/YinUtil.cpp',
+  'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
+  'main/test/tony-core-test.cpp',
+  dependencies: [
+    tony_core_dep,
+    svcore_dep,
+    qt_dep,
+    feature_dependencies,
+    dl_dep,
+  ],
+  cpp_args: [
+    feature_defines,
+    general_defines,
+  ],
+  link_args: [
+    feature_additional_libs,
+    general_link_args,
+  ],
+  win_subsystem: 'console'
+)
+
+tony_app_test_moc_files = qt.preprocess(
+  moc_headers: [
+  'main/test/TestSingingDocument.h',
+])
+
+tony_app_test_exe = executable(
+  'test-tony-app',
+  tony_app_test_moc_files,
+  'main/test/tony-app-test.cpp',
+  dependencies: [
+    tony_app_dep,
+    tony_core_dep,
+    svcore_dep,
+    qt_dep,
+    feature_dependencies,
+    os_dep,
+    dl_dep,
+  ],
+  cpp_args: [
+    feature_defines,
+    general_defines,
+  ],
+  link_args: [
+    feature_additional_libs,
+    general_link_args,
+  ],
+  win_subsystem: 'console'
+)
+
+test('tony-core', tony_core_test_exe)
+test('tony-app', tony_app_test_exe,
+     env: [ 'QT_QPA_PLATFORM=offscreen' ])
 
 test('svcore-base', svcore_base_test_exe)
 test('svcore-system', svcore_system_test_exe)

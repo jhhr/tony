@@ -16,6 +16,7 @@ set PATH=%MSYS2_MINGW%\bin;%MSYS2_MINGW%\..\usr\bin;%PATH%
 ::  build.bat            →  build only
 ::  build.bat run        →  build then launch Tony.exe
 ::  build.bat launch     →  launch Tony.exe without building
+::  build.bat test       →  build and run the automated tests
 ::  build.bat clean      →  wipe build_mingw and reconfigure
 ::  build.bat help       →  print this help
 :: ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ if /i "%ACTION%"=="clean" goto :clean
 if /i "%ACTION%"=="launch" goto :launch
 if /i "%ACTION%"=="run" goto :build
 if /i "%ACTION%"=="build" goto :build
+if /i "%ACTION%"=="test" goto :test
 
 echo ERROR: Unknown action "%ACTION%". Run "build.bat help" for usage.
 exit /b 1
@@ -64,6 +66,18 @@ echo Build succeeded: %BUILD_DIR%\Tony.exe
 if /i "%ACTION%"=="run" goto :launch
 exit /b 0
 
+:: ── test ─────────────────────────────────────────────────────────────────────
+:test
+if not exist "%BUILD_DIR%\build.ninja" (
+    echo Build directory not configured. Running meson setup ...
+    meson setup "%BUILD_DIR%" --buildtype=debugoptimized
+    if errorlevel 1 exit /b %errorlevel%
+)
+
+echo Building and running tests ...
+meson test -C "%BUILD_DIR%" --print-errorlogs
+exit /b %errorlevel%
+
 :: ── launch ───────────────────────────────────────────────────────────────────
 :launch
 set EXE=%BUILD_DIR%\Tony.exe
@@ -84,6 +98,7 @@ echo   Actions:
 echo     (none)   Build Tony.exe  (default)
 echo     run      Build Tony.exe then launch it
 echo     launch   Launch Tony.exe without rebuilding
+echo     test     Build and run the automated tests (meson test)
 echo     clean    Delete the build directory and reconfigure from scratch
 echo     help     Show this message
 echo.

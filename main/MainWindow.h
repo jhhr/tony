@@ -327,14 +327,19 @@ protected:
     void loadBackgroundMusic(QString path);
     void teardownBackgroundMusic();
 
-    // Drain m_pendingExtraPanes: delete orphan layers and the pane widgets
-    // that were deferred from record()'s pane-cleanup step.  Must be called
-    // after m_analyser2 has created its WaveformLayer (so deleteLayer won't
+    // Remove an extra pane created by openAudio()/record() in
+    // CreateAdditionalModel mode: delete the orphan layer(s) showing
+    // ownedModelId, detach shared layers (the time ruler) without deleting
+    // them, then delete the pane widget.  Another layer must already
+    // reference ownedModelId, or the model is released with the orphan.
+    void pruneExtraPane(sv::Pane *extra, sv::ModelId ownedModelId);
+
+    // Drain m_pendingExtraPanes: prune the panes that were deferred from
+    // record()'s pane-cleanup step.  Must be called after m_analyser2 has
+    // created its WaveformLayer for singingModelId (so deleteLayer won't
     // free the recording model), and while the pane widgets are still alive
     // (so m_layerViewMap iteration in deleteLayer(force=true) is valid).
-    // Also called as a safety net from teardownSingingTrackAnalyser() and
-    // closeSession() to avoid leaking widgets.
-    void drainPendingExtraPanes();
+    void drainPendingExtraPanes(sv::ModelId singingModelId);
 
     // When loadSingingTrack opens an additional audio file, modelAdded()
     // stores the resulting ModelId here so analyseNewSingingModel() can
@@ -384,7 +389,7 @@ protected:
     // them — AFTER m_analyser2 has created its own WaveformLayer referencing
     // the recording model, making it safe to call deleteLayer(orphan, true)
     // on the extra pane's waveform layer without releasing the recording model.
-    // Also drained by teardownSingingTrackAnalyser() and closeSession().
+    // closeSession() deletes any leftovers via its hidden-pane loop.
     std::vector<sv::Pane *> m_pendingExtraPanes;
 
     virtual void octaveShift(bool up);

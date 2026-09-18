@@ -101,6 +101,8 @@ protected:
     void run() override;
 
 private:
+    friend class TestRealtimeYin;
+
     sv::ModelId     m_audioSourceId;
 
     double          m_minFreq;

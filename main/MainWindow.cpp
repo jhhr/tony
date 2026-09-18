@@ -18,6 +18,8 @@
 #include "MainWindow.h"
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
+#include "LatencyUtils.h"
+#include "PaneUtils.h"
 
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
@@ -2112,42 +2114,32 @@ MainWindow::loadSingingTrack(QString path)
         return;
     }
 
+    // modelAdded() fired synchronously inside openPath() and stored the new
+    // model's id in m_pendingSingingModelId.  Set up the secondary analyser
+    // NOW, before pruning the extra pane: the imported WaveformLayer in that
+    // pane is the only layer referencing the singing model, so deleting it
+    // first would make Document::releaseModel() free the model before it can
+    // be analysed.  Once m_analyser2's own WaveformLayer references the model
+    // the orphan can go.  This also clears m_pendingSingingModelId, so the
+    // analyseNewSingingModel() call queued by modelAdded() becomes a no-op.
+    ModelId singingModelId = m_pendingSingingModelId;
+    analyseNewSingingModel();
+
     // openPath(CreateAdditionalModel) will have called AddPaneCommand which
     // added a new pane for the singing track's waveform layer.  We do NOT
     // want that extra pane — both tracks must overlay pane 0.  Remove any
     // panes above the original count (except the time-ruler pane at index 1
     // which was already there).  We delete from the top down so that index
-    // arithmetic stays valid.
+    // arithmetic stays valid.  If the analyser setup above failed, nothing
+    // else references the singing model and pruning releases it, which is
+    // what we want.
     if (m_paneStack) {
         while (m_paneStack->getPaneCount() > paneCountBefore) {
             Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
-            // Delete any layers that ended up in this extra pane.
-            // setupSingingTrackAnalyser will create proper layers in pane 0,
-            // so these auto-created layers (e.g. the waveform from
-            // addOpenedAudioModel) are not needed and would otherwise
-            // become orphans in the document layer list.
-            if (m_document && extra) {
-                while (extra->getLayerCount() > 0) {
-                    Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
-                    // Use deleteLayer with force=true: this removes the layer
-                    // from the view directly (without creating an undo command)
-                    // and then deletes it from the document.  We must NOT call
-                    // removeLayerFromView first, as that would push a
-                    // RemoveLayerCommand onto the undo stack holding a pointer
-                    // to a layer we are about to delete — a guaranteed crash on
-                    // undo.
-                    m_document->deleteLayer(orphan, true);
-                }
-            }
-            if (m_overview) m_overview->unregisterView(extra);
-            m_paneStack->deletePane(extra);
+            if (!extra) break;
+            pruneExtraPane(extra, singingModelId);
         }
     }
-
-    // analyseNewSingingModel() is triggered on the next event-loop tick via
-    // the QTimer::singleShot(0, ...) in modelAdded().  It picks up the model
-    // id from m_pendingSingingModelId, which was set in modelAdded() when the
-    // audio file was registered with the document.
 }
 
 void
@@ -2261,14 +2253,8 @@ MainWindow::loadBackgroundMusic(QString path)
     if (m_paneStack) {
         while (m_paneStack->getPaneCount() > paneCountBefore) {
             Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
-            if (m_document && extra) {
-                while (extra->getLayerCount() > 0) {
-                    Layer *orphan = extra->getLayer(extra->getLayerCount() - 1);
-                    m_document->deleteLayer(orphan, true);
-                }
-            }
-            if (m_overview) m_overview->unregisterView(extra);
-            m_paneStack->deletePane(extra);
+            if (!extra) break;
+            pruneExtraPane(extra, m_backgroundMusicModelId);
         }
     }
 
@@ -2384,7 +2370,7 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     // deleteLayer(force=true) iterates Document::m_layerViewMap to remove the
     // layer from any views — and that map still contains the live pane pointer.
     // After deletePane() the pointer would be dangling → crash.
-    drainPendingExtraPanes();
+    drainPendingExtraPanes(singingModelId);
 
     // Re-stack layers so the primary pitch track stays on top
     m_analyser->getLayer(Analyser::PitchTrack);  // ensure primary is on top
@@ -2399,94 +2385,27 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
 }
 
 void
-MainWindow::drainPendingExtraPanes()
+MainWindow::pruneExtraPane(Pane *extra, sv::ModelId ownedModelId)
 {
-    // This helper is called from setupSingingTrackAnalyser() after m_analyser2
-    // has been initialised with its own WaveformLayer referencing the recording
-    // model.  At that point it is safe to call deleteLayer(orphan, true) on the
-    // extra pane's waveform layer because:
-    //   (a) m_analyser2's WaveformLayer holds a reference to the model, so
-    //       Document::releaseModel() will not free it.
-    //   (b) The extra pane widget is still alive (we haven't called deletePane
-    //       yet), so Document::m_layerViewMap iteration in deleteLayer(true) is
-    //       valid and won't dereference a dangling pointer.
-    //
-    // It is also called from teardownSingingTrackAnalyser() and closeSession()
-    // as a safety net — in those contexts m_document may be null so we just
-    // call deletePane() to destroy the widget without touching the document.
+    // The rules for what may be deleted and what only detached live
+    // with the helper: see PaneUtils.cpp.
+    ::pruneExtraPane(m_document, m_paneStack, extra, ownedModelId, m_overview);
+}
+
+void
+MainWindow::drainPendingExtraPanes(sv::ModelId singingModelId)
+{
+    // Called from setupSingingTrackAnalyser() after m_analyser2 has been
+    // initialised with its own WaveformLayer referencing the recording
+    // model, which is what makes pruneExtraPane() safe for the panes that
+    // record() hid rather than deleted.
     if (m_pendingExtraPanes.empty()) return;
 
     cerr << "MainWindow::drainPendingExtraPanes: draining "
          << m_pendingExtraPanes.size() << " pending extra pane(s)" << endl;
 
     for (Pane *extra : m_pendingExtraPanes) {
-        if (!extra) continue;
-
-        if (m_document) {
-            // The extra pane created by MainWindowBase::record() in
-            // RecordCreateAdditionalModel mode contains two layers:
-            //
-            //   1. m_timeRulerLayer — a SHARED layer that also lives in pane 0.
-            //      We must NOT call deleteLayer() on it; that would remove the
-            //      ruler from every view including pane 0.  Instead, use
-            //      removeLayerFromView(extra, layer) so only the extra pane's
-            //      entry is removed from m_layerViewMap (this creates an undo
-            //      command, but the layer pointer remains valid so no crash).
-            //
-            //   2. The orphan WaveformLayer from createImportedLayer() — unique
-            //      to this pane, with the WritableWaveFileModel as its model.
-            //      deleteLayer(force=true) is safe here because:
-            //        (a) m_analyser2 was set up before this drain, so its
-            //            WaveformLayer still holds a reference to the model
-            //            → releaseModel() will not free the live recording.
-            //        (b) The extra pane widget is still alive → m_layerViewMap
-            //            iteration in deleteLayer(true) is valid.
-            //
-            // We distinguish them by whether the model is a WritableWaveFileModel.
-            int layerCount = extra->getLayerCount();
-            for (int i = layerCount - 1; i >= 0; --i) {
-                Layer *lay = extra->getLayer(i);
-                if (!lay) continue;
-
-                ModelId layerModel = lay->getModel();
-
-                if (ModelById::isa<WritableWaveFileModel>(layerModel)) {
-                    // Orphan recording waveform: full delete (safe because
-                    // m_analyser2's WaveformLayer still holds the model ref).
-                    // deleteLayer(force=true) iterates m_layerViewMap and calls
-                    // view->removeLayer() — the pane is still alive here so
-                    // the pointer is valid.
-                    cerr << "MainWindow::drainPendingExtraPanes: deleteLayer orphan "
-                         << lay << " [" << lay->objectName().toStdString()
-                         << "] (WritableWaveFileModel)" << endl;
-                    m_document->deleteLayer(lay, true);
-                } else {
-                    // Shared layer (e.g. TimeRuler): we cannot call deleteLayer
-                    // because that would remove the layer from ALL views.  We
-                    // also cannot call removeLayerFromView because that pushes a
-                    // RemoveLayerCommand onto the undo stack with a raw pointer
-                    // to the extra pane — if undo is later triggered the pane
-                    // is already destroyed → crash.
-                    //
-                    // Instead, use detachLayerFromView (no undo command): removes
-                    // the layer from the pane's display list AND updates
-                    // m_layerViewMap so deletePane() leaves no dangling pointer.
-                    cerr << "MainWindow::drainPendingExtraPanes: detachLayerFromView "
-                         << lay << " [" << lay->objectName().toStdString()
-                         << "] (shared layer, keeping in other views)" << endl;
-                    m_document->detachLayerFromView(extra, lay);
-                }
-            }
-        }
-
-        // Now destroy the pane widget.  By this point all WritableWaveFileModel
-        // layers have been deleted from the document and m_layerViewMap no
-        // longer references this pane for them.  Shared layers were properly
-        // detached via removeLayerFromView.  deletePane() can safely destroy
-        // the widget without leaving dangling pointers in m_layerViewMap.
-        if (m_paneStack) {
-            m_paneStack->deletePane(extra);
-        }
+        pruneExtraPane(extra, singingModelId);
     }
 
     m_pendingExtraPanes.clear();
@@ -2949,7 +2868,8 @@ MainWindow::recordingStarted()
             // shift the model's start frame by -(outputLatency + inputLatency).
             sv_frame_t outputLatency = m_playSource->getTargetPlayLatency();
             sv_frame_t inputLatency  = m_recordTarget ? m_recordTarget->getSystemRecordLatency() : 0;
-            m_recordingLatencyFrames = outputLatency + inputLatency;
+            m_recordingLatencyFrames =
+                computeRecordingLatency(outputLatency, inputLatency);
             cerr << "MainWindow::recordingStarted: output latency=" << outputLatency
                  << " input latency=" << inputLatency
                  << " round-trip compensation=" << m_recordingLatencyFrames << " frames" << endl;
@@ -4282,8 +4202,10 @@ MainWindow::modelAdded(ModelId model)
                     });
                 } else {
                     // Normal case: a finished audio file was loaded as a
-                    // singing track.  Run full analysis immediately.
-                    // Defer so the model is fully registered before we analyse.
+                    // singing track.  loadSingingTrack() runs the analysis
+                    // itself as soon as openPath() returns (it must happen
+                    // before the extra pane is pruned); this deferred call
+                    // is the fallback for any other route that adds a model.
                     QTimer::singleShot(0, this, SLOT(analyseNewSingingModel()));
                 }
             } else {
@@ -4510,7 +4432,12 @@ MainWindow::analyseNewMainModel()
     // not the main model and not already being tracked as a singing model.
     // We only do this if we don't already have a secondary analyser (it may
     // have been set up already e.g. via modelAdded() during session load).
-    if (!m_analyser2 && m_document) {
+    // Skip the scan while a singing model is pending: openAudio() emits
+    // audioFileLoaded() for CreateAdditionalModel too, and loadSingingTrack()
+    // is about to set up that model itself.  A second, queued setup would
+    // tear down m_analyser2's layers — the only references to the singing
+    // model — releasing it before the re-setup.
+    if (!m_analyser2 && m_document && m_pendingSingingModelId.isNone()) {
         ModelId mainId = getMainModelId();
         ModelId foundSinging;
         for (ModelId mid : m_document->getModels()) {
