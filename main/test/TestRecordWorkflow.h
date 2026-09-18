@@ -83,6 +83,7 @@ public:
 
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
+    bool isDocumentModified() { return m_documentModified; }
     void doCloseSession() { discardModifications(); closeSession(); }
 
     void setPlayReferenceWhileRecording(bool on) {
@@ -463,6 +464,9 @@ private slots:
         auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
             (m_window->realtimeModelId());
         QVERIFY(model);
+        // One dot per hop (review finding 12)
+        QCOMPARE(int(model->getResolution()),
+                 int(RealtimePitchTracker::kHopSize));
         auto events = model->getAllEvents();
         QVERIFY2(events.size() > 20,
                  qPrintable(QString("only %1 live dots after a second")
@@ -897,6 +901,8 @@ private slots:
         sv::Layer *refLayer =
             m_window->analyser()->getLayer(Analyser::PitchTrack);
         sv::ModelId refModel = refLayer->getModel();
+        QSignalSpy refSetUp(m_window->analyser(), SIGNAL(layersChanged()));
+        QVERIFY(refSetUp.isValid());
 
         m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
 
@@ -917,11 +923,16 @@ private slots:
         QVERIFY(std::fabs(TestSignals::centsBetween
                           (medianHz(pitchEvents(a2)), highHz)) < 10.0);
 
-        // The open half of finding 7: the reference is handed to its
-        // analyser a second time, which today changes nothing
+        // The other half of finding 7: the reference is not handed to
+        // its analyser a second time. That would keep its layers, but
+        // forget its pitch candidates and leave them in the pane
+        QCOMPARE(int(refSetUp.count()), 0);
         QCOMPARE(m_window->analyser()->getLayer(Analyser::PitchTrack),
                  refLayer);
         QCOMPARE(refLayer->getModel(), refModel);
+
+        // The second pass used to end by marking the document unmodified
+        QVERIFY(m_window->isDocumentModified());
     }
 
     void load_background_music() {
@@ -930,9 +941,12 @@ private slots:
         if (QTest::currentTestFailed()) return;
         int panes = m_window->paneStack()->getPaneCount();
         int rulerPaneLayers = m_window->paneStack()->getPane(1)->getLayerCount();
+        QSignalSpy refSetUp(m_window->analyser(), SIGNAL(layersChanged()));
+        QVERIFY(refSetUp.isValid());
 
         m_window->doLoadBackgroundMusic(writeWav(tone(highHz, 1.0)));
         QCoreApplication::processEvents();
+        QCOMPARE(int(refSetUp.count()), 0);
 
         sv::ModelId music = m_window->backgroundMusicModelId();
         QVERIFY(!music.isNone());

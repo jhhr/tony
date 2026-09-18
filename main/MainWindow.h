@@ -348,6 +348,12 @@ protected:
     // pick it up on the next event-loop iteration.
     sv::ModelId m_pendingSingingModelId;
 
+    // The main model last handed to m_analyser by analyseNewMainModel().
+    // audioFileLoaded() is emitted for additional models too (a singing
+    // track, background music), and the reference must not be set up again
+    // for those.  Cleared in closeSession().
+    sv::ModelId m_analysedMainModelId;
+
     // True while a microphone recording is in progress (set in
     // recordingStarted(), cleared in recordingFinishedFull()).
     bool        m_recordingInProgress;

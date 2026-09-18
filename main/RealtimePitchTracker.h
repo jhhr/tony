@@ -51,6 +51,12 @@ class RealtimePitchTracker : public QThread
     Q_OBJECT
 
 public:
+    // Window size: 2048 samples @ 44100 Hz ≈ 46 ms.
+    // Hop size: 256 samples ≈ 5.8 ms. One estimate per hop, so this is
+    // also the resolution of the model the estimates go into.
+    static constexpr int kWindowSize = 2048;
+    static constexpr int kHopSize    = 256;
+
     /**
      * @param audioSourceId  ModelId of the WritableWaveFileModel being
      *                       recorded into. Polled from the background thread.
@@ -108,11 +114,6 @@ private:
     double          m_minFreq;
     double          m_maxFreq;
     double          m_threshold;
-
-    // Window size: 2048 samples @ 44100 Hz ≈ 46 ms.
-    // Hop size: 256 samples ≈ 5.8 ms.
-    static const int kWindowSize = 2048;
-    static const int kHopSize    = 256;
 
     // --- YIN helpers (all called only from run()) ---
 

@@ -2019,6 +2019,7 @@ MainWindow::closeSession()
     m_pendingSingingModelId = {};
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
+    m_analysedMainModelId = {};
 
     m_analyser->fileClosed();
 
@@ -2551,10 +2552,11 @@ MainWindow::setupRealtimePitchLayer()
     }
 
     // Create a SparseTimeValueModel to receive pitch estimates.
-    // Resolution 256 frames matches the YIN hop size in RealtimePitchTracker.
+    // Its resolution is the YIN hop size: one estimate per hop.
     // Unit "Hz" is required so TimeValueLayer::shouldAutoAlign() defers to
     // the pane's log-frequency coordinate system (same as the pYIN pitch track).
-    auto pitchModel = std::make_shared<SparseTimeValueModel>(sr, 512, false);
+    auto pitchModel = std::make_shared<SparseTimeValueModel>
+        (sr, RealtimePitchTracker::kHopSize, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
     pitchModel->setScaleUnits("Hz");
     m_realtimePitchModelId = ModelById::add(pitchModel);
@@ -4498,6 +4500,17 @@ MainWindow::analyseNewMainModel()
         cerr << "no pane stack!" << endl;
         return;
     }
+
+    // openAudio() emits audioFileLoaded() for CreateAdditionalModel too (a
+    // singing track, background music), with the main model unchanged.
+    // Going on would hand the reference to m_analyser a second time, which
+    // keeps its layers but forgets its pitch candidates, and would connect
+    // the pane's regionOutlined() to us once more.
+    if (getMainModelId() == m_analysedMainModelId) {
+        SVDEBUG << "MainWindow::analyseNewMainModel: main model unchanged, nothing to do" << endl;
+        return;
+    }
+    m_analysedMainModelId = getMainModelId();
 
     int pc = m_paneStack->getPaneCount();
     Pane *pane = 0;
