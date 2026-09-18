@@ -12,12 +12,15 @@
 */
 
 #include "TestSingingDocument.h"
+#include "TestSingingAnalysis.h"
+#include "TestRecordWorkflow.h"
 
 #include "RunSuite.h"
 
 #include "system/Init.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QtTest>
 
 #include <iostream>
@@ -43,8 +46,26 @@ int main(int argc, char *argv[])
     app.setOrganizationName("tony-tests");
     app.setApplicationName("test-tony-app");
 
+    // Tier 4 runs the real pYIN plugin, which the build leaves next to
+    // this executable. Replace rather than extend VAMP_PATH, so that a
+    // pYIN installed elsewhere on this machine is never the one tested.
+    qputenv("VAMP_PATH",
+            QDir::toNativeSeparators(app.applicationDirPath()).toLocal8Bit());
+
     {
         TestSingingDocument t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestSingingAnalysis t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestRecordWorkflow t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

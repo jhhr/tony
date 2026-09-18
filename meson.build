@@ -1367,6 +1367,8 @@ tony_core_test_exe = executable(
 tony_app_test_moc_files = qt.preprocess(
   moc_headers: [
   'main/test/TestSingingDocument.h',
+  'main/test/TestSingingAnalysis.h',
+  'main/test/TestRecordWorkflow.h',
 ])
 
 tony_app_test_exe = executable(
@@ -1395,6 +1397,8 @@ tony_app_test_exe = executable(
 
 test('tony-core', tony_core_test_exe)
 test('tony-app', tony_app_test_exe,
+     depends: pyin_plugin,
+     timeout: 300,
      env: [ 'QT_QPA_PLATFORM=offscreen' ])
 
 test('svcore-base', svcore_base_test_exe)
