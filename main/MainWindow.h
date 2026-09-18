@@ -21,6 +21,7 @@
 #include "RealtimePitchTracker.h"
 
 #include <vector>
+#include <atomic>
 
 #include "data/model/SparseTimeValueModel.h"
 
@@ -380,7 +381,21 @@ protected:
     // "play reference while recording" toggle on.  Applied as a negative
     // start-frame offset to the singing model so its timeline aligns with
     // the reference during playback.  Reset to 0 at the start of each recording.
+    //
+    // It also includes the start gap: the part of the take recorded before
+    // the reference began to play.  That starts out as an estimate made just
+    // before play() is called, and refineRecordingLatency() replaces the
+    // estimate with the measured figure once the audio callback has it.
     sv::sv_frame_t  m_recordingLatencyFrames;
+    sv::sv_frame_t  m_recordingStartGapEstimate;
+
+    // Written by the audio callback when the first block of the reference is
+    // handed to the device during a take: the number of frames of the take
+    // that came before that block.  -1 until then.
+    std::atomic<sv::sv_frame_t> m_recordingStartGapMeasured;
+    std::atomic<bool> m_awaitingReferenceStart;
+
+    void refineRecordingLatency();
 
     // Extra panes created by MainWindowBase::record() via AddPaneCommand
     // that we want to hide immediately but cannot delete yet because

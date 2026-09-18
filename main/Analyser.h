@@ -71,6 +71,13 @@ public:
     // layers; return "" on success or error string on failure
     QString analyseExistingFile();
 
+    // Stop any pitch or note analysis still running on our model, and
+    // wait for its thread to exit. A running transform holds shared
+    // pointers to its input and output models, so this must happen
+    // before those models are released, or the last reference may be
+    // dropped (and the model destroyed) on the transform thread
+    void cancelAnalyses();
+
     // Discard any layers etc associated with the current document
     void fileClosed();
 

@@ -16,7 +16,8 @@
 
 // A duplex audio device with no hardware behind it. A worker thread
 // runs the callback in real time, as a driver would: each block it
-// pulls the application's output and pushes a programmed input.
+// pushes a programmed input and then pulls the application's output,
+// in that order, like PortAudioIO and JACKAudioIO.
 //
 // The device reports whatever latencies the test asks for, so the
 // application computes a known compensation, and the input can be
@@ -56,11 +57,14 @@ public:
 
         // Start the input clock at the first audible output sample
         // instead of at resume. With inputDelay equal to the reported
-        // round trip, this is a singer who is exactly on time
+        // round trip, this is a singer who is exactly on time.
+        // inputDelay must be at least a block, because the input of
+        // the block in which playback starts has already gone
         bool inputFollowsPlayback = false;
 
         // Add the output to the input, inputDelay frames late:
-        // speakers bleeding into the microphone
+        // speakers bleeding into the microphone. Again inputDelay
+        // must be at least a block
         bool loopback = false;
 
         // Whether the application keeps the input it is given just
@@ -77,8 +81,7 @@ public:
         m_config(config),
         m_suspended(true),
         m_stop(false),
-        m_clockRunning(false),
-        m_clock(0),
+        m_resumeFrame(0),
         m_frames(0),
         m_playStartFrame(-1),
         m_sinceResume(0),
@@ -122,8 +125,7 @@ public:
         std::lock_guard<std::mutex> guard(m_mutex);
         if (!m_suspended) return;
         m_suspended = false;
-        m_clock = 0;
-        m_clockRunning = !m_config.inputFollowsPlayback;
+        m_resumeFrame = long(m_captured.size());
         m_playStartFrame = -1;
         m_sinceResume = 0;
         m_framesBeforePlayStart = -1;
@@ -171,8 +173,7 @@ private:
     std::thread m_thread;
     bool m_suspended;
     std::atomic<bool> m_stop;
-    bool m_clockRunning;
-    long m_clock;
+    long m_resumeFrame;
     std::atomic<long> m_frames;
     long m_playStartFrame;
     long m_sinceResume;
@@ -199,8 +200,14 @@ private:
         }
     }
 
-    float inputAt(long clock) const {
-        long i = clock - m_config.inputDelay;
+    // The input at a position in the captured output's timeline
+    float inputAt(long frame) const {
+        long origin = m_resumeFrame;
+        if (m_config.inputFollowsPlayback) {
+            if (m_playStartFrame < 0) return 0.f;
+            origin = m_playStartFrame;
+        }
+        long i = frame - origin - m_config.inputDelay;
         if (i < 0 || i >= long(m_config.input.size())) return 0.f;
         return m_config.input[size_t(i)];
     }
@@ -208,15 +215,29 @@ private:
     void process() {
         const int n = m_config.blockSize;
         const int ch = m_config.channels;
+        const long base = long(m_captured.size());
+
+        std::vector<float> in(n, 0.f);
+        for (int i = 0; i < n; ++i) {
+            in[i] = inputAt(base + i);
+            if (m_config.loopback) {
+                long j = base + i - m_config.inputDelay;
+                if (j >= 0 && j < base) in[i] += m_captured[size_t(j)];
+            }
+        }
+
+        bool kept = !m_config.inputIsKept || m_config.inputIsKept();
+        long keptBefore = m_sinceResume;
+
+        std::vector<const float *> inPtrs(ch, in.data());
+        m_target->putSamples(inPtrs.data(), ch, n);
+        if (kept) m_sinceResume += n;
 
         std::vector<std::vector<float>> out(ch, std::vector<float>(n, 0.f));
         std::vector<float *> outPtrs;
         for (auto &v : out) outPtrs.push_back(v.data());
         int got = m_source->getSourceSamples(outPtrs.data(), ch, n);
 
-        bool kept = !m_config.inputIsKept || m_config.inputIsKept();
-
-        long base = long(m_captured.size());
         for (int i = 0; i < n; ++i) {
             float mix = 0.f;
             if (i < got) {
@@ -226,29 +247,9 @@ private:
             m_captured.push_back(mix);
             if (m_playStartFrame < 0 && std::fabs(mix) > 1e-4f) {
                 m_playStartFrame = base + i;
-                m_framesBeforePlayStart = m_sinceResume + (kept ? i : 0);
+                m_framesBeforePlayStart = keptBefore + (kept ? i : 0);
             }
         }
-
-        std::vector<float> in(n, 0.f);
-        for (int i = 0; i < n; ++i) {
-            if (!m_clockRunning && m_playStartFrame >= 0 &&
-                base + i >= m_playStartFrame) {
-                m_clockRunning = true;
-            }
-            if (m_clockRunning) {
-                in[i] = inputAt(m_clock);
-                ++m_clock;
-            }
-            if (m_config.loopback) {
-                long j = base + i - m_config.inputDelay;
-                if (j >= 0) in[i] += m_captured[size_t(j)];
-            }
-        }
-
-        std::vector<const float *> inPtrs(ch, in.data());
-        m_target->putSamples(inPtrs.data(), ch, n);
-        if (kept) m_sinceResume += n;
 
         m_frames += n;
     }

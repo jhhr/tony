@@ -327,8 +327,6 @@ private slots:
         delete document;
 
         QVERIFY2(found, "the singing model was not reloaded");
-        QEXPECT_FAIL("", "Review finding 13: SVFileReader does not re-apply "
-                     "\"start\" to wave file models", Continue);
         QCOMPARE(start, -shift);
     }
 

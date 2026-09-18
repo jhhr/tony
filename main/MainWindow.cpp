@@ -149,9 +149,25 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingAsSingingTrack(false),
     m_paneCountBeforeRecording(0),
     m_currentRecordingModelId(),
-    m_recordingLatencyFrames(0)
+    m_recordingLatencyFrames(0),
+    m_recordingStartGapEstimate(0),
+    m_recordingStartGapMeasured(-1),
+    m_awaitingReferenceStart(false)
 {
     setWindowTitle(QApplication::applicationName());
+
+    // Called from the audio callback: see recordingStarted()
+    if (m_playSource) {
+        m_playSource->setPlayStartCallback([this](int blockFrames) {
+            if (!m_awaitingReferenceStart.exchange(false)) return;
+            if (!m_recordTarget || !m_recordTarget->isRecording()) return;
+            // The device drivers deliver the input of a block before they
+            // ask for its output (PortAudioIO, JACKAudioIO), so the count
+            // already includes the input that goes with this first block
+            sv_frame_t gap = m_recordTarget->getFramesReceived() - blockFrames;
+            m_recordingStartGapMeasured = (gap > 0 ? gap : 0);
+        });
+    }
 
 #ifdef Q_OS_MAC
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 2, 0))
@@ -2749,6 +2765,9 @@ MainWindow::record()
 
         m_recordingAsSingingTrack = true;
         m_recordingLatencyFrames = 0; // reset; will be computed in recordingStarted()
+        m_recordingStartGapEstimate = 0;
+        m_awaitingReferenceStart = false;
+        m_recordingStartGapMeasured = -1;
         // Remember pane count so we can prune the extra pane that
         // MainWindowBase::record() creates via AddPaneCommand for the
         // recording's waveform layer.  We want both tracks in pane 0.
@@ -2868,11 +2887,27 @@ MainWindow::recordingStarted()
             // shift the model's start frame by -(outputLatency + inputLatency).
             sv_frame_t outputLatency = m_playSource->getTargetPlayLatency();
             sv_frame_t inputLatency  = m_recordTarget ? m_recordTarget->getSystemRecordLatency() : 0;
+            //
+            // The take is already running by now: record() started it, and
+            // this lambda runs an event-loop turn (and a layer setup) later.
+            // Whatever the device delivers before the reference starts sits
+            // at the front of the take, ahead of reference frame 0, so it is
+            // part of the shift as well.  What it has delivered so far is
+            // only an estimate of that, because the play source takes a
+            // little while to start; the audio callback reports the real
+            // figure, and refineRecordingLatency() picks it up.
+            m_recordingStartGapEstimate =
+                m_recordTarget ? m_recordTarget->getFramesReceived() : 0;
             m_recordingLatencyFrames =
-                computeRecordingLatency(outputLatency, inputLatency);
+                computeRecordingLatency(outputLatency, inputLatency) +
+                m_recordingStartGapEstimate;
             cerr << "MainWindow::recordingStarted: output latency=" << outputLatency
                  << " input latency=" << inputLatency
-                 << " round-trip compensation=" << m_recordingLatencyFrames << " frames" << endl;
+                 << " estimated start gap=" << m_recordingStartGapEstimate
+                 << " total compensation=" << m_recordingLatencyFrames << " frames" << endl;
+
+            m_recordingStartGapMeasured = -1;
+            m_awaitingReferenceStart = true;
 
             m_viewManager->setPlaybackFrame(0);
             m_playSource->play(0);
@@ -2881,6 +2916,17 @@ MainWindow::recordingStarted()
         updateLayerStatuses();
         updateMenuStates();
     });
+}
+
+void
+MainWindow::refineRecordingLatency()
+{
+    sv_frame_t measured = m_recordingStartGapMeasured;
+    if (measured < 0 || measured == m_recordingStartGapEstimate) return;
+    cerr << "MainWindow::refineRecordingLatency: start gap was " << measured
+         << " frames, not the estimated " << m_recordingStartGapEstimate << endl;
+    m_recordingLatencyFrames += measured - m_recordingStartGapEstimate;
+    m_recordingStartGapEstimate = measured;
 }
 
 void
@@ -4260,6 +4306,7 @@ MainWindow::analyseNow()
         // pYIN analysis so that all derived layers (pitch, notes) inherit the
         // same timeline offset.  Only applied when reference playback was
         // active during the recording (m_recordingLatencyFrames > 0).
+        refineRecordingLatency();
         if (m_recordingLatencyFrames > 0 && !m_currentRecordingModelId.isNone()) {
             auto wfm = ModelById::getAs<WritableWaveFileModel>(m_currentRecordingModelId);
             if (wfm) {

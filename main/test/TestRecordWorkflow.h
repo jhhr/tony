@@ -516,7 +516,19 @@ private slots:
         auto wave = sv::ModelById::getAs<sv::WritableWaveFileModel>
             (m_window->analyser2()->getMainModelId());
         QVERIFY(wave);
-        QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(-K));
+
+        // The shift is the round trip plus what the application took
+        // the start gap to be (review finding 14). The device knows
+        // what the gap really was. The application counts in whole
+        // blocks, in the audio callback, so the two agree to within a
+        // few samples; an estimate made on the GUI thread is out by a
+        // block or more
+        sv::sv_frame_t gap = m_window->fake()->getFramesBeforePlayStart();
+        sv::sv_frame_t assumedGap = -wave->getStartFrame() - K;
+        QVERIFY2(std::llabs(assumedGap - gap) <= 16,
+                 qPrintable(QString("the application took the start gap to "
+                                    "be %1 frames; it was %2")
+                            .arg(assumedGap).arg(gap)));
 
         sv::sv_frame_t refStep = stepFrame(pitchEvents(m_window->analyser()));
         sv::sv_frame_t sungStep = stepFrame(pitchEvents(m_window->analyser2()));
@@ -524,20 +536,14 @@ private slots:
         QVERIFY2(sungStep > 0, "the take never reached the second note");
 
         sv::sv_frame_t error = sungStep - refStep;
-        sv::sv_frame_t gap = m_window->fake()->getFramesBeforePlayStart();
         QString detail = QString("sung step at %1, reference step at %2: "
                                  "%3 frames (%4 ms) apart; the reference "
-                                 "started %5 frames into the take")
+                                 "started %5 frames into the take, and the "
+                                 "application took that to be %6")
             .arg(sungStep).arg(refStep).arg(error)
-            .arg(1000.0 * double(error) / rate, 0, 'f', 1).arg(gap);
+            .arg(1000.0 * double(error) / rate, 0, 'f', 1)
+            .arg(gap).arg(assumedGap);
 
-        // What is left over is the time between the start of the take
-        // and the start of the reference, and nothing else
-        QVERIFY2(std::llabs(error - gap) <= 2 * hop, qPrintable(detail));
-
-        QEXPECT_FAIL("", "Review finding 14: the take starts before the "
-                     "reference does, and the gap is not compensated",
-                     Continue);
         QVERIFY2(std::llabs(error) <= 2 * hop, qPrintable(detail));
     }
 
@@ -830,7 +836,9 @@ private slots:
 
         take(1200);
         if (QTest::currentTestFailed()) return;
-        QCOMPARE(m_window->recordingLatencyFrames(), sv::sv_frame_t(K));
+        // the round trip plus the start gap, which varies
+        sv::sv_frame_t shift = m_window->recordingLatencyFrames();
+        QVERIFY(shift >= K);
 
         QString session = m_dir.filePath("round-trip.ton");
         QVERIFY(m_window->saveSessionFile(session));
@@ -858,9 +866,7 @@ private slots:
         auto wave = sv::ModelById::getAs<sv::WaveFileModel>
             (a2->getMainModelId());
         QVERIFY(wave);
-        QEXPECT_FAIL("", "Review finding 13: SVFileReader does not re-apply "
-                     "\"start\" to wave file models", Continue);
-        QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(-K));
+        QCOMPARE(wave->getStartFrame(), -shift);
     }
 
     void close_session_resets() {
@@ -893,16 +899,14 @@ private slots:
                            highHz)) < 10.0);
     }
 
-    // Closing while pYIN is still running on the take. About one run
-    // in five under CPU load, the take's model is destroyed on the
-    // transform thread ("Timers cannot be stopped from another
-    // thread") and the process dies with an access violation soon
-    // after. A crash cannot be an expected failure, so this is
-    // skipped until the finding is fixed.
+    // Closing while pYIN is still running on the take (review finding
+    // 15). Unless the analysis is cancelled first, about one run in
+    // three under CPU load destroys the take's model on the transform
+    // thread ("Timers cannot be stopped from another thread") and the
+    // process dies with an access violation soon after. A regression
+    // shows up as a crash of the whole test program, and not reliably:
+    // run it under load to check.
     void close_session_during_analysis() {
-        QSKIP("Review finding 15: closing the session during the take's "
-              "analysis can crash");
-
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);
         makeWindow(config);

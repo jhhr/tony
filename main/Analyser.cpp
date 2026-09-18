@@ -17,6 +17,7 @@
 
 #include "transform/TransformFactory.h"
 #include "transform/ModelTransformer.h"
+#include "transform/ModelTransformerFactory.h"
 #include "transform/FeatureExtractionModelTransformer.h"
 #include "framework/Document.h"
 #include "data/model/WaveFileModel.h"
@@ -115,7 +116,11 @@ Analyser::analyseExistingFile()
     if (!m_pane) return "Internal error: Analyser::analyseExistingFile() called with no pane present";
 
     if (m_fileModel.isNone()) return "Internal error: Analyser::analyseExistingFile() called with no model present";
-    
+
+    // The layers removed below are kept alive by the undo history, so
+    // an analysis still running on them would carry on unseen
+    cancelAnalyses();
+
     if (m_layers[PitchTrack]) {
         m_document->removeLayerFromView(m_pane, m_layers[PitchTrack]);
         m_layers[PitchTrack] = 0;
@@ -183,9 +188,29 @@ Analyser::doAllAnalyses(bool withPitchTrack)
 }
 
 void
+Analyser::cancelAnalyses()
+{
+    std::vector<Layer *> derived(m_reAnalysisCandidates.begin(),
+                                 m_reAnalysisCandidates.end());
+    for (Component c : { PitchTrack, Notes }) {
+        auto it = m_layers.find(c);
+        if (it != m_layers.end() && it->second) derived.push_back(it->second);
+    }
+
+    auto mtf = ModelTransformerFactory::getInstance();
+    for (Layer *layer : derived) {
+        ModelId modelId = layer->getModel();
+        // cancel() returns once the transform thread has exited; it
+        // does nothing if the transform has already finished
+        if (!modelId.isNone()) mtf->cancel(modelId);
+    }
+}
+
+void
 Analyser::fileClosed()
 {
     cerr << "Analyser::fileClosed" << endl;
+    cancelAnalyses();
     m_layers.clear();
     m_reAnalysisCandidates.clear();
     m_currentCandidate = -1;
@@ -196,6 +221,9 @@ void
 Analyser::removeAllLayers()
 {
     cerr << "Analyser::removeAllLayers" << endl;
+
+    // Before any model is released: see cancelAnalyses()
+    cancelAnalyses();
 
     // First discard any re-analysis candidate layers (these are not in
     // m_layers, but they are registered with the document).
