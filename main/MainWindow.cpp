@@ -2447,6 +2447,10 @@ MainWindow::teardownSingingTrackAnalyser()
     // m_analyser2 is set up and its WaveformLayer holds the model reference.
     // closeSession() handles any residual hidden panes via its own
     // getHiddenPaneCount() loop using removeLayerFromView + deletePane.
+    //
+    // The forced deletes do not fire layerInAView(false), which is what
+    // usually takes a model out of the play source.  The models go from
+    // there when the document releases them (modelAboutToBeReleased).
     if (m_document) {
         m_analyser2->removeAllLayers();
     } else {
@@ -2556,11 +2560,11 @@ MainWindow::setupRealtimePitchLayer()
     m_realtimePitchModelId = ModelById::add(pitchModel);
     m_document->addNonDerivedModel(m_realtimePitchModelId);
 
-    // Create a TimeValueLayer to display the pitch estimates.
-    // createEmptyLayer creates the layer with an appropriate empty model
-    // registered with the document; we then use document->setModel() to
-    // replace that empty model with our SparseTimeValueModel.
-    Layer *rawLayer = m_document->createEmptyLayer(LayerFactory::TimeValues);
+    // Create a TimeValueLayer to display the pitch estimates.  Not with
+    // createEmptyLayer(): that gives the layer an empty model of its own,
+    // which goes into the play source only to be released again by the
+    // setModel() below.
+    Layer *rawLayer = m_document->createLayer(LayerFactory::TimeValues);
     m_realtimePitchLayer = qobject_cast<TimeValueLayer *>(rawLayer);
 
     if (!m_realtimePitchLayer) {
@@ -2758,8 +2762,10 @@ MainWindow::record()
                          << prevSingingModelId << endl;
                     m_document->deleteLayer(orphan, true);
                 }
-                // Explicitly remove from play source — belt-and-suspenders in case
-                // deleteLayer(true)'s layerInAView(false) path didn't fire.
+                // deleteLayer(true) does not fire layerInAView(false).  The
+                // model leaves the play source when it is released, which
+                // is normally in the teardown below; this makes sure of it
+                // even if something else still holds the model.
                 if (m_playSource) {
                     m_playSource->removeModel(prevSingingModelId);
                 }

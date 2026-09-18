@@ -779,13 +779,24 @@ private slots:
         if (QTest::currentTestFailed()) return;
         int panes = m_window->paneStack()->getPaneCount();
 
-        take(800);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->realtimeLayer(), 2000);
+        sv::ModelId firstLive = m_window->realtimeLayer()->getModel();
+        QTest::qWait(800);
+        stopTake();
         if (QTest::currentTestFailed()) return;
         Analyser *first = m_window->analyser2();
         sv::ModelId firstModel = first->getMainModelId();
         QVERIFY(sv::ModelById::get(firstModel));
 
-        take(800);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->realtimeLayer(), 2000);
+        sv::ModelId secondLive = m_window->realtimeLayer()->getModel();
+        QVERIFY(secondLive != firstLive);
+        QTest::qWait(800);
+        stopTake();
         if (QTest::currentTestFailed()) return;
 
         QVERIFY(m_window->analyser2());
@@ -803,8 +814,25 @@ private slots:
         auto events = pitchEvents(m_window->analyser2());
         QVERIFY(events.size() > 50);
 
-        // The play source's model list has no accessor, so whether it
-        // holds stale ids (finding 6) is not checked here
+        // Nothing of the first take is left in the play source: not
+        // its audio and not its live pitch model (review finding 6)
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->realtimeLayer(), 5000);
+        auto playing = m_window->playSource()->getModels();
+        QVERIFY(!playing.count(firstModel));
+        QVERIFY(!playing.count(firstLive));
+        QVERIFY(!playing.count(secondLive));
+        for (sv::ModelId id : playing) {
+            QVERIFY2(sv::ModelById::get(id),
+                     qPrintable(QString("the play source holds model %1, "
+                                        "which no longer exists")
+                                .arg(id.untyped)));
+            QVERIFY2(layersOnModel(id) > 0,
+                     qPrintable(QString("the play source holds model %1, "
+                                        "which no layer uses")
+                                .arg(id.untyped)));
+        }
+        // audio, pitch track and notes, of the reference and of the take
+        QCOMPARE(int(playing.size()), 6);
     }
 
     // No device at all: the base class record() gives up quietly

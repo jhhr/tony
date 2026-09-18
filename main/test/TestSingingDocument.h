@@ -184,22 +184,29 @@ private slots:
     }
 
     void force_delete_skips_play_source() {
-        // layerInAView(layer, false) is what takes a model out of the
-        // play source. A forced delete never emits it (review finding
-        // 6), so callers have to remove the model themselves.
+        // layerInAView(layer, false) is what usually takes a model out
+        // of the play source. A forced delete never emits it (review
+        // finding 6); what the main window goes by then is
+        // modelAboutToBeReleased.
         Extra viaCommand = addExtraPane(false);
         Extra viaForce = addExtraPane(false);
         QVERIFY(viaCommand.waveform && viaForce.waveform);
         QSignalSpy inAView(m_document,
                            SIGNAL(layerInAView(Layer *, bool)));
         QVERIFY(inAView.isValid());
+        QSignalSpy released(m_document,
+                            SIGNAL(modelAboutToBeReleased(ModelId)));
+        QVERIFY(released.isValid());
 
         m_document->removeLayerFromView(viaCommand.pane, viaCommand.waveform);
         QCOMPARE(int(inAView.count()), 1);
         QCOMPARE(inAView.at(0).at(1).toBool(), false);
+        QCOMPARE(int(released.count()), 0);
 
         m_document->deleteLayer(viaForce.waveform, true);
         QCOMPARE(int(inAView.count()), 1);
+        QCOMPARE(int(released.count()), 1);
+        QVERIFY(!modelAlive(viaForce.model));
     }
 
     // --- The pruning helper ----------------------------------------------
