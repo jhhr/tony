@@ -816,8 +816,6 @@ private slots:
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
 
-        QEXPECT_FAIL("", "Review finding 4: m_recordingAsSingingTrack is "
-                     "left true when record() fails", Abort);
         QVERIFY(!m_window->recordingAsSingingTrack());
 
         // so that the next file opened is analysed as usual
@@ -845,14 +843,20 @@ private slots:
         m_window->doAnalyseNow();
         QTest::qWait(600);
         QVERIFY(m_window->recordTarget()->isRecording());
+
+        // The take carries on as if nothing had been asked
+        QVERIFY(m_window->recordingAsSingingTrack());
+        QVERIFY(m_window->recordingInProgress());
+        QVERIFY(m_window->realtimeTracker());
+        QVERIFY(m_window->realtimeLayer());
+        QVERIFY(pitchEvents(m_window->analyser2()).empty());
+
         m_window->doRecord();
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
         sv::Layer *refLayerNow =
             m_window->analyser()->getLayer(Analyser::PitchTrack);
-        QEXPECT_FAIL("", "Review finding 5: Analyse Now during a take makes "
-                     "the end of the take re-analyse the reference", Continue);
         QVERIFY2(refLayerNow == refLayer && refLayerNow->getModel() == refModel,
                  "the reference pitch track was replaced");
     }

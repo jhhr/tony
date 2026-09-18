@@ -2792,6 +2792,17 @@ MainWindow::record()
 
     MainWindowBase::record();
 
+    // The base class gives up without a signal when the device cannot be
+    // opened or the recording cannot be started.  No take is coming then,
+    // so nothing must be left waiting for one: with the flag still set,
+    // the next file opened would not be analysed, and Analyse Now would
+    // be routed to a singing track that is not there.
+    if (!m_recordTarget || !m_recordTarget->isRecording()) {
+        cerr << "MainWindow::record: recording did not start" << endl;
+        m_recordingAsSingingTrack = false;
+        m_recordingInProgress = false;
+    }
+
     // Restore the default mode so that a subsequent "standalone" recording
     // (after the singing track session is closed) behaves correctly.
     setAudioRecordMode(RecordReplaceSession);
@@ -4337,6 +4348,17 @@ void
 MainWindow::analyseNow()
 {
     cerr << "analyseNow called" << endl;
+
+    // Not during a take.  The analysis of a take is started from here
+    // when the take ends (recordCompleted, by which time isRecording()
+    // is false).  Run in the middle of one, it would analyse the part
+    // recorded so far and end the take's bookkeeping early, so that the
+    // end of the take would re-analyse the reference instead, discarding
+    // any edits made to its pitch track.
+    if (m_recordTarget && m_recordTarget->isRecording()) {
+        cerr << "analyseNow: recording in progress, ignoring" << endl;
+        return;
+    }
 
     // When the user recorded a singing track alongside an existing reference
     // track (RecordCreateAdditionalModel mode), the recording becomes an

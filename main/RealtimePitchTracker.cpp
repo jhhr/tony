@@ -92,7 +92,10 @@ RealtimePitchTracker::run()
 
         while (nextFrameToProcess + kWindowSize <= totalFrames) {
 
-            floatvec_t rawFv = audioModel->getData(0, nextFrameToProcess, kWindowSize);
+            // Channel -1 is the mixdown of all channels, which is also
+            // what the pYIN transform is given: the microphone need not
+            // be on the first input of the interface.
+            floatvec_t rawFv = audioModel->getData(-1, nextFrameToProcess, kWindowSize);
 
             if ((int)rawFv.size() < kWindowSize) break;
 

@@ -306,9 +306,12 @@ private slots:
         settle(spy, expectedHops(rec->written));
         tracker.stop();
 
-        QEXPECT_FAIL("", "Review finding 11: the tracker reads channel 0 only",
-                     Continue);
         QVERIFY(spy.count() > 0);
+        for (const auto &event : spy.events) {
+            double hz = event.hz;
+            QVERIFY2(std::abs(TestSignals::centsBetween(hz, 330.0)) < 10.0,
+                     qPrintable(QString("%1 Hz").arg(hz)));
+        }
     }
 };
 
