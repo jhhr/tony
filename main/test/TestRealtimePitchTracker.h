@@ -313,6 +313,27 @@ private slots:
                      qPrintable(QString("%1 Hz").arg(hz)));
         }
     }
+
+    void stereo_other_input_noisy() {
+        // As above, but the unused input is not silent: the mixdown
+        // carries its noise along with the voice
+        auto rec = makeRecording(2);
+        RealtimePitchTracker tracker(rec->id);
+        PitchCollector spy(&tracker);
+        tracker.start();
+        const int n = int(kRate) / 2;
+        rec->append({ TestSignals::whiteNoise(n, 7, 0.02),
+                      TestSignals::sine(330.0, kRate, n) });
+        settle(spy, expectedHops(rec->written));
+        tracker.stop();
+
+        QVERIFY(spy.count() > expectedHops(rec->written) / 2);
+        for (const auto &event : spy.events) {
+            double hz = event.hz;
+            QVERIFY2(std::abs(TestSignals::centsBetween(hz, 330.0)) < 20.0,
+                     qPrintable(QString("%1 Hz").arg(hz)));
+        }
+    }
 };
 
 #endif

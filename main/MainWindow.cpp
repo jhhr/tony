@@ -147,6 +147,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_withSpectrogram(withSpectrogram),
     m_recordingInProgress(false),
     m_recordingAsSingingTrack(false),
+    m_singingAudioMutedForTake(false),
+    m_singingAudioAfterTake(true),
     m_paneCountBeforeRecording(0),
     m_currentRecordingModelId(),
     m_recordingLatencyFrames(0),
@@ -1835,7 +1837,10 @@ MainWindow::playNotesToggled()
 void
 MainWindow::playSingingAudioToggled()
 {
-    if (m_analyser2) {
+    if (m_singingAudioMutedForTake) {
+        // Muted whatever the button says; it takes effect after the take
+        m_singingAudioAfterTake = !m_singingAudioAfterTake;
+    } else if (m_analyser2) {
         m_analyser2->toggleAudible(Analyser::Audio);
     }
     updateLayerStatuses();
@@ -1891,7 +1896,9 @@ MainWindow::updateLayerStatuses()
 
     if (m_playSingingAudio) {
         m_playSingingAudio->setEnabled(m_analyser2 != nullptr);
-        if (m_analyser2) {
+        if (m_singingAudioMutedForTake) {
+            m_playSingingAudio->setChecked(m_singingAudioAfterTake);
+        } else if (m_analyser2) {
             m_playSingingAudio->setChecked(m_analyser2->isAudible(Analyser::Audio));
         } else {
             m_playSingingAudio->setChecked(true); // default on when track arrives
@@ -2389,6 +2396,21 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     // After deletePane() the pointer would be dangling → crash.
     drainPendingExtraPanes(singingModelId);
 
+    // A take being recorded stays out of the mix until it is over.  The
+    // play source happens to read ahead of what has been recorded, so the
+    // take is silent anyway with the buffer sizes of today; this does not
+    // depend on that.  Not with setAudible(), which would write the state
+    // to the settings the reference shares.
+    if (deferAnalysis) {
+        m_singingAudioAfterTake = m_analyser2->isAudible(Analyser::Audio);
+        if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
+            if (auto params = audio->getPlayParameters()) {
+                params->setPlayAudible(false);
+                m_singingAudioMutedForTake = true;
+            }
+        }
+    }
+
     // Re-stack layers so the primary pitch track stays on top
     m_analyser->getLayer(Analyser::PitchTrack);  // ensure primary is on top
     updateLayerStatuses();
@@ -2429,8 +2451,24 @@ MainWindow::drainPendingExtraPanes(sv::ModelId singingModelId)
 }
 
 void
+MainWindow::restoreSingingAudioAfterTake()
+{
+    if (!m_singingAudioMutedForTake) return;
+    m_singingAudioMutedForTake = false;
+    if (!m_analyser2) return;
+    if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
+        if (auto params = audio->getPlayParameters()) {
+            params->setPlayAudible(m_singingAudioAfterTake);
+        }
+    }
+    updateLayerStatuses();
+}
+
+void
 MainWindow::teardownSingingTrackAnalyser()
 {
+    m_singingAudioMutedForTake = false;
+
     if (!m_analyser2) return;
 
     // removeAllLayers() removes each layer from the pane and deletes it from
@@ -2591,9 +2629,10 @@ MainWindow::setupRealtimePitchLayer()
 
     m_document->addLayerToView(pane, m_realtimePitchLayer);
 
-    // Create and start the pitch tracker.
-    // It will poll audioSourceId (the WritableWaveFileModel) for new frames
-    // on each QTimer tick and write estimates into m_realtimePitchModelId.
+    // Create and start the pitch tracker.  Its thread reads new frames
+    // from audioSourceId (the WritableWaveFileModel) and emits
+    // pitchDetected(); onRealtimePitchDetected() writes the estimates into
+    // m_realtimePitchModelId on this thread.
     m_realtimePitchTracker = new RealtimePitchTracker(
         audioSourceId, this);
     connect(m_realtimePitchTracker, &RealtimePitchTracker::pitchDetected,
@@ -3034,6 +3073,7 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
     m_recordingInProgress = false;
     m_recordingAsSingingTrack = false;
     m_currentRecordingModelId = {};
+    restoreSingingAudioAfterTake();
 
     if (analysing && m_realtimePitchLayer) {
         stopRealtimePitchTracker();

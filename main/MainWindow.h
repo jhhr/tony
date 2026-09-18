@@ -348,6 +348,15 @@ protected:
     // pick it up on the next event-loop iteration.
     sv::ModelId m_pendingSingingModelId;
 
+    // A take is kept out of the playback mix while it is being recorded:
+    // with the reference playing, the singer would otherwise hear
+    // themselves late, and on speakers that goes back into the microphone.
+    // m_singingAudioAfterTake is what Play Singing Audio asks for, and
+    // what the take is given when the recording is over.
+    bool m_singingAudioMutedForTake;
+    bool m_singingAudioAfterTake;
+    void restoreSingingAudioAfterTake();
+
     // The main model last handed to m_analyser by analyseNewMainModel().
     // audioFileLoaded() is emitted for additional models too (a singing
     // track, background music), and the reference must not be set up again

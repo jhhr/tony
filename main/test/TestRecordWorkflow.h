@@ -89,6 +89,7 @@ public:
     void setPlayReferenceWhileRecording(bool on) {
         m_playRefWhileRecording->setChecked(on);
     }
+    QAction *playSingingAudioAction() { return m_playSingingAudio; }
 
     Analyser *analyser() { return m_analyser; }
     Analyser *analyser2() { return m_analyser2; }
@@ -283,6 +284,21 @@ class TestRecordWorkflow : public QObject
         return 2.0 * std::sqrt(re * re + im * im) / double(n);
     }
 
+    // Every model the play source holds is alive and in use by a layer
+    // (review finding 6)
+    void verifyPlaySourceClean() {
+        for (sv::ModelId id : m_window->playSource()->getModels()) {
+            QVERIFY2(sv::ModelById::get(id),
+                     qPrintable(QString("the play source holds model %1, "
+                                        "which no longer exists")
+                                .arg(id.untyped)));
+            QVERIFY2(layersOnModel(id) > 0,
+                     qPrintable(QString("the play source holds model %1, "
+                                        "which no layer uses")
+                                .arg(id.untyped)));
+        }
+    }
+
     int layersOnModel(sv::ModelId id) {
         int n = 0;
         for (sv::Layer *layer : m_window->document()->getLayers()) {
@@ -379,6 +395,12 @@ private slots:
         QSettings settings;
         settings.beginGroup("MainWindow");
         settings.setValue("playrefwhilerecording", false);
+        settings.endGroup();
+
+        // The audible flags are shared by both analysers; a test that
+        // failed half way must not leave the next one's tracks muted
+        settings.beginGroup("Analyser");
+        settings.remove("");
         settings.endGroup();
     }
 
@@ -775,6 +797,66 @@ private slots:
                                     "pitch, at amplitude %1").arg(synth)));
     }
 
+    // Review finding 3. The two tests above find the take and the live
+    // pitch silent in the output, but only because the play source reads
+    // ahead of what has been recorded. Neither is to be audible while it
+    // is being recorded, whatever the buffers do.
+    void take_muted_while_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        auto takeParams = [this]() {
+            return m_window->analyser2()->getLayer(Analyser::Audio)
+                ->getPlayParameters();
+        };
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->analyser2() &&
+                                 m_window->analyser2()->getLayer
+                                 (Analyser::Audio), 2000);
+        QVERIFY(m_window->realtimeLayer());
+        auto liveParams = m_window->realtimeLayer()->getPlayParameters();
+        QVERIFY(liveParams);
+        QVERIFY2(!liveParams->isPlayAudible(),
+                 "the live pitch model is audible during the take");
+        QVERIFY(takeParams());
+        QVERIFY2(!takeParams()->isPlayAudible(),
+                 "the take is audible while it is being recorded");
+
+        // The button goes on saying what the user asked for
+        QVERIFY(m_window->playSingingAudioAction()->isChecked());
+
+        QTest::qWait(800);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(takeParams()->isPlayAudible(),
+                 "the take was left muted after recording");
+        QVERIFY(m_window->playSingingAudioAction()->isChecked());
+
+        // Switched off during a take, it stays muted afterwards
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->analyser2() &&
+                                 m_window->analyser2()->getLayer
+                                 (Analyser::Audio), 2000);
+        m_window->playSingingAudioAction()->trigger();
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
+        QVERIFY(!takeParams()->isPlayAudible());
+        QTest::qWait(800);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!takeParams()->isPlayAudible());
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
+
+        // The reference was not touched by any of this
+        QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+    }
+
     void rerecord_cleans_up() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);
@@ -837,6 +919,40 @@ private slots:
         }
         // audio, pitch track and notes, of the reference and of the take
         QCOMPARE(int(playing.size()), 6);
+    }
+
+    // With nothing loaded the take is not a singing track: it becomes
+    // the main model and the primary analyser gets it
+    void record_without_reference() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->recordingAsSingingTrack());
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->realtimeLayer(), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!pitchEvents(m_window->realtimeLayer()).empty(), 3000);
+        QTest::qWait(800);
+
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+
+        QVERIFY(!m_window->analyser2());
+        QVERIFY(!m_window->mainModelId().isNone());
+        QCOMPARE(m_window->analyser()->getMainModelId(),
+                 m_window->mainModelId());
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(m_window->analyser())),
+                           highHz)) < 10.0);
+
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->realtimeLayer(), 5000);
+        QVERIFY(!m_window->realtimeTracker());
+        QVERIFY(!m_window->recordingInProgress());
+        QCOMPARE(m_window->pendingExtraPaneCount(), 0);
+        verifyPlaySourceClean();
     }
 
     // No device at all: the base class record() gives up quietly
@@ -935,6 +1051,71 @@ private slots:
         QVERIFY(m_window->isDocumentModified());
     }
 
+    // Loading over a singing track that is already there: the path
+    // through teardownSingingTrackAnalyser() that record() does not take
+    void reload_singing_track() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        int panes = m_window->paneStack()->getPaneCount();
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 2.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        sv::ModelId first = m_window->analyser2()->getMainModelId();
+        sv::ModelId firstPitch = m_window->analyser2()
+            ->getLayer(Analyser::PitchTrack)->getModel();
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        sv::ModelId second = m_window->analyser2()->getMainModelId();
+        QVERIFY(second != first);
+
+        QVERIFY2(!sv::ModelById::get(first),
+                 "the first singing track's model was not released");
+        QVERIFY(!sv::ModelById::get(firstPitch));
+        QCOMPARE(layersOnModel(second), 1);
+        QCOMPARE(m_window->paneStack()->getPaneCount(), panes);
+
+        auto playing = m_window->playSource()->getModels();
+        QVERIFY(!playing.count(first));
+        QVERIFY(!playing.count(firstPitch));
+        verifyPlaySourceClean();
+        if (QTest::currentTestFailed()) return;
+        // audio, pitch track and notes, of the reference and of the track
+        QCOMPARE(int(playing.size()), 6);
+
+        // A stale id used to keep the end of playback where the longest
+        // model ever loaded had ended
+        QVERIFY(m_window->playSource()->getPlayEndFrame() <
+                sv::sv_frame_t(1.2 * rate));
+    }
+
+    // Finding 7, the scenario itself: pitch candidates on the reference
+    // are still the analyser's after another track has been loaded
+    void reference_candidates_survive_load() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+
+        QString error = a->reAnalyseSelection
+            (sv::Selection(sv::sv_frame_t(0.5 * rate),
+                           sv::sv_frame_t(1.5 * rate)),
+             Analyser::FrequencyRange());
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveHigherPitchCandidate(), 30000);
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        QVERIFY2(a->haveHigherPitchCandidate(),
+                 "the reference analyser forgot its pitch candidates");
+
+        m_window->doLoadBackgroundMusic(writeWav(tone(highHz, 1.0)));
+        QCoreApplication::processEvents();
+        QVERIFY2(a->haveHigherPitchCandidate(),
+                 "the reference analyser forgot its pitch candidates");
+    }
+
     void load_background_music() {
         makeWindow(FakeAudioIO::Config());
         openReference(writeWav(tone(lowHz, 1.0)));
@@ -947,6 +1128,7 @@ private slots:
         m_window->doLoadBackgroundMusic(writeWav(tone(highHz, 1.0)));
         QCoreApplication::processEvents();
         QCOMPARE(int(refSetUp.count()), 0);
+        QVERIFY(m_window->isDocumentModified());
 
         sv::ModelId music = m_window->backgroundMusicModelId();
         QVERIFY(!music.isNone());
