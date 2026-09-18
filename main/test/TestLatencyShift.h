@@ -110,6 +110,20 @@ private slots:
         QCOMPARE(computeRecordingLatency(-1, 256), sv::sv_frame_t(256));
         QCOMPARE(computeRecordingLatency(-100, -100), sv::sv_frame_t(0));
     }
+
+    // Review finding 8: a live dot goes where the finished pitch track
+    // will put the same sound
+    void live_dot_shift() {
+        QCOMPARE(compensatedLiveFrame(5000, 768), sv::sv_frame_t(4232));
+        QCOMPARE(compensatedLiveFrame(768, 768), sv::sv_frame_t(0));
+        QCOMPARE(compensatedLiveFrame(5000, 0), sv::sv_frame_t(5000));
+        // Sound from before the reference started has nowhere to go:
+        // the caller drops anything negative
+        QVERIFY(compensatedLiveFrame(767, 768) < 0);
+        QVERIFY(compensatedLiveFrame(0, 768) < 0);
+        // An unavailable latency must never pull the dot later
+        QCOMPARE(compensatedLiveFrame(5000, -1), sv::sv_frame_t(5000));
+    }
 };
 
 #endif

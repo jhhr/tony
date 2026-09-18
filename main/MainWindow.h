@@ -203,7 +203,7 @@ protected slots:
     // --- Real-time pitch tracking during microphone recording ---
     virtual void recordingStarted();
     virtual void onRealtimePitchDetected(sv::sv_frame_t frame, double hz);
-    virtual void recordingFinishedFull();
+    virtual void recordingFinishedFull(Analyser *analysing = nullptr);
 
     void moveOneNoteRight();
     void moveOneNoteLeft();
@@ -322,6 +322,7 @@ protected:
     virtual void teardownSingingTrackAnalyser();
     virtual void setupRealtimePitchLayer();
     virtual void teardownRealtimePitchLayer();
+    virtual void stopRealtimePitchTracker();
 
     // Background music helpers: load/tear-down a non-analysed audio track
     // that plays alongside the reference track.
@@ -396,6 +397,10 @@ protected:
     std::atomic<bool> m_awaitingReferenceStart;
 
     void refineRecordingLatency();
+
+    // Set while the live dots of a finished take wait for pYIN to
+    // produce the pitch track that replaces them.
+    QMetaObject::Connection m_realtimeLayerTeardownConnection;
 
     // Extra panes created by MainWindowBase::record() via AddPaneCommand
     // that we want to hide immediately but cannot delete yet because

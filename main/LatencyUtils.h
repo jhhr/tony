@@ -33,4 +33,17 @@ computeRecordingLatency(sv::sv_frame_t outputLatency,
     return outputLatency + inputLatency;
 }
 
+/**
+ * Where to draw a live pitch dot for sound found at the given frame
+ * of a take that is going to be shifted earlier by the given latency
+ * once it is finished. A negative result means the sound came before
+ * the reference started, and the dot should be dropped.
+ */
+inline sv::sv_frame_t
+compensatedLiveFrame(sv::sv_frame_t frame, sv::sv_frame_t latency)
+{
+    if (latency < 0) latency = 0;
+    return frame - latency;
+}
+
 #endif

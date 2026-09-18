@@ -53,6 +53,7 @@
 #include <QtTest>
 #include <QAction>
 #include <QApplication>
+#include <QLabel>
 #include <QMessageBox>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -108,6 +109,12 @@ public:
     bool recordingAsSingingTrack() { return m_recordingAsSingingTrack; }
     sv::sv_frame_t recordingLatencyFrames() { return m_recordingLatencyFrames; }
     int pendingExtraPaneCount() { return int(m_pendingExtraPanes.size()); }
+
+    void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
+        onRealtimePitchDetected(frame, hz);
+    }
+    QString statusText() { return getStatusLabel()->text(); }
+    void setStatusText(QString text) { getStatusLabel()->setText(text); }
 
 protected:
     void createAudioIO() override {
@@ -481,13 +488,140 @@ private slots:
         stopTake();
         if (QTest::currentTestFailed()) return;
 
+        // The dots go when pYIN finishes, and the application hears of
+        // that an event-loop turn after the models say so
+        QTRY_VERIFY(!m_window->realtimeLayer());
         QVERIFY(!m_window->realtimeTracker());
-        QVERIFY(!m_window->realtimeLayer());
         QVERIFY(m_window->realtimeModelId().isNone());
         QVERIFY2(!sv::ModelById::get(liveModel),
                  "the live pitch model outlived its layer");
         QVERIFY(!m_window->recordingInProgress());
         QVERIFY(!m_window->recordingAsSingingTrack());
+    }
+
+    // Review finding 9: the pitch track replaces the dots. Between Stop
+    // and the end of pYIN the dots are all the singer has to look at
+    void live_dots_stay_until_analysis() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(1000);
+        sv::ModelId liveModel = m_window->realtimeModelId();
+        QVERIFY(!liveModel.isNone());
+
+        // Stop. pYIN has been started and cannot have finished: its
+        // completion arrives through the event loop, which has not run
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(!analysed(m_window->analyser2()));
+
+        QVERIFY2(m_window->realtimeLayer(),
+                 "the live dots went at Stop, before pYIN had anything "
+                 "to show in their place");
+        QVERIFY(paneHasLayer(0, m_window->realtimeLayer()));
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>(liveModel);
+        QVERIFY(model);
+        int dots = model->getEventCount();
+        QVERIFY(dots > 20);
+
+        // The take is over all the same: nothing is tracking it, and
+        // the state is that of a finished take
+        QVERIFY(!m_window->realtimeTracker());
+        QVERIFY(!m_window->recordingInProgress());
+        QVERIFY(!m_window->recordingAsSingingTrack());
+
+        // and they go no sooner than the pitch track is complete
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->realtimeLayer(), 30000);
+        QVERIFY(m_window->analyser2()->getInitialAnalysisCompletion() >= 100);
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+        QVERIFY2(!sv::ModelById::get(liveModel),
+                 "the live pitch model outlived its layer");
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+    }
+
+    // Review finding 10: pitch events still queued when the take ends
+    // must not draw dots or write to the status bar
+    void stale_pitch_event_ignored() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(600);
+        sv::ModelId liveModel = m_window->realtimeModelId();
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>(liveModel);
+        QVERIFY(model);
+        int dots = model->getEventCount();
+        m_window->setStatusText("after the take");
+        m_window->doRealtimePitchDetected(20000, 440.0);
+        QCOMPARE(model->getEventCount(), dots);
+        QCOMPARE(m_window->statusText(), QString("after the take"));
+
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        QTRY_VERIFY(!m_window->realtimeLayer());
+        m_window->setStatusText("after the analysis");
+        m_window->doRealtimePitchDetected(20000, 440.0);
+        QCOMPARE(m_window->statusText(), QString("after the analysis"));
+    }
+
+    // Review finding 8: during the take, the dots sit where the pitch
+    // track will. Same device and singer as latency_end_to_end, but
+    // looked at before Stop
+    void live_dots_compensated() {
+        const int K = 3 * 4096;
+        FakeAudioIO::Config config;
+        config.playbackLatency = 2 * 4096;
+        config.recordLatency = 4096;
+        config.input = melody(0.75);
+        config.inputDelay = K;
+        config.inputFollowsPlayback = true;
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(melody(0.75)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(2200);
+
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        QVERIFY(model);
+        auto dots = model->getAllEvents();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        sv::sv_frame_t refStep = stepFrame(pitchEvents(m_window->analyser()));
+        sv::sv_frame_t dotStep = stepFrame(dots);
+        QVERIFY(refStep > 0);
+        QVERIFY2(dotStep > 0, "the live dots never reached the second note");
+
+        // The dots are coarser than pYIN: allow them a YIN window
+        sv::sv_frame_t error = dotStep - refStep;
+        QVERIFY2(std::llabs(error) <= 2048,
+                 qPrintable(QString("live step at %1, reference step at %2: "
+                                    "%3 frames (%4 ms) apart; the round trip "
+                                    "is %5 frames and the reference started "
+                                    "%6 frames into the take")
+                            .arg(dotStep).arg(refStep).arg(error)
+                            .arg(1000.0 * double(error) / rate, 0, 'f', 1)
+                            .arg(K)
+                            .arg(m_window->fake()
+                                 ->getFramesBeforePlayStart())));
+
+        // Nothing is drawn ahead of the reference
+        QVERIFY(dots.empty() || dots.front().getFrame() >= 0);
     }
 
     // The automated latency test. The device reports a round trip of K

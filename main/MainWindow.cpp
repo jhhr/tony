@@ -2599,12 +2599,23 @@ MainWindow::setupRealtimePitchLayer()
 }
 
 void
-MainWindow::teardownRealtimePitchLayer()
+MainWindow::stopRealtimePitchTracker()
 {
     if (m_realtimePitchTracker) {
         m_realtimePitchTracker->stop();
         delete m_realtimePitchTracker;
         m_realtimePitchTracker = nullptr;
+    }
+}
+
+void
+MainWindow::teardownRealtimePitchLayer()
+{
+    stopRealtimePitchTracker();
+
+    if (m_realtimeLayerTeardownConnection) {
+        disconnect(m_realtimeLayerTeardownConnection);
+        m_realtimeLayerTeardownConnection = {};
     }
 
     if (m_realtimePitchLayer) {
@@ -2935,8 +2946,29 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
     // Called on the GUI thread via Qt::QueuedConnection (RealtimePitchTracker
     // emits from its background thread).  Write the point into the model here
     // so all model mutations stay on the GUI thread.
-    if (auto m = ModelById::getAs<SparseTimeValueModel>(m_realtimePitchModelId)) {
-        m->add(Event(frame, float(hz), tr("")));
+    //
+    // Events still queued when the take ended arrive here as well. The
+    // dots may still be on show then, waiting for pYIN, but the take is
+    // over: leave them, and the status bar, alone.
+    if (!m_recordingInProgress) return;
+
+    // Draw the dot where the finished pitch track will put this sound:
+    // the take is going to be shifted earlier by the recording latency.
+    // The first dots may have been placed using the estimate of the
+    // start gap. They all belong to sound from before the reference
+    // started, which has no place on the reference's timeline.
+    sv_frame_t latencyBefore = m_recordingLatencyFrames;
+    refineRecordingLatency();
+    auto m = ModelById::getAs<SparseTimeValueModel>(m_realtimePitchModelId);
+    if (m && m_recordingLatencyFrames != latencyBefore) {
+        for (const Event &e : m->getAllEvents()) m->remove(e);
+    }
+
+    sv_frame_t dotFrame = compensatedLiveFrame(frame, m_recordingLatencyFrames);
+    if (dotFrame < 0) return;
+
+    if (m) {
+        m->add(Event(dotFrame, float(hz), tr("")));
     }
 
     // Convert Hz to MIDI note number and cents deviation.
@@ -2971,17 +3003,33 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
 }
 
 void
-MainWindow::recordingFinishedFull()
+MainWindow::recordingFinishedFull(Analyser *analysing)
 {
-    // Called after analyseNow() has completed for the newly recorded audio.
-    // At this point the full pYIN analysis of the recording is available.
-    // We can remove the coarse realtime pitch layer (the "live" orange dots)
-    // because the full pYIN pitch track now covers the same audio.
-    cerr << "MainWindow::recordingFinishedFull: pYIN done, removing realtime pitch layer" << endl;
+    // Called from analyseNow() once the pYIN analysis of the newly
+    // recorded audio has been started.  The take is over, so the tracker
+    // goes now.  The coarse realtime pitch layer (the "live" orange dots)
+    // stays on show until the analyser passed in reports that the full
+    // pYIN pitch track is there to replace it.  With no analyser (the
+    // analysis could not be started) there is nothing to wait for.
+    cerr << "MainWindow::recordingFinishedFull: take finished" << endl;
     m_recordingInProgress = false;
     m_recordingAsSingingTrack = false;
     m_currentRecordingModelId = {};
-    teardownRealtimePitchLayer();
+
+    if (analysing && m_realtimePitchLayer) {
+        stopRealtimePitchTracker();
+        if (m_realtimeLayerTeardownConnection) {
+            disconnect(m_realtimeLayerTeardownConnection);
+        }
+        m_realtimeLayerTeardownConnection =
+            connect(analysing, &Analyser::initialAnalysisCompleted,
+                    this, [this]() {
+                        cerr << "MainWindow: pYIN done, removing realtime pitch layer" << endl;
+                        teardownRealtimePitchLayer();
+                    });
+    } else {
+        teardownRealtimePitchLayer();
+    }
 
     // Stop reference playback that was started for the singer's benefit.
     // Suspend the audio IO so it doesn't keep consuming CPU while idle.
@@ -4316,7 +4364,12 @@ MainWindow::analyseNow()
             }
         }
 
-        if (m_analyser2) {
+        // The realtime pitch layer stays until the full pYIN analysis of
+        // the singing recording (via m_analyser2) is there to replace it,
+        // or goes at once if that analysis could not be started.
+        bool wasLive = (m_realtimePitchTracker || m_realtimePitchLayer);
+
+        auto analyseSingingTrack = [this]() -> bool {
             CommandHistory::getInstance()->startCompoundOperation
                 (tr("Analyse Singing Track"), true);
 
@@ -4330,34 +4383,33 @@ MainWindow::analyseNow()
                      tr("Failed to analyse singing track"),
                      tr("<b>Analysis failed</b><p>%1</p>").arg(error),
                      QMessageBox::Ok);
+                return false;
             }
+            return true;
+        };
+
+        if (m_analyser2) {
+            bool ok = analyseSingingTrack();
+            if (wasLive) recordingFinishedFull(ok ? m_analyser2 : nullptr);
         } else {
             // m_analyser2 may still be pending setup (modelAdded fires async).
             // Defer the analysis until the secondary analyser is ready.
             cerr << "analyseNow: m_analyser2 not ready yet, deferring singing-track analysis" << endl;
-            QTimer::singleShot(200, this, [this]() {
+            if (wasLive) {
+                // The take is over either way; the dots wait for the
+                // deferred analysis
+                stopRealtimePitchTracker();
+                m_recordingInProgress = false;
+            }
+            QTimer::singleShot(200, this, [this, wasLive, analyseSingingTrack]() {
+                bool ok = false;
                 if (m_analyser2) {
-                    CommandHistory::getInstance()->startCompoundOperation
-                        (tr("Analyse Singing Track"), true);
-                    QString error = m_analyser2->analyseExistingFile();
-                    CommandHistory::getInstance()->endCompoundOperation();
-                    if (error != "") {
-                        QMessageBox::warning
-                            (this,
-                             tr("Failed to analyse singing track"),
-                             tr("<b>Analysis failed</b><p>%1</p>").arg(error),
-                             QMessageBox::Ok);
-                    }
+                    ok = analyseSingingTrack();
                 } else {
                     cerr << "analyseNow (deferred): m_analyser2 still null, singing-track analysis skipped" << endl;
                 }
+                if (wasLive) recordingFinishedFull(ok ? m_analyser2 : nullptr);
             });
-        }
-
-        // Clean up the realtime pitch layer; the full pYIN analysis of the
-        // singing recording (via m_analyser2) now covers the same audio.
-        if (m_realtimePitchTracker || m_realtimePitchLayer) {
-            recordingFinishedFull();
         }
         return;
     }
@@ -4379,10 +4431,10 @@ MainWindow::analyseNow()
              QMessageBox::Ok);
     }
 
-    // If this analyseNow was triggered by recording completion, clean up
-    // the realtime pitch layer now that the full pYIN analysis is available.
+    // If this analyseNow was triggered by recording completion, the
+    // realtime pitch layer goes when the full pYIN analysis is available.
     if (m_realtimePitchTracker || m_realtimePitchLayer) {
-        recordingFinishedFull();
+        recordingFinishedFull(error == "" ? m_analyser : nullptr);
     }
 }
 
