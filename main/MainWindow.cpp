@@ -75,6 +75,7 @@
 #include <bqaudioio/SystemAudioIO.h>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QMessageBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -130,6 +131,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_alternatePitchUpAction(nullptr),
     m_alternatePitchDownAction(nullptr),
     m_referencePitchHiddenForTake(false),
+    m_takes(nullptr),
+    m_takePosition(0),
     m_backgroundMusicModelId(),
     m_backgroundMusicLayer(nullptr),
     m_loadBackgroundMusicAction(nullptr),
@@ -156,6 +159,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_singingAudioAfterTake(true),
     m_paneCountBeforeRecording(0),
     m_currentRecordingModelId(),
+    m_recordingLayer(nullptr),
+    m_rebuildingTakeAudio(false),
     m_recordingLatencyFrames(0),
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
@@ -348,6 +353,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_alternatePitch = new AlternatePitchTrack(this);
     connect(m_analyser, SIGNAL(layersChanged()),
             this, SLOT(syncAlternatePitchTrack()));
+
+    m_takes = new SingingTakes(this);
 
     setupMenus();
     setupToolbars();
@@ -2091,6 +2098,7 @@ MainWindow::closeSession()
     // Tear down singing track and realtime pitch layer before panes/document
     // are destroyed, so they can cleanly remove their layers from the pane.
     teardownRealtimePitchLayer();
+    teardownRecordingLayer();
     teardownSingingTrackAnalyser();
     teardownBackgroundMusic();
     m_alternatePitch->hide();
@@ -2098,7 +2106,14 @@ MainWindow::closeSession()
     m_pendingSingingModelId = {};
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
+    m_singingAudioMutedForTake = false;
     m_analysedMainModelId = {};
+
+    // The takes of the session go with it.  Their audio files are left
+    // where they are; deleting the ones nothing refers to any more is
+    // phase 6 of the takes work.
+    m_takes->clear();
+    m_takePosition = 0;
 
     m_analyser->fileClosed();
 
@@ -2554,18 +2569,13 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     // After deletePane() the pointer would be dangling → crash.
     drainPendingExtraPanes(singingModelId);
 
-    // A take being recorded stays out of the mix until it is over.  The
-    // play source happens to read ahead of what has been recorded, so the
-    // take is silent anyway with the buffer sizes of today; this does not
-    // depend on that.  Not with setAudible(), which would write the state
-    // to the settings the reference shares.
-    if (deferAnalysis) {
-        m_singingAudioAfterTake = m_analyser2->isAudible(Analyser::Audio);
-        if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
-            if (auto params = audio->getPlayParameters()) {
-                params->setPlayAudible(false);
-                m_singingAudioMutedForTake = true;
-            }
+    // The take's audio is the file behind this model.  All of a file the
+    // user loaded, or one a session restored, holds recorded singing; a
+    // file we have just spliced ourselves has the coverage the splice
+    // worked out, which must not be thrown away here.
+    if (!m_rebuildingTakeAudio) {
+        if (auto wfm = ModelById::getAs<WaveFileModel>(singingModelId)) {
+            m_takes->setWholeFileTake(wfm->getLocation(), wfm->getFrameCount());
         }
     }
 
@@ -2609,11 +2619,35 @@ MainWindow::drainPendingExtraPanes(sv::ModelId singingModelId)
 }
 
 void
+MainWindow::muteSingingAudioForTake()
+{
+    // The singing that is there is not heard while it is being recorded
+    // into: the singer would hear themselves along with the reference,
+    // and on speakers that goes back into the microphone.  Not with
+    // setAudible(), which would write the state to the settings the
+    // reference shares; the button goes on saying what the user asked
+    // for, and restoreSingingAudioAfterTake() applies it afterwards.
+    m_singingAudioAfterTake =
+        (m_analyser2 ? m_analyser2->isAudible(Analyser::Audio) : true);
+
+    if (!m_analyser2) return;
+    if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
+        if (auto params = audio->getPlayParameters()) {
+            params->setPlayAudible(false);
+            m_singingAudioMutedForTake = true;
+        }
+    }
+}
+
+void
 MainWindow::restoreSingingAudioAfterTake()
 {
     if (!m_singingAudioMutedForTake) return;
     m_singingAudioMutedForTake = false;
     if (!m_analyser2) return;
+    // By now m_analyser2 is usually the one made for the take's new audio
+    // file, not the one that was muted: what the user asked for is what
+    // matters, not which layer it is applied to
     if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
         if (auto params = audio->getPlayParameters()) {
             params->setPlayAudible(m_singingAudioAfterTake);
@@ -2625,8 +2659,11 @@ MainWindow::restoreSingingAudioAfterTake()
 void
 MainWindow::teardownSingingTrackAnalyser()
 {
-    m_singingAudioMutedForTake = false;
-
+    // m_singingAudioMutedForTake is deliberately not cleared here: the
+    // singing track is torn down and built again in the middle of
+    // finishing a take, and what the user asked Play Singing Audio for
+    // has to survive that.  restoreSingingAudioAfterTake() clears it when
+    // the take is over, and closeSession() when the session goes.
     if (!m_analyser2) return;
 
     // removeAllLayers() removes each layer from the pane and deletes it from
@@ -2854,6 +2891,81 @@ MainWindow::teardownRealtimePitchLayer()
 }
 
 void
+MainWindow::setupRecordingLayer()
+{
+    // A layer of our own on the recording, so that the document holds the
+    // WritableWaveFileModel while the device writes to it.  The singing
+    // analyser cannot do that job any more: it is showing the take's own
+    // audio, pitch and notes, which stay as they are for the duration.
+    //
+    // The layer is never shown.  The recording starts at frame 0 of its
+    // own file, which is not where its sound belongs on the reference's
+    // timeline, so drawing it would put the waveform in the wrong place;
+    // the live dots are what the singer watches.  It is muted for the
+    // same reason the live pitch model is (review finding 3).
+    //
+    // With this layer in place the extra pane that AddPaneCommand made is
+    // no longer the only thing holding the model, so record() can prune
+    // it at once, as loadSingingTrack() does.
+    if (m_recordingLayer) teardownRecordingLayer();
+
+    if (!m_document || m_currentRecordingModelId.isNone()) return;
+    if (!m_paneStack || m_paneStack->getPaneCount() < 1) return;
+    Pane *pane = m_paneStack->getPane(0);
+    if (!pane) return;
+
+    Layer *rawLayer = m_document->createLayer(LayerFactory::Waveform);
+    m_recordingLayer = qobject_cast<WaveformLayer *>(rawLayer);
+    if (!m_recordingLayer) {
+        cerr << "MainWindow::setupRecordingLayer: failed to create the layer "
+             << "for the recording" << endl;
+        return;
+    }
+
+    m_document->setModel(m_recordingLayer, m_currentRecordingModelId);
+    m_document->addLayerToView(pane, m_recordingLayer);
+    m_recordingLayer->showLayer(pane, false);
+    if (auto params = m_recordingLayer->getPlayParameters()) {
+        params->setPlayAudible(false);
+    }
+
+    // The new layer is on top, where the editing tools look for the layer
+    // to act on: put the tracks that can be edited back there, as
+    // alternatePitchToggled() does
+    m_analyser->stackLayers();
+    if (m_analyser2) m_analyser2->stackLayers();
+}
+
+void
+MainWindow::teardownRecordingLayer()
+{
+    // The recording has been spliced into the take (or the take came to
+    // nothing): the model is not needed any more, and releasing it closes
+    // the file handles the recording still has open.  The file itself
+    // stays on disk; Tony never deletes a recording.
+    ModelId recordingModelId = m_currentRecordingModelId;
+
+    if (m_recordingLayer) {
+        if (m_document) m_document->deleteLayer(m_recordingLayer, true);
+        m_recordingLayer = nullptr;
+    }
+
+    // The fallback in record(): with no layer of ours, the pane that
+    // AddPaneCommand made was kept, hidden, because its waveform layer
+    // was all that held the model
+    drainPendingExtraPanes(recordingModelId);
+
+    // deleteLayer(force) does not fire layerInAView(false).  The model
+    // leaves the play source when it is released, which is what has just
+    // happened; this makes sure of it even if something else holds it
+    if (m_playSource && !recordingModelId.isNone()) {
+        m_playSource->removeModel(recordingModelId);
+    }
+
+    m_currentRecordingModelId = {};
+}
+
+void
 MainWindow::record()
 {
     // If recording is already in progress this click is a STOP request, not a
@@ -2867,15 +2979,15 @@ MainWindow::record()
         return;
     }
 
-    // If a reference track is already loaded, record the microphone input as
-    // the singing track rather than replacing the whole session.
-    // We do this by temporarily switching to RecordCreateAdditionalModel so
+    // If a reference track is already loaded, record the microphone input
+    // into the singing track rather than replacing the whole session.  We
+    // do that by switching to RecordCreateAdditionalModel for the call, so
     // that MainWindowBase::record() adds the WritableWaveFileModel as an
-    // additional (non-main) model.  Our modelAdded() hook will then pick it
-    // up and route it through setupSingingTrackAnalyser() with deferred pYIN.
+    // additional (non-main) model; modelAdded() takes note of it, and
+    // finishSingingTake() splices it into the take's audio at the end.
     //
-    // If there is no main model yet (first-time record), fall through with the
-    // default RecordReplaceSession behaviour.
+    // If there is no main model yet (first-time record), fall through with
+    // the default RecordReplaceSession behaviour.
 
     bool haveReference = (getMainModel() != nullptr);
 
@@ -2884,120 +2996,66 @@ MainWindow::record()
     // not inherit the shift of a singing take made before it.  The figures
     // for a singing take are computed in recordingStarted().  This is below
     // the early return above on purpose: a Stop must leave them alone, the
-    // shift is applied afterwards in analyseNow().
+    // splice on Stop needs them.
     m_recordingLatencyFrames = 0;
     m_recordingStartGapEstimate = 0;
     m_awaitingReferenceStart = false;
     m_recordingStartGapMeasured = -1;
 
     if (haveReference) {
-        cerr << "MainWindow::record: reference track loaded — recording as singing track" << endl;
 
-        // If a previous singing-track recording (or loaded singing file) is
-        // still active, discard it now before we start capturing a new one.
-        // teardownRealtimePitchLayer() stops any live tracker still running
-        // (edge case: user re-records before pYIN finished on the last one).
-        // teardownSingingTrackAnalyser() removes the old recording's layers
-        // from the pane and releases its model so the document is clean.
-        // m_pendingSingingModelId is cleared so the modelAdded() race guard
-        // doesn't block the new recording's model from being registered.
+        // The recording goes into the take at the playback position.  It
+        // has to be read before the base class call, which centres the view
+        // on frame 0, and while we are not recording yet: once we are,
+        // ViewManager reports the duration of the take instead.
+        sv_frame_t position = m_viewManager ? m_viewManager->getPlaybackFrame() : 0;
+        if (position < 0) position = 0;
+
+        // Recording from inside singing that is already there replaces it
+        // from that point on.  The user is asked first, unless they have
+        // said not to be: undo can bring it back.
+        if (m_takes->shouldConfirmRecordingAt(position) &&
+            !confirmRecordingOverTake()) {
+            cerr << "MainWindow::record: recording over the existing singing "
+                 << "was declined" << endl;
+            return;
+        }
+
+        m_takePosition = position;
+
+        cerr << "MainWindow::record: recording into the singing track from "
+             << "frame " << position << endl;
+
+        // Dots and a tracker of a take whose analysis never finished
         if (m_realtimePitchTracker || m_realtimePitchLayer) {
             cerr << "MainWindow::record: tearing down leftover realtime pitch layer" << endl;
             teardownRealtimePitchLayer();
         }
 
-        // Pre-flight orphan cleanup: delete the WaveformLayer that
-        // MainWindowBase::record() created via createImportedLayer() for the
-        // previous singing recording, and remove that model from m_playSource.
-        //
-        // This MUST be done before teardownSingingTrackAnalyser() (which calls
-        // removeAllLayers() and would otherwise release the singing model while
-        // the orphan layer still holds a reference) AND before deletePane()
-        // (which would destroy the extra pane and leave a dangling pointer in
-        // m_document->m_layerViewMap for the orphan layer — causing a crash in
-        // deleteLayer(true) when it tries to call removeLayer on the dead pane).
-        //
-        // At this point the extra pane is still alive (deletePane hasn't run),
-        // so m_layerViewMap contains a valid pane pointer, and deleteLayer(true)
-        // is safe.
-        //
-        // Two cases arise depending on when the user presses Record again:
-        //
-        // (A) User re-records while pYIN is still running (or before
-        //     recordingFinishedFull() has fired): m_currentRecordingModelId
-        //     is still set to the previous recording's WritableWaveFileModel.
-        //
-        // (B) User re-records after pYIN has completed: recordingFinishedFull()
-        //     already cleared m_currentRecordingModelId to {}.  However,
-        //     m_analyser2 is still alive and its getMainModelId() still returns
-        //     the previous singing model's ID (fileClosed() clears m_layers but
-        //     NOT m_fileModel).  We use that ID for the orphan scan instead.
-        //
-        // In both cases we identify orphan layers by scanning all document
-        // layers for any layer whose model matches the previous singing model ID,
-        // excluding layers that m_analyser2 owns (those are cleaned up by
-        // removeAllLayers() inside teardownSingingTrackAnalyser() below).
-        {
-            ModelId prevSingingModelId = m_currentRecordingModelId;
-            if (prevSingingModelId.isNone() && m_analyser2) {
-                prevSingingModelId = m_analyser2->getMainModelId();
-                if (!prevSingingModelId.isNone()) {
-                    cerr << "MainWindow::record: m_currentRecordingModelId cleared "
-                         << "(post-pYIN re-record); using m_analyser2 model id "
-                         << prevSingingModelId << " for orphan cleanup" << endl;
-                }
-            }
-
-            if (m_document && !prevSingingModelId.isNone()) {
-                std::vector<Layer *> orphans;
-                for (Layer *layer : m_document->getLayers()) {
-                    if (layer->getModel() != prevSingingModelId) continue;
-                    // Skip layers owned by m_analyser2 — removeAllLayers() handles those.
-                    bool ownedByAnalyser2 = false;
-                    if (m_analyser2) {
-                        for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
-                            if (m_analyser2->getLayer(static_cast<Analyser::Component>(c)) == layer) {
-                                ownedByAnalyser2 = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!ownedByAnalyser2) {
-                        orphans.push_back(layer);
-                    }
-                }
-                for (Layer *orphan : orphans) {
-                    cerr << "MainWindow::record: deleting orphan layer " << orphan
-                         << " referencing previous singing model "
-                         << prevSingingModelId << endl;
-                    m_document->deleteLayer(orphan, true);
-                }
-                // deleteLayer(true) does not fire layerInAView(false).  The
-                // model leaves the play source when it is released, which
-                // is normally in the teardown below; this makes sure of it
-                // even if something else still holds the model.
-                if (m_playSource) {
-                    m_playSource->removeModel(prevSingingModelId);
-                }
-                m_currentRecordingModelId = {};
-            }
+        // Likewise a recording that was never spliced into the take
+        if (m_recordingLayer || !m_currentRecordingModelId.isNone()) {
+            cerr << "MainWindow::record: releasing a recording left over from "
+                 << "a take that did not finish" << endl;
+            teardownRecordingLayer();
         }
 
-        if (m_analyser2) {
-            cerr << "MainWindow::record: tearing down previous singing-track analyser" << endl;
-            teardownSingingTrackAnalyser();
-        }
+        // The singing track itself stays as it is: its pitch and notes are
+        // what the singer is adding to, and they stay on show for the take.
+        // Only its audio is kept out of the mix (spec 5.1).
+        muteSingingAudioForTake();
+
         m_pendingSingingModelId = {};
         m_recordingInProgress = false;
 
         m_recordingAsSingingTrack = true;
-        // Remember pane count so we can prune the extra pane that
+        // Remember the pane count so we can prune the extra pane that
         // MainWindowBase::record() creates via AddPaneCommand for the
-        // recording's waveform layer.  We want both tracks in pane 0.
+        // recording's waveform layer.  We want everything in pane 0.
         m_paneCountBeforeRecording = m_paneStack ? m_paneStack->getPaneCount() : 0;
         setAudioRecordMode(RecordCreateAdditionalModel);
     } else {
         m_recordingAsSingingTrack = false;
+        m_takePosition = 0;
         m_paneCountBeforeRecording = 0;
         setAudioRecordMode(RecordReplaceSession);
     }
@@ -3014,6 +3072,15 @@ MainWindow::record()
         cerr << "MainWindow::record: recording did not start" << endl;
         m_recordingAsSingingTrack = false;
         m_recordingInProgress = false;
+        restoreSingingAudioAfterTake();
+    }
+
+    // The base class centres the view on frame 0.  The take is being
+    // recorded where playback was, and that is where the singer is
+    // watching (spec section 4).
+    if (m_recordingAsSingingTrack && m_viewManager) {
+        m_viewManager->setPlaybackFrame(m_takePosition);
+        m_viewManager->setGlobalCentreFrame(m_takePosition);
     }
 
     updateAlternatePitchForTake();
@@ -3023,53 +3090,41 @@ MainWindow::record()
     // (after the singing track session is closed) behaves correctly.
     setAudioRecordMode(RecordReplaceSession);
 
-    // Remove any extra panes that AddPaneCommand created for the recording's
-    // waveform layer.  setupSingingTrackAnalyser() will add a proper waveform
-    // layer for the recording into pane 0, so the auto-created extra pane is
-    // redundant and visually confusing.
-    //
-    // WHY WE CANNOT DELETE THE ORPHAN LAYER HERE:
-    // At this point m_analyser2 has NOT yet been created — its setup is deferred
-    // via QTimer::singleShot(0) queued inside modelAdded().  The orphan
-    // WaveformLayer in the extra pane is currently the ONLY layer referencing
-    // the WritableWaveFileModel being recorded into.  Calling
-    // deleteLayer(orphan, true) would invoke Document::releaseModel(), which
-    // would destroy the live recording model mid-capture — crash.
-    //
-    // WHY WE CANNOT CALL Pane::removeLayer() + deletePane() HERE:
-    // Pane::removeLayer() removes the layer from the View's internal display
-    // list but does NOT update Document::m_layerViewMap.  After deletePane()
-    // destroys the widget, m_layerViewMap still contains the now-dangling pane
-    // pointer.  On the next recording attempt, the pre-flight orphan cleanup
-    // calls deleteLayer(orphan, true), which iterates m_layerViewMap and calls
-    // (*j)->removeLayer(layer) on the stale pointer — use-after-free crash.
-    //
-    // SOLUTION: use PaneStack::hidePane() to move the extra pane out of the
-    // visible list (so getPaneCount() drops back and the UI doesn't show it)
-    // while keeping the widget alive with valid m_layerViewMap entries.
-    // Store the pane in m_pendingExtraPanes.  setupSingingTrackAnalyser() will
-    // drain that list once m_analyser2 is set up and its WaveformLayer holds a
-    // reference to the recording model, at which point deleteLayer(orphan, true)
-    // is safe (the model won't be freed because m_analyser2's layer still refs it)
-    // and deletePane() can safely destroy the now-clean pane widget.
-    if (m_recordingAsSingingTrack && m_paneStack) {
-        while (m_paneStack->getPaneCount() > m_paneCountBeforeRecording) {
-            Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
-            if (!extra) break;
+    if (m_recordingAsSingingTrack) {
 
-            // Unregister from the overview before hiding so it stops rendering.
-            if (m_overview) m_overview->unregisterView(extra);
+        // Give the recording a layer of our own to hold it in the document,
+        // and then remove the extra pane that AddPaneCommand made for it.
+        // The order matters: that pane's imported waveform layer is the
+        // only thing referencing the live WritableWaveFileModel until our
+        // layer is there, and deleting it first would have
+        // Document::releaseModel() destroy the model mid-capture.
+        setupRecordingLayer();
 
-            // hidePane() moves the pane from the visible list to m_hiddenPanes,
-            // calls pw->hide() on the widget, and updates getPaneCount() — so
-            // this while loop will terminate correctly.
-            m_paneStack->hidePane(extra);
+        if (m_paneStack) {
+            while (m_paneStack->getPaneCount() > m_paneCountBeforeRecording) {
+                Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
+                if (!extra) break;
 
-            // Store for deferred cleanup in setupSingingTrackAnalyser().
-            m_pendingExtraPanes.push_back(extra);
+                if (m_recordingLayer) {
+                    pruneExtraPane(extra, m_currentRecordingModelId);
+                    continue;
+                }
 
-            cerr << "MainWindow::record: hiding extra pane " << extra
-                 << " — deferred deletion queued for setupSingingTrackAnalyser" << endl;
+                // Nothing of ours holds the model, so the pane's own layer
+                // has to keep it alive until the take is over.  Hiding the
+                // pane takes it out of the visible list while leaving the
+                // widget alive with valid Document::m_layerViewMap entries:
+                // a pane must not be deleted while a layer of its own is
+                // still in that map (see "Extra-pane Pruning" in the dev
+                // doc).  teardownRecordingLayer() prunes it at the end.
+                if (m_overview) m_overview->unregisterView(extra);
+                m_paneStack->hidePane(extra);
+                m_pendingExtraPanes.push_back(extra);
+
+                cerr << "MainWindow::record: no layer for the recording; "
+                     << "keeping its pane " << extra << " hidden for the take"
+                     << endl;
+            }
         }
     }
 }
@@ -3110,10 +3165,11 @@ MainWindow::recordingStarted()
         setupRealtimePitchLayer();
 
         // If the "play reference while recording" toggle is on, start
-        // playback from frame 0 so the singer hears the reference track.
-        // The audio IO was already resumed by record() so m_playSource
-        // can be started directly without calling MainWindowBase::play()
-        // (which would stop recording if isRecording() is true).
+        // playback from where the take is being recorded, so the singer
+        // hears the reference from there.  The audio IO was already
+        // resumed by record() so m_playSource can be started directly
+        // without calling MainWindowBase::play() (which would stop
+        // recording if isRecording() is true).
         if (m_recordingAsSingingTrack &&
             m_playRefWhileRecording && m_playRefWhileRecording->isChecked() &&
             m_playSource && !m_playSource->isPlaying()) {
@@ -3123,9 +3179,10 @@ MainWindow::recordingStarted()
             // singing recording's timeline after the take.
             // output latency = time from play() call until audio exits the speaker
             // input latency  = time from sound entering the mic until it arrives here
-            // The singer's response to reference frame 0 arrives in the recording
-            // at approximately frame (outputLatency + inputLatency), so we will
-            // shift the model's start frame by -(outputLatency + inputLatency).
+            // The singer's response to the reference at m_takePosition arrives
+            // in the recording at approximately frame
+            // (outputLatency + inputLatency), so that is the frame the splice
+            // reads the recording from.
             sv_frame_t outputLatency = m_playSource->getTargetPlayLatency();
             sv_frame_t inputLatency  = m_recordTarget ? m_recordTarget->getSystemRecordLatency() : 0;
             //
@@ -3150,8 +3207,8 @@ MainWindow::recordingStarted()
             m_recordingStartGapMeasured = -1;
             m_awaitingReferenceStart = true;
 
-            m_viewManager->setPlaybackFrame(0);
-            m_playSource->play(0);
+            m_viewManager->setPlaybackFrame(m_takePosition);
+            m_playSource->play(m_takePosition);
         }
 
         updateLayerStatuses();
@@ -3182,11 +3239,12 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
     // over: leave them, and the status bar, alone.
     if (!m_recordingInProgress) return;
 
-    // Draw the dot where the finished pitch track will put this sound:
-    // the take is going to be shifted earlier by the recording latency.
-    // The first dots may have been placed using the estimate of the
-    // start gap. They all belong to sound from before the reference
-    // started, which has no place on the reference's timeline.
+    // Draw the dot where the finished pitch track will put this sound: the
+    // take is spliced into the singing track from m_takePosition on, with
+    // the recording latency taken off its front.  The first dots may have
+    // been placed using the estimate of the start gap. They all belong to
+    // sound from before the reference started, which has no place on the
+    // reference's timeline.
     sv_frame_t latencyBefore = m_recordingLatencyFrames;
     refineRecordingLatency();
     auto m = ModelById::getAs<SparseTimeValueModel>(m_realtimePitchModelId);
@@ -3194,8 +3252,9 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
         for (const Event &e : m->getAllEvents()) m->remove(e);
     }
 
-    sv_frame_t dotFrame = compensatedLiveFrame(frame, m_recordingLatencyFrames);
-    if (dotFrame < 0) return;
+    sv_frame_t intoTake = compensatedLiveFrame(frame, m_recordingLatencyFrames);
+    if (intoTake < 0) return;
+    sv_frame_t dotFrame = m_takePosition + intoTake;
 
     if (m) {
         m->add(Event(dotFrame, float(hz), tr("")));
@@ -3273,6 +3332,144 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
 
     updateLayerStatuses();
     updateMenuStates();
+}
+
+void
+MainWindow::finishSingingTake()
+{
+    // The take has stopped, and what the device recorded is raw material:
+    // it goes into the take's audio file at the position the take was
+    // started from, with the latency taken off its front, and the singing
+    // track is then rebuilt from the file that comes out of that.
+    //
+    // (Rebuilt means analysed in full, as a singing track loaded from a
+    // file is.  Phase 4 of the takes work puts the new audio under the
+    // pitch and notes layers that are there and analyses only the range
+    // that changed, which is what makes this quick on a long song.)
+
+    refineRecordingLatency();
+
+    sv_frame_t latency = m_recordingLatencyFrames;
+    sv_frame_t position = m_takePosition;
+
+    QString recordingPath;
+    sv_frame_t recorded = 0;
+    if (auto wfm = ModelById::getAs<WritableWaveFileModel>
+        (m_currentRecordingModelId)) {
+        recordingPath = wfm->getLocation();
+        recorded = wfm->getFrameCount();
+    }
+
+    // The take is over: the tracker goes first, so that the recording's
+    // model is never released under it, and then the model itself.
+    // AudioCallbackRecordTarget::stopRecording() has flushed the buffers
+    // and called writeComplete(), and releasing the model closes what is
+    // left, so the file is whole before the splice reads it.
+    stopRealtimePitchTracker();
+    m_recordingInProgress = false;
+    m_recordingAsSingingTrack = false;
+    teardownRecordingLayer();
+
+    // The playhead goes back to where the take started: Play then hears
+    // what was just sung, and Record again records the same part.  (While
+    // recording, ViewManager keeps the playback frame at the duration of
+    // the take, so it is somewhere else by now.)
+    if (m_viewManager) m_viewManager->setPlaybackFrame(position);
+
+    // A take stopped the moment it was started, or one no longer than the
+    // latency, has nothing in it to add.  Nothing has gone wrong; there is
+    // simply nothing to do
+    if (recordingPath != "" && recorded <= latency) {
+        cerr << "MainWindow::finishSingingTake: nothing to use: " << recorded
+             << " frames recorded, the first " << latency
+             << " of which are the latency" << endl;
+        recordingFinishedFull(nullptr);
+        return;
+    }
+
+    QString error;
+    Coverage::Range placed;
+
+    if (recordingPath == "") {
+        error = tr("The recording is no longer there to be used");
+    } else {
+        QString directory = RecordDirectory::getRecordDirectory();
+        if (directory == "") {
+            error = tr("Could not find a directory to write the singing "
+                       "track into");
+        } else {
+            // Everything before the latency is sound from before the singer
+            // could have heard the reference at the take's position
+            error = m_takes->spliceRecording(recordingPath, latency, position,
+                                             -1, directory, &placed);
+        }
+    }
+
+    if (error != "") {
+        QMessageBox::warning
+            (this,
+             tr("Failed to add the recording to the singing track"),
+             tr("<b>The recording could not be added to the singing track</b>"
+                "<p>%1</p>").arg(error),
+             QMessageBox::Ok);
+        // The singing track is as it was, and the recording is still in
+        // the record directory; there is nothing for the dots to wait for
+        recordingFinishedFull(nullptr);
+        return;
+    }
+
+    cerr << "MainWindow::finishSingingTake: " << recorded << " frames "
+         << "recorded, used from frame " << latency << ", placed at ["
+         << placed.start << "," << placed.end << ") of "
+         << m_takes->getAudioPath() << endl;
+
+    bool rebuilt = rebuildSingingTrackFromTake();
+
+    // The dots stay until the analysis that replaces them is done
+    recordingFinishedFull(rebuilt ? m_analyser2 : nullptr);
+}
+
+bool
+MainWindow::rebuildSingingTrackFromTake()
+{
+    if (!m_takes->haveTake()) return false;
+
+    Analyser *before = m_analyser2;
+
+    // The same path as File -> Load Singing Track, but the coverage of
+    // this file is the one the splice worked out, not "all of it"
+    m_rebuildingTakeAudio = true;
+    loadSingingTrack(m_takes->getAudioPath());
+    m_rebuildingTakeAudio = false;
+
+    return (m_analyser2 != nullptr && m_analyser2 != before);
+}
+
+bool
+MainWindow::confirmRecordingOverTake()
+{
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(tr("Record over the existing singing?"));
+    box.setText(tr("<b>Record over the existing singing from here?</b>"));
+    box.setInformativeText
+        (tr("There is singing recorded from this point on. Recording from "
+            "here replaces it."));
+    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    box.setDefaultButton(QMessageBox::Yes);
+
+    QCheckBox *dontAsk = new QCheckBox(tr("Don't ask again"), &box);
+    box.setCheckBox(dontAsk);
+
+    bool yes = (box.exec() == QMessageBox::Yes);
+
+    // "Don't ask again" means "always go ahead", so it is only taken as
+    // an answer when this one was yes
+    if (yes && dontAsk->isChecked()) {
+        SingingTakes::setOverwriteConfirmationWanted(false);
+    }
+
+    return yes;
 }
 
 void
@@ -4497,6 +4694,18 @@ MainWindow::modelAdded(ModelId model)
             return;
         }
 
+        // A recording being made into the singing track is raw material,
+        // not the singing track itself: record() gives it a layer of its
+        // own and finishSingingTake() splices it in at the end.  The
+        // singing analyser is left with the take's own audio, whose pitch
+        // and notes stay on show for the duration.
+        if (m_recordingAsSingingTrack && model != getMainModelId()) {
+            m_currentRecordingModelId = model;
+            cerr << "modelAdded: the recording of the take is model "
+                 << model << endl;
+            return;
+        }
+
         // If there is already a main model and this is a new additional
         // audio model (not the realtime pitch model), treat it as the
         // singing track to be analysed with the secondary colour scheme.
@@ -4509,30 +4718,13 @@ MainWindow::modelAdded(ModelId model)
             if (m_pendingSingingModelId.isNone()) {
                 m_pendingSingingModelId = model;
 
-                if (m_recordingAsSingingTrack) {
-                    // The model is a WritableWaveFileModel still being
-                    // recorded into.  Set up m_analyser2 with waveform/
-                    // visualisation layers but defer pYIN until recording
-                    // finishes (analyseNow() will call analyseExistingFile()).
-                    // Also store the model ID so setupRealtimePitchLayer()
-                    // can target this exact model rather than scanning all
-                    // document models (which would wrongly pick up a previous
-                    // recording's WritableWaveFileModel that is still
-                    // registered because its orphan waveform layer prevents
-                    // releaseModel() from freeing it).
-                    m_currentRecordingModelId = model;
-                    QTimer::singleShot(0, this, [this, model]() {
-                        m_pendingSingingModelId = {};
-                        setupSingingTrackAnalyser(model, /*deferAnalysis=*/true);
-                    });
-                } else {
-                    // Normal case: a finished audio file was loaded as a
-                    // singing track.  loadSingingTrack() runs the analysis
-                    // itself as soon as openPath() returns (it must happen
-                    // before the extra pane is pruned); this deferred call
-                    // is the fallback for any other route that adds a model.
-                    QTimer::singleShot(0, this, SLOT(analyseNewSingingModel()));
-                }
+                // An audio file has been loaded as the singing track: the
+                // take's own audio, or one the user chose.
+                // loadSingingTrack() runs the analysis itself as soon as
+                // openPath() returns (it has to happen before the extra
+                // pane is pruned); this deferred call is the fallback for
+                // any other route that adds a model.
+                QTimer::singleShot(0, this, SLOT(analyseNewSingingModel()));
             } else {
                 cerr << "modelAdded: m_pendingSingingModelId already set, ignoring model "
                      << model << endl;
@@ -4580,79 +4772,14 @@ MainWindow::analyseNow()
         return;
     }
 
-    // When the user recorded a singing track alongside an existing reference
-    // track (RecordCreateAdditionalModel mode), the recording becomes an
-    // additional model, not the main model.  In that case we must route
-    // analysis through m_analyser2 (which was set up by setupSingingTrackAnalyser
-    // via modelAdded() when the WritableWaveFileModel was registered).
-    // We must NOT re-analyse the primary reference track here.
+    // A take that has just stopped is not analysed where it is: the
+    // recording is raw material, to be spliced into the take's audio at
+    // the position it was started from.  finishSingingTake() does that,
+    // and rebuilds the singing track from the file that comes out.
     if (m_recordingAsSingingTrack) {
-        cerr << "analyseNow: recording was singing track — routing to m_analyser2" << endl;
-
-        // Apply round-trip latency compensation: shift the singing model's
-        // global start frame backward by the round-trip hardware latency so
-        // the singer's audio (which arrives late due to output + input latency)
-        // aligns with the reference during playback.  This must happen before
-        // pYIN analysis so that all derived layers (pitch, notes) inherit the
-        // same timeline offset.  Only applied when reference playback was
-        // active during the recording (m_recordingLatencyFrames > 0).
-        refineRecordingLatency();
-        if (m_recordingLatencyFrames > 0 && !m_currentRecordingModelId.isNone()) {
-            auto wfm = ModelById::getAs<WritableWaveFileModel>(m_currentRecordingModelId);
-            if (wfm) {
-                cerr << "analyseNow: applying latency compensation: setStartFrame("
-                     << -m_recordingLatencyFrames << ")" << endl;
-                wfm->setStartFrame(-m_recordingLatencyFrames);
-            }
-        }
-
-        // The realtime pitch layer stays until the full pYIN analysis of
-        // the singing recording (via m_analyser2) is there to replace it,
-        // or goes at once if that analysis could not be started.
-        bool wasLive = (m_realtimePitchTracker || m_realtimePitchLayer);
-
-        auto analyseSingingTrack = [this]() -> bool {
-            CommandHistory::getInstance()->startCompoundOperation
-                (tr("Analyse Singing Track"), true);
-
-            QString error = m_analyser2->analyseExistingFile();
-
-            CommandHistory::getInstance()->endCompoundOperation();
-
-            if (error != "") {
-                QMessageBox::warning
-                    (this,
-                     tr("Failed to analyse singing track"),
-                     tr("<b>Analysis failed</b><p>%1</p>").arg(error),
-                     QMessageBox::Ok);
-                return false;
-            }
-            return true;
-        };
-
-        if (m_analyser2) {
-            bool ok = analyseSingingTrack();
-            if (wasLive) recordingFinishedFull(ok ? m_analyser2 : nullptr);
-        } else {
-            // m_analyser2 may still be pending setup (modelAdded fires async).
-            // Defer the analysis until the secondary analyser is ready.
-            cerr << "analyseNow: m_analyser2 not ready yet, deferring singing-track analysis" << endl;
-            if (wasLive) {
-                // The take is over either way; the dots wait for the
-                // deferred analysis
-                stopRealtimePitchTracker();
-                m_recordingInProgress = false;
-            }
-            QTimer::singleShot(200, this, [this, wasLive, analyseSingingTrack]() {
-                bool ok = false;
-                if (m_analyser2) {
-                    ok = analyseSingingTrack();
-                } else {
-                    cerr << "analyseNow (deferred): m_analyser2 still null, singing-track analysis skipped" << endl;
-                }
-                if (wasLive) recordingFinishedFull(ok ? m_analyser2 : nullptr);
-            });
-        }
+        cerr << "analyseNow: the take that has just stopped goes into the "
+             << "singing track" << endl;
+        finishSingingTake();
         return;
     }
 

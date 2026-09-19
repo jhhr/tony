@@ -20,6 +20,7 @@
 #include "Analyser.h"
 #include "RealtimePitchTracker.h"
 #include "AlternatePitchTrack.h"
+#include "SingingTakes.h"
 
 #include <vector>
 #include <atomic>
@@ -210,6 +211,7 @@ protected slots:
     virtual void recordingStarted();
     virtual void onRealtimePitchDetected(sv::sv_frame_t frame, double hz);
     virtual void recordingFinishedFull(Analyser *analysing = nullptr);
+    virtual void finishSingingTake();
 
     void moveOneNoteRight();
     void moveOneNoteLeft();
@@ -259,6 +261,33 @@ protected:
     bool           m_referencePitchHiddenForTake;
     void stepAlternatePitch(bool up);
     void updateAlternatePitchForTake();
+
+    // The singing takes of the session: the audio file of each take and
+    // the ranges of it that hold recorded singing.  MainWindow only
+    // wires it: it decides where a recording goes and writes the files.
+    SingingTakes  *m_takes;
+
+    // Where on the reference's timeline the take being recorded, or the
+    // one most recently recorded, starts: the playback position when
+    // Record was pressed.  The live dots are drawn from here, and this
+    // is where the recording is spliced into the take's audio.
+    sv::sv_frame_t m_takePosition;
+
+    // Ask before recording over singing that is already there, unless
+    // the user has said not to.  Overridden by the tests, which cannot
+    // answer a dialog.  Returns true to go ahead with the recording.
+    virtual bool confirmRecordingOverTake();
+
+    // Rebuild the singing track from the take's audio file, the way
+    // Load Singing Track does: the layers of the file before go, the new
+    // file is opened and analysed in full.  Returns true if a new
+    // analyser was set up.  (Phase 4 of the takes work replaces this
+    // with a model swap that keeps the pitch and notes layers.)
+    bool rebuildSingingTrackFromTake();
+
+    // Keep the take's existing audio out of the mix while it is being
+    // recorded into, and put it back afterwards
+    void muteSingingAudioForTake();
 
     // Background music track: an additional audio file that plays alongside
     // the reference track but is never analysed.  The toggle enables/disables
@@ -334,15 +363,25 @@ protected:
     virtual void setupHelpMenu();
     virtual void setupToolbars();
 
-    // Helpers for the singing / second-track workflow
-    // deferAnalysis=true skips pYIN (used when the model is a
-    // WritableWaveFileModel still being recorded into).
+    // Helpers for the singing / second-track workflow.
+    // deferAnalysis=true skips pYIN; no caller needs that since a take is
+    // spliced into a finished audio file before it is analysed, but the
+    // model swap of phase 4 will.
     virtual void setupSingingTrackAnalyser(sv::ModelId singingModelId,
                                            bool deferAnalysis = false);
     virtual void teardownSingingTrackAnalyser();
     virtual void setupRealtimePitchLayer();
     virtual void teardownRealtimePitchLayer();
     virtual void stopRealtimePitchTracker();
+
+    // The raw recording of a take needs a layer of its own to hold it in
+    // the document: the singing analyser is busy with the take's audio,
+    // which stays on show while the recording is made.  The layer is
+    // never shown and never heard; it goes when the recording has been
+    // spliced into the take, which releases the model and with it the
+    // file handles of the recording.
+    void setupRecordingLayer();
+    void teardownRecordingLayer();
 
     // Background music helpers: load/tear-down a non-analysed audio track
     // that plays alongside the reference track.
@@ -368,11 +407,13 @@ protected:
     // pick it up on the next event-loop iteration.
     sv::ModelId m_pendingSingingModelId;
 
-    // A take is kept out of the playback mix while it is being recorded:
-    // with the reference playing, the singer would otherwise hear
-    // themselves late, and on speakers that goes back into the microphone.
+    // The singing track is kept out of the playback mix while a take is
+    // being recorded into it: with the reference playing, the singer
+    // would otherwise hear their earlier singing along with it, and on
+    // speakers that goes back into the microphone.  The recording itself
+    // is silent for the same reason (setupRecordingLayer()).
     // m_singingAudioAfterTake is what Play Singing Audio asks for, and
-    // what the take is given when the recording is over.
+    // what the rebuilt singing track is given when the take is over.
     bool m_singingAudioMutedForTake;
     bool m_singingAudioAfterTake;
     void restoreSingingAudioAfterTake();
@@ -402,23 +443,32 @@ protected:
 
     // The WritableWaveFileModel being recorded into in the current (or most
     // recent) singing-track recording.  Set in modelAdded() when
-    // m_recordingAsSingingTrack is true, cleared in closeSession() and
-    // recordingFinishedFull().  Used by setupRealtimePitchLayer() to
-    // identify the correct audio source model without scanning all document
-    // models — a scan would incorrectly pick up a previous recording's
-    // WritableWaveFileModel that is still registered in the document because
-    // its orphan waveform layer (view-detached but still in m_document's
-    // layer list) holds a reference that prevents releaseModel() from
-    // freeing it.
+    // m_recordingAsSingingTrack is true, cleared by teardownRecordingLayer()
+    // when the recording has been spliced into the take, and in
+    // closeSession().  Used by setupRealtimePitchLayer() to identify the
+    // correct audio source model without scanning all document models — a
+    // scan would incorrectly pick up a previous recording's
+    // WritableWaveFileModel that is still registered in the document.
     sv::ModelId m_currentRecordingModelId;
+
+    // The layer that holds the raw recording in the document while it is
+    // being recorded into; see setupRecordingLayer().
+    sv::WaveformLayer *m_recordingLayer;
+
+    // True while the singing track is being rebuilt from an audio file
+    // that we have just spliced ourselves, so that the take's coverage —
+    // which the splice worked out — is not replaced by "the whole file",
+    // as it is for a file the user loads or a session restores.
+    bool        m_rebuildingTakeAudio;
 
     // Round-trip hardware latency (output + input, in frames at the model
     // sample rate) stored when a singing-track recording is made with the
-    // "play reference while recording" toggle on.  Applied as a negative
-    // start-frame offset to the singing model so its timeline aligns with
-    // the reference during playback, and to the live dots during the take.
+    // "play reference while recording" toggle on.  The recording is read
+    // from this frame on when it is spliced into the take's audio, so that
+    // what the singer sang in answer to the reference at m_takePosition
+    // lands there; and the live dots are placed with it during the take.
     // Reset to 0 in record() at the start of every take, standalone ones
-    // included, but not by a Stop: analyseNow() applies it after that.
+    // included, but not by a Stop: the splice needs it after that.
     //
     // It also includes the start gap: the part of the take recorded before
     // the reference began to play.  That starts out as an estimate made just

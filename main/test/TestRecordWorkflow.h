@@ -27,6 +27,7 @@
 
 #include "../MainWindow.h"
 #include "../Analyser.h"
+#include "../SingingTakes.h"
 
 #include "version.h"
 
@@ -43,6 +44,8 @@
 #include "audio/AudioCallbackRecordTarget.h"
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/SparseTimeValueModel.h"
+#include "data/fileio/FileSource.h"
+#include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
 #include "base/PlayParameters.h"
 #include "base/RecordDirectory.h"
@@ -104,6 +107,20 @@ public:
     sv::TimeValueLayer *realtimeLayer() { return m_realtimePitchLayer; }
     sv::ModelId realtimeModelId() { return m_realtimePitchModelId; }
     sv::ModelId currentRecordingModelId() { return m_currentRecordingModelId; }
+    sv::WaveformLayer *recordingLayer() { return m_recordingLayer; }
+    SingingTakes *takes() { return m_takes; }
+    sv::sv_frame_t takePosition() { return m_takePosition; }
+
+    void seekTo(sv::sv_frame_t frame) {
+        m_viewManager->setPlaybackFrame(frame);
+    }
+
+    // The question about recording over singing that is there is answered
+    // from here: the suite cannot answer a dialog
+    void setRecordOverAnswer(bool yes) { m_recordOverAnswer = yes; }
+    int recordOverQuestions() const { return m_recordOverQuestions; }
+    void clearRecordOverQuestions() { m_recordOverQuestions = 0; }
+
     sv::ModelId pendingSingingModelId() { return m_pendingSingingModelId; }
     sv::ModelId backgroundMusicModelId() { return m_backgroundMusicModelId; }
     sv::WaveformLayer *backgroundMusicLayer() { return m_backgroundMusicLayer; }
@@ -140,12 +157,19 @@ protected:
         m_playSource->setSystemPlaybackTarget(m_audioIO);
     }
 
+    bool confirmRecordingOverTake() override {
+        ++m_recordOverQuestions;
+        return m_recordOverAnswer;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
 private:
     FakeAudioIO::Config m_fakeConfig;
     bool m_installDevice;
+    bool m_recordOverAnswer = true;
+    int m_recordOverQuestions = 0;
 };
 
 class TestRecordWorkflow : public QObject
@@ -251,6 +275,40 @@ class TestRecordWorkflow : public QObject
     static sv::EventVector pitchEvents(Analyser *a) {
         return a ? pitchEvents(a->getLayer(Analyser::PitchTrack))
             : sv::EventVector();
+    }
+
+    static sv::EventVector eventsBetween(const sv::EventVector &events,
+                                         sv::sv_frame_t from,
+                                         sv::sv_frame_t to) {
+        sv::EventVector result;
+        for (const auto &e : events) {
+            if (e.getFrame() >= from && e.getFrame() < to) {
+                result.push_back(e);
+            }
+        }
+        return result;
+    }
+
+    // The audio of the take: one file, starting at frame 0 of the
+    // reference's timeline, silent where nothing has been recorded
+    std::shared_ptr<sv::WaveFileModel> takeAudio() {
+        Analyser *a2 = m_window->analyser2();
+        if (!a2) return nullptr;
+        return sv::ModelById::getAs<sv::WaveFileModel>(a2->getMainModelId());
+    }
+
+    // What is in the take's audio file itself over [from, to), rather
+    // than what a model makes of it
+    double takeAudioRms(sv::sv_frame_t from, sv::sv_frame_t to) {
+        QString path = m_window->takes()->getAudioPath();
+        if (path.isEmpty() || to <= from) return -1.0;
+        sv::WavFileReader reader { sv::FileSource(path) };
+        if (!reader.isOK()) return -1.0;
+        auto data = reader.getInterleavedFrames(from, to - from);
+        if (data.empty()) return -1.0;
+        double sum = 0.0;
+        for (float v : data) sum += double(v) * double(v);
+        return std::sqrt(sum / double(data.size()));
     }
 
     static double medianHz(const sv::EventVector &events) {
@@ -437,6 +495,10 @@ private slots:
         settings.beginGroup("Analyser");
         settings.remove("");
         settings.endGroup();
+
+        // Asking before recording over existing singing is the default,
+        // whatever a test that switched it off did
+        SingingTakes::setOverwriteConfirmationWanted(true);
     }
 
     void cleanup() {
@@ -482,9 +544,27 @@ private slots:
         QVERIFY(a2);
         sv::ModelId singing = a2->getMainModelId();
         QVERIFY(singing != m_window->mainModelId());
-        auto wave = sv::ModelById::getAs<sv::WritableWaveFileModel>(singing);
-        QVERIFY2(wave, "the singing model is not a WritableWaveFileModel");
+
+        // The singing track is the take's own audio file, which the
+        // recording was spliced into: a plain wave file starting at frame
+        // 0, not the recording itself
+        auto wave = sv::ModelById::getAs<sv::WaveFileModel>(singing);
+        QVERIFY2(wave, "the singing model is not a wave file model");
+        QVERIFY2(!sv::ModelById::isa<sv::WritableWaveFileModel>(singing),
+                 "the singing model is the recording, not the take's audio");
+        QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(0));
         QVERIFY(wave->getFrameCount() > sv::sv_frame_t(0.8 * rate));
+
+        // and the recording has been let go of
+        QVERIFY(!m_window->recordingLayer());
+        QVERIFY(m_window->currentRecordingModelId().isNone());
+
+        // The take covers what was recorded, from frame 0 here
+        QVERIFY(m_window->takes()->haveTake());
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, sv::sv_frame_t(0));
+        QCOMPARE(ranges[0].end, wave->getFrameCount());
 
         QCOMPARE(colourOf(a2->getLayer(Analyser::PitchTrack)),
                  colourNamed("Orange"));
@@ -730,18 +810,21 @@ private slots:
         QVERIFY2(m_window->fake()->getPlayStartFrame() >= 0,
                  "the reference was never played");
 
-        auto wave = sv::ModelById::getAs<sv::WritableWaveFileModel>
-            (m_window->analyser2()->getMainModelId());
+        auto wave = takeAudio();
         QVERIFY(wave);
+        // The compensation is in the audio: the recording was read from
+        // the frame the latency points at, so the take's own file starts
+        // at frame 0 of the reference's timeline
+        QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(0));
 
-        // The shift is the round trip plus what the application took
-        // the start gap to be (review finding 14). The device knows
+        // The compensation is the round trip plus what the application
+        // took the start gap to be (review finding 14). The device knows
         // what the gap really was. The application counts in whole
         // blocks, in the audio callback, so the two agree to within a
         // few samples; an estimate made on the GUI thread is out by a
         // block or more
         sv::sv_frame_t gap = m_window->fake()->getFramesBeforePlayStart();
-        sv::sv_frame_t assumedGap = -wave->getStartFrame() - K;
+        sv::sv_frame_t assumedGap = m_window->recordingLatencyFrames() - K;
         QVERIFY2(std::llabs(assumedGap - gap) <= 16,
                  qPrintable(QString("the application took the start gap to "
                                     "be %1 frames; it was %2")
@@ -778,11 +861,298 @@ private slots:
         if (QTest::currentTestFailed()) return;
 
         QCOMPARE(m_window->recordingLatencyFrames(), sv::sv_frame_t(0));
-        auto wave = sv::ModelById::getAs<sv::WritableWaveFileModel>
-            (m_window->analyser2()->getMainModelId());
+        auto wave = takeAudio();
         QVERIFY(wave);
         QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(0));
         QCOMPARE(m_window->fake()->getPlayStartFrame(), -1L);
+        // Nothing to compensate for, so the take is where it was recorded
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, sv::sv_frame_t(0));
+    }
+
+    // Record starts the take at the playback position: what is sung lands
+    // there on the reference's timeline, and the take's audio file is
+    // silence up to it
+    void take_at_playback_position() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(2.0 * rate);
+        m_window->seekTo(P);
+        take(1000);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takePosition(), P);
+        QCOMPARE(m_window->recordOverQuestions(), 0);
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(0));
+        QVERIFY2(wave->getFrameCount() > P + sv::sv_frame_t(0.7 * rate) &&
+                 wave->getFrameCount() < P + sv::sv_frame_t(1.6 * rate),
+                 qPrintable(QString("the take's audio is %1 frames long; a "
+                                    "second recorded at frame %2 should make "
+                                    "it about %3")
+                            .arg(wave->getFrameCount()).arg(P)
+                            .arg(P + sv::sv_frame_t(rate))));
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
+        QCOMPARE(ranges[0].end, wave->getFrameCount());
+
+        // The file holds the singing where it was sung and nothing before
+        const sv::sv_frame_t margin = sv::sv_frame_t(0.1 * rate);
+        QVERIFY2(takeAudioRms(0, P - margin) < 0.001,
+                 "the take's audio is not silent before the position it was "
+                 "recorded at");
+        QVERIFY(takeAudioRms(P + margin, ranges[0].end - margin) > 0.05);
+
+        // and so does its pitch track
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY(!events.empty());
+        QVERIFY2(std::llabs(events.front().getFrame() - P) < margin,
+                 qPrintable(QString("the take's pitch track starts at frame "
+                                    "%1; it was recorded from frame %2")
+                            .arg(events.front().getFrame()).arg(P)));
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(events), highHz)) < 10.0);
+
+        // and the reference is where it was
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(m_window->analyser())),
+                           lowHz)) < 10.0);
+    }
+
+    // The latency is taken off the front of the recording as it is
+    // spliced in, rather than carried by the model's start frame. The
+    // device reports a round trip of K frames and delivers a singer who
+    // is exactly that late, singing a low note and then a high one; the
+    // step between them must land 0.75 s after the take's position.
+    void take_latency_removed_by_splice() {
+        const int K = 3 * 4096;
+        FakeAudioIO::Config config;
+        config.playbackLatency = 2 * 4096;
+        config.recordLatency = 4096;
+        config.input = melody(0.75);
+        config.inputDelay = K;
+        config.inputFollowsPlayback = true;
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(1.5 * rate);
+        m_window->seekTo(P);
+        take(2200);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_window->fake()->getPlayStartFrame() >= 0,
+                 "the reference was never played");
+        QVERIFY(m_window->recordingLatencyFrames() >= K);
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QVERIFY2(wave->getStartFrame() == sv::sv_frame_t(0),
+                 "the take's audio is shifted for the latency instead of "
+                 "being spliced with it taken off");
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
+
+        auto events = pitchEvents(m_window->analyser2());
+        sv::sv_frame_t step = stepFrame(events);
+        sv::sv_frame_t want = P + sv::sv_frame_t(0.75 * rate);
+        QVERIFY2(step > 0, "the take never reached the second note");
+        sv::sv_frame_t error = step - want;
+        QVERIFY2(std::llabs(error) <= 4 * hop,
+                 qPrintable(QString("the sung step is at frame %1, %2 frames "
+                                    "(%3 ms) from where it was sung (%4); the "
+                                    "round trip is %5 frames and the "
+                                    "application compensated %6")
+                            .arg(step).arg(error)
+                            .arg(1000.0 * double(error) / rate, 0, 'f', 1)
+                            .arg(want).arg(K)
+                            .arg(m_window->recordingLatencyFrames())));
+
+        QVERIFY(!events.empty());
+        QVERIFY2(events.front().getFrame() >= P - 4 * hop,
+                 qPrintable(QString("the take's pitch track starts at frame "
+                                    "%1, before the position %2 it was "
+                                    "recorded from")
+                            .arg(events.front().getFrame()).arg(P)));
+    }
+
+    // Recording into the middle of a take replaces what is there from
+    // that point on and leaves the rest. The singer sings a low note and
+    // then a high one; recording the melody again from inside the high
+    // note leaves the high note only where the second recording did not
+    // reach.
+    void take_over_existing_replaces_it() {
+        FakeAudioIO::Config config;
+        config.input = melody(0.75);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(1600);
+        if (QTest::currentTestFailed()) return;
+        sv::sv_frame_t step = stepFrame(pitchEvents(m_window->analyser2()));
+        QVERIFY2(step > 0 && std::llabs(step - sv::sv_frame_t(0.75 * rate)) <
+                 sv::sv_frame_t(0.1 * rate),
+                 qPrintable(QString("the first recording's step to the high "
+                                    "note is at frame %1, not about %2")
+                            .arg(step).arg(sv::sv_frame_t(0.75 * rate))));
+        QString before = m_window->takes()->getAudioPath();
+        sv::sv_frame_t firstEnd =
+            m_window->takes()->getCoverage().getEndFrame();
+
+        const sv::sv_frame_t P = sv::sv_frame_t(1.1 * rate);
+        m_window->seekTo(P);
+        m_window->clearRecordOverQuestions();
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        // The playhead was inside the singing, so the user was asked
+        QCOMPARE(m_window->recordOverQuestions(), 1);
+
+        // One range still, and it reaches further than the first take did
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, sv::sv_frame_t(0));
+        QVERIFY(ranges[0].end >= P + sv::sv_frame_t(0.6 * rate));
+        QVERIFY(ranges[0].end > firstEnd);
+
+        // A new file, with the one before kept for undo
+        QVERIFY(m_window->takes()->getAudioPath() != before);
+        QCOMPARE(m_window->takes()->getSupersededPaths(),
+                 QStringList { before });
+        QVERIFY2(QFileInfo::exists(before),
+                 "the audio file the take had before was not kept");
+
+        auto events = pitchEvents(m_window->analyser2());
+        double mid = std::sqrt(lowHz * highHz);
+
+        auto opening = eventsBetween(events, sv::sv_frame_t(0.1 * rate),
+                                     sv::sv_frame_t(0.6 * rate));
+        QVERIFY(!opening.empty());
+        QVERIFY2(medianHz(opening) < mid,
+                 "the low note the first recording opened with is gone");
+
+        auto kept = eventsBetween(events, sv::sv_frame_t(0.85 * rate),
+                                  sv::sv_frame_t(1.05 * rate));
+        QVERIFY(!kept.empty());
+        QVERIFY2(medianHz(kept) > mid,
+                 "the high note is gone from before the second recording, "
+                 "which should not have touched it");
+
+        auto replaced = eventsBetween(events, P + sv::sv_frame_t(0.1 * rate),
+                                      P + sv::sv_frame_t(0.6 * rate));
+        QVERIFY(!replaced.empty());
+        QVERIFY2(medianHz(replaced) < mid,
+                 "the high note is still there where the second recording "
+                 "sang a low one over it");
+    }
+
+    // A recording in a gap leaves the gap a gap: the file grows to hold
+    // it, with silence in between
+    void take_in_a_gap_grows_the_file() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+        sv::sv_frame_t firstEnd =
+            m_window->takes()->getCoverage().getEndFrame();
+        QVERIFY(firstEnd > sv::sv_frame_t(0.6 * rate));
+
+        const sv::sv_frame_t P = sv::sv_frame_t(2.5 * rate);
+        m_window->seekTo(P);
+        m_window->clearRecordOverQuestions();
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        // Recording in a gap takes nothing away, so nothing is asked
+        QCOMPARE(m_window->recordOverQuestions(), 0);
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+        QCOMPARE(ranges[0], Coverage::Range(0, firstEnd));
+        QCOMPARE(ranges[1].start, P);
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QCOMPARE(wave->getFrameCount(), ranges[1].end);
+
+        const sv::sv_frame_t margin = sv::sv_frame_t(0.1 * rate);
+        QVERIFY(takeAudioRms(margin, firstEnd - margin) > 0.05);
+        QVERIFY2(takeAudioRms(firstEnd + margin, P - margin) < 0.001,
+                 "the gap between the two recordings is not silent");
+        QVERIFY(takeAudioRms(P + margin, ranges[1].end - margin) > 0.05);
+
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY(!eventsBetween(events, 0, firstEnd).empty());
+        QVERIFY(!eventsBetween(events, P, ranges[1].end).empty());
+        QVERIFY2(eventsBetween(events, firstEnd + margin, P - margin).empty(),
+                 "the pitch track has something in the gap between the two "
+                 "recordings");
+    }
+
+    // The question asked before recording over singing that is there, and
+    // what the answer does. The dialog itself is not shown here:
+    // TestMainWindow answers it (the real one has "Don't ask again").
+    void record_over_existing_question() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        // There was nothing to record over
+        QCOMPARE(m_window->recordOverQuestions(), 0);
+        sv::sv_frame_t end = m_window->takes()->getCoverage().getEndFrame();
+
+        // In a gap after it: nothing asked
+        m_window->seekTo(end + sv::sv_frame_t(1.0 * rate));
+        take(400);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->recordOverQuestions(), 0);
+
+        // Inside it, answered no: no recording, and nothing changed
+        QString audio = m_window->takes()->getAudioPath();
+        m_window->setRecordOverAnswer(false);
+        m_window->seekTo(sv::sv_frame_t(0.2 * rate));
+        m_window->doRecord();
+        QCOMPARE(m_window->recordOverQuestions(), 1);
+        QVERIFY2(!m_window->recordTarget()->isRecording(),
+                 "the recording started although the question was answered "
+                 "with no");
+        QVERIFY(!m_window->recordingAsSingingTrack());
+        QVERIFY(!m_window->realtimeLayer());
+        QCOMPARE(m_window->takes()->getAudioPath(), audio);
+
+        // Answered yes: it records
+        m_window->setRecordOverAnswer(true);
+        take(400);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->recordOverQuestions(), 2);
+        QVERIFY(m_window->takes()->getAudioPath() != audio);
+
+        // "Don't ask again", and it is not asked
+        SingingTakes::setOverwriteConfirmationWanted(false);
+        m_window->seekTo(sv::sv_frame_t(0.2 * rate));
+        take(400);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->recordOverQuestions(), 2);
     }
 
     // The take and the live pitch model are both in the play source
@@ -825,16 +1195,17 @@ private slots:
 
     // Review finding 3. The test above finds the take silent in the
     // output, but that much is true even unmuted, because the play
-    // source reads ahead of what has been recorded. Neither the take
-    // nor the live pitch model is to be audible during the take,
-    // whatever the buffers do: this test checks the play parameters,
-    // and the next one the output.
+    // source reads ahead of what has been recorded. Nothing of the take
+    // is to be audible while it is being recorded, whatever the buffers
+    // do: neither the recording, nor the live pitch model, nor the
+    // singing that is already there. This test checks the play
+    // parameters, and the next one the output.
     void take_muted_while_recording() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 4.0);
         makeWindow(config);
         m_window->setPlayReferenceWhileRecording(true);
-        openReference(writeWav(tone(lowHz, 1.0)));
+        openReference(writeWav(tone(lowHz, 2.0)));
         if (QTest::currentTestFailed()) return;
 
         auto takeParams = [this]() {
@@ -842,19 +1213,22 @@ private slots:
                 ->getPlayParameters();
         };
 
+        // The first recording: there is no singing track yet, only the
+        // recording itself and the dots
         startTake();
         if (QTest::currentTestFailed()) return;
-        QTRY_VERIFY_WITH_TIMEOUT(m_window->analyser2() &&
-                                 m_window->analyser2()->getLayer
-                                 (Analyser::Audio), 2000);
-        QVERIFY(m_window->realtimeLayer());
+        QVERIFY2(m_window->recordingLayer(),
+                 "the recording has no layer to hold it in the document");
+        auto recordingParams =
+            m_window->recordingLayer()->getPlayParameters();
+        QVERIFY(recordingParams);
+        QVERIFY2(!recordingParams->isPlayAudible(),
+                 "the recording is audible while it is being made");
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->realtimeLayer(), 2000);
         auto liveParams = m_window->realtimeLayer()->getPlayParameters();
         QVERIFY(liveParams);
         QVERIFY2(!liveParams->isPlayAudible(),
                  "the live pitch model is audible during the take");
-        QVERIFY(takeParams());
-        QVERIFY2(!takeParams()->isPlayAudible(),
-                 "the take is audible while it is being recorded");
 
         // The button goes on saying what the user asked for
         QVERIFY(m_window->playSingingAudioAction()->isChecked());
@@ -862,16 +1236,28 @@ private slots:
         QTest::qWait(800);
         stopTake();
         if (QTest::currentTestFailed()) return;
+        QVERIFY2(!m_window->recordingLayer(),
+                 "the recording was still held after it had been spliced in");
         QVERIFY2(takeParams()->isPlayAudible(),
                  "the take was left muted after recording");
         QVERIFY(m_window->playSingingAudioAction()->isChecked());
 
-        // Switched off during a take, it stays muted afterwards
+        // Recording into the take that is now there: its pitch and notes
+        // stay on show, and its audio is kept out of the mix
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY(!events.empty());
+
         startTake();
         if (QTest::currentTestFailed()) return;
-        QTRY_VERIFY_WITH_TIMEOUT(m_window->analyser2() &&
-                                 m_window->analyser2()->getLayer
-                                 (Analyser::Audio), 2000);
+        QVERIFY2(m_window->analyser2(),
+                 "the singing track was torn down for the take");
+        QVERIFY2(pitchEvents(m_window->analyser2()).size() == events.size(),
+                 "the singing pitch track did not stay on show for the take");
+        QVERIFY2(!takeParams()->isPlayAudible(),
+                 "the singing that is there is audible while it is being "
+                 "recorded into");
+
+        // Switched off during a take, it stays muted afterwards
         m_window->playSingingAudioAction()->trigger();
         QVERIFY(!m_window->playSingingAudioAction()->isChecked());
         QVERIFY(!takeParams()->isPlayAudible());
@@ -1198,6 +1584,14 @@ private slots:
 
         // The second pass used to end by marking the document unmodified
         QVERIFY(m_window->isDocumentModified());
+
+        // A track loaded whole is a take whose singing is all of it
+        QVERIFY(m_window->takes()->haveTake());
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0],
+                 Coverage::Range(0, sv::ModelById::getAs<sv::WaveFileModel>
+                                 (singing)->getFrameCount()));
     }
 
     // Loading over a singing track that is already there: the path
@@ -1391,6 +1785,12 @@ private slots:
         sv::sv_frame_t shift = m_window->recordingLatencyFrames();
         QVERIFY(shift >= K);
 
+        // The compensation is in the take's audio, so what has to survive
+        // the round trip is the pitch track, not a start frame
+        auto before = pitchEvents(m_window->analyser2());
+        QVERIFY(!before.empty());
+        sv::sv_frame_t firstEventBefore = before.front().getFrame();
+
         QString session = m_dir.filePath("round-trip.ton");
         QVERIFY(m_window->saveSessionFile(session));
         m_window->doCloseSession();
@@ -1417,7 +1817,25 @@ private slots:
         auto wave = sv::ModelById::getAs<sv::WaveFileModel>
             (a2->getMainModelId());
         QVERIFY(wave);
-        QCOMPARE(wave->getStartFrame(), -shift);
+        QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(0));
+
+        auto after = pitchEvents(a2);
+        QVERIFY(!after.empty());
+        QVERIFY2(std::llabs(after.front().getFrame() - firstEventBefore) <=
+                 2 * hop,
+                 qPrintable(QString("the reloaded take's pitch track starts "
+                                    "at frame %1; before saving it started "
+                                    "at %2")
+                            .arg(after.front().getFrame())
+                            .arg(firstEventBefore)));
+
+        // The take is the audio file the session pointed at.  Until the
+        // coverage is saved too (phase 5 of the takes work), a restored
+        // take counts as covering all of its file
+        QVERIFY(m_window->takes()->haveTake());
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0], Coverage::Range(0, wave->getFrameCount()));
     }
 
     void close_session_resets() {
@@ -1436,8 +1854,11 @@ private slots:
         QVERIFY(!m_window->realtimeLayer());
         QVERIFY(m_window->realtimeModelId().isNone());
         QVERIFY(m_window->currentRecordingModelId().isNone());
+        QVERIFY(!m_window->recordingLayer());
         QVERIFY(m_window->pendingSingingModelId().isNone());
         QVERIFY(!m_window->recordingAsSingingTrack());
+        QVERIFY2(!m_window->takes()->haveTake(),
+                 "the take outlived the session it was recorded in");
         QCOMPARE(m_window->pendingExtraPaneCount(), 0);
         QCOMPARE(m_window->paneStack()->getPaneCount(), 0);
         QCOMPARE(m_window->paneStack()->getHiddenPaneCount(), 0);
@@ -1684,10 +2105,9 @@ private slots:
         if (QTest::currentTestFailed()) return;
         QTest::qWait(600);
 
-        // With the take's analyser there already, Stop starts pYIN
-        // at once rather than 200 ms later, so that it is running when
-        // the session is closed. Otherwise this test shows nothing
-        QVERIFY(m_window->analyser2());
+        // Stop splices the recording into the take and starts the analysis
+        // of the result there and then, so it is running when the session
+        // is closed. Otherwise this test shows nothing
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(sv::ModelTransformerFactory::getInstance()
