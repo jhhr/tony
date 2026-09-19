@@ -38,6 +38,8 @@
 #include <QSettings>
 #include <QMutexLocker>
 
+#include <algorithm>
+
 using std::vector;
 using std::cerr;
 using std::endl;
@@ -51,7 +53,9 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_pane(0),
     m_currentCandidate(-1),
     m_candidatesVisible(false),
-    m_currentAsyncHandle(0)
+    m_currentAsyncHandle(0),
+    m_rangedStart(0),
+    m_rangedEnd(0)
 {
     QSettings settings;
     settings.beginGroup("LayerDefaults");
@@ -71,6 +75,10 @@ Analyser::Analyser(ColorScheme colorScheme) :
 
 Analyser::~Analyser()
 {
+    // A ranged analysis still running would go on writing into models
+    // the document is about to release, and its temporary layers would
+    // be left in the document with nobody left who knows what they are
+    discardRangedAnalysis();
 }
 
 std::map<QString, QVariant>
@@ -214,6 +222,10 @@ Analyser::cancelAnalyses()
         // does nothing if the transform has already finished
         if (!modelId.isNone()) mtf->cancel(modelId);
     }
+
+    // A ranged analysis is cancelled the same way, and there is then
+    // nothing worth merging from it, so its temporary layers go too
+    discardRangedAnalysis();
 }
 
 void
@@ -514,37 +526,19 @@ Analyser::addWaveform()
 }
 
 QString
-Analyser::addAnalyses()
+Analyser::buildAnalysisTransforms(Transforms &transforms)
 {
     auto waveFileModel = ModelById::getAs<WaveFileModel>(m_fileModel);
     if (!waveFileModel) {
-        return "Internal error: Analyser::addAnalyses() called with no model present";
+        return "Internal error: Analyser::buildAnalysisTransforms() called with no model present";
     }
-    
-    // As with the spectrogram above, if these layers exist we use them
-    // rather than making another pair
-    if (claimExistingAnalyses(true)) return "";
 
     TransformFactory *tf = TransformFactory::getInstance();
-    
+
     QString plugname = "pYIN";
     QString base = "vamp:pyin:pyin:";
     QString f0out = "smoothedpitchtrack";
     QString noteout = "notes";
-
-    Transforms transforms;
-
-/*!!! we could have more than one pitch track...
-    QString cx = "vamp:cepstral-pitchtracker:cepstral-pitchtracker:f0";
-    if (tf->haveTransform(cx)) {
-        Transform tx = tf->getDefaultTransformFor(cx);
-        TimeValueLayer *lx = qobject_cast<TimeValueLayer *>
-            (m_document->createDerivedLayer(tx, m_fileModel));
-        lx->setVerticalScale(TimeValueLayer::AutoAlignScale);
-        lx->setBaseColour(ColourDatabase::getInstance()->getColourIndex(tr("Bright Red")));
-        m_document->addLayerToView(m_pane, lx);
-    }
-*/
 
     QString notFound = tr("Transform \"%1\" not found. Unable to analyse audio file.<br><br>Is the %2 Vamp plugin correctly installed?");
     if (!tf->haveTransform(base + f0out)) {
@@ -558,7 +552,7 @@ Analyser::addAnalyses()
     settings.beginGroup("Analyser");
 
     bool precise = false, lowamp = true, onset = true, prune = true;
-    
+
     std::map<QString, bool &> flags {
         { "precision-analysis", precise },
         { "lowamp-analysis", lowamp },
@@ -567,13 +561,13 @@ Analyser::addAnalyses()
     };
 
     auto keyMap = getAnalysisSettings();
-    
+
     for (auto p: flags) {
         auto ki = keyMap.find(p.first);
         if (ki != keyMap.end()) {
             p.second = settings.value(ki->first, ki->second).toBool();
         } else {
-            throw std::logic_error("Internal error: One or more analysis settings keys not found in map: check addAnalyses and getAnalysisSettings");
+            throw std::logic_error("Internal error: One or more analysis settings keys not found in map: check buildAnalysisTransforms and getAnalysisSettings");
         }
     }
 
@@ -619,8 +613,39 @@ Analyser::addAnalyses()
     transforms.push_back(t);
 
     t.setOutput(noteout);
-    
+
     transforms.push_back(t);
+
+    return "";
+}
+
+QString
+Analyser::addAnalyses()
+{
+    auto waveFileModel = ModelById::getAs<WaveFileModel>(m_fileModel);
+    if (!waveFileModel) {
+        return "Internal error: Analyser::addAnalyses() called with no model present";
+    }
+    
+    // As with the spectrogram above, if these layers exist we use them
+    // rather than making another pair
+    if (claimExistingAnalyses(true)) return "";
+
+    Transforms transforms;
+    QString error = buildAnalysisTransforms(transforms);
+    if (error != "") return error;
+
+/*!!! we could have more than one pitch track...
+    QString cx = "vamp:cepstral-pitchtracker:cepstral-pitchtracker:f0";
+    if (tf->haveTransform(cx)) {
+        Transform tx = tf->getDefaultTransformFor(cx);
+        TimeValueLayer *lx = qobject_cast<TimeValueLayer *>
+            (m_document->createDerivedLayer(tx, m_fileModel));
+        lx->setVerticalScale(TimeValueLayer::AutoAlignScale);
+        lx->setBaseColour(ColourDatabase::getInstance()->getColourIndex(tr("Bright Red")));
+        m_document->addLayerToView(m_pane, lx);
+    }
+*/
 
     std::vector<Layer *> layers =
         m_document->createDerivedLayers(transforms, m_fileModel);
@@ -883,6 +908,258 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
     return "";
 }
 
+QString
+Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
+                       sv_frame_t clipStart, sv_frame_t clipEnd)
+{
+    auto waveFileModel = ModelById::getAs<WaveFileModel>(m_fileModel);
+    if (!waveFileModel) {
+        return "Internal error: Analyser::analyseRange() called with no model present";
+    }
+    if (!m_document || !m_pane) {
+        return "Internal error: Analyser::analyseRange() called with no document or pane present";
+    }
+    if (!m_layers[PitchTrack] || !m_layers[Notes]) {
+        return "Internal error: Analyser::analyseRange() called with no pitch track and notes to merge into";
+    }
+
+    // One at a time.  A second call means the audio under us has been
+    // replaced again, so the first run's result is of no use to anyone
+    discardRangedAnalysis();
+
+    sv_samplerate_t rate = waveFileModel->getSampleRate();
+
+    if (clipStart < 0) clipStart = 0;
+    if (clipEnd < 0 || clipEnd > waveFileModel->getEndFrame()) {
+        clipEnd = waveFileModel->getEndFrame();
+    }
+    if (start < clipStart) start = clipStart;
+    if (end > clipEnd) end = clipEnd;
+    if (end <= start) return "";
+
+    // Half a second of context on each side, so that a note at an edge
+    // is found whole -- but never outside the material the caller says
+    // is there to analyse (the take's coverage)
+    sv_frame_t margin = sv_frame_t(rate / 2);
+    sv_frame_t from = std::max(clipStart, start - margin);
+    sv_frame_t to = std::min(clipEnd, end + margin);
+
+    // Aligned to the 256-frame grid, as reAnalyseSelection() does. The
+    // step size is the grid a whole-file run's results sit on, and the
+    // notes of a ranged run are placed relative to its first block (see
+    // mergeRangedAnalysis()), so only a start on the grid puts them
+    // where a whole-file run would have put them
+    const sv_frame_t grid = 256;
+    from = (from / grid) * grid;
+    to = ((to + grid - 1) / grid) * grid;
+    if (to <= from) return "";
+
+    Transforms transforms;
+    QString error = buildAnalysisTransforms(transforms);
+    if (error != "") return error;
+
+    RealTime startTime = RealTime::frame2RealTime(from, rate);
+    RealTime duration = RealTime::frame2RealTime(to - from, rate);
+
+    for (Transform &t : transforms) {
+        t.setStartTime(startTime);
+        t.setDuration(duration);
+    }
+
+    cerr << "Analyser::analyseRange: " << start << " to " << end
+         << ", widened and aligned to " << from << " to " << to
+         << " (clip " << clipStart << " to " << clipEnd << ")" << endl;
+
+    // The temporary layers are registered with the document, so that
+    // deleting them releases their models, but they go into no view
+    std::vector<Layer *> layers =
+        m_document->createDerivedLayers(transforms, m_fileModel);
+
+    for (Layer *layer : layers) {
+        m_rangedLayers.push_back(layer);
+        ModelId id = layer->getModel();
+        // By model and not by layer type: all we want is the events
+        if (ModelById::getAs<NoteModel>(id)) {
+            m_rangedNotesModel = id;
+        } else if (ModelById::getAs<SparseTimeValueModel>(id)) {
+            m_rangedPitchModel = id;
+        }
+    }
+
+    if (m_rangedPitchModel.isNone() || m_rangedNotesModel.isNone()) {
+        discardRangedAnalysis();
+        return tr("Transform \"pYIN\" did not run correctly (no pitch track and notes for the range)");
+    }
+
+    m_rangedStart = from;
+    m_rangedEnd = to;
+
+    for (ModelId id : { m_rangedPitchModel, m_rangedNotesModel }) {
+        auto model = ModelById::get(id);
+        if (!model) continue;
+        // Emitted on the transform's own thread, so delivered here as a
+        // queued call: the merge happens on this thread like any other
+        connect(model.get(), SIGNAL(completionChanged(ModelId)),
+                this, SLOT(rangedAnalysisCompletionChanged(ModelId)));
+    }
+
+    // createDerivedLayers() returns only once the transform has set both
+    // outputs' completion to 0, so no signal can have been missed above.
+    // A very short range could have finished by now all the same
+    rangedAnalysisCompletionChanged({});
+
+    return "";
+}
+
+void
+Analyser::rangedAnalysisCompletionChanged(ModelId)
+{
+    if (m_rangedLayers.empty()) return;
+
+    auto newPitch = ModelById::getAs<SparseTimeValueModel>(m_rangedPitchModel);
+    auto newNotes = ModelById::getAs<NoteModel>(m_rangedNotesModel);
+
+    if (!newPitch || !newNotes) {
+        cerr << "Analyser::rangedAnalysisCompletionChanged: a temporary model "
+             << "has gone, merging nothing" << endl;
+        discardRangedAnalysis();
+        return;
+    }
+
+    // A transform sets its outputs' completion to 100 whether it ran to
+    // the end or was abandoned, but an abandoned one is cancelled and
+    // discarded from here (see discardRangedAnalysis()), so completion
+    // at 100 in both means a result
+    if (!newPitch->isReady() || !newNotes->isReady()) return;
+
+    mergeRangedAnalysis();
+}
+
+void
+Analyser::mergeRangedAnalysis()
+{
+    auto newPitch = ModelById::getAs<SparseTimeValueModel>(m_rangedPitchModel);
+    auto newNotes = ModelById::getAs<NoteModel>(m_rangedNotesModel);
+
+    auto pitch = m_layers[PitchTrack] ?
+        ModelById::getAs<SparseTimeValueModel>(m_layers[PitchTrack]->getModel()) :
+        nullptr;
+    auto notes = m_layers[Notes] ?
+        ModelById::getAs<NoteModel>(m_layers[Notes]->getModel()) : nullptr;
+
+    if (!newPitch || !newNotes || !pitch || !notes) {
+        cerr << "Analyser::mergeRangedAnalysis: a model has gone, "
+             << "merging nothing" << endl;
+        discardRangedAnalysis();
+        return;
+    }
+
+    EventVector newPitchEvents = newPitch->getAllEvents();
+    EventVector newNoteEvents;
+
+    // The time-stamp question of spec section 11, settled by
+    // TestSingingAnalysis::ranged_matches_whole_file: the smoothed pitch
+    // track needs no correction, because it is a fixed-sample-rate
+    // output and the host rounds each feature to the nearest multiple of
+    // the step size of the whole file.  The notes output is
+    // variable-sample-rate, and pYIN times a note by its frame number
+    // *within this run* (PYinVamp::addNoteFeatures()), so for a run that
+    // did not start at the beginning of the file the notes come back
+    // shifted to near zero
+    for (const Event &e : newNotes->getAllEvents()) {
+        newNoteEvents.push_back(e.withFrame(e.getFrame() + m_rangedStart));
+    }
+
+    // What the merge replaces is the widened range, extended to cover
+    // whatever the run actually produced: pYIN stamps a block a quarter
+    // of a block in (two hops here), so its events start a little after
+    // the range and end a little after it too.  Clearing exactly the
+    // span they occupy leaves neither a stale event where a new one
+    // goes nor two events on one frame
+    sv_frame_t pitchFrom = m_rangedStart, pitchTo = m_rangedEnd;
+    if (!newPitchEvents.empty()) {
+        pitchFrom = std::min(pitchFrom, newPitchEvents.front().getFrame());
+        pitchTo = std::max(pitchTo, newPitchEvents.back().getFrame() + 1);
+    }
+
+    sv_frame_t noteFrom = m_rangedStart, noteTo = m_rangedEnd;
+    for (const Event &e : newNoteEvents) {
+        noteFrom = std::min(noteFrom, e.getFrame());
+        noteTo = std::max(noteTo, e.getFrame() + 1);
+    }
+
+    cerr << "Analyser::mergeRangedAnalysis: " << newPitchEvents.size()
+         << " pitch event(s) and " << newNoteEvents.size() << " note(s) for "
+         << m_rangedStart << " to " << m_rangedEnd << "; replacing pitch in "
+         << pitchFrom << " to " << pitchTo << ", notes in " << noteFrom
+         << " to " << noteTo << endl;
+
+    for (const Event &e :
+             pitch->getEventsStartingWithin(pitchFrom, pitchTo - pitchFrom)) {
+        pitch->remove(e);
+    }
+    for (const Event &e : newPitchEvents) {
+        pitch->add(e);
+    }
+
+    // A note that starts in the range goes; one that runs into the range
+    // from the left is cut back to the edge of it, and the new notes
+    // supply everything from there on.  A note that reached out of the
+    // far end of the range loses that tail: the run has analysed the
+    // material there and says what is in it
+    for (const Event &e : notes->getAllEvents()) {
+        sv_frame_t f = e.getFrame();
+        if (f >= noteFrom && f < noteTo) {
+            notes->remove(e);
+        } else if (f < noteFrom && f + e.getDuration() > noteFrom) {
+            notes->remove(e);
+            notes->add(e.withDuration(noteFrom - f));
+        }
+    }
+    for (const Event &e : newNoteEvents) {
+        notes->add(e);
+    }
+
+    // The events are in the models, not in a command: an analysis result
+    // never went onto the undo stack.  Phase 6 makes the recording that
+    // asked for this analysis undoable as a whole
+    discardRangedAnalysis();
+
+    emit initialAnalysisCompleted();
+}
+
+void
+Analyser::discardRangedAnalysis()
+{
+    if (m_rangedLayers.empty()) {
+        m_rangedPitchModel = {};
+        m_rangedNotesModel = {};
+        return;
+    }
+
+    // Cleared before anything is cancelled or deleted: a completion
+    // signal that arrives from a transform we are abandoning then finds
+    // nothing to merge, and deleteLayer() below reaches
+    // layerAboutToBeDeleted() with the layers already forgotten
+    std::vector<Layer *> doomed;
+    doomed.swap(m_rangedLayers);
+    ModelId pitchId = m_rangedPitchModel, notesId = m_rangedNotesModel;
+    m_rangedPitchModel = {};
+    m_rangedNotesModel = {};
+
+    // Before the models are released: see cancelAnalyses()
+    auto mtf = ModelTransformerFactory::getInstance();
+    for (ModelId id : { pitchId, notesId }) {
+        if (!id.isNone()) mtf->cancel(id);
+    }
+
+    for (Layer *layer : doomed) {
+        // As in removeAllLayers(): force, and no removeLayerFromView,
+        // so that nothing of this is left on the undo stack
+        if (m_document) m_document->deleteLayer(layer, true);
+    }
+}
+
 bool
 Analyser::arePitchCandidatesShown() const
 {
@@ -1123,6 +1400,17 @@ Analyser::layerAboutToBeDeleted(Layer *doomed)
         m_reAnalysisCandidates = notDoomed;
         // The index no longer means the candidate it did
         m_currentCandidate = -1;
+    }
+
+    // A temporary layer of a ranged analysis, deleted by someone else --
+    // we clear m_rangedLayers before deleting them ourselves
+    auto r = std::find(m_rangedLayers.begin(), m_rangedLayers.end(), doomed);
+    if (r != m_rangedLayers.end()) {
+        m_rangedLayers.erase(r);
+        if (m_rangedLayers.empty()) {
+            m_rangedPitchModel = {};
+            m_rangedNotesModel = {};
+        }
     }
 
     // A layer of ours deleted by someone else, e.g. by a command

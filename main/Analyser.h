@@ -177,6 +177,39 @@ public:
     QString reAnalyseSelection(sv::Selection sel, FrequencyRange range);
 
     /**
+     * Analyse the frames from start to end of our audio file with the
+     * same transforms and parameters as a whole-file analysis, and
+     * merge the result into the pitch track and notes we already have
+     * (which must both be there: this analyser has either made them or
+     * claimed them).  The range is widened by half a second on each
+     * side, so that a note at an edge is found whole, but never outside
+     * clipStart..clipEnd -- the caller passes the extent of the
+     * material that is there to be analysed (the take's coverage; the
+     * Analyser knows nothing of Coverage itself).  A clipEnd below zero
+     * means the end of the file.
+     *
+     * The analysis runs into temporary layers that are in no view;
+     * when both are complete their events replace what was in the
+     * widened range and initialAnalysisCompleted() is emitted.  The
+     * merge is not undoable: an analysis result never was.
+     *
+     * Returns "" if a run was started (or there was nothing to do), or
+     * a user-readable error string.  A second call while one is running
+     * abandons the first: its material is presumed to have changed.
+     */
+    QString analyseRange(sv::sv_frame_t start, sv::sv_frame_t end,
+                         sv::sv_frame_t clipStart = 0,
+                         sv::sv_frame_t clipEnd = -1);
+
+    /**
+     * Return true between the start of a ranged analysis and the merge
+     * (or the abandonment) of its result.
+     */
+    bool isAnalysingRange() const {
+        return !m_rangedLayers.empty();
+    }
+
+    /**
      * Return true if the analysed pitch candidates are currently
      * visible (they are hidden from the call to reAnalyseSelection
      * until they are requested through showPitchCandidates()). Note
@@ -283,6 +316,7 @@ protected slots:
     void layerCompletionChanged(sv::ModelId);
     void reAnalyseRegion(sv::sv_frame_t, sv::sv_frame_t, float, float);
     void materialiseReAnalysis();
+    void rangedAnalysisCompletionChanged(sv::ModelId);
 
 protected:
     ColorScheme m_colorScheme;
@@ -303,11 +337,35 @@ protected:
     sv::Document::LayerCreationAsyncHandle m_currentAsyncHandle;
     QMutex m_asyncMutex;
 
+    // A ranged analysis in progress (analyseRange()). The layers are
+    // registered with the document but added to no view, so nothing
+    // shows them, nothing selects them and claimExistingAnalyses(),
+    // which looks in the pane, never takes them for ours
+    std::vector<sv::Layer *> m_rangedLayers;
+    sv::ModelId m_rangedPitchModel;
+    sv::ModelId m_rangedNotesModel;
+    sv::sv_frame_t m_rangedStart;  // widened, grid-aligned: what is analysed
+    sv::sv_frame_t m_rangedEnd;    // and what the merge replaces
+
     QString doAllAnalyses(bool withPitchTrack);
 
     QString addVisualisations();
     QString addWaveform();
     QString addAnalyses();
+
+    // The two pYIN transforms of a full analysis (smoothed pitch track
+    // and notes) with the parameters the settings ask for. Shared with
+    // analyseRange(), which must produce within its range just what a
+    // whole-file analysis produces. "" on success, else an error string
+    QString buildAnalysisTransforms(sv::Transforms &transforms);
+
+    // Merge a finished ranged analysis into the pitch and notes models
+    // and delete the temporaries
+    void mergeRangedAnalysis();
+
+    // Stop a ranged analysis if one is running and delete its
+    // temporary layers and models, merging nothing
+    void discardRangedAnalysis();
 
     // Claim the pitch and notes layers that are in the pane already and
     // whose models come from our file model: the layers of a session just

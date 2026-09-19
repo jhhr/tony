@@ -2041,7 +2041,10 @@ private slots:
 
         Analyser *after = m_window->analyser2();
         QVERIFY(after);
-        QVERIFY(after != before);
+        // Not "after != before": the old analyser has been deleted, and a
+        // new one may legitimately be built at the same address (which it
+        // is, once another suite has churned the heap first). That the
+        // analyser was rebuilt shows in the model it is on, below
         QCOMPARE(after->getLayer(Analyser::PitchTrack), pitch);
         QCOMPARE(after->getLayer(Analyser::Notes), notes);
         QCOMPARE(pitch->getModel(), pitchModel);
@@ -2233,9 +2236,13 @@ private slots:
 
         Analyser *after = m_window->analyser2();
         QVERIFY(after);
-        QVERIFY(after != before);
+        // Not "after != before": the old analyser has been deleted, and a
+        // new one may legitimately be built at the same address (which it
+        // is, once another suite has churned the heap first). That the
+        // analyser was rebuilt shows in the model it is on, below
         QCOMPARE(after->getLayer(Analyser::PitchTrack), pitch);
         QCOMPARE(after->getLayer(Analyser::Notes), notes);
+        QVERIFY(after->getMainModelId() != oldAudio);
         QVERIFY2(!sv::ModelById::get(oldAudio),
                  "the audio that was swapped out was not released");
         QCoreApplication::processEvents();
