@@ -3060,6 +3060,11 @@ MainWindow::record()
         setAudioRecordMode(RecordReplaceSession);
     }
 
+    // While recording, the playback cursor is the start of the recording
+    // plus what has been recorded: the views follow the take from where it
+    // is being made, not from frame 0
+    if (m_viewManager) m_viewManager->setRecordStartFrame(m_takePosition);
+
     MainWindowBase::record();
 
     // The base class gives up without a signal when the device cannot be

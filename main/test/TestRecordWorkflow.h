@@ -114,6 +114,7 @@ public:
     void seekTo(sv::sv_frame_t frame) {
         m_viewManager->setPlaybackFrame(frame);
     }
+    sv::sv_frame_t playbackFrame() { return m_viewManager->getPlaybackFrame(); }
 
     // The question about recording over singing that is there is answered
     // from here: the suite cannot answer a dialog
@@ -874,6 +875,31 @@ private slots:
     // Record starts the take at the playback position: what is sung lands
     // there on the reference's timeline, and the take's audio file is
     // silence up to it
+    // The cursor, which the view follows, runs from where the take is being
+    // recorded and not from frame 0
+    void take_cursor_runs_from_position() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(2.0 * rate);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(500);
+        sv::sv_frame_t during = m_window->playbackFrame();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(during > P && during < P + sv::sv_frame_t(2.0 * rate),
+                 qPrintable(QString("half a second into a take recorded from "
+                                    "frame %1 the cursor was at frame %2")
+                            .arg(P).arg(during)));
+        QCOMPARE(m_window->playbackFrame(), P);
+    }
+
     void take_at_playback_position() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);
