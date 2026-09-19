@@ -1320,6 +1320,52 @@ private slots:
                             .arg(input).arg(reference)));
     }
 
+    // Recording again before the analysis of the take just made has
+    // finished. The second take's splice tears that analyser down in the
+    // middle of its pYIN, which is the area this fork has crashed in
+    // before; cancelAnalyses() is what keeps it safe. A regression guard,
+    // not a new behaviour: run it under load, a crash is the failure.
+    void rerecord_during_analysis() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(700);
+
+        // Stop splices the recording in and starts the analysis of the
+        // result there and then
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY2(sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(),
+                 "the race was not set up: no analysis was running when the "
+                 "second take started");
+        QString first = m_window->takes()->getAudioPath();
+        QVERIFY(!first.isEmpty());
+
+        // In a gap, so nothing is asked
+        m_window->seekTo(sv::sv_frame_t(1.5 * rate));
+        take(500);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->recordOverQuestions(), 0);
+
+        QVERIFY(m_window->analyser2());
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+        QVERIFY(m_window->takes()->getAudioPath() != first);
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+        QCOMPARE(ranges[1].start, sv::sv_frame_t(1.5 * rate));
+
+        QVERIFY(!m_window->recordingLayer());
+        QCOMPARE(m_window->pendingExtraPaneCount(), 0);
+        QCOMPARE(m_window->paneStack()->getHiddenPaneCount(), 0);
+        verifyPlaySourceClean();
+    }
+
     void rerecord_cleans_up() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);

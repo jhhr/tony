@@ -66,8 +66,8 @@ SingingTakes::spliceRecording(QString recordingPath,
 
     Coverage::Range range;
     QString error = TakeAudio::splice(m_audioPath, recordingPath,
-                                     recordingOffset, position, length,
-                                     outPath, &range);
+                                      recordingOffset, position, length,
+                                      outPath, &range);
     if (error != "") return error;
 
     if (m_audioPath != "") m_superseded.push_back(m_audioPath);
