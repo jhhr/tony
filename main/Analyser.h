@@ -261,6 +261,11 @@ public:
         return m_layers[type];
     }
 
+    // Raise the pitch track, then the notes, to the top of the pane,
+    // where the editing tools find them.  For when something else has
+    // been added to the pane on top of them
+    void stackLayers();
+
 signals:
     void layersChanged();
     void initialAnalysisCompleted();
@@ -297,8 +302,6 @@ protected:
     QString addAnalyses();
 
     void discardPitchCandidates();
-
-    void stackLayers();
     
     // Document::LayerCreationHandler method
     void layersCreated(sv::Document::LayerCreationAsyncHandle,

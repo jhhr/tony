@@ -19,6 +19,7 @@
 #include "framework/MainWindowBase.h"
 #include "Analyser.h"
 #include "RealtimePitchTracker.h"
+#include "AlternatePitchTrack.h"
 
 #include <vector>
 #include <atomic>
@@ -111,6 +112,11 @@ protected slots:
     virtual void backgroundMusicToggled();
     virtual void backgroundMusicGainChanged(float gain);
     virtual void backgroundMusicPanChanged(float pan);
+
+    virtual void alternatePitchToggled();
+    virtual void alternatePitchUp();
+    virtual void alternatePitchDown();
+    virtual void syncAlternatePitchTrack();
 
     virtual void editDisplayExtents();
 
@@ -239,6 +245,20 @@ protected:
     QAction       *m_playSingingAudio;
     QAction       *m_playRefWhileRecording;
     QAction       *m_loadSingingTrackAction;
+
+    // The alternate pitch track: the reference pitch track moved by whole
+    // octaves, for the singer to follow in place of the reference.  While
+    // a singing take is being recorded it is shown in full and the
+    // reference pitch track is hidden; m_referencePitchHiddenForTake says
+    // that we hid it, and must show it again afterwards.  Not hidden with
+    // Analyser::setVisible(), which would write the state to the settings.
+    AlternatePitchTrack *m_alternatePitch;
+    QAction       *m_showAlternatePitch;
+    QAction       *m_alternatePitchUpAction;
+    QAction       *m_alternatePitchDownAction;
+    bool           m_referencePitchHiddenForTake;
+    void stepAlternatePitch(bool up);
+    void updateAlternatePitchForTake();
 
     // Background music track: an additional audio file that plays alongside
     // the reference track but is never analysed.  The toggle enables/disables

@@ -1098,6 +1098,7 @@ tony_core_files = [
 ]
 
 tony_app_files = [
+  'main/AlternatePitchTrack.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
@@ -1113,6 +1114,7 @@ tony_app_moc_files = qt.preprocess(
   moc_headers: [
   'main/MainWindow.h',
   'main/Analyser.h',
+  'main/AlternatePitchTrack.h',
 ])
 
 qt_resource_files = qt.preprocess(

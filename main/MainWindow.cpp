@@ -125,6 +125,11 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_playSingingAudio(nullptr),
     m_playRefWhileRecording(nullptr),
     m_loadSingingTrackAction(nullptr),
+    m_alternatePitch(nullptr),
+    m_showAlternatePitch(nullptr),
+    m_alternatePitchUpAction(nullptr),
+    m_alternatePitchDownAction(nullptr),
+    m_referencePitchHiddenForTake(false),
     m_backgroundMusicModelId(),
     m_backgroundMusicLayer(nullptr),
     m_loadBackgroundMusicAction(nullptr),
@@ -340,6 +345,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(m_analyser, SIGNAL(layersChanged()),
             this, SLOT(updateMenuStates()));
 
+    m_alternatePitch = new AlternatePitchTrack(this);
+    connect(m_analyser, SIGNAL(layersChanged()),
+            this, SLOT(syncAlternatePitchTrack()));
+
     setupMenus();
     setupToolbars();
     setupHelpMenu();
@@ -410,6 +419,10 @@ MainWindow::~MainWindow()
         delete m_analyser2;
         m_analyser2 = nullptr;
     }
+    // Before the base class deletes the document: it only watches the
+    // document's layers, it does not own them
+    delete m_alternatePitch;
+    m_alternatePitch = nullptr;
     delete m_analyser;
     delete m_keyReference;
     Profiles::getInstance()->dump();
@@ -1483,6 +1496,44 @@ MainWindow::setupToolbars()
     });
     connect(this, SIGNAL(canPlay(bool)), m_playRefWhileRecording, SLOT(setEnabled(bool)));
 
+    // The alternate pitch track: the reference pitch an octave or more
+    // up or down, for the singer to follow in place of the reference.
+    spacer = new QLabel;
+    spacer->setFixedWidth(m_viewManager->scalePixelSize(30));
+    toolbar->addWidget(spacer);
+
+    {
+        QLabel *followLabel = new QLabel(tr("Follow:"));
+        QFont f = followLabel->font();
+        f.setPointSize(f.pointSize() - 1);
+        followLabel->setFont(f);
+        followLabel->setEnabled(false);
+        toolbar->addWidget(followLabel);
+    }
+
+    m_showAlternatePitch = toolbar->addAction(il.load("values"),
+                                              tr("Alternate Pitch Track"));
+    m_showAlternatePitch->setCheckable(true);
+    connect(m_showAlternatePitch, SIGNAL(triggered()),
+            this, SLOT(alternatePitchToggled()));
+
+    // No icons for these; the toolbar shows the text
+    m_alternatePitchDownAction = toolbar->addAction(tr("8vb"));
+    m_alternatePitchDownAction->setToolTip
+        (tr("Move the alternate pitch track down an octave"));
+    m_alternatePitchDownAction->setStatusTip
+        (tr("Move the alternate pitch track down an octave"));
+    connect(m_alternatePitchDownAction, SIGNAL(triggered()),
+            this, SLOT(alternatePitchDown()));
+
+    m_alternatePitchUpAction = toolbar->addAction(tr("8va"));
+    m_alternatePitchUpAction->setToolTip
+        (tr("Move the alternate pitch track up an octave"));
+    m_alternatePitchUpAction->setStatusTip
+        (tr("Move the alternate pitch track up an octave"));
+    connect(m_alternatePitchUpAction, SIGNAL(triggered()),
+            this, SLOT(alternatePitchUp()));
+
     // Background music section: an additional audio track that plays
     // alongside the reference track but is never analysed.
     spacer = new QLabel;
@@ -1905,6 +1956,25 @@ MainWindow::updateLayerStatuses()
         }
     }
 
+    // Alternate pitch track: there to be had once there is a reference.
+    // No moving it during a take, when the singer is following it
+    if (m_showAlternatePitch) {
+        bool haveReference = (m_document && getMainModel() &&
+                              m_paneStack && m_paneStack->getPaneCount() > 0);
+        bool shown = m_alternatePitch->isShown();
+        bool inTake = (m_recordTarget && m_recordTarget->isRecording());
+        m_showAlternatePitch->setEnabled(haveReference && !inTake);
+        m_showAlternatePitch->setChecked(shown);
+        QString tip = tr("Show a copy of the reference pitch track %1 (brown), and follow that when recording")
+            .arg(AlternatePitchTrack::describe(m_alternatePitch->getOctaves()));
+        m_showAlternatePitch->setToolTip(tip);
+        m_showAlternatePitch->setStatusTip(tip);
+        m_alternatePitchUpAction->setEnabled
+            (shown && !inTake && m_alternatePitch->canStep(true));
+        m_alternatePitchDownAction->setEnabled
+            (shown && !inTake && m_alternatePitch->canStep(false));
+    }
+
     // Background music toggle: enabled when a background music track is loaded
     if (m_playBackgroundMusic) {
         bool haveBgMusic = (m_backgroundMusicLayer != nullptr);
@@ -2023,6 +2093,8 @@ MainWindow::closeSession()
     teardownRealtimePitchLayer();
     teardownSingingTrackAnalyser();
     teardownBackgroundMusic();
+    m_alternatePitch->hide();
+    m_referencePitchHiddenForTake = false;
     m_pendingSingingModelId = {};
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
@@ -2339,6 +2411,92 @@ MainWindow::backgroundMusicPanChanged(float pan)
     if (!m_backgroundMusicLayer) return;
     auto params = m_backgroundMusicLayer->getPlayParameters();
     if (params) params->setPlayPan(pan);
+}
+
+void
+MainWindow::alternatePitchToggled()
+{
+    if (!m_document || !m_paneStack || m_paneStack->getPaneCount() < 1) {
+        updateLayerStatuses();
+        return;
+    }
+
+    if (m_alternatePitch->isShown()) {
+        m_alternatePitch->hide();
+        // The layer went without a command, as it must (see
+        // teardownRealtimePitchLayer()), but the session has changed
+        documentModified();
+    } else if (m_alternatePitch->show(m_document, m_paneStack->getPane(0))) {
+        // The new layer is on top, and is the one the editing tools
+        // would work on: put the tracks that can be edited back there,
+        // in the order they were
+        m_analyser->stackLayers();
+        if (m_analyser2) m_analyser2->stackLayers();
+        syncAlternatePitchTrack();
+    }
+
+    updateLayerStatuses();
+}
+
+void
+MainWindow::alternatePitchUp()
+{
+    stepAlternatePitch(true);
+}
+
+void
+MainWindow::alternatePitchDown()
+{
+    stepAlternatePitch(false);
+}
+
+void
+MainWindow::stepAlternatePitch(bool up)
+{
+    if (!m_alternatePitch->isShown() || !m_alternatePitch->canStep(up)) return;
+    m_alternatePitch->step(up);
+    documentModified();
+    updateLayerStatuses();
+    getStatusLabel()->setText
+        (tr("Alternate pitch track: %1")
+         .arg(AlternatePitchTrack::describe(m_alternatePitch->getOctaves())));
+}
+
+void
+MainWindow::syncAlternatePitchTrack()
+{
+    // The reference pitch layer, and its model with it, is replaced
+    // whenever the reference is analysed again
+    if (!m_alternatePitch->isShown()) return;
+    Layer *reference = m_analyser->getLayer(Analyser::PitchTrack);
+    m_alternatePitch->setSource(reference ? reference->getModel() : ModelId());
+    updateAlternatePitchForTake();
+}
+
+void
+MainWindow::updateAlternatePitchForTake()
+{
+    // During a singing take the alternate track is the one to sing to:
+    // it is shown in full, and the reference pitch track makes way
+    bool following = (m_alternatePitch->isShown() &&
+                      m_recordingAsSingingTrack &&
+                      m_recordTarget && m_recordTarget->isRecording());
+
+    m_alternatePitch->setFollowed(following);
+
+    Layer *reference = m_analyser->getLayer(Analyser::PitchTrack);
+    Pane *pane = m_analyser->getPane();
+
+    if (following) {
+        if (!m_referencePitchHiddenForTake && reference && pane &&
+            !reference->isLayerDormant(pane)) {
+            reference->showLayer(pane, false);
+            m_referencePitchHiddenForTake = true;
+        }
+    } else if (m_referencePitchHiddenForTake) {
+        m_referencePitchHiddenForTake = false;
+        if (reference && pane) reference->showLayer(pane, true);
+    }
 }
 
 void
@@ -2858,6 +3016,9 @@ MainWindow::record()
         m_recordingInProgress = false;
     }
 
+    updateAlternatePitchForTake();
+    updateLayerStatuses();
+
     // Restore the default mode so that a subsequent "standalone" recording
     // (after the singing track session is closed) behaves correctly.
     setAudioRecordMode(RecordReplaceSession);
@@ -2920,8 +3081,11 @@ MainWindow::recordingStarted()
     // (true) and stops (false). We only want to act when it starts.
     if (!m_recordTarget) return;
     if (!m_recordTarget->isRecording()) {
-        // Recording stopped - nothing to do here; recordingFinishedFull()
-        // is called from analyseNow() once pYIN completes.
+        // Recording stopped - recordingFinishedFull() is called from
+        // analyseNow() once pYIN completes.  The reference pitch track
+        // comes back now, though: the singer has stopped following.
+        updateAlternatePitchForTake();
+        updateLayerStatuses();
         return;
     }
 
@@ -4603,6 +4767,14 @@ MainWindow::analyseNewMainModel()
                  tr("<b>Analysis failed</b><p>%1</p>").arg(error),
                  QMessageBox::Ok);
         }
+    }
+
+    // A session saved with the alternate pitch track has its layer in
+    // the pane already
+    if (pane && m_alternatePitch->adopt(m_document, pane)) {
+        cerr << "analyseNewMainModel: found the alternate pitch track of the session, "
+             << m_alternatePitch->getOctaves() << " octave(s)" << endl;
+        syncAlternatePitchTrack();
     }
 
     if (!m_withSpectrogram) {

@@ -112,6 +112,15 @@ public:
     sv::sv_frame_t recordingLatencyFrames() { return m_recordingLatencyFrames; }
     int pendingExtraPaneCount() { return int(m_pendingExtraPanes.size()); }
 
+    AlternatePitchTrack *alternatePitch() { return m_alternatePitch; }
+    void doToggleAlternatePitch() { alternatePitchToggled(); }
+    void doStepAlternatePitch(bool up) {
+        if (up) alternatePitchUp(); else alternatePitchDown();
+    }
+    QAction *alternatePitchAction() { return m_showAlternatePitch; }
+    QAction *alternatePitchUpAction() { return m_alternatePitchUpAction; }
+    QAction *alternatePitchDownAction() { return m_alternatePitchDownAction; }
+
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
         onRealtimePitchDetected(frame, hz);
     }
@@ -346,6 +355,32 @@ class TestRecordWorkflow : public QObject
                  "the shared time ruler was deleted from the document");
         QVERIFY2(paneHasLayer(1, m_window->timeRuler()),
                  "the shared time ruler is no longer in the ruler pane");
+    }
+
+    int alternateLayersInDocument() {
+        int n = 0, octaves = 0;
+        for (sv::Layer *layer : m_window->document()->getLayers()) {
+            if (AlternatePitchTrack::octavesFromLayerName
+                (layer->objectName(), octaves)) ++n;
+        }
+        return n;
+    }
+
+    // True once the alternate track is the reference's, note for note
+    bool alternateMatchesReference() {
+        auto alt = pitchEvents(m_window->alternatePitch()->getLayer());
+        auto ref = pitchEvents(m_window->analyser());
+        int octaves = m_window->alternatePitch()->getOctaves();
+        if (ref.empty() || alt.size() != ref.size()) return false;
+        for (size_t i = 0; i < ref.size(); ++i) {
+            if (alt[i].getFrame() != ref[i].getFrame()) return false;
+            double want = AlternatePitchTrack::shifted
+                (ref[i].getValue(), octaves);
+            if (std::fabs(alt[i].getValue() - want) > 1e-3 * want) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // Not a slot: QtTest would run it as a test
@@ -1373,6 +1408,222 @@ private slots:
         QVERIFY(std::fabs(TestSignals::centsBetween
                           (medianHz(pitchEvents(m_window->analyser())),
                            highHz)) < 10.0);
+    }
+
+    // The alternate pitch track: the reference pitch track moved by
+    // whole octaves, as a layer of its own
+
+    void alternate_pitch_layer_names() {
+        int octaves = 99;
+        QVERIFY(AlternatePitchTrack::octavesFromLayerName
+                (AlternatePitchTrack::layerNameFor(-2), octaves));
+        QCOMPARE(octaves, -2);
+        QVERIFY(AlternatePitchTrack::octavesFromLayerName
+                (AlternatePitchTrack::layerNameFor(3), octaves));
+        QCOMPARE(octaves, 3);
+        // zero is the reference itself, and the rest are not ours
+        for (QString name : { AlternatePitchTrack::layerNameFor(0),
+                              AlternatePitchTrack::layerNameFor(4),
+                              QString("Alternate Pitch Track"),
+                              QString("Alternate Pitch Track x"),
+                              QString("Pitch Track -1") }) {
+            QVERIFY2(!AlternatePitchTrack::octavesFromLayerName(name, octaves),
+                     qPrintable(name));
+        }
+        QCOMPARE(octaves, 3);
+        QCOMPARE(AlternatePitchTrack::shifted(220.0, -1), 110.0);
+        QCOMPARE(AlternatePitchTrack::shifted(220.0, 2), 880.0);
+    }
+
+    void alternate_pitch_track() {
+        makeWindow(FakeAudioIO::Config());
+        QVERIFY(!m_window->alternatePitchAction()->isEnabled());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        AlternatePitchTrack *alt = m_window->alternatePitch();
+        QVERIFY(m_window->alternatePitchAction()->isEnabled());
+        QVERIFY(!m_window->alternatePitchAction()->isChecked());
+        QVERIFY(!m_window->alternatePitchUpAction()->isEnabled());
+        QVERIFY(!alt->isShown());
+        m_window->discardModifications();
+
+        m_window->doToggleAlternatePitch();
+        QVERIFY(alt->isShown());
+        QVERIFY(m_window->alternatePitchAction()->isChecked());
+        QVERIFY(m_window->alternatePitchUpAction()->isEnabled());
+        QVERIFY(m_window->isDocumentModified());
+        QCOMPARE(alt->getOctaves(), -1);
+        QVERIFY(paneHasLayer(0, alt->getLayer()));
+        QCOMPARE(colourOf(alt->getLayer()), colourNamed("Faded Brown"));
+        QVERIFY(alternateMatchesReference());
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(alt->getLayer())),
+                           lowHz / 2)) < 10.0);
+
+        // never heard, and never the layer that gets edited
+        QVERIFY(!alt->getLayer()->getPlayParameters()->isPlayAudible());
+        QVERIFY(m_window->paneStack()->getPane(0)->getSelectedLayer()
+                != alt->getLayer());
+
+        // up from one below is one above: none is the reference itself
+        m_window->discardModifications();
+        m_window->doStepAlternatePitch(true);
+        QCOMPARE(alt->getOctaves(), 1);
+        QVERIFY(m_window->isDocumentModified());
+        QVERIFY(alternateMatchesReference());
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(alt->getLayer())),
+                           lowHz * 2)) < 10.0);
+
+        m_window->doStepAlternatePitch(true);
+        m_window->doStepAlternatePitch(true);
+        m_window->doStepAlternatePitch(true);
+        QCOMPARE(alt->getOctaves(), int(AlternatePitchTrack::maxOctaves));
+        QVERIFY(!m_window->alternatePitchUpAction()->isEnabled());
+        QVERIFY(m_window->alternatePitchDownAction()->isEnabled());
+
+        // the reference was left alone
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(m_window->analyser())),
+                           lowHz)) < 10.0);
+
+        sv::Layer *layer = alt->getLayer();
+        m_window->doToggleAlternatePitch();
+        QVERIFY(!alt->isShown());
+        QVERIFY(!documentHasLayer(layer));
+        QCOMPARE(alternateLayersInDocument(), 0);
+        verifyPlaySourceClean();
+
+        // and it comes back where it was
+        m_window->doToggleAlternatePitch();
+        QCOMPARE(alt->getOctaves(), int(AlternatePitchTrack::maxOctaves));
+        QVERIFY(alternateMatchesReference());
+    }
+
+    // Analyse Now gives the reference a new pitch layer and model
+    void alternate_pitch_follows_reanalysis() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        AlternatePitchTrack *alt = m_window->alternatePitch();
+        m_window->doToggleAlternatePitch();
+        sv::ModelId before = alt->getSource();
+        QVERIFY(!before.isNone());
+
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+
+        QVERIFY(alt->getSource() != before);
+        QCOMPARE(alt->getSource(),
+                 m_window->analyser()->getLayer(Analyser::PitchTrack)
+                 ->getModel());
+        QTRY_VERIFY_WITH_TIMEOUT(alternateMatchesReference(), 5000);
+
+        // and an edit to the reference reaches it
+        auto ref = pitchEvents(m_window->analyser());
+        m_window->analyser()->shiftOctave
+            (sv::Selection(ref.front().getFrame(),
+                           ref.back().getFrame() + 1), true);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (std::fabs(TestSignals::centsBetween
+                       (medianHz(pitchEvents(alt->getLayer())), lowHz)) < 10.0,
+             5000);
+        QVERIFY(alternateMatchesReference());
+    }
+
+    void alternate_pitch_followed_during_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        AlternatePitchTrack *alt = m_window->alternatePitch();
+        m_window->doToggleAlternatePitch();
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        sv::Layer *reference =
+            m_window->analyser()->getLayer(Analyser::PitchTrack);
+        QVERIFY(!reference->isLayerDormant(pane));
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(colourOf(alt->getLayer()), colourNamed("Dark Brown"));
+        QVERIFY(!alt->getLayer()->isLayerDormant(pane));
+        QVERIFY(reference->isLayerDormant(pane));
+        QVERIFY(!m_window->alternatePitchAction()->isEnabled());
+        QVERIFY(!m_window->alternatePitchDownAction()->isEnabled());
+        QTest::qWait(600);
+        QVERIFY(reference->isLayerDormant(pane));
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(colourOf(alt->getLayer()), colourNamed("Faded Brown"));
+        QVERIFY(!reference->isLayerDormant(pane));
+        QVERIFY(m_window->alternatePitchAction()->isEnabled());
+        QVERIFY(alternateMatchesReference());
+
+        // The setting that Show Pitch Track keeps was not touched
+        QVERIFY(m_window->analyser()->isVisible(Analyser::PitchTrack));
+        QSettings settings;
+        settings.beginGroup("Analyser");
+        QVERIFY(settings.value
+                (QString("visible-%1").arg(int(Analyser::PitchTrack)),
+                 true).toBool());
+        settings.endGroup();
+
+        // A take with no alternate track hides nothing
+        m_window->doToggleAlternatePitch();
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!reference->isLayerDormant(pane));
+        stopTake();
+    }
+
+    void alternate_pitch_session_round_trip() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        AlternatePitchTrack *alt = m_window->alternatePitch();
+        m_window->doToggleAlternatePitch();
+        m_window->doStepAlternatePitch(false);
+        QCOMPARE(alt->getOctaves(), -2);
+
+        QString session = m_dir.filePath("alternate.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        m_window->doCloseSession();
+        QVERIFY(!alt->isShown());
+
+        // A session without one must not be given the last one's
+        openReference(writeWav(tone(highHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!alt->isShown());
+        QCOMPARE(alternateLayersInDocument(), 0);
+
+        openReference(session);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(alt->isShown());
+        QCOMPARE(alt->getOctaves(), -2);
+        QVERIFY(m_window->alternatePitchAction()->isChecked());
+        QCOMPARE(alternateLayersInDocument(), 1);
+        QVERIFY(paneHasLayer(0, alt->getLayer()));
+        QCOMPARE(colourOf(alt->getLayer()), colourNamed("Faded Brown"));
+        QVERIFY(!alt->getLayer()->getPlayParameters()->isPlayAudible());
+        QTRY_VERIFY_WITH_TIMEOUT(alternateMatchesReference(), 5000);
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(alt->getLayer())),
+                           lowHz / 4)) < 10.0);
+
+        // The reference is still the black one, and still the one edited
+        QCOMPARE(colourOf(m_window->analyser()->getLayer(Analyser::PitchTrack)),
+                 colourNamed("Black"));
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(m_window->analyser())),
+                           lowHz)) < 10.0);
+        QVERIFY(m_window->paneStack()->getPane(0)->getSelectedLayer()
+                != alt->getLayer());
     }
 
     // Closing while pYIN is still running on the take (review finding
