@@ -788,44 +788,12 @@ private slots:
                                     "in it, at amplitude %1").arg(input)));
     }
 
-    // The live pitch model is a SparseTimeValueModel, which would be
-    // played as a synth tone at the pitch it holds; such a model is
-    // inaudible unless something switches it on, and nothing does.
-    // This test holds that at the output, in a later window than the
-    // test above. The read-ahead covers for it in the same way, though:
-    // what shows the live model silent when it could be heard is
-    // take_silent_in_output_after_reseek
-    void no_synth_tone() {
-        FakeAudioIO::Config config;
-        config.input = TestSignals::sine(highHz, rate, int(3 * rate), 0.5);
-        makeWindow(config);
-        m_window->setPlayReferenceWhileRecording(true);
-        openReference(writeWav(TestSignals::sine(lowHz, rate,
-                                                 int(3 * rate), 0.5)));
-        if (QTest::currentTestFailed()) return;
-
-        startTake();
-        if (QTest::currentTestFailed()) return;
-        QTest::qWait(1800);
-        stopTake();
-        if (QTest::currentTestFailed()) return;
-
-        auto output = m_window->fake()->getCapturedOutput();
-        long start = m_window->fake()->getPlayStartFrame();
-        QVERIFY2(start >= 0, "the reference was never played");
-        size_t from = size_t(start) + size_t(0.8 * rate);
-        double synth = amplitudeAt(output, from, 26400, highHz);
-        QVERIFY2(synth >= 0.0 && synth < 0.005,
-                 qPrintable(QString("the output has a tone at the live "
-                                    "pitch, at amplitude %1").arg(synth)));
-    }
-
-    // Review finding 3. The two tests above find the take and the live
-    // pitch silent in the output, but for the take that much is true
-    // even unmuted, because the play source reads ahead of what has
-    // been recorded. Neither is to be audible while it is being
-    // recorded, whatever the buffers do: this test checks the play
-    // parameters, and the next one the output.
+    // Review finding 3. The test above finds the take silent in the
+    // output, but that much is true even unmuted, because the play
+    // source reads ahead of what has been recorded. Neither the take
+    // nor the live pitch model is to be audible during the take,
+    // whatever the buffers do: this test checks the play parameters,
+    // and the next one the output.
     void take_muted_while_recording() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 4.0);
