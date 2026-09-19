@@ -1096,6 +1096,7 @@ tony_entry_files = [
 tony_core_files = [
   'main/Coverage.cpp',
   'main/RealtimePitchTracker.cpp',
+  'main/SingingTakes.cpp',
   'main/TakeAudio.cpp',
 ]
 
@@ -1110,6 +1111,7 @@ tony_app_files = [
 tony_core_moc_files = qt.preprocess(
   moc_headers: [
   'main/RealtimePitchTracker.h',
+  'main/SingingTakes.h',
 ])
 
 tony_app_moc_files = qt.preprocess(
@@ -1343,6 +1345,7 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestLatencyShift.h',
   'main/test/TestCoverage.h',
   'main/test/TestTakeAudio.h',
+  'main/test/TestSingingTakes.h',
 ])
 
 tony_core_test_exe = executable(
