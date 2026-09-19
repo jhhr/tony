@@ -125,6 +125,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_showSingingNotes(nullptr),
     m_playSingingAudio(nullptr),
     m_playRefWhileRecording(nullptr),
+    m_preRoll(nullptr),
+    m_recordIntoSelection(nullptr),
     m_loadSingingTrackAction(nullptr),
     m_alternatePitch(nullptr),
     m_showAlternatePitch(nullptr),
@@ -133,6 +135,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_referencePitchHiddenForTake(false),
     m_takes(nullptr),
     m_takePosition(0),
+    m_takePreRoll(0),
+    m_takeEnd(-1),
+    m_takeTimer(nullptr),
     m_backgroundMusicModelId(),
     m_backgroundMusicLayer(nullptr),
     m_loadBackgroundMusicAction(nullptr),
@@ -356,6 +361,12 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     m_takes = new SingingTakes(this);
 
+    // Often enough to stop a take that records into a selection well
+    // within the margin that follows the selection's end
+    m_takeTimer = new QTimer(this);
+    m_takeTimer->setInterval(100);
+    connect(m_takeTimer, SIGNAL(timeout()), this, SLOT(pollTakeProgress()));
+
     setupMenus();
     setupToolbars();
     setupHelpMenu();
@@ -406,6 +417,9 @@ MainWindow::MainWindow(AudioMode audioMode,
 
 MainWindow::~MainWindow()
 {
+    // Nothing must poll a take while the window is coming down
+    stopTakePolling();
+
     // Clean up secondary state that may not have been torn down if the
     // window was closed without going through closeSession() (e.g. on
     // application exit via the window close button).
@@ -1503,6 +1517,55 @@ MainWindow::setupToolbars()
     });
     connect(this, SIGNAL(canPlay(bool)), m_playRefWhileRecording, SLOT(setEnabled(bool)));
 
+    // Pre-roll: a lead-in before the take's position, heard but not
+    // recorded over, so the singer comes in in time.  Its length is the
+    // QSettings value MainWindow/prerollseconds, with no UI to change it.
+    m_preRoll = toolbar->addAction(il.load("rewind"), tr("Pre-roll"));
+    m_preRoll->setCheckable(true);
+    {
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        m_preRoll->setChecked(settings.value("preroll", false).toBool());
+        settings.endGroup();
+    }
+    m_preRoll->setToolTip(
+        tr("Play the reference from a few seconds before the recording "
+           "position, counting down, so that you can come in in time. "
+           "Nothing before the position is recorded over."));
+    connect(m_preRoll, &QAction::toggled, this, [this](bool on) {
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        settings.setValue("preroll", on);
+        settings.endGroup();
+    });
+    connect(this, SIGNAL(canPlay(bool)), m_preRoll, SLOT(setEnabled(bool)));
+
+    // Punch in and out: record the selected range and nothing else.
+    // The selection says where the take starts and where it stops, so
+    // the singer need not reach for Stop.
+    m_recordIntoSelection = toolbar->addAction(il.load("playselection"),
+                                               tr("Record into Selection"));
+    m_recordIntoSelection->setCheckable(true);
+    {
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        m_recordIntoSelection->setChecked(
+            settings.value("recordintoselection", false).toBool());
+        settings.endGroup();
+    }
+    m_recordIntoSelection->setToolTip(
+        tr("Record into the selected range only: recording starts at the "
+           "start of the selection, whatever the playhead says, and stops "
+           "by itself at its end"));
+    connect(m_recordIntoSelection, &QAction::toggled, this, [this](bool on) {
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        settings.setValue("recordintoselection", on);
+        settings.endGroup();
+    });
+    connect(this, SIGNAL(canPlay(bool)), m_recordIntoSelection,
+            SLOT(setEnabled(bool)));
+
     // The alternate pitch track: the reference pitch an octave or more
     // up or down, for the singer to follow in place of the reference.
     spacer = new QLabel;
@@ -2095,6 +2158,9 @@ MainWindow::closeSession()
 {
     if (!checkSaveModified()) return;
 
+    // Nothing of a take that is still running outlives its session
+    stopTakePolling();
+
     // Tear down singing track and realtime pitch layer before panes/document
     // are destroyed, so they can cleanly remove their layers from the pane.
     teardownRealtimePitchLayer();
@@ -2114,6 +2180,8 @@ MainWindow::closeSession()
     // phase 6 of the takes work.
     m_takes->clear();
     m_takePosition = 0;
+    m_takePreRoll = 0;
+    m_takeEnd = -1;
 
     m_analyser->fileClosed();
 
@@ -2975,6 +3043,9 @@ MainWindow::record()
     // audio is still being captured — causing a crash or a null m_analyser2
     // when recordCompleted() fires analyseNow() moments later.
     if (m_recordTarget && m_recordTarget->isRecording()) {
+        // Nothing left for the timer to watch, whether this Stop came
+        // from the button or from the timer itself
+        stopTakePolling();
         MainWindowBase::record();
         return;
     }
@@ -3011,10 +3082,35 @@ MainWindow::record()
         sv_frame_t position = m_viewManager ? m_viewManager->getPlaybackFrame() : 0;
         if (position < 0) position = 0;
 
+        // Record into Selection: the selection is what is recorded, so it
+        // says where the take starts and where it stops, and the playhead
+        // only picks which selection that is.  With none selected this is
+        // an ordinary recording from the playhead.
+        sv_frame_t end = -1;
+        if (m_recordIntoSelection && m_recordIntoSelection->isChecked() &&
+            m_viewManager) {
+            Coverage::Ranges selected;
+            for (const Selection &s : m_viewManager->getSelections()) {
+                if (!s.isEmpty()) {
+                    selected.push_back(Coverage::Range(s.getStartFrame(),
+                                                       s.getEndFrame()));
+                }
+            }
+            Coverage::Range chosen;
+            if (TakeTiming::chooseRange(selected, position, chosen)) {
+                position = chosen.start;
+                end = chosen.end;
+                cerr << "MainWindow::record: recording into the selection ["
+                     << position << "," << end << ")" << endl;
+            }
+        }
+
         // Recording from inside singing that is already there replaces it
         // from that point on.  The user is asked first, unless they have
-        // said not to be: undo can bring it back.
-        if (m_takes->shouldConfirmRecordingAt(position) &&
+        // said not to be: undo can bring it back.  Not asked when
+        // recording into a selection: making the selection was the answer,
+        // and the end of the recording is known there (spec 5.1).
+        if (end < 0 && m_takes->shouldConfirmRecordingAt(position) &&
             !confirmRecordingOverTake()) {
             cerr << "MainWindow::record: recording over the existing singing "
                  << "was declined" << endl;
@@ -3022,9 +3118,13 @@ MainWindow::record()
         }
 
         m_takePosition = position;
+        m_takeEnd = end;
+        m_takePreRoll = TakeTiming::preRollBefore(position,
+                                                  wantedPreRollFrames());
 
         cerr << "MainWindow::record: recording into the singing track from "
-             << "frame " << position << endl;
+             << "frame " << position << ", with a lead-in of "
+             << m_takePreRoll << " frames" << endl;
 
         // Dots and a tracker of a take whose analysis never finished
         if (m_realtimePitchTracker || m_realtimePitchLayer) {
@@ -3056,14 +3156,19 @@ MainWindow::record()
     } else {
         m_recordingAsSingingTrack = false;
         m_takePosition = 0;
+        m_takePreRoll = 0;
+        m_takeEnd = -1;
         m_paneCountBeforeRecording = 0;
         setAudioRecordMode(RecordReplaceSession);
     }
 
-    // While recording, the playback cursor is the start of the recording
-    // plus what has been recorded: the views follow the take from where it
-    // is being made, not from frame 0
-    if (m_viewManager) m_viewManager->setRecordStartFrame(m_takePosition);
+    // While recording, the playback cursor is where the take's playback
+    // started plus what has been recorded: the views follow the take from
+    // where it is being made, not from frame 0.  With a pre-roll that is
+    // the start of the lead-in, so the cursor runs through the lead-in in
+    // step with the reference.
+    sv_frame_t playbackStart = currentTakeTiming().playbackStart();
+    if (m_viewManager) m_viewManager->setRecordStartFrame(playbackStart);
 
     MainWindowBase::record();
 
@@ -3081,11 +3186,12 @@ MainWindow::record()
     }
 
     // The base class centres the view on frame 0.  The take is being
-    // recorded where playback was, and that is where the singer is
-    // watching (spec section 4).
+    // recorded from where playback was — the start of the lead-in when
+    // there is one — and that is where the singer is watching (spec
+    // section 4).
     if (m_recordingAsSingingTrack && m_viewManager) {
-        m_viewManager->setPlaybackFrame(m_takePosition);
-        m_viewManager->setGlobalCentreFrame(m_takePosition);
+        m_viewManager->setPlaybackFrame(playbackStart);
+        m_viewManager->setGlobalCentreFrame(playbackStart);
     }
 
     updateAlternatePitchForTake();
@@ -3131,7 +3237,98 @@ MainWindow::record()
                      << endl;
             }
         }
+
+        // A take with an end of its own to reach is watched until it
+        // gets there
+        startTakePolling();
     }
+}
+
+void
+MainWindow::startTakePolling()
+{
+    // Only a take that is to stop by itself needs watching: nothing else
+    // about a take is decided while it runs
+    if (!m_takeTimer) return;
+    if (!m_recordTarget || !m_recordTarget->isRecording()) return;
+    if (!currentTakeTiming().havePunchOut()) return;
+
+    m_takeTimer->start();
+}
+
+void
+MainWindow::stopTakePolling()
+{
+    if (m_takeTimer) m_takeTimer->stop();
+}
+
+void
+MainWindow::pollTakeProgress()
+{
+    // The take may have ended, or the session gone, between one poll and
+    // the next: there is nothing to watch then
+    if (!m_recordTarget || !m_recordTarget->isRecording() ||
+        !m_recordingAsSingingTrack) {
+        stopTakePolling();
+        return;
+    }
+
+    // The latency may have been refined since the last poll, which moves
+    // the end of the take with it: currentTakeTiming() has the figure as
+    // it stands now
+    TakeTiming timing = currentTakeTiming();
+    sv_frame_t received = m_recordTarget->getFramesReceived();
+
+    // Everything up to the end of the selection has been sung and
+    // recorded; what comes after it would not be used anyway
+    if (timing.shouldStopAt(received)) {
+        cerr << "MainWindow::pollTakeProgress: the singing up to frame "
+             << timing.end << " has arrived (" << received
+             << " frames recorded): stopping the take" << endl;
+        // The same path as the Stop button, which stops the timer
+        record();
+    }
+}
+
+bool
+MainWindow::showTakeCountdown() const
+{
+    // While the lead-in of a pre-roll runs, the status bar counts it down
+    // instead of saying where playback is or how much has been recorded:
+    // what is coming in does not count yet.
+    //
+    // Everything that writes the status bar during a take has to come
+    // through here, because they all write often — the recorded duration
+    // every 10 ms, the playback position every 20 ms, the visible range
+    // whenever the view scrolls after the cursor — and anything written
+    // between two of those would be gone before it could be read.  (The
+    // live dots write it too, and need no help: none is drawn during the
+    // lead-in.)
+    if (!m_recordingAsSingingTrack || m_takePreRoll <= 0 || !m_recordTarget) {
+        return false;
+    }
+
+    QString countdown = currentTakeTiming().countdownText
+        (m_recordTarget->getFramesReceived());
+    if (countdown == "") return false;
+
+    m_myStatusMessage = countdown;
+    getStatusLabel()->setText(countdown);
+    return true;
+}
+
+void
+MainWindow::recordDurationChanged(sv_frame_t frame, sv_samplerate_t rate)
+{
+    if (showTakeCountdown()) return;
+    MainWindowBase::recordDurationChanged(frame, rate);
+}
+
+void
+MainWindow::playbackFrameChanged(sv_frame_t frame)
+{
+    if (showTakeCountdown()) return;
+    MainWindowBase::playbackFrameChanged(frame);
 }
 
 void
@@ -3184,10 +3381,15 @@ MainWindow::recordingStarted()
             // singing recording's timeline after the take.
             // output latency = time from play() call until audio exits the speaker
             // input latency  = time from sound entering the mic until it arrives here
-            // The singer's response to the reference at m_takePosition arrives
-            // in the recording at approximately frame
+            // The singer's response to the reference where playback starts
+            // arrives in the recording at approximately frame
             // (outputLatency + inputLatency), so that is the frame the splice
             // reads the recording from.
+            // With a pre-roll, playback starts at the beginning of the
+            // lead-in rather than at the take's position, and the splice
+            // skips the lead-in as well (TakeTiming::spliceOffset()).
+            sv_frame_t playbackStart = currentTakeTiming().playbackStart();
+
             sv_frame_t outputLatency = m_playSource->getTargetPlayLatency();
             sv_frame_t inputLatency  = m_recordTarget ? m_recordTarget->getSystemRecordLatency() : 0;
             //
@@ -3212,8 +3414,8 @@ MainWindow::recordingStarted()
             m_recordingStartGapMeasured = -1;
             m_awaitingReferenceStart = true;
 
-            m_viewManager->setPlaybackFrame(m_takePosition);
-            m_playSource->play(m_takePosition);
+            m_viewManager->setPlaybackFrame(playbackStart);
+            m_playSource->play(playbackStart);
         }
 
         updateLayerStatuses();
@@ -3228,8 +3430,51 @@ MainWindow::refineRecordingLatency()
     if (measured < 0 || measured == m_recordingStartGapEstimate) return;
     cerr << "MainWindow::refineRecordingLatency: start gap was " << measured
          << " frames, not the estimated " << m_recordingStartGapEstimate << endl;
-    m_recordingLatencyFrames += measured - m_recordingStartGapEstimate;
+    m_recordingLatencyFrames = currentRecordingLatency();
     m_recordingStartGapEstimate = measured;
+}
+
+sv_frame_t
+MainWindow::currentRecordingLatency() const
+{
+    // Reading the measurement without taking it: pollTakeProgress() wants
+    // the latest figure every time it looks, but making it the stored one
+    // is onRealtimePitchDetected()'s business — it throws the dots placed
+    // with the estimate away when the figure changes.
+    sv_frame_t measured = m_recordingStartGapMeasured;
+    if (measured < 0) return m_recordingLatencyFrames;
+    return m_recordingLatencyFrames + (measured - m_recordingStartGapEstimate);
+}
+
+TakeTiming
+MainWindow::currentTakeTiming() const
+{
+    TakeTiming timing;
+    auto model = getMainModel();
+    timing.rate = model ? model->getSampleRate() : 0;
+    timing.position = m_takePosition;
+    timing.end = m_takeEnd;
+    timing.preRoll = m_takePreRoll;
+    timing.latency = currentRecordingLatency();
+    return timing;
+}
+
+sv_frame_t
+MainWindow::wantedPreRollFrames() const
+{
+    if (!m_preRoll || !m_preRoll->isChecked()) return 0;
+
+    QSettings settings;
+    settings.beginGroup("MainWindow");
+    double seconds = settings.value("prerollseconds", 3.0).toDouble();
+    settings.endGroup();
+    if (seconds <= 0.0) return 0;
+
+    auto model = getMainModel();
+    sv_samplerate_t rate = model ? model->getSampleRate() : 0;
+    if (rate <= 0) return 0;
+
+    return sv_frame_t(seconds * rate);
 }
 
 void
@@ -3246,10 +3491,10 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
 
     // Draw the dot where the finished pitch track will put this sound: the
     // take is spliced into the singing track from m_takePosition on, with
-    // the recording latency taken off its front.  The first dots may have
-    // been placed using the estimate of the start gap. They all belong to
-    // sound from before the reference started, which has no place on the
-    // reference's timeline.
+    // the recording latency and the lead-in taken off its front.  The first
+    // dots may have been placed using the estimate of the start gap. They
+    // all belong to sound from before the reference started, which has no
+    // place on the reference's timeline.
     sv_frame_t latencyBefore = m_recordingLatencyFrames;
     refineRecordingLatency();
     auto m = ModelById::getAs<SparseTimeValueModel>(m_realtimePitchModelId);
@@ -3257,7 +3502,9 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
         for (const Event &e : m->getAllEvents()) m->remove(e);
     }
 
-    sv_frame_t intoTake = compensatedLiveFrame(frame, m_recordingLatencyFrames);
+    // A negative answer is sound sung during the lead-in of a pre-roll, or
+    // before the reference started at all: no dot for it
+    sv_frame_t intoTake = currentTakeTiming().liveFrameIntoTake(frame);
     if (intoTake < 0) return;
     sv_frame_t dotFrame = m_takePosition + intoTake;
 
@@ -3306,6 +3553,7 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
     // pYIN pitch track is there to replace it.  With no analyser (the
     // analysis could not be started) there is nothing to wait for.
     cerr << "MainWindow::recordingFinishedFull: take finished" << endl;
+    stopTakePolling();
     m_recordingInProgress = false;
     m_recordingAsSingingTrack = false;
     m_currentRecordingModelId = {};
@@ -3344,17 +3592,20 @@ MainWindow::finishSingingTake()
 {
     // The take has stopped, and what the device recorded is raw material:
     // it goes into the take's audio file at the position the take was
-    // started from, with the latency taken off its front, and the singing
-    // track is then rebuilt from the file that comes out of that.
+    // started from, with the latency and the lead-in taken off its front,
+    // and the singing track is then rebuilt from the file that comes out.
     //
     // (Rebuilt means analysed in full, as a singing track loaded from a
     // file is.  Phase 4 of the takes work puts the new audio under the
     // pitch and notes layers that are there and analyses only the range
     // that changed, which is what makes this quick on a long song.)
 
+    stopTakePolling();
     refineRecordingLatency();
 
-    sv_frame_t latency = m_recordingLatencyFrames;
+    TakeTiming timing = currentTakeTiming();
+    sv_frame_t offset = timing.spliceOffset();
+    sv_frame_t length = timing.spliceLength();
     sv_frame_t position = m_takePosition;
 
     QString recordingPath;
@@ -3382,12 +3633,12 @@ MainWindow::finishSingingTake()
     if (m_viewManager) m_viewManager->setPlaybackFrame(position);
 
     // A take stopped the moment it was started, or one no longer than the
-    // latency, has nothing in it to add.  Nothing has gone wrong; there is
-    // simply nothing to do
-    if (recordingPath != "" && recorded <= latency) {
+    // latency and the lead-in together, has nothing in it to add.  Nothing
+    // has gone wrong; there is simply nothing to do
+    if (recordingPath != "" && recorded <= offset) {
         cerr << "MainWindow::finishSingingTake: nothing to use: " << recorded
-             << " frames recorded, the first " << latency
-             << " of which are the latency" << endl;
+             << " frames recorded, the first " << offset
+             << " of which are the latency and the lead-in" << endl;
         recordingFinishedFull(nullptr);
         return;
     }
@@ -3403,10 +3654,12 @@ MainWindow::finishSingingTake()
             error = tr("Could not find a directory to write the singing "
                        "track into");
         } else {
-            // Everything before the latency is sound from before the singer
-            // could have heard the reference at the take's position
-            error = m_takes->spliceRecording(recordingPath, latency, position,
-                                             -1, directory, &placed);
+            // Everything before the offset is sound from before the singer
+            // could have heard the reference at the take's position: the
+            // round trip, and the lead-in of a pre-roll before it.  The
+            // length is what a punch-out allows, or all there is
+            error = m_takes->spliceRecording(recordingPath, offset, position,
+                                             length, directory, &placed);
         }
     }
 
@@ -3424,7 +3677,7 @@ MainWindow::finishSingingTake()
     }
 
     cerr << "MainWindow::finishSingingTake: " << recorded << " frames "
-         << "recorded, used from frame " << latency << ", placed at ["
+         << "recorded, used from frame " << offset << ", placed at ["
          << placed.start << "," << placed.end << ") of "
          << m_takes->getAudioPath() << endl;
 
@@ -4597,6 +4850,9 @@ MainWindow::updateVisibleRangeDisplay(Pane *p) const
     if (!getMainModel() || !p) {
         return;
     }
+
+    // The countdown of a pre-roll's lead-in has the status bar to itself
+    if (showTakeCountdown()) return;
 
     bool haveSelection = false;
     sv_frame_t startFrame = 0, endFrame = 0;

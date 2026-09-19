@@ -21,11 +21,14 @@
 #include "RealtimePitchTracker.h"
 #include "AlternatePitchTrack.h"
 #include "SingingTakes.h"
+#include "TakeTiming.h"
 
 #include <vector>
 #include <atomic>
 
 #include "data/model/SparseTimeValueModel.h"
+
+class QTimer;
 
 namespace sv {
 class VersionTester;
@@ -150,6 +153,11 @@ protected slots:
 
     virtual void monitoringLevelsChanged(float, float);
 
+    // The status bar's "Recording: <duration>" and "Playing: ...", which
+    // the lead-in of a pre-roll replaces with its countdown
+    virtual void recordDurationChanged(sv::sv_frame_t, sv::sv_samplerate_t);
+    virtual void playbackFrameChanged(sv::sv_frame_t);
+
     virtual void audioGainChanged(float);
     virtual void pitchGainChanged(float);
     virtual void notesGainChanged(float);
@@ -213,6 +221,10 @@ protected slots:
     virtual void recordingFinishedFull(Analyser *analysing = nullptr);
     virtual void finishSingingTake();
 
+    // Watches a take that is to stop at an end of its own; see
+    // startTakePolling()
+    virtual void pollTakeProgress();
+
     void moveOneNoteRight();
     void moveOneNoteLeft();
     void selectOneNoteRight();
@@ -246,6 +258,8 @@ protected:
     QAction       *m_showSingingNotes;
     QAction       *m_playSingingAudio;
     QAction       *m_playRefWhileRecording;
+    QAction       *m_preRoll;
+    QAction       *m_recordIntoSelection;
     QAction       *m_loadSingingTrackAction;
 
     // The alternate pitch track: the reference pitch track moved by whole
@@ -269,9 +283,40 @@ protected:
 
     // Where on the reference's timeline the take being recorded, or the
     // one most recently recorded, starts: the playback position when
-    // Record was pressed.  The live dots are drawn from here, and this
-    // is where the recording is spliced into the take's audio.
+    // Record was pressed, or the start of the selection recorded into.
+    // The live dots are drawn from here, and this is where the recording
+    // is spliced into the take's audio.
     sv::sv_frame_t m_takePosition;
+
+    // The lead-in played before m_takePosition (R, "Pre-roll"), and the
+    // frame the take stops itself at (E, "Record into Selection"), or -1
+    // when it runs until Stop is pressed.  Both are worked out in
+    // record() and used until the take has been spliced in; TakeTiming
+    // does the arithmetic.
+    sv::sv_frame_t m_takePreRoll;
+    sv::sv_frame_t m_takeEnd;
+
+    // Polls the record target while a take that has an end to reach
+    // runs, and stops the take once the singing for that end has
+    // arrived.  Not running for a take that goes on until Stop.
+    QTimer        *m_takeTimer;
+
+    void startTakePolling();
+    void stopTakePolling();
+
+    // The take being recorded, or the one just recorded, as TakeTiming
+    // sees it: everything the splice, the dots and the automatic stop
+    // are worked out from.
+    TakeTiming currentTakeTiming() const;
+
+    // The pre-roll asked for, in frames of the reference: the QSettings
+    // value MainWindow/prerollseconds (3 s), or 0 with the toggle off
+    sv::sv_frame_t wantedPreRollFrames() const;
+
+    // Put the countdown of a pre-roll's lead-in in the status bar, and
+    // say so, if that is what belongs there just now.  Everything that
+    // writes the status bar while a take runs asks this first.
+    bool showTakeCountdown() const;
 
     // Ask before recording over singing that is already there, unless
     // the user has said not to.  Overridden by the tests, which cannot
@@ -484,6 +529,12 @@ protected:
     std::atomic<bool> m_awaitingReferenceStart;
 
     void refineRecordingLatency();
+
+    // The best figure for the latency as things stand, measurement
+    // included if it has arrived: refineRecordingLatency() is what makes
+    // it the stored one, and only it, because the live dots placed with
+    // the estimate are thrown away when the figure changes.
+    sv::sv_frame_t currentRecordingLatency() const;
 
     // Set while the live dots of a finished take wait for pYIN to
     // produce the pitch track that replaces them.

@@ -92,6 +92,10 @@ public:
     void setPlayReferenceWhileRecording(bool on) {
         m_playRefWhileRecording->setChecked(on);
     }
+    void setPreRoll(bool on) { m_preRoll->setChecked(on); }
+    void setRecordIntoSelection(bool on) {
+        m_recordIntoSelection->setChecked(on);
+    }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
 
     Analyser *analyser() { return m_analyser; }
@@ -110,11 +114,19 @@ public:
     sv::WaveformLayer *recordingLayer() { return m_recordingLayer; }
     SingingTakes *takes() { return m_takes; }
     sv::sv_frame_t takePosition() { return m_takePosition; }
+    sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
+    sv::sv_frame_t takeEnd() { return m_takeEnd; }
+    bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
 
     void seekTo(sv::sv_frame_t frame) {
         m_viewManager->setPlaybackFrame(frame);
     }
     sv::sv_frame_t playbackFrame() { return m_viewManager->getPlaybackFrame(); }
+
+    void selectRange(sv::sv_frame_t start, sv::sv_frame_t end) {
+        m_viewManager->addSelection(sv::Selection(start, end));
+    }
+    void clearSelections() { m_viewManager->clearSelections(); }
 
     // The question about recording over singing that is there is answered
     // from here: the suite cannot answer a dialog
@@ -442,6 +454,26 @@ class TestRecordWorkflow : public QObject
         return true;
     }
 
+    // The pre-roll's length has no UI: it is read from the settings when
+    // Record is pressed. These are the test suite's own settings
+    // (tony-app-test), not the user's
+    static void setPreRollSeconds(double seconds) {
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        settings.setValue("prerollseconds", seconds);
+        settings.endGroup();
+    }
+
+    // A recording of two notes, the first as long as "first" seconds and
+    // the second as long as "then": what is sung during a lead-in, or
+    // after the end of a selection, is the one the take must not hold
+    static std::vector<float> twoNotes(double first, double then) {
+        auto signal = tone(lowHz, first);
+        auto second = tone(highHz, then);
+        signal.insert(signal.end(), second.begin(), second.end());
+        return signal;
+    }
+
     // Not a slot: QtTest would run it as a test
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -489,6 +521,12 @@ private slots:
         QSettings settings;
         settings.beginGroup("MainWindow");
         settings.setValue("playrefwhilerecording", false);
+        // The toolbar toggles of the recording behaviour, and the length
+        // of the pre-roll: a test that switched one on must not leave it
+        // on for the next
+        settings.setValue("preroll", false);
+        settings.setValue("recordintoselection", false);
+        settings.remove("prerollseconds");
         settings.endGroup();
 
         // The audible flags are shared by both analysers; a test that
@@ -1179,6 +1217,265 @@ private slots:
         take(400);
         if (QTest::currentTestFailed()) return;
         QCOMPARE(m_window->recordOverQuestions(), 2);
+    }
+
+    // Pre-roll: the reference is played from before the take's position
+    // and the singer comes in with it, but nothing sung during that
+    // lead-in goes into the take. The singer here sings a low note
+    // through the lead-in and a high one after it: the take is to hold
+    // the high note only, and to be the lead-in shorter than what the
+    // device recorded.
+    void preroll_lead_is_not_recorded() {
+        const double leadIn = 0.5;
+        FakeAudioIO::Config config;
+        config.input = twoNotes(0.6, 1.0);
+        makeWindow(config);
+        // Nothing to hear, so the round trip is zero and the lead-in is
+        // the whole of what the splice skips (spec 5.1)
+        m_window->setPlayReferenceWhileRecording(false);
+        setPreRollSeconds(leadIn);
+        m_window->setPreRoll(true);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(2.0 * rate);
+        const sv::sv_frame_t R = sv::sv_frame_t(leadIn * rate);
+        m_window->seekTo(P);
+        take(1300);
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(m_window->takePosition(), P);
+        QCOMPARE(m_window->takePreRoll(), R);
+        QCOMPARE(m_window->recordOverQuestions(), 0);
+
+        // The take starts where it was told to, whatever came before
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
+
+        // and holds the lead-in less than the 1.3 s that was recorded
+        sv::sv_frame_t length = ranges[0].length();
+        QVERIFY2(length > sv::sv_frame_t(0.45 * rate) &&
+                 length < sv::sv_frame_t(0.95 * rate),
+                 qPrintable(QString("1.3 s was recorded with a lead-in of "
+                                    "%1 frames, and %2 frames of it went "
+                                    "into the take")
+                            .arg(R).arg(length)));
+
+        const sv::sv_frame_t margin = sv::sv_frame_t(0.1 * rate);
+        QVERIFY2(takeAudioRms(0, P - margin) < 0.001,
+                 "the take's audio is not silent before the position it was "
+                 "recorded at");
+
+        // The note sung during the lead-in is not in the take: what is at
+        // its position is the note that came after the lead-in
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY(!events.empty());
+        auto sung = eventsBetween(events, P + margin, ranges[0].end - margin);
+        QVERIFY(!sung.empty());
+        QVERIFY2(std::fabs(TestSignals::centsBetween
+                           (medianHz(sung), highHz)) < 10.0,
+                 qPrintable(QString("the take's median pitch at its position "
+                                    "is %1 Hz; the lead-in was sung at %2 and "
+                                    "the take itself at %3")
+                            .arg(medianHz(sung)).arg(lowHz).arg(highHz)));
+    }
+
+    // What the lead-in looks and sounds like while it runs: the reference
+    // is played from S, the cursor runs with it from there, the status bar
+    // counts down, and no dot is drawn until the take's position
+    void preroll_counts_down_before_the_position() {
+        const double leadIn = 1.2;
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        setPreRollSeconds(leadIn);
+        m_window->setPreRoll(true);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(2.0 * rate);
+        const sv::sv_frame_t R = sv::sv_frame_t(leadIn * rate);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takePreRoll(), R);
+        QTest::qWait(400);
+
+        QVERIFY2(m_window->fake()->getPlayStartFrame() >= 0,
+                 "the reference was never played");
+
+        sv::sv_frame_t during = m_window->playbackFrame();
+        QVERIFY2(during >= P - R && during < P,
+                 qPrintable(QString("0.4 s into a take at frame %1 with a "
+                                    "lead-in of %2 frames, the cursor is at "
+                                    "frame %3; it should be running through "
+                                    "the lead-in")
+                            .arg(P).arg(R).arg(during)));
+
+        QVERIFY2(m_window->statusText().startsWith("Recording in "),
+                 qPrintable(QString("the status bar says \"%1\" during the "
+                                    "lead-in, rather than counting down")
+                            .arg(m_window->statusText())));
+
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        QVERIFY(model);
+        QVERIFY2(model->getEventCount() == 0,
+                 qPrintable(QString("%1 live dots were drawn during the "
+                                    "lead-in, before the take's position")
+                            .arg(model->getEventCount())));
+
+        // Past the lead-in the dots come, none of them before the take's
+        // position, and there is nothing left to count down
+        QTest::qWait(1400);
+        QVERIFY(model->getEventCount() > 10);
+        for (const auto &e : model->getAllEvents()) {
+            QVERIFY2(e.getFrame() >= P,
+                     qPrintable(QString("a live dot at frame %1, before the "
+                                        "take's position %2")
+                                .arg(e.getFrame()).arg(P)));
+        }
+        QVERIFY(!m_window->statusText().startsWith("Recording in "));
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
+    }
+
+    // Record into Selection: the selection says where the take starts and
+    // where it ends, the take stops by itself there, and nothing sung
+    // afterwards is used. Then a second one over the first, which is not
+    // asked about, into the selection the playhead is in, and with a
+    // pre-roll as well.
+    void punch_out_stops_at_the_end_of_the_selection() {
+        FakeAudioIO::Config config;
+        // Low note for a little longer than the selection, then high: the
+        // high note is what must not reach the take
+        config.input = twoNotes(0.85, 0.8);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(false);
+        m_window->setRecordIntoSelection(true);
+        openReference(writeWav(tone(highHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(1.0 * rate);
+        const sv::sv_frame_t E = sv::sv_frame_t(1.8 * rate);
+        m_window->selectRange(P, E);
+        m_window->seekTo(sv::sv_frame_t(0.3 * rate)); // outside the selection
+        startTake();
+        if (QTest::currentTestFailed()) return;
+
+        // The selection is recorded into whatever the playhead says
+        QCOMPARE(m_window->takePosition(), P);
+        QCOMPARE(m_window->takeEnd(), E);
+        QVERIFY(m_window->takeTimerRunning());
+
+        // Nobody presses Stop: the take ends itself once the singing for
+        // the end of the selection has arrived
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->recordTarget()->isRecording(), 5000);
+        QVERIFY2(!m_window->takeTimerRunning(),
+                 "the timer that watches the take is still running after it");
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        // What it kept is exactly the selection, margin and all discarded
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0], Coverage::Range(P, E));
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QCOMPARE(wave->getFrameCount(), E);
+
+        // and what it kept is the note sung inside the selection, not the
+        // one that came after its end
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY(!events.empty());
+        QVERIFY2(std::fabs(TestSignals::centsBetween
+                           (medianHz(events), lowHz)) < 10.0,
+                 qPrintable(QString("the take's median pitch is %1 Hz; the "
+                                    "selection was sung at %2 and what came "
+                                    "after its end at %3")
+                            .arg(medianHz(events)).arg(lowHz).arg(highHz)));
+
+        // A second punch, over the singing that is now there: the
+        // selection is the consent, so nothing is asked (spec 5.1). It is
+        // the selection the playhead is in that is recorded into, and the
+        // lead-in of the pre-roll is not taken out of it.
+        const sv::sv_frame_t P2 = sv::sv_frame_t(1.2 * rate);
+        const sv::sv_frame_t E2 = sv::sv_frame_t(1.9 * rate);
+        setPreRollSeconds(0.5);
+        m_window->setPreRoll(true);
+        m_window->clearSelections();
+        m_window->selectRange(sv::sv_frame_t(0.2 * rate),
+                              sv::sv_frame_t(0.5 * rate));
+        m_window->selectRange(P2, E2);
+        m_window->seekTo(sv::sv_frame_t(1.5 * rate)); // in the second one
+        m_window->clearRecordOverQuestions();
+        startTake();
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(m_window->recordOverQuestions(), 0);
+        QCOMPARE(m_window->takePosition(), P2);
+        QCOMPARE(m_window->takeEnd(), E2);
+        QCOMPARE(m_window->takePreRoll(), sv::sv_frame_t(0.5 * rate));
+
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->recordTarget()->isRecording(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        // The two ranges join, and the second one reached its end: had the
+        // lead-in been counted as part of what was recorded, the take
+        // would have stopped short of it
+        ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0], Coverage::Range(P, E2));
+    }
+
+    // Stop can still be pressed before the end of the selection; the take
+    // is then as short as what was sung, and nothing is left watching it
+    void punch_early_stop_is_shorter() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(false);
+        m_window->setRecordIntoSelection(true);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(1.0 * rate);
+        const sv::sv_frame_t E = sv::sv_frame_t(3.0 * rate);
+        m_window->selectRange(P, E);
+        m_window->seekTo(P + sv::sv_frame_t(0.5 * rate)); // inside it
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takePosition(), P);
+        QCOMPARE(m_window->takeEnd(), E);
+
+        QTest::qWait(700);
+        QVERIFY2(m_window->recordTarget()->isRecording(),
+                 "the take stopped by itself well before the end of the "
+                 "selection");
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->takeTimerRunning());
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
+        QVERIFY2(ranges[0].end > P + sv::sv_frame_t(0.4 * rate) &&
+                 ranges[0].end < E,
+                 qPrintable(QString("0.7 s was recorded into the selection "
+                                    "[%1,%2) before Stop, and the take covers "
+                                    "[%3,%4)")
+                            .arg(P).arg(E)
+                            .arg(ranges[0].start).arg(ranges[0].end)));
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QCOMPARE(wave->getFrameCount(), ranges[0].end);
     }
 
     // The take and the live pitch model are both in the play source
