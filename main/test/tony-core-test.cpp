@@ -17,6 +17,7 @@
 #include "TestCoverage.h"
 #include "TestTakeAudio.h"
 #include "TestSingingTakes.h"
+#include "TestTakeTiming.h"
 
 #include "RunSuite.h"
 
@@ -73,6 +74,12 @@ int main(int argc, char *argv[])
 
     {
         TestSingingTakes t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeTiming t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }
