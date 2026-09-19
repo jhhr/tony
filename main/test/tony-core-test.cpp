@@ -14,6 +14,8 @@
 #include "TestRealtimeYin.h"
 #include "TestRealtimePitchTracker.h"
 #include "TestLatencyShift.h"
+#include "TestCoverage.h"
+#include "TestTakeAudio.h"
 
 #include "RunSuite.h"
 
@@ -52,6 +54,18 @@ int main(int argc, char *argv[])
 
     {
         TestLatencyShift t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestCoverage t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeAudio t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

@@ -1094,7 +1094,9 @@ tony_entry_files = [
 
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
+  'main/Coverage.cpp',
   'main/RealtimePitchTracker.cpp',
+  'main/TakeAudio.cpp',
 ]
 
 tony_app_files = [
@@ -1339,6 +1341,8 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestRealtimeYin.h',
   'main/test/TestRealtimePitchTracker.h',
   'main/test/TestLatencyShift.h',
+  'main/test/TestCoverage.h',
+  'main/test/TestTakeAudio.h',
 ])
 
 tony_core_test_exe = executable(
