@@ -2721,6 +2721,17 @@ MainWindow::record()
 
     bool haveReference = (getMainModel() != nullptr);
 
+    // A new take starts with no latency compensation, whichever kind of take
+    // it is: the live dots are drawn with these, and a standalone take must
+    // not inherit the shift of a singing take made before it.  The figures
+    // for a singing take are computed in recordingStarted().  This is below
+    // the early return above on purpose: a Stop must leave them alone, the
+    // shift is applied afterwards in analyseNow().
+    m_recordingLatencyFrames = 0;
+    m_recordingStartGapEstimate = 0;
+    m_awaitingReferenceStart = false;
+    m_recordingStartGapMeasured = -1;
+
     if (haveReference) {
         cerr << "MainWindow::record: reference track loaded — recording as singing track" << endl;
 
@@ -2822,10 +2833,6 @@ MainWindow::record()
         m_recordingInProgress = false;
 
         m_recordingAsSingingTrack = true;
-        m_recordingLatencyFrames = 0; // reset; will be computed in recordingStarted()
-        m_recordingStartGapEstimate = 0;
-        m_awaitingReferenceStart = false;
-        m_recordingStartGapMeasured = -1;
         // Remember pane count so we can prune the extra pane that
         // MainWindowBase::record() creates via AddPaneCommand for the
         // recording's waveform layer.  We want both tracks in pane 0.
@@ -2842,8 +2849,9 @@ MainWindow::record()
     // The base class gives up without a signal when the device cannot be
     // opened or the recording cannot be started.  No take is coming then,
     // so nothing must be left waiting for one: with the flag still set,
-    // the next file opened would not be analysed, and Analyse Now would
-    // be routed to a singing track that is not there.
+    // Analyse Now would be routed to a singing track that is not there,
+    // and the reference would not be re-analysed.  (Opening a file is not
+    // affected: that closes the session, which clears the flag.)
     if (!m_recordTarget || !m_recordTarget->isRecording()) {
         cerr << "MainWindow::record: recording did not start" << endl;
         m_recordingAsSingingTrack = false;

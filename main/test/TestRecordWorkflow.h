@@ -583,6 +583,18 @@ private slots:
         if (QTest::currentTestFailed()) return;
         QTest::qWait(600);
         sv::ModelId liveModel = m_window->realtimeModelId();
+
+        // The real case: an event queued before the take ends and
+        // delivered after it. Frame 20000 is well inside the take, and
+        // with no reference playing there is no latency to take off
+        // it, so it would make a dot. The tracker may have queued
+        // events of its own as well; the same goes for them
+        QCOMPARE(m_window->recordingLatencyFrames(), sv::sv_frame_t(0));
+        QVERIFY2(QMetaObject::invokeMethod
+                 (m_window, "onRealtimePitchDetected", Qt::QueuedConnection,
+                  Q_ARG(sv::sv_frame_t, sv::sv_frame_t(20000)),
+                  Q_ARG(double, 440.0)),
+                 "the pitch event could not be queued");
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
 
@@ -590,6 +602,19 @@ private slots:
         QVERIFY(model);
         int dots = model->getEventCount();
         m_window->setStatusText("after the take");
+        QCoreApplication::processEvents();
+        QVERIFY2(model->getEventCount() == dots,
+                 qPrintable(QString("a pitch event queued during the take "
+                                    "and delivered after it drew a dot: %1 "
+                                    "dots, there were %2")
+                            .arg(model->getEventCount()).arg(dots)));
+        QVERIFY2(m_window->statusText() == QString("after the take"),
+                 qPrintable(QString("a pitch event queued during the take "
+                                    "and delivered after it wrote \"%1\" to "
+                                    "the status bar")
+                            .arg(m_window->statusText())));
+
+        // and one that arrives later still
         m_window->doRealtimePitchDetected(20000, 440.0);
         QCOMPARE(model->getEventCount(), dots);
         QCOMPARE(m_window->statusText(), QString("after the take"));
@@ -645,9 +670,6 @@ private slots:
                             .arg(K)
                             .arg(m_window->fake()
                                  ->getFramesBeforePlayStart())));
-
-        // Nothing is drawn ahead of the reference
-        QVERIFY(dots.empty() || dots.front().getFrame() >= 0);
     }
 
     // The automated latency test. The device reports a round trip of K
@@ -729,10 +751,13 @@ private slots:
     }
 
     // The take and the live pitch model are both in the play source
-    // while the reference plays (review finding 3), but neither is
-    // heard: the play source fills its buffers seconds ahead of the
-    // playback position, and the take has no audio that far ahead yet.
-    // This test holds that in place.
+    // while the reference plays (review finding 3), and neither is to be
+    // heard. This test holds that in place for the whole path, from the
+    // input to the device output. It does not by itself show that the
+    // take is muted: the play source fills its buffers seconds ahead of
+    // the playback position, the take has no audio that far ahead yet,
+    // and so a take this short is silent even unmuted. For the mute see
+    // take_muted_while_recording and take_silent_in_output_after_reseek.
     //
     // Pure tones here, so that the reference has nothing at the
     // frequency of the input. 26400 samples is a whole number of
@@ -763,8 +788,13 @@ private slots:
                                     "in it, at amplitude %1").arg(input)));
     }
 
-    // As above with the take's own waveform muted, leaving only the
-    // synth that follows the live pitch model
+    // The live pitch model is a SparseTimeValueModel, which would be
+    // played as a synth tone at the pitch it holds; such a model is
+    // inaudible unless something switches it on, and nothing does.
+    // This test holds that at the output, in a later window than the
+    // test above. The read-ahead covers for it in the same way, though:
+    // what shows the live model silent when it could be heard is
+    // take_silent_in_output_after_reseek
     void no_synth_tone() {
         FakeAudioIO::Config config;
         config.input = TestSignals::sine(highHz, rate, int(3 * rate), 0.5);
@@ -776,13 +806,6 @@ private slots:
 
         startTake();
         if (QTest::currentTestFailed()) return;
-        QTRY_VERIFY_WITH_TIMEOUT(m_window->analyser2() &&
-                                 m_window->analyser2()->getLayer
-                                 (Analyser::Audio), 2000);
-        auto params = m_window->analyser2()->getLayer(Analyser::Audio)
-            ->getPlayParameters();
-        QVERIFY(params);
-        params->setPlayAudible(false);
         QTest::qWait(1800);
         stopTake();
         if (QTest::currentTestFailed()) return;
@@ -798,9 +821,11 @@ private slots:
     }
 
     // Review finding 3. The two tests above find the take and the live
-    // pitch silent in the output, but only because the play source reads
-    // ahead of what has been recorded. Neither is to be audible while it
-    // is being recorded, whatever the buffers do.
+    // pitch silent in the output, but for the take that much is true
+    // even unmuted, because the play source reads ahead of what has
+    // been recorded. Neither is to be audible while it is being
+    // recorded, whatever the buffers do: this test checks the play
+    // parameters, and the next one the output.
     void take_muted_while_recording() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 4.0);
@@ -855,6 +880,55 @@ private slots:
 
         // The reference was not touched by any of this
         QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+    }
+
+    // Review finding 3, at the device. The read-ahead that keeps the
+    // take out of the output in no_self_monitoring is taken away here:
+    // once more has been recorded than the play source buffers, playback
+    // is sent back to the start, so that everything the fill thread now
+    // reads is audio the take already has, and pitches the live model
+    // already has. Only their being muted keeps them out.
+    void take_silent_in_output_after_reseek() {
+        FakeAudioIO::Config config;
+        config.input = TestSignals::sine(highHz, rate, int(8 * rate), 0.5);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(TestSignals::sine(lowHz, rate,
+                                                 int(6 * rate), 0.5)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(3600);
+
+        auto wave = sv::ModelById::getAs<sv::WritableWaveFileModel>
+            (m_window->currentRecordingModelId());
+        QVERIFY2(wave, "there is no take being recorded");
+        sv::sv_frame_t recorded = wave->getFrameCount();
+        QVERIFY2(recorded > sv::sv_frame_t(3.2 * rate),
+                 qPrintable(QString("only %1 frames of the take exist, not "
+                                    "enough to outrun the read-ahead")
+                            .arg(recorded)));
+
+        size_t reseek = m_window->fake()->getCapturedOutput().size();
+        m_window->playSource()->play(0);
+        QTest::qWait(1500);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        auto output = m_window->fake()->getCapturedOutput();
+        size_t from = reseek + size_t(0.3 * rate);
+        double reference = amplitudeAt(output, from, 26400, lowHz);
+        double input = amplitudeAt(output, from, 26400, highHz);
+        QVERIFY2(reference > 0.1,
+                 qPrintable(QString("reference amplitude in the output after "
+                                    "the reseek is %1").arg(reference)));
+        QVERIFY2(input >= 0.0 && input < 0.005,
+                 qPrintable(QString("the output has the input's frequency in "
+                                    "it, at amplitude %1 (reference %2): the "
+                                    "take, or a tone at the live pitch, is "
+                                    "played while it is being recorded")
+                            .arg(input).arg(reference)));
     }
 
     void rerecord_cleans_up() {
@@ -955,6 +1029,56 @@ private slots:
         verifyPlaySourceClean();
     }
 
+    // The latency of a compensated take must not outlive it. A take
+    // with nothing loaded has no reference to line up with: its dots
+    // belong where they were heard, the first of them at the centre
+    // of the first YIN window
+    void standalone_take_after_compensated_take() {
+        FakeAudioIO::Config config;
+        config.playbackLatency = 4096;
+        config.recordLatency = 4096;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_window->recordingLatencyFrames() >= 8192,
+                 qPrintable(QString("the first take was compensated by %1 "
+                                    "frames only; the device reports 8192")
+                            .arg(m_window->recordingLatencyFrames())));
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->realtimeLayer(), 5000);
+        m_window->doCloseSession();
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->recordingAsSingingTrack());
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->realtimeLayer(), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!pitchEvents(m_window->realtimeLayer()).empty(), 3000);
+        QTest::qWait(800);
+
+        sv::sv_frame_t latency = m_window->recordingLatencyFrames();
+        auto dots = pitchEvents(m_window->realtimeLayer());
+        QVERIFY(!dots.empty());
+        sv::sv_frame_t firstDot = dots.front().getFrame();
+
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+
+        QVERIFY2(latency == 0 &&
+                 firstDot >= sv::sv_frame_t(RealtimePitchTracker::kWindowSize / 2),
+                 qPrintable(QString("the standalone take ran with a latency "
+                                    "of %1 frames and its first dot at frame "
+                                    "%2; there is nothing to compensate for, "
+                                    "and no dot can come before frame %3")
+                            .arg(latency).arg(firstDot)
+                            .arg(RealtimePitchTracker::kWindowSize / 2)));
+    }
+
     // No device at all: the base class record() gives up quietly
     void record_failure_resets_flags() {
         makeWindow(FakeAudioIO::Config(), false);
@@ -965,13 +1089,35 @@ private slots:
         QVERIFY(!m_window->recordTarget()->isRecording());
 
         QVERIFY(!m_window->recordingAsSingingTrack());
+        QVERIFY(!m_window->recordingInProgress());
 
-        // so that the next file opened is analysed as usual
-        openReference(writeWav(tone(highHz, 1.0)));
-        if (QTest::currentTestFailed()) return;
+        // The reference is still there, and Analyse Now is about it.
+        // With the flag left set it would be routed to a singing track
+        // that does not exist, and the reference left as it was. (Not
+        // "the next file opened": opening one closes the session, which
+        // clears the flag whatever record() did.)
+        QVERIFY(analysed(m_window->analyser()));
+        sv::ModelId pitchBefore =
+            m_window->analyser()->getLayer(Analyser::PitchTrack)->getModel();
+        QSignalSpy relayered(m_window->analyser(), SIGNAL(layersChanged()));
+
+        m_window->doAnalyseNow();
+
+        // The misrouted Analyse Now waits 200 ms for the singing track's
+        // analyser before it gives up. Wait that out before failing, so
+        // that it does not fire after this test has ended
+        if (relayered.isEmpty()) QTest::qWait(300);
+
+        sv::Layer *pitchNow =
+            m_window->analyser()->getLayer(Analyser::PitchTrack);
+        QVERIFY2(!relayered.isEmpty() &&
+                 pitchNow && pitchNow->getModel() != pitchBefore,
+                 "Analyse Now after a failed record did not re-analyse "
+                 "the reference");
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
         QVERIFY(std::fabs(TestSignals::centsBetween
                           (medianHz(pitchEvents(m_window->analyser())),
-                           highHz)) < 10.0);
+                           lowHz)) < 10.0);
     }
 
     void analyse_now_during_take() {
@@ -1278,8 +1424,17 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(600);
+
+        // With the take's analyser there already, Stop starts pYIN
+        // at once rather than 200 ms later, so that it is running when
+        // the session is closed. Otherwise this test shows nothing
+        QVERIFY(m_window->analyser2());
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY2(sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(),
+                 "the race was not set up: no analysis was running when "
+                 "the session was about to be closed");
         m_window->doCloseSession();
 
         QVERIFY(!m_window->analyser2());

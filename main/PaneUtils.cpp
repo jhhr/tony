@@ -58,8 +58,11 @@ pruneExtraPane(Document *document, PaneStack *paneStack, Pane *extra,
     //      deletePane() leaves no dangling pointer.
     //
     // We distinguish them by whether the layer's model is ownedModelId.
-    // The ruler's own model id is "none", so an empty ownedModelId must
-    // match nothing.
+    // The ruler's model is the main model (createMainModelLayer() gives
+    // it that id), so it never matches the id of an additional model.
+    // A layer that has no model at all has the "none" id, though, so an
+    // empty ownedModelId must match nothing: without the isNone() guard
+    // such a layer would be deleted rather than detached.
     if (!extra) return;
 
     if (document) {

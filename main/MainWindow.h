@@ -396,7 +396,9 @@ protected:
     // sample rate) stored when a singing-track recording is made with the
     // "play reference while recording" toggle on.  Applied as a negative
     // start-frame offset to the singing model so its timeline aligns with
-    // the reference during playback.  Reset to 0 at the start of each recording.
+    // the reference during playback, and to the live dots during the take.
+    // Reset to 0 in record() at the start of every take, standalone ones
+    // included, but not by a Stop: analyseNow() applies it after that.
     //
     // It also includes the start gap: the part of the take recorded before
     // the reference began to play.  That starts out as an estimate made just

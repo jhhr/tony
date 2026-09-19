@@ -258,13 +258,24 @@ private slots:
     }
 
     void prune_none_id_deletes_nothing() {
-        // The ruler's own model id is "none". An empty owned id must
-        // not be taken to match it.
+        // A layer that was never given a model has the "none" id. An
+        // empty owned id must not be taken to match it. (Not the ruler:
+        // createMainModelLayer() gives that the main model's id.)
         Extra extra = addExtraPane(true);
         QVERIFY(extra.waveform);
+        sv::Layer *noModel =
+            m_document->createLayer(sv::LayerFactory::TimeValues);
+        QVERIFY(noModel);
+        QVERIFY2(noModel->getModel().isNone(),
+                 "a layer made without a model does not have the none id");
+        m_document->addLayerToView(extra.pane, noModel);
+        QVERIFY2(paneHasLayer(extra.pane, noModel),
+                 "the layer without a model was not added to the pane");
 
         pruneExtraPane(m_document, m_paneStack, extra.pane, sv::ModelId());
 
+        QVERIFY2(documentHasLayer(noModel),
+                 "the layer without a model was deleted from the document");
         QVERIFY2(documentHasLayer(m_ruler),
                  "the shared time ruler was deleted from the document");
         QVERIFY(paneHasLayer(m_mainPane, m_ruler));
