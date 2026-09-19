@@ -1265,6 +1265,46 @@ private slots:
                  "the reference analyser forgot its pitch candidates");
     }
 
+    // Bug 1: the analyser was never told of a layer deleted by someone
+    // else, and went on listing deleted pitch candidates
+    void candidates_deleted_from_outside() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+
+        QString error = a->reAnalyseSelection
+            (sv::Selection(sv::sv_frame_t(0.5 * rate),
+                           sv::sv_frame_t(1.5 * rate)),
+             Analyser::FrequencyRange());
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveHigherPitchCandidate(), 30000);
+
+        std::vector<sv::Layer *> candidates;
+        sv::Pane *pane = a->getPane();
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            sv::Layer *layer = pane->getLayer(i);
+            if (layer->getLayerPresentationName() == "candidate") {
+                candidates.push_back(layer);
+            }
+        }
+        QVERIFY(!candidates.empty());
+
+        for (sv::Layer *layer : candidates) {
+            m_window->document()->deleteLayer(layer, true);
+        }
+        QVERIFY2(!a->haveHigherPitchCandidate() &&
+                 !a->haveLowerPitchCandidate(),
+                 "the analyser still lists deleted pitch candidates");
+
+        // The same for one of its own layers
+        sv::Layer *notes = a->getLayer(Analyser::Notes);
+        QVERIFY(notes);
+        m_window->document()->deleteLayer(notes, true);
+        QVERIFY2(!a->getLayer(Analyser::Notes),
+                 "the analyser still points at its deleted note layer");
+    }
+
     void load_background_music() {
         makeWindow(FakeAudioIO::Config());
         openReference(writeWav(tone(lowHz, 1.0)));

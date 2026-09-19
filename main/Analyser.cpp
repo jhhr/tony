@@ -97,8 +97,13 @@ Analyser::newFileLoaded(Document *doc, ModelId model,
         return "Internal error: Analyser::newFileLoaded() called with no model, or a non-WaveFileModel";
     }
     
-    connect(doc, SIGNAL(layerAboutToBeDeleted(Layer *)),
-            this, SLOT(layerAboutToBeDeleted(Layer *)));
+    // By member pointer: this class is outside namespace sv, so moc
+    // records the slot as taking sv::Layer *, which a SLOT() string
+    // saying Layer * never matches.  Unique, because this is called
+    // again with the same document for every take
+    connect(doc, &Document::layerAboutToBeDeleted,
+            this, &Analyser::layerAboutToBeDeleted,
+            Qt::UniqueConnection);
 
     QSettings settings;
     settings.beginGroup("Analyser");
@@ -1039,8 +1044,8 @@ Analyser::discardPitchCandidates()
 void
 Analyser::layerAboutToBeDeleted(Layer *doomed)
 {
-    cerr << "Analyser::layerAboutToBeDeleted(" << doomed << ")" << endl;
-    
+    // Called for every layer the document deletes, ours or not
+
     vector<Layer *> notDoomed;
 
     foreach (Layer *layer, m_reAnalysisCandidates) {
@@ -1049,7 +1054,17 @@ Analyser::layerAboutToBeDeleted(Layer *doomed)
         }
     }
 
-    m_reAnalysisCandidates = notDoomed;
+    if (notDoomed.size() != m_reAnalysisCandidates.size()) {
+        m_reAnalysisCandidates = notDoomed;
+        // The index no longer means the candidate it did
+        m_currentCandidate = -1;
+    }
+
+    // A layer of ours deleted by someone else, e.g. by a command
+    // dropped from the undo history
+    for (auto &entry : m_layers) {
+        if (entry.second == doomed) entry.second = nullptr;
+    }
 }
 
 void
