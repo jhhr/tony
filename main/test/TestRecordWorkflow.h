@@ -81,8 +81,14 @@ public:
     FakeAudioIO *fake() { return dynamic_cast<FakeAudioIO *>(m_audioIO); }
 
     void doRecord() { record(); }
+    void doPlay() { play(); } // and again to stop
     void doAnalyseNow() { analyseNow(); }
     void doLoadBackgroundMusic(QString path) { loadBackgroundMusic(path); }
+
+    // Another audio file under the take's pitch and notes layers
+    QString doSwapSingingAudio(QString path) {
+        return swapSingingAudio(path);
+    }
 
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
@@ -195,6 +201,10 @@ class TestRecordWorkflow : public QObject
     // Whole numbers of samples per period: see TestSingingAnalysis.h
     static constexpr double lowHz = 220.5;
     static constexpr double highHz = 294.0;
+
+    // A third tone for the audio a swap puts in, no harmonic of either of
+    // the other two, so that what is in the output says which file it is
+    static constexpr double swapHz = 490.0;
 
     QTemporaryDir m_dir;
     int m_fileCounter = 0;
@@ -2000,6 +2010,236 @@ private slots:
         // model ever loaded had ended
         QVERIFY(m_window->playSource()->getPlayEndFrame() <
                 sv::sv_frame_t(1.2 * rate));
+    }
+
+    // Another audio file under the take's pitch and notes layers: the
+    // layers, their models and everything in them are the same objects
+    // afterwards, and no analysis is run
+    void swap_keeps_layers_and_events() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        int panes = m_window->paneStack()->getPaneCount();
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        Analyser *before = m_window->analyser2();
+        sv::Layer *pitch = before->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = before->getLayer(Analyser::Notes);
+        sv::ModelId oldAudio = before->getMainModelId();
+        sv::ModelId pitchModel = pitch->getModel();
+        sv::ModelId notesModel = notes->getModel();
+        auto events = pitchEvents(pitch);
+        QVERIFY(!events.empty());
+        auto coverage = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(coverage.size()), 1);
+
+        // Twice as long as the file it replaces, so that a coverage reset
+        // to "the whole of this file" would show
+        QString error = m_window->doSwapSingingAudio(writeWav(tone(lowHz, 2.0)));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        Analyser *after = m_window->analyser2();
+        QVERIFY(after);
+        QVERIFY(after != before);
+        QCOMPARE(after->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(after->getLayer(Analyser::Notes), notes);
+        QCOMPARE(pitch->getModel(), pitchModel);
+        QCOMPARE(notes->getModel(), notesModel);
+        auto kept = pitchEvents(pitch);
+        QCOMPARE(kept.size(), events.size());
+        for (size_t i = 0; i < events.size(); ++i) {
+            QCOMPARE(kept[i].getFrame(), events[i].getFrame());
+            QCOMPARE(kept[i].getValue(), events[i].getValue());
+        }
+
+        // The new audio is the analyser's, and the old one is released
+        sv::ModelId newAudio = after->getMainModelId();
+        QVERIFY(newAudio != oldAudio);
+        auto wfm = sv::ModelById::getAs<sv::WaveFileModel>(newAudio);
+        QVERIFY(wfm);
+        QCOMPARE(wfm->getFrameCount(), sv::sv_frame_t(2.0 * rate));
+        QVERIFY2(!sv::ModelById::get(oldAudio),
+                 "the audio that was swapped out was not released");
+        QCOMPARE(layersOnModel(newAudio), 1);
+        QCOMPARE(m_window->paneStack()->getPaneCount(), panes);
+        QCOMPARE(m_window->paneStack()->getHiddenPaneCount(), 0);
+        auto playing = m_window->playSource()->getModels();
+        QVERIFY(!playing.count(oldAudio));
+        QVERIFY(playing.count(newAudio));
+        verifyPlaySourceClean();
+        if (QTest::currentTestFailed()) return;
+
+        // The two layers' models come from the new audio now: that is what
+        // let the new analyser claim them
+        QCOMPARE(sv::ModelById::get(pitchModel)->getSourceModel(), newAudio);
+        QCOMPARE(sv::ModelById::get(notesModel)->getSourceModel(), newAudio);
+
+        // Nothing was analysed, then or when the queued calls ran
+        QVERIFY(!sv::ModelTransformerFactory::getInstance()
+                ->haveRunningTransformers());
+        QCoreApplication::processEvents();
+        QCOMPARE(m_window->analyser2(), after);
+        QVERIFY(!sv::ModelTransformerFactory::getInstance()
+                ->haveRunningTransformers());
+        QCOMPARE(pitchEvents(pitch).size(), events.size());
+
+        // Colours, the toggles and the take's coverage as they were
+        QCOMPARE(colourOf(pitch), colourNamed("Orange"));
+        QCOMPARE(colourOf(notes), colourNamed("Bright Purple"));
+        QVERIFY(after->isVisible(Analyser::Audio));
+        QVERIFY(after->isVisible(Analyser::PitchTrack));
+        QVERIFY(after->isVisible(Analyser::Notes));
+        QVERIFY(after->isAudible(Analyser::Audio));
+        QVERIFY(m_window->playSingingAudioAction()->isChecked());
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0], coverage[0]);
+    }
+
+    // The swapped-in audio is what is heard afterwards, and the audio it
+    // replaced is not
+    void swap_plays_the_new_audio() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(TestSignals::sine(lowHz, rate,
+                                                 int(2 * rate), 0.5)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->loadSingingTrack
+            (writeWav(TestSignals::sine(highHz, rate, int(2 * rate), 0.5)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        QString error = m_window->doSwapSingingAudio
+            (writeWav(TestSignals::sine(swapHz, rate, int(2 * rate), 0.5)));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        m_window->seekTo(0);
+        m_window->doPlay();
+        QTest::qWait(1500);
+        m_window->doPlay();
+
+        auto output = m_window->fake()->getCapturedOutput();
+        long start = m_window->fake()->getPlayStartFrame();
+        QVERIFY2(start >= 0, "nothing was played");
+        size_t from = size_t(start) + size_t(0.3 * rate);
+        double swapped = amplitudeAt(output, from, 22050, swapHz);
+        double replaced = amplitudeAt(output, from, 22050, highHz);
+        QVERIFY2(swapped > 0.05,
+                 qPrintable(QString("the audio swapped in is not in the "
+                                    "output: amplitude %1").arg(swapped)));
+        QVERIFY2(replaced >= 0.0 && replaced < 0.005,
+                 qPrintable(QString("the audio swapped out is still in the "
+                                    "output, at amplitude %1 (the new audio "
+                                    "is at %2)").arg(replaced).arg(swapped)));
+    }
+
+    // Closing the session after a swap: the layers the released analyser
+    // used to own are deleted by the analyser that claimed them
+    void swap_then_close_session() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        sv::ModelId pitchModel = m_window->analyser2()
+            ->getLayer(Analyser::PitchTrack)->getModel();
+
+        QString error = m_window->doSwapSingingAudio(writeWav(tone(lowHz, 1.0)));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        sv::ModelId audio = m_window->analyser2()->getMainModelId();
+
+        m_window->doCloseSession();
+
+        QVERIFY(!m_window->analyser2());
+        QVERIFY2(!sv::ModelById::get(audio),
+                 "the swapped-in audio outlived the session");
+        QVERIFY2(!sv::ModelById::get(pitchModel),
+                 "the swapped-over pitch track outlived the session");
+        QCOMPARE(m_window->paneStack()->getPaneCount(), 0);
+        QCOMPARE(m_window->paneStack()->getHiddenPaneCount(), 0);
+        QCOMPARE(m_window->pendingExtraPaneCount(), 0);
+
+        // and the window still works
+        openReference(writeWav(tone(highHz, 1.0)));
+    }
+
+    // Recording again after a swap.  The layers the first analyser
+    // released are deleted while the one that claimed them is alive: what
+    // the next take does with them is not the released analyser's business
+    void swap_then_record_again() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        int panes = m_window->paneStack()->getPaneCount();
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QString first = m_window->takes()->getAudioPath();
+        QVERIFY(!first.isEmpty());
+
+        // Standing in for the file a splice will write in phase 4c
+        QString error = m_window->doSwapSingingAudio(writeWav(tone(lowHz, 2.0)));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+
+        m_window->seekTo(0);
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->analyser2());
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+        QVERIFY(m_window->takes()->getAudioPath() != first);
+        QVERIFY(!m_window->recordingLayer());
+        QCOMPARE(m_window->paneStack()->getPaneCount(), panes);
+        QCOMPARE(m_window->pendingExtraPaneCount(), 0);
+        verifyPlaySourceClean();
+    }
+
+    // The swap while pYIN is still running on the audio it replaces: the
+    // transforms are cancelled before any model changes hands.  A
+    // regression guard, a crash is the failure
+    void swap_during_analysis() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 4.0)));
+        QVERIFY2(sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(),
+                 "the race was not set up: no analysis was running when the "
+                 "swap started");
+        Analyser *before = m_window->analyser2();
+        QVERIFY(before);
+        sv::Layer *pitch = before->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = before->getLayer(Analyser::Notes);
+        QVERIFY(pitch && notes);
+        sv::ModelId oldAudio = before->getMainModelId();
+
+        QString error = m_window->doSwapSingingAudio(writeWav(tone(lowHz, 1.0)));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        // The transform threads are gone by the time the swap returns, so
+        // nothing writes into the pitch track any more -- whatever pYIN
+        // had got to is what stays.  (The factory only strikes a
+        // transformer off its list when the event loop next runs)
+        auto events = pitchEvents(pitch);
+        QTRY_VERIFY_WITH_TIMEOUT(!sv::ModelTransformerFactory::getInstance()
+                                 ->haveRunningTransformers(), 10000);
+        QTest::qWait(300);
+        QCOMPARE(pitchEvents(pitch).size(), events.size());
+
+        Analyser *after = m_window->analyser2();
+        QVERIFY(after);
+        QVERIFY(after != before);
+        QCOMPARE(after->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(after->getLayer(Analyser::Notes), notes);
+        QVERIFY2(!sv::ModelById::get(oldAudio),
+                 "the audio that was swapped out was not released");
+        QCoreApplication::processEvents();
+        verifyPlaySourceClean();
     }
 
     // Finding 7, the scenario itself: pitch candidates on the reference

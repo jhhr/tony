@@ -88,7 +88,15 @@ public:
     // Unlike fileClosed(), this actually cleans up the view and the document
     // model registry so no orphan layers or models remain.
     void removeAllLayers();
-		       
+
+    // Give up our layers without deleting the pitch and notes ones: they
+    // stay in the pane, with their events, for the analyser of another
+    // audio file to claim (see MainWindow::swapSingingAudio()).  Only the
+    // waveform layer goes, which releases the audio model it shows, and
+    // then fileClosed() as above.  This is for the singing analyser; the
+    // primary's spectrogram would be left in the pane as well.
+    void releaseLayers();
+
     void setIntelligentActions(bool);
 
     bool getDisplayFrequencyExtents(double &min, double &max);
@@ -300,6 +308,17 @@ protected:
     QString addVisualisations();
     QString addWaveform();
     QString addAnalyses();
+
+    // Claim the pitch and notes layers that are in the pane already and
+    // whose models come from our file model: the layers of a session just
+    // restored, or the ones another audio file has been swapped under.
+    // True only if both are there.  An odd one out is removed from the
+    // pane when removeMismatched is set (the caller is about to make the
+    // pair itself) and left alone otherwise.
+    bool claimExistingAnalyses(bool removeMismatched);
+
+    // Listen to the pitch and notes layers we have just claimed or made
+    void connectAnalysisLayers();
 
     void discardPitchCandidates();
     

@@ -164,6 +164,11 @@ Analyser::doAllAnalyses(bool withPitchTrack)
     if (withPitchTrack) {
         error = addAnalyses();
         if (error != "") return error;
+    } else {
+        // No analysis to run, but pitch and notes layers may be there for
+        // us all the same: a session restore with auto-analysis switched
+        // off, or another audio file swapped under the layers of a take
+        (void)claimExistingAnalyses(false);
     }
 
     loadState(Audio);
@@ -269,6 +274,35 @@ Analyser::removeAllLayers()
     }
 
     // fileClosed() clears the rest of the state (candidates, selection, etc.)
+    fileClosed();
+}
+
+void
+Analyser::releaseLayers()
+{
+    cerr << "Analyser::releaseLayers" << endl;
+
+    // Before any model is released: see cancelAnalyses().  This also has
+    // to happen before the pitch and notes models are given another
+    // source model, which is what the caller does next
+    cancelAnalyses();
+
+    // The candidates are of the audio that is going
+    discardPitchCandidates();
+
+    // Only the waveform goes.  Deleting it releases the audio model
+    // behind it, as nothing else holds a layer on it; the file stays on
+    // disk.  deleteLayer(force=true) and not removeLayerFromView, for the
+    // reasons set out in removeAllLayers()
+    if (Layer *audio = m_layers[Audio]) {
+        m_layers[Audio] = nullptr; // before deleteLayer fires the slot
+        if (m_document) m_document->deleteLayer(audio, true);
+    }
+
+    // The pitch and notes layers are simply forgotten: they stay in the
+    // pane with their events, and fileClosed() clears the rest of the
+    // state.  From here this analyser owns nothing, so deleting it -- or
+    // deleting a layer it used to own -- disturbs nobody
     fileClosed();
 }
 
@@ -487,56 +521,9 @@ Analyser::addAnalyses()
         return "Internal error: Analyser::addAnalyses() called with no model present";
     }
     
-    // As with the spectrogram above, if these layers exist we use
-    // them -- but only if their source model matches our file model.
-    // When two analysers share a pane (dual-track mode), each must
-    // claim only the layers it created, not those from the other
-    // analyser.
-    TimeValueLayer *existingPitch = 0;
-    FlexiNoteLayer *existingNotes = 0;
-    for (int i = 0; i < m_pane->getLayerCount(); ++i) {
-        if (!existingPitch) {
-            TimeValueLayer *tvl =
-                qobject_cast<TimeValueLayer *>(m_pane->getLayer(i));
-            if (tvl) {
-                // Accept this layer only if its source model is our
-                // file model (or a model derived from our file model).
-                auto model = ModelById::get(tvl->getModel());
-                if (model && (tvl->getModel() == m_fileModel ||
-                              model->getSourceModel() == m_fileModel)) {
-                    existingPitch = tvl;
-                }
-            }
-        }
-        if (!existingNotes) {
-            FlexiNoteLayer *fnl =
-                qobject_cast<FlexiNoteLayer *>(m_pane->getLayer(i));
-            if (fnl) {
-                auto model = ModelById::get(fnl->getModel());
-                if (model && (fnl->getModel() == m_fileModel ||
-                              model->getSourceModel() == m_fileModel)) {
-                    existingNotes = fnl;
-                }
-            }
-        }
-    }
-    if (existingPitch && existingNotes) {
-        cerr << "recording existing pitch and notes layers (matching our file model)" << endl;
-        m_layers[PitchTrack] = existingPitch;
-        m_layers[Notes] = existingNotes;
-        return "";
-    } else {
-        // Remove any mismatched layers we may have found for our model
-        // (partial state from a previous failed analysis run).
-        if (existingPitch) {
-            m_document->removeLayerFromView(m_pane, existingPitch);
-            m_layers[PitchTrack] = 0;
-        }
-        if (existingNotes) {
-            m_document->removeLayerFromView(m_pane, existingNotes);
-            m_layers[Notes] = 0;
-        }
-    }
+    // As with the spectrogram above, if these layers exist we use them
+    // rather than making another pair
+    if (claimExistingAnalyses(true)) return "";
 
     TransformFactory *tf = TransformFactory::getInstance();
     
@@ -668,10 +655,8 @@ Analyser::addAnalyses()
             params->setPlayPan(1);
             params->setPlayGain(0.5);
         }
-        connect(pitchLayer, SIGNAL(modelCompletionChanged(ModelId)),
-                this, SLOT(layerCompletionChanged(ModelId)));
     }
-    
+
     FlexiNoteLayer *flexiNoteLayer = 
         qobject_cast<FlexiNoteLayer *>(m_layers[Notes]);
     if (flexiNoteLayer) {
@@ -681,15 +666,95 @@ Analyser::addAnalyses()
             params->setPlayPan(1);
             params->setPlayGain(0.5);
         }
-        connect(flexiNoteLayer, SIGNAL(modelCompletionChanged(ModelId)),
-                this, SLOT(layerCompletionChanged(ModelId)));
-        connect(flexiNoteLayer, SIGNAL(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)),
-                this, SLOT(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)));
-        connect(flexiNoteLayer, SIGNAL(materialiseReAnalysis()),
-                this, SLOT(materialiseReAnalysis()));
     }
-    
+
+    connectAnalysisLayers();
+
     return "";
+}
+
+bool
+Analyser::claimExistingAnalyses(bool removeMismatched)
+{
+    // Accept a layer only if its source model is our file model (or the
+    // layer is on our file model itself).  When two analysers share a
+    // pane (dual-track mode), each must claim only its own layers, not
+    // those of the other analyser.
+    TimeValueLayer *existingPitch = 0;
+    FlexiNoteLayer *existingNotes = 0;
+    for (int i = 0; i < m_pane->getLayerCount(); ++i) {
+        if (!existingPitch) {
+            TimeValueLayer *tvl =
+                qobject_cast<TimeValueLayer *>(m_pane->getLayer(i));
+            if (tvl) {
+                auto model = ModelById::get(tvl->getModel());
+                if (model && (tvl->getModel() == m_fileModel ||
+                              model->getSourceModel() == m_fileModel)) {
+                    existingPitch = tvl;
+                }
+            }
+        }
+        if (!existingNotes) {
+            FlexiNoteLayer *fnl =
+                qobject_cast<FlexiNoteLayer *>(m_pane->getLayer(i));
+            if (fnl) {
+                auto model = ModelById::get(fnl->getModel());
+                if (model && (fnl->getModel() == m_fileModel ||
+                              model->getSourceModel() == m_fileModel)) {
+                    existingNotes = fnl;
+                }
+            }
+        }
+    }
+
+    if (existingPitch && existingNotes) {
+        cerr << "recording existing pitch and notes layers (matching our file model)" << endl;
+        m_layers[PitchTrack] = existingPitch;
+        m_layers[Notes] = existingNotes;
+        connectAnalysisLayers();
+        return true;
+    }
+
+    if (removeMismatched) {
+        // Half a pair is partial state from a previous failed analysis
+        // run, and the caller is about to make the pair itself
+        if (existingPitch) {
+            m_document->removeLayerFromView(m_pane, existingPitch);
+            m_layers[PitchTrack] = 0;
+        }
+        if (existingNotes) {
+            m_document->removeLayerFromView(m_pane, existingNotes);
+            m_layers[Notes] = 0;
+        }
+    }
+
+    return false;
+}
+
+void
+Analyser::connectAnalysisLayers()
+{
+    // Claimed layers need these as much as ones we made ourselves: the
+    // analyser they belonged to before is gone, and with it its
+    // connections.  Unique, because an analyser handed the same layers
+    // twice would otherwise hear each signal twice
+    if (auto pitchLayer = qobject_cast<TimeValueLayer *>(m_layers[PitchTrack])) {
+        connect(pitchLayer, SIGNAL(modelCompletionChanged(ModelId)),
+                this, SLOT(layerCompletionChanged(ModelId)),
+                Qt::UniqueConnection);
+    }
+
+    if (auto noteLayer = qobject_cast<FlexiNoteLayer *>(m_layers[Notes])) {
+        connect(noteLayer, SIGNAL(modelCompletionChanged(ModelId)),
+                this, SLOT(layerCompletionChanged(ModelId)),
+                Qt::UniqueConnection);
+        connect(noteLayer, SIGNAL(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)),
+                this, SLOT(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)),
+                Qt::UniqueConnection);
+        connect(noteLayer, SIGNAL(materialiseReAnalysis()),
+                this, SLOT(materialiseReAnalysis()),
+                Qt::UniqueConnection);
+    }
 }
 
 void

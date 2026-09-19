@@ -409,9 +409,9 @@ protected:
     virtual void setupToolbars();
 
     // Helpers for the singing / second-track workflow.
-    // deferAnalysis=true skips pYIN; no caller needs that since a take is
-    // spliced into a finished audio file before it is analysed, but the
-    // model swap of phase 4 will.
+    // deferAnalysis=true skips pYIN: swapSingingAudio() uses it, as the
+    // pitch and notes layers it hands the new analyser are analysed
+    // already.  The scan for existing layers still runs.
     virtual void setupSingingTrackAnalyser(sv::ModelId singingModelId,
                                            bool deferAnalysis = false);
     virtual void teardownSingingTrackAnalyser();
@@ -432,6 +432,22 @@ protected:
     // that plays alongside the reference track.
     void loadBackgroundMusic(QString path);
     void teardownBackgroundMusic();
+
+    // Put another audio file under the take's pitch and notes layers,
+    // keeping those layers and everything in them.  The new audio is not
+    // analysed: what the layers hold is the analysis of all of the take
+    // but the range that has just changed.  Returns "" on success, or a
+    // message for the user.  (Phase 4c: Stop splices the recording into
+    // the take's audio, swaps to the file that comes out and analyses
+    // only the range the splice wrote.)
+    QString swapSingingAudio(QString path);
+
+    // Open path as an additional audio model beside the reference, the
+    // way Load Singing Track does.  The new model's id comes back in
+    // modelId and the extra panes openPath() made in extraPanes; those
+    // are the caller's to prune, once a layer of its own holds the model
+    FileOpenStatus openSingingAudioFile(QString path, sv::ModelId &modelId,
+                                        std::vector<sv::Pane *> &extraPanes);
 
     // Remove an extra pane created by openAudio()/record() in
     // CreateAdditionalModel mode: delete the orphan layer(s) showing

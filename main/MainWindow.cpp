@@ -2276,12 +2276,10 @@ MainWindow::loadSingingTrack(QString path)
 
     emit activity(tr("Load singing track \"%1\"").arg(path));
 
-    // Record the pane count before opening so we can remove any extra panes
-    // that openPath(CreateAdditionalModel) creates via AddPaneCommand.
-    // We want both tracks to share pane 0, not appear in separate panes.
-    int paneCountBefore = m_paneStack ? m_paneStack->getPaneCount() : 0;
-
-    FileOpenStatus status = openPath(path, CreateAdditionalModel);
+    ModelId singingModelId;
+    std::vector<Pane *> extraPanes;
+    FileOpenStatus status =
+        openSingingAudioFile(path, singingModelId, extraPanes);
 
     if (status == FileOpenFailed) {
         QMessageBox::critical(this, tr("Failed to open singing track"),
@@ -2293,32 +2291,178 @@ MainWindow::loadSingingTrack(QString path)
         return;
     }
 
-    // modelAdded() fired synchronously inside openPath() and stored the new
-    // model's id in m_pendingSingingModelId.  Set up the secondary analyser
-    // NOW, before pruning the extra pane: the imported WaveformLayer in that
-    // pane is the only layer referencing the singing model, so deleting it
-    // first would make Document::releaseModel() free the model before it can
-    // be analysed.  Once m_analyser2's own WaveformLayer references the model
-    // the orphan can go.  This also clears m_pendingSingingModelId, so the
+    // Set up the secondary analyser NOW, before pruning the extra pane:
+    // the imported WaveformLayer in that pane is the only layer
+    // referencing the singing model, so deleting it first would make
+    // Document::releaseModel() free the model before it can be analysed.
+    // Once m_analyser2's own WaveformLayer references the model the orphan
+    // can go.  This also clears m_pendingSingingModelId, so the
     // analyseNewSingingModel() call queued by modelAdded() becomes a no-op.
-    ModelId singingModelId = m_pendingSingingModelId;
     analyseNewSingingModel();
 
-    // openPath(CreateAdditionalModel) will have called AddPaneCommand which
-    // added a new pane for the singing track's waveform layer.  We do NOT
-    // want that extra pane — both tracks must overlay pane 0.  Remove any
-    // panes above the original count (except the time-ruler pane at index 1
-    // which was already there).  We delete from the top down so that index
-    // arithmetic stays valid.  If the analyser setup above failed, nothing
-    // else references the singing model and pruning releases it, which is
-    // what we want.
+    // If the analyser setup above failed, nothing else references the
+    // singing model and pruning releases it, which is what we want.
+    for (Pane *extra : extraPanes) {
+        pruneExtraPane(extra, singingModelId);
+    }
+}
+
+MainWindow::FileOpenStatus
+MainWindow::openSingingAudioFile(QString path, sv::ModelId &modelId,
+                                 std::vector<Pane *> &extraPanes)
+{
+    // Record the pane count before opening so we can collect any extra
+    // panes that openPath(CreateAdditionalModel) creates via
+    // AddPaneCommand.  We want both tracks to share pane 0, not appear in
+    // separate panes.
+    int paneCountBefore = m_paneStack ? m_paneStack->getPaneCount() : 0;
+
+    FileOpenStatus status = openPath(path, CreateAdditionalModel);
+
+    // The extra pane holds the singing track's own imported waveform
+    // layer, which we do not want either.  It is not pruned here: that
+    // layer is the only reference to the new model until the caller has
+    // one of its own, and pruning releases a model nothing references.
+    // Collected from the top down, which is the order they are removed in
     if (m_paneStack) {
-        while (m_paneStack->getPaneCount() > paneCountBefore) {
-            Pane *extra = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
-            if (!extra) break;
-            pruneExtraPane(extra, singingModelId);
+        for (int i = m_paneStack->getPaneCount() - 1;
+             i >= paneCountBefore; --i) {
+            if (Pane *extra = m_paneStack->getPane(i)) {
+                extraPanes.push_back(extra);
+            }
         }
     }
+
+    // modelAdded() fired synchronously inside openPath() and stored the
+    // new model's id in m_pendingSingingModelId.  It is left there for
+    // analyseNewSingingModel() to take; a caller that sets its analyser up
+    // some other way has to clear it itself
+    modelId = m_pendingSingingModelId;
+
+    return status;
+}
+
+QString
+MainWindow::swapSingingAudio(QString path)
+{
+    // The audio of a take is written again from scratch whenever a
+    // recording is spliced into it or a part of it is erased.  Analysing
+    // the whole of it again would take as long as the song, so the pitch
+    // and notes layers stay as they are and the new file goes underneath
+    // them.
+    //
+    // What makes that possible: an Analyser claims a pitch or notes layer
+    // whose model has the analyser's own audio model as its source model.
+    // That is how a restored session's layers find their analyser; here we
+    // make it true of the new audio by hand and let the same scan do the
+    // rest.
+
+    if (!m_document) return tr("There is no session to swap the audio of");
+
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (!pane) return tr("There is no pane to swap the audio in");
+
+    if (!m_analyser2) {
+        return tr("There is no singing track to swap the audio of");
+    }
+
+    Layer *pitch = m_analyser2->getLayer(Analyser::PitchTrack);
+    Layer *notes = m_analyser2->getLayer(Analyser::Notes);
+    if (!pitch || !notes) {
+        return tr("The singing track has no pitch and notes layers to keep");
+    }
+
+    // What the swap must leave as it was.  The analyser of the new audio
+    // starts from the settings the two analysers share, which know
+    // nothing of what a take has done to these layers
+    const Analyser::Component components[] = {
+        Analyser::Audio, Analyser::PitchTrack, Analyser::Notes
+    };
+    const int componentCount = sizeof(components) / sizeof(components[0]);
+    bool visible[componentCount], audible[componentCount];
+    for (int i = 0; i < componentCount; ++i) {
+        visible[i] = m_analyser2->isVisible(components[i]);
+        audible[i] = m_analyser2->isAudible(components[i]);
+    }
+    Layer *selected = pane->getSelectedLayer();
+
+    // 1. The new audio, opened beside the reference as Load Singing Track
+    // does.  First, so that a file that cannot be read disturbs nothing
+    ModelId newAudio;
+    std::vector<Pane *> extraPanes;
+    FileOpenStatus status = openSingingAudioFile(path, newAudio, extraPanes);
+
+    if (status != FileOpenSucceeded || newAudio.isNone()) {
+        for (Pane *extra : extraPanes) pruneExtraPane(extra, newAudio);
+        return tr("The file \"%1\" could not be opened as audio").arg(path);
+    }
+
+    // Not the analysis we want: it would be of the whole file
+    m_pendingSingingModelId = {};
+
+    // 2. The old audio's waveform layer goes, and with it the old audio;
+    // the pitch and notes layers stay in the pane with their events.  The
+    // analyser has nothing left to lose by being deleted
+    m_analyser2->releaseLayers();
+    delete m_analyser2;
+    m_analyser2 = nullptr;
+
+    // 3. Those layers' models come from the new audio now.  Nothing reads
+    // their source model between the release above and here
+    for (ModelId id : { pitch->getModel(), notes->getModel() }) {
+        if (auto model = ModelById::get(id)) {
+            model->setSourceModel(newAudio);
+        }
+    }
+
+    // 4. An analyser for the new audio, which claims the two layers.  No
+    // analysis (deferAnalysis): the layers hold the analysis of all of the
+    // take but the range that has just changed, and the take's coverage is
+    // not "the whole of this file" either
+    bool wasRebuilding = m_rebuildingTakeAudio;
+    m_rebuildingTakeAudio = true;
+    setupSingingTrackAnalyser(newAudio, true);
+    m_rebuildingTakeAudio = wasRebuilding;
+
+    // 5. The orphan waveform in the extra pane can go, now that the
+    // analyser's own waveform layer holds the new audio.  If the setup
+    // failed it is released with the orphan, and the layers are left
+    // showing a take whose audio has gone
+    for (Pane *extra : extraPanes) pruneExtraPane(extra, newAudio);
+
+    if (!m_analyser2) {
+        return tr("The singing track could not be set up on \"%1\"").arg(path);
+    }
+
+    // 6. What the swap was not to change.  On the layers themselves:
+    // setVisible() and setAudible() write to the shared settings, and
+    // neither the muting of a take nor the pane's own stacking is the
+    // user's wish about the reference
+    for (int i = 0; i < componentCount; ++i) {
+        Layer *layer = m_analyser2->getLayer(components[i]);
+        if (!layer) continue;
+        layer->setLayerDormant(pane, !visible[i]);
+        if (auto params = layer->getPlayParameters()) {
+            params->setPlayAudible(audible[i]);
+        }
+    }
+    pane->layerParametersChanged();
+
+    // The selected layer is the top layer of the pane as well, which is
+    // where the editing tools look for the layer they act on
+    if (selected && selected != pane->getSelectedLayer()) {
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            if (pane->getLayer(i) == selected) {
+                m_paneStack->setCurrentLayer(pane, selected);
+                break;
+            }
+        }
+    }
+
+    updateLayerStatuses();
+    updateMenuStates();
+
+    return "";
 }
 
 void
@@ -2653,7 +2797,7 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     updateMenuStates();
 
     if (deferAnalysis) {
-        emit activity(tr("Recording singing track — analysis will run when recording stops"));
+        emit activity(tr("Singing track set up, with no analysis of its own"));
     } else {
         emit activity(tr("Singing track loaded and analysis started"));
     }
