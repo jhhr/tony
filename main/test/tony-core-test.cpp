@@ -16,6 +16,7 @@
 #include "TestLatencyShift.h"
 #include "TestCoverage.h"
 #include "TestTakeAudio.h"
+#include "TestTakeEvents.h"
 #include "TestSingingTakes.h"
 #include "TestTakeTiming.h"
 
@@ -68,6 +69,12 @@ int main(int argc, char *argv[])
 
     {
         TestTakeAudio t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeEvents t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

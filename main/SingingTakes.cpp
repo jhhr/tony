@@ -20,6 +20,8 @@
 #include <QDir>
 #include <QSettings>
 
+#include <algorithm>
+
 using namespace sv;
 
 SingingTakes::SingingTakes(QObject *parent) :
@@ -82,6 +84,43 @@ SingingTakes::spliceRecording(QString recordingPath,
     m_coverage.add(range.start, range.end);
 
     if (placed) *placed = range;
+    return "";
+}
+
+QString
+SingingTakes::eraseRanges(const Coverage::Ranges &ranges, QString directory,
+                          Coverage::Ranges *erased)
+{
+    if (erased) erased->clear();
+
+    // Only what holds singing can be erased.  Silence that was never
+    // recorded is not ours to rewrite, and a selection that runs past
+    // the end of the singing must not make the file any longer
+    Coverage wanted;
+    for (const Coverage::Range &r : ranges) {
+        for (const Coverage::Range &covered : m_coverage.getRanges()) {
+            wanted.add(std::max(r.start, covered.start),
+                       std::min(r.end, covered.end));
+        }
+    }
+    if (wanted.isEmpty()) return "";
+
+    QString outPath = nextAudioPath(directory);
+    if (outPath == "") {
+        return tr("Could not find a name to write the singing track under, "
+                  "in \"%1\"").arg(directory);
+    }
+
+    QString error = TakeAudio::erase(m_audioPath, wanted.getRanges(), outPath);
+    if (error != "") return error;
+
+    m_superseded.push_back(m_audioPath);
+    m_audioPath = outPath;
+    for (const Coverage::Range &r : wanted.getRanges()) {
+        m_coverage.remove(r.start, r.end);
+    }
+
+    if (erased) *erased = wanted.getRanges();
     return "";
 }
 

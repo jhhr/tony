@@ -85,6 +85,25 @@ public:
                             Coverage::Range *placed = nullptr);
 
     /**
+     * Write the next audio file of the take with the given ranges made
+     * silent.  The ranges are clipped to the take's coverage first:
+     * silence that was never recorded holds nothing to erase.  The file
+     * is written into directory, under a name that nothing else is
+     * using; it is as long as the file it came from.
+     *
+     * On success returns "" and the take's audio is the new file, with
+     * the erased ranges gone from its coverage and the file before
+     * remembered as superseded.  "erased", if it is not null, receives
+     * the ranges that were taken out: empty means that nothing of what
+     * was asked for held recorded singing, and nothing was done at all.
+     * On failure the take is exactly as it was and the return is a
+     * message for the user.
+     */
+    QString eraseRanges(const Coverage::Ranges &ranges,
+                        QString directory,
+                        Coverage::Ranges *erased = nullptr);
+
+    /**
      * The audio files of takes that later files have replaced during
      * this run.  They are kept until the session closes, for undo.
      */

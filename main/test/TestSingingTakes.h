@@ -246,6 +246,147 @@ private slots:
         QVERIFY(takes.getCoverage() == before);
     }
 
+    // Erasing from the middle of a recording: the file is as long as it
+    // was, silent where the range was, and the coverage is split in two
+    void erase_the_middle() {
+        SingingTakes takes;
+        QString recording = writeRecording(4000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 0, -1,
+                                      takeDirectory()).isEmpty());
+        QString before = takes.getAudioPath();
+
+        Coverage::Ranges erased;
+        QCOMPARE(takes.eraseRanges(Coverage::Ranges { Coverage::Range(1000, 2000) },
+                                   takeDirectory(), &erased), QString());
+
+        QCOMPARE(int(erased.size()), 1);
+        QCOMPARE(erased[0], Coverage::Range(1000, 2000));
+
+        QCOMPARE(int(takes.getCoverage().getRanges().size()), 2);
+        QCOMPARE(takes.getCoverage().getRanges()[0], Coverage::Range(0, 1000));
+        QCOMPARE(takes.getCoverage().getRanges()[1], Coverage::Range(2000, 4000));
+
+        QString path = takes.getAudioPath();
+        QVERIFY(path != before);
+        QCOMPARE(takes.getSupersededPaths(), QStringList { before });
+        QVERIFY2(QFileInfo::exists(before),
+                 "the file the take had before was not kept");
+
+        // As long as it was, and silent only where the erase went.  The
+        // samples looked at are clear of the 5 ms fades at the edges
+        QCOMPARE(framesIn(path), frame_t(4000));
+        QVERIFY(std::fabs(sampleAt(path, 500) - 0.5f) < 1e-3f);
+        QCOMPARE(sampleAt(path, 1500), 0.f);
+        QVERIFY(std::fabs(sampleAt(path, 3000) - 0.5f) < 1e-3f);
+    }
+
+    // Several ranges at once, out of order, and one of them trimming the
+    // end of the recording
+    void erase_several_ranges() {
+        SingingTakes takes;
+        QString recording = writeRecording(4000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 0, -1,
+                                      takeDirectory()).isEmpty());
+
+        Coverage::Ranges erased;
+        QCOMPARE(takes.eraseRanges(Coverage::Ranges { Coverage::Range(3000, 4000),
+                                                      Coverage::Range(1000, 2000) },
+                                   takeDirectory(), &erased), QString());
+
+        QCOMPARE(int(erased.size()), 2);
+        QCOMPARE(erased[0], Coverage::Range(1000, 2000));
+        QCOMPARE(erased[1], Coverage::Range(3000, 4000));
+
+        QCOMPARE(int(takes.getCoverage().getRanges().size()), 2);
+        QCOMPARE(takes.getCoverage().getRanges()[0], Coverage::Range(0, 1000));
+        QCOMPARE(takes.getCoverage().getRanges()[1], Coverage::Range(2000, 3000));
+
+        QString path = takes.getAudioPath();
+        QCOMPARE(framesIn(path), frame_t(4000));
+        QCOMPARE(sampleAt(path, 1500), 0.f);
+        QVERIFY(std::fabs(sampleAt(path, 2500) - 0.5f) < 1e-3f);
+        QCOMPARE(sampleAt(path, 3500), 0.f);
+    }
+
+    // What is asked for is clipped to the coverage: silence that was
+    // never recorded holds nothing to erase, and a selection running
+    // past the singing must not make the file any longer
+    void erase_is_clipped_to_the_coverage() {
+        SingingTakes takes;
+        QString recording = writeRecording(2000, 0.5f);
+        // coverage is [2000, 4000)
+        QVERIFY(takes.spliceRecording(recording, 0, 2000, -1,
+                                      takeDirectory()).isEmpty());
+
+        Coverage::Ranges erased;
+        QCOMPARE(takes.eraseRanges(Coverage::Ranges { Coverage::Range(0, 3000) },
+                                   takeDirectory(), &erased), QString());
+
+        QCOMPARE(int(erased.size()), 1);
+        QCOMPARE(erased[0], Coverage::Range(2000, 3000));
+        QCOMPARE(int(takes.getCoverage().getRanges().size()), 1);
+        QCOMPARE(takes.getCoverage().getRanges()[0], Coverage::Range(3000, 4000));
+        QCOMPARE(framesIn(takes.getAudioPath()), frame_t(4000));
+    }
+
+    // A selection with no recorded singing in it: nothing is written and
+    // nothing changes, and it is not an error
+    void erase_where_nothing_was_recorded() {
+        SingingTakes takes;
+        QString recording = writeRecording(1000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 1000, -1,
+                                      takeDirectory()).isEmpty());
+        QString path = takes.getAudioPath();
+        Coverage before = takes.getCoverage();
+
+        Coverage::Ranges erased { Coverage::Range(1, 2) };
+        QCOMPARE(takes.eraseRanges(Coverage::Ranges { Coverage::Range(0, 1000) },
+                                   takeDirectory(), &erased), QString());
+        QVERIFY(erased.empty());
+        QCOMPARE(takes.getAudioPath(), path);
+        QVERIFY(takes.getCoverage() == before);
+        QVERIFY(takes.getSupersededPaths().isEmpty());
+
+        // and no ranges at all
+        QCOMPARE(takes.eraseRanges(Coverage::Ranges {}, takeDirectory(),
+                                   &erased), QString());
+        QVERIFY(erased.empty());
+        QCOMPARE(takes.getAudioPath(), path);
+    }
+
+    // Erasing all there is: the take stays, with an audio file that is
+    // silent throughout and nothing covered
+    void erase_the_whole_take() {
+        SingingTakes takes;
+        QString recording = writeRecording(2000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 0, -1,
+                                      takeDirectory()).isEmpty());
+
+        QCOMPARE(takes.eraseRanges(Coverage::Ranges { Coverage::Range(0, 2000) },
+                                   takeDirectory()), QString());
+
+        QVERIFY(takes.haveTake());
+        QVERIFY(takes.getCoverage().isEmpty());
+        QCOMPARE(framesIn(takes.getAudioPath()), frame_t(2000));
+        QCOMPARE(sampleAt(takes.getAudioPath(), 1000), 0.f);
+    }
+
+    void erase_failure_leaves_the_take_alone() {
+        SingingTakes takes;
+        takes.setWholeFileTake(m_dir.filePath("not-a-file.wav"), 1000);
+        Coverage before = takes.getCoverage();
+
+        Coverage::Ranges erased { Coverage::Range(1, 2) };
+        QString error = takes.eraseRanges
+            (Coverage::Ranges { Coverage::Range(0, 500) }, takeDirectory(),
+             &erased);
+        QVERIFY(!error.isEmpty());
+        QVERIFY(erased.empty());
+        QCOMPARE(takes.getAudioPath(), m_dir.filePath("not-a-file.wav"));
+        QVERIFY(takes.getCoverage() == before);
+        QVERIFY(takes.getSupersededPaths().isEmpty());
+    }
+
     // The question before recording over something: asked inside the
     // covered ranges only, and not at all once the user has said so
     void overwrite_question() {
