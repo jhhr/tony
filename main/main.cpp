@@ -36,6 +36,7 @@
 #include <QSplashScreen>
 #include <QFileOpenEvent>
 #include <QDir>
+#include <QStyleHints>
 
 #include <iostream>
 #include <signal.h>
@@ -215,6 +216,14 @@ main(int argc, char **argv)
     svSystemSpecificInitialisation();
 
     TonyApplication application(argc, argv);
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    // Qt follows the system's dark app mode, but Tony's icons and
+    // several of its widgets are drawn in black for a light
+    // background and vanish on a dark one. Stay light whatever the
+    // system says.
+    QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
+#endif
 
     QApplication::setOrganizationName("sonic-visualiser");
     QApplication::setOrganizationDomain("sonicvisualiser.org");
