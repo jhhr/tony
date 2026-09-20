@@ -77,6 +77,9 @@ protected slots:
     virtual void openSingingTrack();
     virtual void openBackgroundMusic();
     virtual void analyseNewSingingModel();
+    // The same, for the singing track of a session being restored: the
+    // take's layers are handed to the new analyser first
+    virtual void analyseRestoredSingingModel();
     virtual void openLocation();
     virtual void openRecentFile();
     virtual void saveSession();
@@ -323,12 +326,33 @@ protected:
     // answer a dialog.  Returns true to go ahead with the recording.
     virtual bool confirmRecordingOverTake();
 
-    // Rebuild the singing track from the take's audio file, the way
-    // Load Singing Track does: the layers of the file before go, the new
-    // file is opened and analysed in full.  Returns true if a new
-    // analyser was set up.  (Phase 4 of the takes work replaces this
-    // with a model swap that keeps the pitch and notes layers.)
-    bool rebuildSingingTrackFromTake();
+    // Show and analyse the take's audio file after a recording has been
+    // spliced into it over the range "placed": the new file goes under
+    // the take's pitch and notes layers (swapSingingAudio(), or
+    // loadTakeAudio() and empty layers for the first recording of a
+    // take) and only "placed" is analysed, over the take's coverage.
+    // Returns true if an analysis is running that will say when it is
+    // done; a failure is reported to the user from here.
+    bool rebuildSingingTrackFromTake(const Coverage::Range &placed);
+
+    // Open the take's audio as the singing track with no analysis of its
+    // own, for a take that has no pitch and notes layers to keep.
+    // "" on success, else a message for the user
+    QString loadTakeAudio(QString path);
+
+    // Hand the take's pitch and notes layers, if they are in pane 0 and
+    // belong to no analyser, to the audio model about to be analysed:
+    // that link is what lets an Analyser claim them.  True if both were
+    // found and linked
+    bool adoptTakeLayers(sv::ModelId audio);
+
+    // Analyse [start, end) of the take's audio and merge the result into
+    // its pitch and notes, with the context limited to the coverage
+    // range the material sits in.  True if a run was started
+    bool startTakeAnalysis(sv::sv_frame_t start, sv::sv_frame_t end);
+
+    // Analyse all of the take's coverage again (Analyse Now, spec 7)
+    bool analyseTakeCoverage();
 
     // Keep the take's existing audio out of the mix while it is being
     // recorded into, and put it back afterwards
@@ -436,10 +460,9 @@ protected:
     // Put another audio file under the take's pitch and notes layers,
     // keeping those layers and everything in them.  The new audio is not
     // analysed: what the layers hold is the analysis of all of the take
-    // but the range that has just changed.  Returns "" on success, or a
-    // message for the user.  (Phase 4c: Stop splices the recording into
-    // the take's audio, swaps to the file that comes out and analyses
-    // only the range the splice wrote.)
+    // but the range that has just changed, which
+    // rebuildSingingTrackFromTake() analyses on its own.  Returns "" on
+    // success, or a message for the user.
     QString swapSingingAudio(QString path);
 
     // Open path as an additional audio model beside the reference, the
@@ -521,6 +544,14 @@ protected:
     // which the splice worked out — is not replaced by "the whole file",
     // as it is for a file the user loads or a session restores.
     bool        m_rebuildingTakeAudio;
+
+    // The range of the take that the ranged analysis now running was
+    // asked for; empty when none is running.  It is remembered here and
+    // not in the Analyser because the next recording replaces the
+    // analyser along with the audio, and the analysis it was running
+    // goes with it: the next one has to cover this range as well, or
+    // what the singer sang would be left unanalysed.
+    Coverage::Range m_takeAnalysisRange;
 
     // Round-trip hardware latency (output + input, in frames at the model
     // sample rate) stored when a singing-track recording is made with the

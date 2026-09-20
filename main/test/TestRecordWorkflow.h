@@ -39,11 +39,13 @@
 #include "layer/ColourDatabase.h"
 #include "layer/SingleColourLayer.h"
 #include "layer/TimeValueLayer.h"
+#include "layer/FlexiNoteLayer.h"
 #include "layer/WaveformLayer.h"
 #include "audio/AudioCallbackPlaySource.h"
 #include "audio/AudioCallbackRecordTarget.h"
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/SparseTimeValueModel.h"
+#include "data/model/NoteModel.h"
 #include "data/fileio/FileSource.h"
 #include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
@@ -89,6 +91,14 @@ public:
     QString doSwapSingingAudio(QString path) {
         return swapSingingAudio(path);
     }
+
+    // True between the start of the analysis of a recorded range and the
+    // merge of its result into the take's pitch and notes
+    bool analysingRange() {
+        return m_analyser2 && m_analyser2->isAnalysingRange();
+    }
+    sv::sv_frame_t analysedRangeStart() { return m_takeAnalysisRange.start; }
+    sv::sv_frame_t analysedRangeEnd() { return m_takeAnalysisRange.end; }
 
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
@@ -252,6 +262,7 @@ class TestRecordWorkflow : public QObject
         return a && a->getLayer(Analyser::PitchTrack) &&
             a->getLayer(Analyser::Notes) &&
             a->getInitialAnalysisCompletion() >= 100 &&
+            !a->isAnalysingRange() &&
             !sv::ModelTransformerFactory::getInstance()
             ->haveRunningTransformers();
     }
@@ -298,6 +309,13 @@ class TestRecordWorkflow : public QObject
     static sv::EventVector pitchEvents(Analyser *a) {
         return a ? pitchEvents(a->getLayer(Analyser::PitchTrack))
             : sv::EventVector();
+    }
+
+    static sv::EventVector noteEvents(sv::Layer *layer) {
+        if (!layer) return {};
+        auto model = sv::ModelById::getAs<sv::NoteModel>(layer->getModel());
+        if (!model) return {};
+        return model->getAllEvents();
     }
 
     static sv::EventVector eventsBetween(const sv::EventVector &events,
@@ -393,6 +411,18 @@ class TestRecordWorkflow : public QObject
         int n = 0;
         for (sv::Layer *layer : m_window->document()->getLayers()) {
             if (layer->getModel() == id) ++n;
+        }
+        return n;
+    }
+
+    // One for the reference and one for the take: a second pair for the
+    // take means its layers were analysed again instead of being claimed
+    int noteLayersInPane0() {
+        int n = 0;
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        if (!pane) return 0;
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            if (qobject_cast<sv::FlexiNoteLayer *>(pane->getLayer(i))) ++n;
         }
         return n;
     }
@@ -1179,6 +1209,184 @@ private slots:
                  "recordings");
     }
 
+    // Stop no longer analyses the whole of the take's audio: the new
+    // audio goes under the pitch and notes layers that are there and only
+    // the range the recording went into is analysed and merged into them.
+    // So a second take elsewhere leaves the first recording's events
+    // exactly as they were, in the very same layers and models.
+    void take_analyses_only_the_new_range() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(900);
+        if (QTest::currentTestFailed()) return;
+
+        Analyser *a2 = m_window->analyser2();
+        QVERIFY(a2);
+        sv::Layer *pitch = a2->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = a2->getLayer(Analyser::Notes);
+        QVERIFY(pitch && notes);
+        sv::ModelId pitchModel = pitch->getModel();
+        sv::ModelId notesModel = notes->getModel();
+        sv::ModelId audio = a2->getMainModelId();
+        auto before = pitchEvents(pitch);
+        auto notesBefore = noteEvents(notes);
+        QVERIFY(before.size() > 50);
+        QVERIFY(!notesBefore.empty());
+
+        // Two seconds on: further than the half second of context the
+        // analysis of the second recording takes for itself
+        const sv::sv_frame_t P = sv::sv_frame_t(2.5 * rate);
+        m_window->seekTo(P);
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        // The analysis of the take was not thrown away and run again: the
+        // layers, and the models under them, are the same objects
+        Analyser *after = m_window->analyser2();
+        QVERIFY(after);
+        QCOMPARE(after->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(after->getLayer(Analyser::Notes), notes);
+        QCOMPARE(pitch->getModel(), pitchModel);
+        QCOMPARE(notes->getModel(), notesModel);
+        QVERIFY2(after->getMainModelId() != audio,
+                 "the take's audio is not the file the splice wrote");
+        QVERIFY2(!sv::ModelById::get(audio),
+                 "the audio the take had before was not released");
+
+        // and every event before the second recording is the very same
+        // event, frame and value: nothing there was analysed again
+        auto keptPitch = eventsBetween(pitchEvents(pitch), 0, P);
+        auto wasPitch = eventsBetween(before, 0, P);
+        QCOMPARE(keptPitch.size(), wasPitch.size());
+        for (size_t i = 0; i < wasPitch.size(); ++i) {
+            QCOMPARE(keptPitch[i].getFrame(), wasPitch[i].getFrame());
+            QCOMPARE(keptPitch[i].getValue(), wasPitch[i].getValue());
+        }
+
+        auto keptNotes = eventsBetween(noteEvents(notes), 0, P);
+        auto wasNotes = eventsBetween(notesBefore, 0, P);
+        QCOMPARE(keptNotes.size(), wasNotes.size());
+        for (size_t i = 0; i < wasNotes.size(); ++i) {
+            QCOMPARE(keptNotes[i].getFrame(), wasNotes[i].getFrame());
+            QCOMPARE(keptNotes[i].getDuration(), wasNotes[i].getDuration());
+            QCOMPARE(keptNotes[i].getValue(), wasNotes[i].getValue());
+        }
+
+        // The second recording was analysed, and in the right place
+        QVERIFY(!eventsBetween(pitchEvents(pitch), P,
+                               P + sv::sv_frame_t(0.6 * rate)).empty());
+        QCOMPARE(m_window->analysedRangeStart(), P);
+        verifyPlaySourceClean();
+    }
+
+    // Recording again while the analysis of the range just recorded is
+    // still running. That analysis is lost -- the swap releases the models
+    // it was to be merged into -- so the analysis that follows has to
+    // cover both ranges, or the first recording would have no pitch track
+    // at all (the first recording of a take starts from empty models).
+    void take_analysis_covers_the_range_it_lost() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(900);
+
+        // Stop splices the recording in and starts the analysis of the
+        // range it went into there and then
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY2(m_window->analysingRange(),
+                 "the race was not set up: no range was being analysed when "
+                 "the second take started");
+        QCOMPARE(m_window->analysedRangeStart(), sv::sv_frame_t(0));
+        sv::sv_frame_t firstEnd = m_window->analysedRangeEnd();
+        QVERIFY(firstEnd > sv::sv_frame_t(0.7 * rate));
+
+        // A second take in a gap, recorded without letting the event
+        // loop run: the result of a ranged analysis is merged from a
+        // queued call, so the first one cannot have finished by the time
+        // this one stops, however quick the machine is. (The device
+        // records from a thread of its own, and the record target's ring
+        // buffer holds ten seconds.)
+        const sv::sv_frame_t P = sv::sv_frame_t(3.0 * rate);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QThread::msleep(250);
+        QVERIFY2(m_window->analysingRange(),
+                 "the first range's analysis finished before the second take "
+                 "stopped: something ran the event loop");
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+
+        // The analysis now running covers both recordings
+        QVERIFY(m_window->analysingRange());
+        QCOMPARE(m_window->analysedRangeStart(), sv::sv_frame_t(0));
+        QVERIFY(m_window->analysedRangeEnd() > P);
+
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY2(!eventsBetween(events, 0, firstEnd).empty(),
+                 "the first recording was left without a pitch track when "
+                 "the second one interrupted its analysis");
+        QVERIFY(!eventsBetween(events, P,
+                               P + sv::sv_frame_t(0.2 * rate)).empty());
+        verifyPlaySourceClean();
+    }
+
+    // The models the analysis of a recorded range is to be merged into,
+    // torn down while it is still running: by another singing track, and
+    // by the session going. A regression guard for the area this fork has
+    // crashed in before -- a crash is the failure.
+    void range_analysis_torn_down_while_running() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(900);
+        m_window->doRecord();
+        QVERIFY2(m_window->analysingRange(),
+                 "the race was not set up: nothing was being analysed after "
+                 "Stop");
+
+        // Another singing track over it
+        m_window->loadSingingTrack(writeWav(tone(lowHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        QVERIFY(!m_window->analysingRange());
+        verifyPlaySourceClean();
+        if (QTest::currentTestFailed()) return;
+
+        // and the same again, with the session closed under it
+        m_window->seekTo(0);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(700);
+        m_window->doRecord();
+        QVERIFY(m_window->analysingRange());
+
+        m_window->doCloseSession();
+        QVERIFY(!m_window->analyser2());
+        QVERIFY(!m_window->takes()->haveTake());
+        QCOMPARE(m_window->paneStack()->getPaneCount(), 0);
+        QCOMPARE(m_window->paneStack()->getHiddenPaneCount(), 0);
+        QTest::qWait(300);  // anything still queued arrives here
+
+        // and the window still works
+        openReference(writeWav(tone(highHz, 1.0)));
+    }
+
     // The question asked before recording over singing that is there, and
     // what the answer does. The dialog itself is not shown here:
     // TestMainWindow answers it (the real one has "Don't ask again").
@@ -1923,6 +2131,60 @@ private slots:
                  "the reference pitch track was replaced");
     }
 
+    // Analyse Now takes in the singing of the take as well (spec 7): all
+    // of its coverage is analysed again and merged into the pitch track
+    // and notes it has, which are not thrown away and made afresh
+    void analyse_now_reanalyses_the_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        const sv::sv_frame_t P = sv::sv_frame_t(2.0 * rate);
+        m_window->seekTo(P);
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+
+        Analyser *a2 = m_window->analyser2();
+        sv::Layer *pitch = a2->getLayer(Analyser::PitchTrack);
+        QVERIFY(pitch);
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (pitch->getModel());
+        QVERIFY(model);
+
+        // Emptied by hand, so that what comes back can only have come
+        // from the analysis Analyse Now asks for
+        for (const auto &e : model->getAllEvents()) model->remove(e);
+        QVERIFY(pitchEvents(pitch).empty());
+
+        m_window->doAnalyseNow();
+
+        // One run over the span of the coverage, not one per range
+        QVERIFY(m_window->analysingRange());
+        QCOMPARE(m_window->analysedRangeStart(), ranges[0].start);
+        QCOMPARE(m_window->analysedRangeEnd(), ranges[1].end);
+
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(noteLayersInPane0(), 2);
+
+        auto events = pitchEvents(pitch);
+        QVERIFY2(!eventsBetween(events, ranges[0].start, ranges[0].end).empty(),
+                 "the first range of the coverage was not analysed again");
+        QVERIFY2(!eventsBetween(events, ranges[1].start, ranges[1].end).empty(),
+                 "the second range of the coverage was not analysed again");
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(events), highHz)) < 10.0);
+    }
+
     void load_singing_track() {
         makeWindow(FakeAudioIO::Config());
         openReference(writeWav(tone(lowHz, 1.0)));
@@ -2406,6 +2668,7 @@ private slots:
         auto before = pitchEvents(m_window->analyser2());
         QVERIFY(!before.empty());
         sv::sv_frame_t firstEventBefore = before.front().getFrame();
+        QCOMPARE(noteLayersInPane0(), 2);
 
         QString session = m_dir.filePath("round-trip.ton");
         QVERIFY(m_window->saveSessionFile(session));
@@ -2435,7 +2698,13 @@ private slots:
         QVERIFY(wave);
         QCOMPARE(wave->getStartFrame(), sv::sv_frame_t(0));
 
+        // The take's layers were restored and claimed, not analysed
+        // again: a re-analysis would have left the restored pair in the
+        // pane and put a second one beside it
+        QCOMPARE(noteLayersInPane0(), 2);
+
         auto after = pitchEvents(a2);
+        QCOMPARE(after.size(), before.size());
         QVERIFY(!after.empty());
         QVERIFY2(std::llabs(after.front().getFrame() - firstEventBefore) <=
                  2 * hop,

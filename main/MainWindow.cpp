@@ -98,6 +98,7 @@
 #include <QRegularExpression>
 #include <QTimer>
 
+#include <algorithm>
 #include <iostream>
 #include <cstdio>
 #include <cmath>
@@ -2182,6 +2183,7 @@ MainWindow::closeSession()
     m_takePosition = 0;
     m_takePreRoll = 0;
     m_takeEnd = -1;
+    m_takeAnalysisRange = Coverage::Range();
 
     m_analyser->fileClosed();
 
@@ -2476,6 +2478,22 @@ MainWindow::analyseNewSingingModel()
     m_pendingSingingModelId = {};
 
     setupSingingTrackAnalyser(singingModelId);
+}
+
+void
+MainWindow::analyseRestoredSingingModel()
+{
+    // The queued call from modelAdded(), which is how the singing track
+    // of a session being restored arrives: loadSingingTrack() and the
+    // take's own paths have set their analyser up synchronously by now
+    // and left nothing pending.  A take that has been recorded into has
+    // pitch and notes layers in the pane that belong to no analyser, and
+    // the one about to be made is to claim them rather than analyse all
+    // of the file again
+    if (m_pendingSingingModelId.isNone()) return;
+
+    adoptTakeLayers(m_pendingSingingModelId);
+    analyseNewSingingModel();
 }
 
 void
@@ -3737,12 +3755,10 @@ MainWindow::finishSingingTake()
     // The take has stopped, and what the device recorded is raw material:
     // it goes into the take's audio file at the position the take was
     // started from, with the latency and the lead-in taken off its front,
-    // and the singing track is then rebuilt from the file that comes out.
-    //
-    // (Rebuilt means analysed in full, as a singing track loaded from a
-    // file is.  Phase 4 of the takes work puts the new audio under the
-    // pitch and notes layers that are there and analyses only the range
-    // that changed, which is what makes this quick on a long song.)
+    // and the singing track is then shown and analysed from the file that
+    // comes out -- the new audio under the pitch and notes layers that
+    // are there, with only the range that changed analysed, which is what
+    // makes this quick on a long song.
 
     stopTakePolling();
     refineRecordingLatency();
@@ -3825,26 +3841,210 @@ MainWindow::finishSingingTake()
          << placed.start << "," << placed.end << ") of "
          << m_takes->getAudioPath() << endl;
 
-    bool rebuilt = rebuildSingingTrackFromTake();
+    bool analysing = rebuildSingingTrackFromTake(placed);
 
     // The dots stay until the analysis that replaces them is done
-    recordingFinishedFull(rebuilt ? m_analyser2 : nullptr);
+    recordingFinishedFull(analysing ? m_analyser2 : nullptr);
 }
 
 bool
-MainWindow::rebuildSingingTrackFromTake()
+MainWindow::rebuildSingingTrackFromTake(const Coverage::Range &placed)
 {
     if (!m_takes->haveTake()) return false;
 
-    Analyser *before = m_analyser2;
+    // What the analysis that follows has to cover: the range the splice
+    // has just written, and any range whose analysis is still running.
+    // That one's result is lost -- the swap below releases the models it
+    // is being written into, and its analyser with them -- so it is
+    // analysed again rather than left half done
+    Coverage::Range analyse = placed;
+    if (m_analyser2 && m_analyser2->isAnalysingRange() &&
+        m_takeAnalysisRange.length() > 0) {
+        analyse.start = std::min(analyse.start, m_takeAnalysisRange.start);
+        analyse.end = std::max(analyse.end, m_takeAnalysisRange.end);
+    }
+    m_takeAnalysisRange = Coverage::Range();
 
-    // The same path as File -> Load Singing Track, but the coverage of
-    // this file is the one the splice worked out, not "all of it"
+    QString path = m_takes->getAudioPath();
+
+    // A take with pitch and notes on show keeps them: the new audio goes
+    // underneath, and only the range that changed is analysed.  The
+    // first recording of a take has neither, so its audio is opened as a
+    // singing track with no analysis of its own and given empty ones
+    bool haveLayers = m_analyser2 &&
+        m_analyser2->getLayer(Analyser::PitchTrack) &&
+        m_analyser2->getLayer(Analyser::Notes);
+
+    QString error = (haveLayers ? swapSingingAudio(path)
+                     : loadTakeAudio(path));
+
+    if (error == "" && m_analyser2) {
+        error = m_analyser2->addEmptyAnalyses();
+    }
+
+    if (error != "") {
+        // The recording is in the take's audio file and the take's
+        // coverage says so, but the screen does not: say so rather than
+        // leave the two quietly disagreeing
+        QMessageBox::warning
+            (this,
+             tr("Failed to show the recording"),
+             tr("<b>The recording was added to the singing track, but it "
+                "could not be shown</b><p>%1</p><p>What is on screen is the "
+                "singing track as it was. The recording is in the take's "
+                "audio file, \"%2\".</p>").arg(error).arg(path),
+             QMessageBox::Ok);
+        return false;
+    }
+
+    return startTakeAnalysis(analyse.start, analyse.end);
+}
+
+QString
+MainWindow::loadTakeAudio(QString path)
+{
+    // The take's audio, opened and shown with no analysis of its own:
+    // what is analysed is the range a recording has just gone into, and
+    // the pitch and notes of the rest of the take are either in the pane
+    // already or about to be made empty.  swapSingingAudio() is this for
+    // a take that has its layers; the two are the same but for the
+    // handing over
+    ModelId audio;
+    std::vector<Pane *> extraPanes;
+    FileOpenStatus status = openSingingAudioFile(path, audio, extraPanes);
+
+    if (status != FileOpenSucceeded || audio.isNone()) {
+        for (Pane *extra : extraPanes) pruneExtraPane(extra, audio);
+        return tr("The file \"%1\" could not be opened as audio").arg(path);
+    }
+
+    // Not the analysis we want: it would be of the whole file
+    m_pendingSingingModelId = {};
+
+    // Layers of the take that no analyser owns are handed to the one
+    // about to be made, as after a session restore
+    adoptTakeLayers(audio);
+
+    // m_rebuildingTakeAudio: the coverage of this file is the one the
+    // splice worked out, not "the whole of it"
+    bool wasRebuilding = m_rebuildingTakeAudio;
     m_rebuildingTakeAudio = true;
-    loadSingingTrack(m_takes->getAudioPath());
-    m_rebuildingTakeAudio = false;
+    setupSingingTrackAnalyser(audio, true);
+    m_rebuildingTakeAudio = wasRebuilding;
 
-    return (m_analyser2 != nullptr && m_analyser2 != before);
+    // The orphan waveform in the extra pane can go now that the
+    // analyser's own waveform layer holds the audio
+    for (Pane *extra : extraPanes) pruneExtraPane(extra, audio);
+
+    if (!m_analyser2) {
+        return tr("The singing track could not be set up on \"%1\"").arg(path);
+    }
+
+    return "";
+}
+
+bool
+MainWindow::adoptTakeLayers(ModelId audio)
+{
+    // An analyser claims a pitch or notes layer whose model has the
+    // analyser's own audio model as its source model
+    // (Analyser::claimExistingAnalyses()).  The layers of a take that
+    // has had audio swapped under it have no such link: the model they
+    // were derived from is long gone, and a session file keeps them as
+    // ordinary layers.  So the link is made here, for the layers in the
+    // pane that no analyser owns, just before the analyser that is to
+    // claim them is made.
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (!pane || audio.isNone()) return false;
+
+    TimeValueLayer *pitch = nullptr;
+    FlexiNoteLayer *notes = nullptr;
+
+    for (int i = 0; i < pane->getLayerCount(); ++i) {
+
+        Layer *layer = pane->getLayer(i);
+
+        // Ours, and not a take's: the live dots of a take being
+        // recorded, and the reference's pitch track moved by octaves
+        if (layer == m_realtimePitchLayer) continue;
+        if (m_alternatePitch && layer == m_alternatePitch->getLayer()) continue;
+
+        auto model = ModelById::get(layer->getModel());
+        if (!model) continue;
+
+        // A layer whose source model is still there has an analyser of
+        // its own: the reference's pitch, notes and candidates, or a
+        // take whose audio has not been swapped since it was analysed
+        if (ModelById::get(model->getSourceModel())) continue;
+
+        if (!pitch) pitch = qobject_cast<TimeValueLayer *>(layer);
+        if (!notes) notes = qobject_cast<FlexiNoteLayer *>(layer);
+    }
+
+    // Half a pair is no use: the analyser claims both or neither
+    if (!pitch || !notes) return false;
+
+    cerr << "MainWindow::adoptTakeLayers: the take's pitch and notes layers "
+         << "come from model " << audio << " now" << endl;
+
+    for (ModelId id : { pitch->getModel(), notes->getModel() }) {
+        if (auto model = ModelById::get(id)) {
+            model->setSourceModel(audio);
+        }
+    }
+
+    return true;
+}
+
+bool
+MainWindow::startTakeAnalysis(sv_frame_t start, sv_frame_t end)
+{
+    if (!m_analyser2 || end <= start) return false;
+
+    // How far the analysis may reach for the context it needs: as far as
+    // the material the take has, and no further.  The margin may run
+    // into silence that has been recorded over, but silence that was
+    // never recorded tells pYIN nothing and is not ours to analyse
+    const Coverage &coverage = m_takes->getCoverage();
+    sv_frame_t clipStart = start, clipEnd = end;
+    Coverage::Range at;
+    if (coverage.getRangeAt(start, at)) clipStart = at.start;
+    if (coverage.getRangeAt(end - 1, at)) clipEnd = at.end;
+
+    QString error = m_analyser2->analyseRange(start, end, clipStart, clipEnd);
+
+    if (error != "") {
+        QMessageBox::warning
+            (this,
+             tr("Failed to analyse the recording"),
+             tr("<b>The singing could not be analysed</b><p>%1</p>").arg(error),
+             QMessageBox::Ok);
+        return false;
+    }
+
+    // A range short enough to have been analysed and merged before the
+    // call returned leaves nothing to wait for
+    if (!m_analyser2->isAnalysingRange()) return false;
+
+    m_takeAnalysisRange = Coverage::Range(start, end);
+    return true;
+}
+
+bool
+MainWindow::analyseTakeCoverage()
+{
+    // Analyse Now takes in the singing of the take as well (spec 7): all
+    // of its coverage is analysed again and merged into its pitch and
+    // notes.  One run from the first range to the last, not one run per
+    // range: only one ranged analysis can be running at a time, and pYIN
+    // over the silence between two ranges costs less than a queue of
+    // runs would.
+    if (!m_analyser2 || !m_takes->haveTake()) return false;
+
+    const Coverage::Ranges &ranges = m_takes->getCoverage().getRanges();
+    if (ranges.empty()) return false;
+
+    return startTakeAnalysis(ranges.front().start, ranges.back().end);
 }
 
 bool
@@ -5127,9 +5327,11 @@ MainWindow::modelAdded(ModelId model)
                 // take's own audio, or one the user chose.
                 // loadSingingTrack() runs the analysis itself as soon as
                 // openPath() returns (it has to happen before the extra
-                // pane is pruned); this deferred call is the fallback for
-                // any other route that adds a model.
-                QTimer::singleShot(0, this, SLOT(analyseNewSingingModel()));
+                // pane is pruned); this deferred call is what sets up the
+                // singing track of a session being restored, and the
+                // fallback for any other route that adds a model.
+                QTimer::singleShot
+                    (0, this, SLOT(analyseRestoredSingingModel()));
             } else {
                 cerr << "modelAdded: m_pendingSingingModelId already set, ignoring model "
                      << model << endl;
@@ -5196,6 +5398,9 @@ MainWindow::analyseNow()
     QString error = m_analyser->analyseExistingFile();
 
     CommandHistory::getInstance()->endCompoundOperation();
+
+    // The singing of a take is analysed again too, over its coverage
+    analyseTakeCoverage();
 
     if (error != "") {
         QMessageBox::warning
@@ -5347,6 +5552,11 @@ MainWindow::analyseNewMainModel()
             // Defer so that the primary analyser's layers are fully in place
             // before the secondary analyser tries to share the same pane.
             QTimer::singleShot(0, this, [this, foundSinging]() {
+                // A take recorded into is saved with pitch and notes
+                // layers that belong to no analyser (the model they were
+                // derived from went with the swap that put this audio
+                // under them): they are this analyser's to claim
+                adoptTakeLayers(foundSinging);
                 setupSingingTrackAnalyser(foundSinging);
             });
         }
