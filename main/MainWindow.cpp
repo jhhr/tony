@@ -27,6 +27,8 @@
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
 
+#include <bqaudioio/AudioFactory.h>
+
 #include "view/Pane.h"
 #include "view/PaneStack.h"
 #include "data/model/WaveFileModel.h"
@@ -171,6 +173,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recentFilesMenu(0), 
     m_rightButtonMenu(0),
     m_rightButtonPlaybackMenu(0),
+    m_audioDeviceMenu(0),
+    m_audioDeviceGroup(0),
+    m_audioInputDeviceMenu(0),
+    m_audioInputDeviceGroup(0),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -1264,6 +1270,176 @@ MainWindow::setupRecentFilesMenu()
     }
 }
 
+namespace {
+
+// The audio-device preference keys that MainWindowBase::createAudioIO()
+// reads. The key is suffixed with the preferred driver when one has been
+// pinned, so that a device name chosen for (say) JACK is not then offered
+// to PortAudio.
+static QString
+audioDeviceSettingKey(QString base)
+{
+    QSettings settings;
+    settings.beginGroup("Preferences");
+    QString implementation = settings.value("audio-target", "").toString();
+    settings.endGroup();
+    if (implementation == "" || implementation == "auto") return base;
+    return base + "-" + implementation;
+}
+
+// Which bqaudioio implementation the device names should come from. The
+// factory can only enumerate devices for a named implementation, so when
+// the driver is left on "auto" we ask the only one that was built in --
+// which on Windows and macOS is always PortAudio.
+static std::string
+audioImplementationName()
+{
+    QSettings settings;
+    settings.beginGroup("Preferences");
+    QString implementation = settings.value("audio-target", "").toString();
+    settings.endGroup();
+
+    if (implementation != "" && implementation != "auto") {
+        return implementation.toStdString();
+    }
+
+    std::vector<std::string> available =
+        breakfastquay::AudioFactory::getImplementationNames();
+    if (available.size() == 1) return available[0];
+    return {};
+}
+
+}
+
+void
+MainWindow::buildAudioDeviceMenu(QMenu *menu,
+                                 QActionGroup *group,
+                                 const std::vector<std::string> &names,
+                                 QString settingKey)
+{
+    QSettings settings;
+    settings.beginGroup("Preferences");
+    QString current = settings.value(settingKey, "").toString();
+    settings.endGroup();
+
+    for (QAction *a: group->actions()) {
+        group->removeAction(a);
+    }
+    menu->clear();
+
+    QAction *defaultAction = menu->addAction(tr("(System Default)"));
+    defaultAction->setCheckable(true);
+    defaultAction->setData(QString());
+    defaultAction->setChecked(current == "");
+    group->addAction(defaultAction);
+
+    if (names.empty()) {
+        menu->addSeparator();
+        menu->addAction(tr("(No devices found)"))->setEnabled(false);
+        return;
+    }
+
+    menu->addSeparator();
+
+    bool haveCurrent = false;
+
+    for (const std::string &name: names) {
+        QString qname = QString::fromStdString(name);
+        QAction *action = menu->addAction(qname);
+        action->setCheckable(true);
+        action->setData(qname);
+        if (qname == current) {
+            action->setChecked(true);
+            haveCurrent = true;
+        }
+        group->addAction(action);
+    }
+
+    if (current != "" && !haveCurrent) {
+        // The chosen device has gone away. Show it anyway, marked as
+        // absent, rather than silently reverting the tick to the system
+        // default -- the setting is still in force and will take effect
+        // again when the device comes back.
+        menu->addSeparator();
+        QAction *missing = menu->addAction
+            (tr("%1 (not connected)").arg(current));
+        missing->setCheckable(true);
+        missing->setChecked(true);
+        missing->setData(current);
+        group->addAction(missing);
+    }
+}
+
+void
+MainWindow::rescanAudioDevices()
+{
+    if (!m_audioDeviceMenu || !m_audioInputDeviceMenu) return;
+
+    // PortAudio enumerates the system's devices once, when it is
+    // initialised, and bqaudioio keeps it initialised for as long as an
+    // audio IO object exists. So a device that appeared after Tony started
+    // -- a Bluetooth speaker connected mid-session, typically -- is not in
+    // the list at all until the IO is torn down and rebuilt. Do that here,
+    // around the enumeration, so that opening either of these menus always
+    // shows what is actually connected now.
+    //
+    // Deleting the IO mid-recording would drop the take, so in that case
+    // leave the list as it stands. With no IO open there is nothing to
+    // tear down: the enumeration below initialises PortAudio itself and so
+    // gets a current list anyway.
+    bool canRebuild = (m_playTarget || m_audioIO) &&
+        !(m_recordTarget && m_recordTarget->isRecording());
+
+    if (canRebuild) {
+        if (m_playSource && m_playSource->isPlaying()) {
+            stop();
+        }
+        deleteAudioIO();
+    }
+
+    std::string implementation = audioImplementationName();
+
+    std::vector<std::string> playbackNames =
+        breakfastquay::AudioFactory::getPlaybackDeviceNames(implementation);
+    std::vector<std::string> recordNames =
+        breakfastquay::AudioFactory::getRecordDeviceNames(implementation);
+
+    if (canRebuild) {
+        createAudioIO();
+    }
+
+    buildAudioDeviceMenu(m_audioDeviceMenu,
+                         m_audioDeviceGroup,
+                         playbackNames,
+                         audioDeviceSettingKey("audio-playback-device"));
+
+    buildAudioDeviceMenu(m_audioInputDeviceMenu,
+                         m_audioInputDeviceGroup,
+                         recordNames,
+                         audioDeviceSettingKey("audio-record-device"));
+}
+
+void
+MainWindow::audioDeviceSelected(QAction *action)
+{
+    if (!action) return;
+
+    QString key = audioDeviceSettingKey
+        (m_audioInputDeviceGroup->actions().contains(action) ?
+         "audio-record-device" : "audio-playback-device");
+
+    QSettings settings;
+    settings.beginGroup("Preferences");
+    settings.setValue(key, action->data().toString());
+    settings.endGroup();
+
+    if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+
+    recreateAudioIO();
+}
+
 void
 MainWindow::setupToolbars()
 {
@@ -1434,6 +1610,30 @@ MainWindow::setupToolbars()
     menu->addAction(selectOneRightAction);
     menu->addSeparator();
     menu->addAction(recordAction);
+    menu->addSeparator();
+
+    m_audioDeviceMenu = menu->addMenu(tr("Audio Output &Device"));
+    m_audioDeviceMenu->setStatusTip(tr("Choose which device Tony plays through"));
+    m_audioDeviceGroup = new QActionGroup(this);
+    m_audioDeviceGroup->setExclusive(true);
+
+    m_audioInputDeviceMenu = menu->addMenu(tr("Audio &Input Device"));
+    m_audioInputDeviceMenu->setStatusTip(tr("Choose which device Tony records from"));
+    m_audioInputDeviceGroup = new QActionGroup(this);
+    m_audioInputDeviceGroup->setExclusive(true);
+
+    for (QMenu *m: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        connect(m, SIGNAL(aboutToShow()), this, SLOT(rescanAudioDevices()));
+        // Placeholder so that the submenu is not empty: an empty submenu is
+        // drawn disabled and never emits aboutToShow, which is where the
+        // real device list is built.
+        m->addAction(tr("(Scanning...)"))->setEnabled(false);
+    }
+
+    for (QActionGroup *g: { m_audioDeviceGroup, m_audioInputDeviceGroup }) {
+        connect(g, SIGNAL(triggered(QAction *)),
+                this, SLOT(audioDeviceSelected(QAction *)));
+    }
     menu->addSeparator();
 
     m_rightButtonPlaybackMenu->addAction(playAction);

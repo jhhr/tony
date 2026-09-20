@@ -26,12 +26,14 @@
 #include "TakeTiming.h"
 
 #include <vector>
+#include <string>
 #include <atomic>
 
 #include "data/model/SparseTimeValueModel.h"
 
 class QTimer;
 class QComboBox;
+class QActionGroup;
 
 namespace sv {
 class VersionTester;
@@ -250,6 +252,9 @@ protected slots:
     virtual void layerPropertiesRightButtonMenuRequested(sv::Pane *, sv::Layer *, QPoint point);
 
     virtual void setupRecentFilesMenu();
+
+    virtual void rescanAudioDevices();
+    virtual void audioDeviceSelected(QAction *);
 
     virtual void handleOSCMessage(const sv::OSCMessage &);
 
@@ -619,6 +624,10 @@ protected:
     QMenu         *m_recentFilesMenu;
     QMenu         *m_rightButtonMenu;
     QMenu         *m_rightButtonPlaybackMenu;
+    QMenu         *m_audioDeviceMenu;
+    QActionGroup  *m_audioDeviceGroup;
+    QMenu         *m_audioInputDeviceMenu;
+    QActionGroup  *m_audioInputDeviceGroup;
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;
@@ -669,6 +678,10 @@ protected:
     virtual void setupAnalysisMenu();
     virtual void setupHelpMenu();
     virtual void setupToolbars();
+    virtual void buildAudioDeviceMenu(QMenu *menu,
+                                      QActionGroup *group,
+                                      const std::vector<std::string> &names,
+                                      QString settingKey);
 
     // Helpers for the singing / second-track workflow.
     // deferAnalysis=true skips pYIN: swapSingingAudio() uses it, as the
