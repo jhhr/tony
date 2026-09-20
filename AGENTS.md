@@ -51,9 +51,7 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 - A test name on the command line goes to **every** suite in the executable; the suites
   that lack it fail, so the exit status is only meaningful for a run with no names.
 - Run named tests while working; run **both whole suites** before calling anything done.
-- From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`. Its
-  300 s timeout for `tony-app` is nearly used up; a "timeout" there is not a test failure
-  ([docs/testing.md](docs/testing.md)).
+- From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
 - Give the app suite a tool timeout of 10 minutes.
 
 ## Rules for working here

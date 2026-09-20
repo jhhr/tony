@@ -10,10 +10,10 @@ QtTest suites in `main/test/`, in two executables that mirror the two libraries
 
 `meson test` / `build.bat test` runs both plus four svcore suites.
 
-- **The `tony-app` meson test has `timeout: 300` and the suite takes about 277 s unloaded.**
-  A few more real-time tests, or a busy machine, and `meson test` reports a timeout although
-  every test passes. Raise the timeout in `meson.build` when adding workflow tests. Running
-  the executable by hand has no timeout.
+- The `tony-app` meson test has `timeout: 900`; the suite took about 277 s unloaded when
+  that was set. Every workflow test adds real time, so if the suite comes near it, raise it
+  in `meson.build`: `meson test` reports a timeout even when every test passes. Running the
+  executable by hand has no timeout.
 - `main()` of the app suite replaces `VAMP_PATH` with the executable's directory, so an
   installed pYIN is never the one tested; the meson test `depends:` on `pyin_plugin`
   because nothing else builds `pyin.dll`. Build `pyin.dll` too when running by hand after
