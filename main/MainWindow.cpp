@@ -145,6 +145,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_alternatePitchUpAction(nullptr),
     m_alternatePitchDownAction(nullptr),
     m_referencePitchHiddenForTake(false),
+    m_singingPitchHiddenForTake(false),
+    m_singingNotesHiddenForTake(false),
     m_takes(nullptr),
     m_coverageStrip(nullptr),
     m_takesMenu(nullptr),
@@ -2541,6 +2543,8 @@ MainWindow::closeSession()
     m_alternatePitch->hide();
     m_coverageStrip->hide();
     m_referencePitchHiddenForTake = false;
+    m_singingPitchHiddenForTake = false;
+    m_singingNotesHiddenForTake = false;
     m_pendingSingingModelId = {};
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
@@ -3207,6 +3211,40 @@ MainWindow::updateAlternatePitchForTake()
 }
 
 void
+MainWindow::updateSingingTrackForTake()
+{
+    // The singing that is already there is drawn over the same part of
+    // the pane as what is being sung now, and its pitch in the same
+    // orange as the live dots: during a take the singer cannot tell the
+    // one from the other, and neither helps them follow the track they
+    // are singing to.  So the stored pitch and notes make way, and come
+    // back when the take stops.  Not with Analyser::setVisible(), which
+    // would write the state to the settings the reference shares.
+    bool inTake = (m_recordingAsSingingTrack &&
+                   m_recordTarget && m_recordTarget->isRecording());
+
+    Pane *pane = m_analyser2 ? m_analyser2->getPane() : nullptr;
+
+    // Only what was on show is hidden, and only what we hid is shown
+    // again: the user may have had either of them off already
+    auto update = [&](Analyser::Component c, bool &hidden) {
+        Layer *layer = m_analyser2 ? m_analyser2->getLayer(c) : nullptr;
+        if (inTake) {
+            if (!hidden && layer && pane && !layer->isLayerDormant(pane)) {
+                layer->showLayer(pane, false);
+                hidden = true;
+            }
+        } else if (hidden) {
+            hidden = false;
+            if (layer && pane) layer->showLayer(pane, true);
+        }
+    };
+
+    update(Analyser::PitchTrack, m_singingPitchHiddenForTake);
+    update(Analyser::Notes, m_singingNotesHiddenForTake);
+}
+
+void
 MainWindow::syncCoverageStrip()
 {
     // The strip is the store of the take's coverage as well as the
@@ -3863,9 +3901,11 @@ MainWindow::record()
             teardownRecordingLayer();
         }
 
-        // The singing track itself stays as it is: its pitch and notes are
-        // what the singer is adding to, and they stay on show for the take.
-        // Only its audio is kept out of the mix (spec 5.1).
+        // The singing track itself stays as it is: its pitch and notes
+        // are what the singer is adding to.  Its audio is kept out of the
+        // mix (spec 5.1), and its pitch and notes out of sight -- see
+        // updateSingingTrackForTake(), called below once the device has
+        // either started or failed to.
         muteSingingAudioForTake();
 
         m_pendingSingingModelId = {};
@@ -3922,6 +3962,7 @@ MainWindow::record()
     }
 
     updateAlternatePitchForTake();
+    updateSingingTrackForTake();
     updateLayerStatuses();
 
     // Restore the default mode so that a subsequent "standalone" recording
@@ -4067,8 +4108,10 @@ MainWindow::recordingStarted()
     if (!m_recordTarget->isRecording()) {
         // Recording stopped - recordingFinishedFull() is called from
         // analyseNow() once pYIN completes.  The reference pitch track
-        // comes back now, though: the singer has stopped following.
+        // comes back now, though: the singer has stopped following, and
+        // so do the take's own pitch and notes.
         updateAlternatePitchForTake();
+        updateSingingTrackForTake();
         updateLayerStatuses();
         return;
     }
@@ -4285,6 +4328,7 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
     m_recordingAsSingingTrack = false;
     m_currentRecordingModelId = {};
     restoreSingingAudioAfterTake();
+    updateSingingTrackForTake();
 
     if (analysing && m_realtimePitchLayer) {
         stopRealtimePitchTracker();

@@ -336,6 +336,16 @@ protected:
     void stepAlternatePitch(bool up);
     void updateAlternatePitchForTake();
 
+    // The take's own pitch and notes are put out of sight while it is
+    // being recorded into, as the reference is for the alternate above:
+    // the pitch is the orange of the live dots and the notes are drawn
+    // over the same part of the pane, and a singer recording over
+    // singing that is there cannot tell either of them from what they
+    // are singing now.  The two flags say which of them we hid.
+    bool           m_singingPitchHiddenForTake;
+    bool           m_singingNotesHiddenForTake;
+    void updateSingingTrackForTake();
+
     // The singing takes of the session: the audio file of each take and
     // the ranges of it that hold recorded singing.  MainWindow only
     // wires it: it decides where a recording goes and writes the files.

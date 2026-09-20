@@ -2172,7 +2172,8 @@ private slots:
         QVERIFY(m_window->playSingingAudioAction()->isChecked());
 
         // Recording into the take that is now there: its pitch and notes
-        // stay on show, and its audio is kept out of the mix
+        // are kept (put out of sight, see the next test), and its audio
+        // is kept out of the mix
         auto events = pitchEvents(m_window->analyser2());
         QVERIFY(!events.empty());
 
@@ -2181,7 +2182,7 @@ private slots:
         QVERIFY2(m_window->analyser2(),
                  "the singing track was torn down for the take");
         QVERIFY2(pitchEvents(m_window->analyser2()).size() == events.size(),
-                 "the singing pitch track did not stay on show for the take");
+                 "the singing pitch track lost its events during the take");
         QVERIFY2(!takeParams()->isPlayAudible(),
                  "the singing that is there is audible while it is being "
                  "recorded into");
@@ -2198,6 +2199,65 @@ private slots:
 
         // The reference was not touched by any of this
         QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+    }
+
+    // The take's stored pitch track and notes sit over the same part of
+    // the pane as what is being sung now, the pitch in the same orange
+    // as the live dots. While a take is being recorded they are out of
+    // sight, so that the only pitch the singer sees beside the track
+    // they are following is the one they are singing now; they come back
+    // when the take stops.
+    void singing_track_hidden_while_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        Analyser *a2 = m_window->analyser2();
+        QVERIFY(a2);
+        sv::Layer *pitch = a2->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = a2->getLayer(Analyser::Notes);
+        sv::Pane *pane = a2->getPane();
+        QVERIFY(pitch && notes && pane);
+        QVERIFY2(!pitch->isLayerDormant(pane),
+                 "the take's pitch track is not shown after the take");
+        QVERIFY2(!notes->isLayerDormant(pane),
+                 "the take's notes are not shown after the take");
+        QVERIFY(!noteEvents(notes).empty());
+
+        m_window->setRecordOverAnswer(true);
+        m_window->seekTo(0);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::Notes), notes);
+        QVERIFY2(pitch->isLayerDormant(pane),
+                 "the take's own orange pitch track is still shown while it "
+                 "is being recorded over");
+        QVERIFY2(notes->isLayerDormant(pane),
+                 "the take's own notes are still shown while it is being "
+                 "recorded over");
+        // The live dots are the pitch the singer does see
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->realtimeLayer(), 2000);
+        QVERIFY(!m_window->realtimeLayer()->isLayerDormant(pane));
+
+        QTest::qWait(800);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->analyser2());
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::Notes), notes);
+        QVERIFY2(!pitch->isLayerDormant(pane),
+                 "the take's pitch track did not come back when the take "
+                 "stopped");
+        QVERIFY2(!notes->isLayerDormant(pane),
+                 "the take's notes did not come back when the take stopped");
     }
 
     // Review finding 3, at the device. The read-ahead that keeps the

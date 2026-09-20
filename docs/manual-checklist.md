@@ -16,6 +16,9 @@ Launch with `.\build.bat run`.
    every one sits in time, not just the first (each recording measures its start gap).
 3. **Live dots** appear under the playback cursor, not behind it; stay after Stop until the
    orange pitch track replaces them; the status bar stops changing when the take stops.
+   Recording over singing that is there: that take's own pitch track and notes are out of
+   sight for the take, so only the dots and the track being followed are on the pane, and
+   they are back when the take stops.
 4. **Nothing of the take in the speakers while recording**: with speakers on, neither your
    voice nor a synth tone comes back. Play Singing Audio keeps its state through the take.
 5. **Stereo interface with the mic on input 2**: dots appear.

@@ -40,7 +40,13 @@ the reference at P is therefore at file frame **L + R**, and the splice reads fr
 5. The take's existing audio is muted for the duration (`muteSingingAudioForTake()`,
    directly on the play parameters). What the Play Singing Audio button asks for meanwhile
    is kept in `m_singingAudioAfterTake` and applied when the take is over. The take's
-   pitch and notes stay on show.
+   pitch track and notes are hidden for the duration too (`updateSingingTrackForTake()`,
+   called after the base call and again when the take stops): they are drawn over the same
+   part of the pane as what is being sung now, the pitch in the same orange as the live
+   dots, so with them on show the singer cannot tell what they are singing from what they
+   sang before. Hidden with `Layer::showLayer()`, not `Analyser::setVisible()`, which would
+   write the state to the shared settings. Only what was on show is hidden, and only what
+   was hidden here is shown again.
 6. Record mode is switched to **`RecordCreateUnshownModel`** (svapp fork) around the base
    call: the recording becomes a model of the document with no pane, no layer and no
    "Import Recorded Audio" undo entry. `ViewManager::setRecordStartFrame(S)` (svgui fork)
@@ -84,9 +90,10 @@ nothing to do since `RecordCreateUnshownModel`. They are kept as a safety net.
    emits `initialAnalysisCompleted` (`m_realtimeLayerTeardownConnection`); without one
    they go at once.
 
-`recordingStarted(false)` only calls `updateAlternatePitchForTake()` and
-`updateLayerStatuses()`, so the reference pitch track is back the moment the take stops,
-whatever happens to the analysis.
+`recordingStarted(false)` only calls `updateAlternatePitchForTake()`,
+`updateSingingTrackForTake()` and `updateLayerStatuses()`, so the reference pitch track
+and the take's own pitch and notes are back the moment the take stops, whatever happens to
+the analysis.
 
 `onRealtimePitchDetected()` begins with `if (!m_recordingInProgress) return;` because the
 dot model outlives the take.
