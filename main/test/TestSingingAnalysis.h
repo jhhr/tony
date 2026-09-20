@@ -245,37 +245,12 @@ class TestSingingAnalysis : public QObject
         return m;
     }
 
-    static sv::EventVector outsidePitch(const sv::EventVector &events,
-                                        sv::sv_frame_t from,
-                                        sv::sv_frame_t to) {
-        sv::EventVector out;
-        for (const auto &e : events) {
-            if (e.getFrame() < from || e.getFrame() >= to) out.push_back(e);
-        }
-        return out;
-    }
-
     // Notes that start within [from, to)
     static sv::EventVector notesIn(const sv::EventVector &events,
                                    sv::sv_frame_t from, sv::sv_frame_t to) {
         sv::EventVector out;
         for (const auto &e : events) {
             if (e.getFrame() >= from && e.getFrame() < to) out.push_back(e);
-        }
-        return out;
-    }
-
-    // Notes that lie wholly outside [from, to), so that the merge has no
-    // business with them at all
-    static sv::EventVector outsideNotes(const sv::EventVector &events,
-                                        sv::sv_frame_t from,
-                                        sv::sv_frame_t to) {
-        sv::EventVector out;
-        for (const auto &e : events) {
-            if (e.getFrame() + e.getDuration() <= from ||
-                e.getFrame() >= to) {
-                out.push_back(e);
-            }
         }
         return out;
     }
