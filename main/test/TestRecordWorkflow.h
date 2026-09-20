@@ -95,6 +95,13 @@ public:
         return swapSingingAudio(path);
     }
 
+    // Editing the singing of a take, as the two Edit menu actions do
+    void doEraseSingingInSelection() { eraseSingingInSelection(); }
+    void doSelectRecordingAtPlayhead() { selectRecordingAtPlayhead(); }
+    QAction *eraseSingingAction() { return m_eraseSingingAction; }
+    QAction *selectRecordingAction() { return m_selectRecordingAction; }
+    void doUpdateMenuStates() { updateMenuStates(); }
+
     // True between the start of the analysis of a recorded range and the
     // merge of its result into the take's pitch and notes
     bool analysingRange() {
@@ -146,6 +153,9 @@ public:
         m_viewManager->addSelection(sv::Selection(start, end));
     }
     void clearSelections() { m_viewManager->clearSelections(); }
+    sv::MultiSelection::SelectionList selections() {
+        return m_viewManager->getSelections();
+    }
 
     // The question about recording over singing that is there is answered
     // from here: the suite cannot answer a dialog
@@ -2982,6 +2992,270 @@ private slots:
         openReference(writeWav(tone(lowHz, 1.0)));
         if (QTest::currentTestFailed()) return;
         QCOMPARE(stripLayersInPane0(), 0);
+    }
+
+    // Erase Singing in Selection and Select Recording at Playhead
+    // (spec 5.2).  An erase takes the singing out of the take's audio,
+    // out of its coverage and strip, and out of the pitch and the notes
+    // that were analysed there.  Nothing is analysed again: the layers
+    // on screen are the very ones that were there before
+
+    void erase_a_whole_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(sv::sv_frame_t(1.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        Coverage::Range recorded = ranges[0];
+        QString audioBefore = m_window->takes()->getAudioPath();
+        sv::Layer *pitch = m_window->analyser2()->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = m_window->analyser2()->getLayer(Analyser::Notes);
+        QVERIFY(pitch && notes);
+        QVERIFY(!pitchEvents(pitch).empty());
+        QVERIFY(!noteEvents(notes).empty());
+        QVERIFY(takeAudioRms(recorded.start, recorded.end) > 0.01);
+        QVERIFY(takeAudio());
+        sv::sv_frame_t frames = takeAudio()->getFrameCount();
+
+        // The range to erase is what the other new action selects
+        m_window->seekTo(recorded.start + recorded.length() / 2);
+        m_window->doSelectRecordingAtPlayhead();
+        QCOMPARE(int(m_window->selections().size()), 1);
+        QCOMPARE(m_window->selections().begin()->getStartFrame(),
+                 recorded.start);
+        QCOMPARE(m_window->selections().begin()->getEndFrame(), recorded.end);
+
+        m_window->doEraseSingingInSelection();
+
+        // Nothing is covered any more and the strip has gone with it.
+        // The take stays, in a file of its own, as long as the one it
+        // replaces and silent where the singing was
+        QVERIFY(m_window->takes()->haveTake());
+        QVERIFY(m_window->takes()->getCoverage().isEmpty());
+        QVERIFY(m_window->takes()->getAudioPath() != audioBefore);
+        QCOMPARE(m_window->takes()->getSupersededPaths().last(), audioBefore);
+        QVERIFY(!m_window->coverageStrip()->isShown());
+        QCOMPARE(stripLayersInPane0(), 0);
+        QVERIFY(takeAudioRms(recorded.start + 1000, recorded.end - 1000)
+                < 1e-6);
+
+        // The same two layers, with nothing left in them where the
+        // singing was
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::Notes), notes);
+        QVERIFY(eventsBetween(pitchEvents(pitch),
+                              recorded.start, recorded.end).empty());
+        QVERIFY(eventsBetween(noteEvents(notes),
+                              recorded.start, recorded.end).empty());
+
+        // and the erase started no analysis of the take.  (A transformer
+        // may well be running: making a selection sets Tony's own
+        // re-analysis of the *reference* going, which has nothing to do
+        // with the take.  Wait for it, and see that the take's pitch and
+        // notes are still empty when everything has settled)
+        QVERIFY(!m_window->analysingRange());
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::Notes), notes);
+        QVERIFY(eventsBetween(pitchEvents(pitch),
+                              recorded.start, recorded.end).empty());
+        QVERIFY(eventsBetween(noteEvents(notes),
+                              recorded.start, recorded.end).empty());
+
+        // The audio under them is the new file, as long as the one it
+        // replaced (a model of a file just opened takes a moment to know
+        // how long it is)
+        QTRY_VERIFY(takeAudio() && takeAudio()->getFrameCount() == frames);
+        verifyPlaySourceClean();
+    }
+
+    // One end of a recording erased: what is left is the rest of it, and
+    // a note whose onset went with the audio begins where the audio does
+    void erase_trims_one_end() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(sv::sv_frame_t(1.0 * rate));
+        take(1000);
+        if (QTest::currentTestFailed()) return;
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        Coverage::Range recorded = ranges[0];
+        sv::sv_frame_t cut = recorded.start + sv::sv_frame_t(0.4 * rate);
+        QVERIFY(cut < recorded.end);
+        sv::Layer *pitch = m_window->analyser2()->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = m_window->analyser2()->getLayer(Analyser::Notes);
+        QVERIFY(!eventsBetween(pitchEvents(pitch), recorded.start,
+                               cut).empty());
+
+        m_window->selectRange(recorded.start, cut);
+        m_window->doEraseSingingInSelection();
+
+        auto left = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(left.size()), 1);
+        QCOMPARE(left[0], Coverage::Range(cut, recorded.end));
+        QCOMPARE(int(stripEvents().size()), 1);
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        // Silent where the erase went, and as it was after that
+        QVERIFY(takeAudioRms(recorded.start + 1000, cut - 1000) < 1e-6);
+        QVERIFY(takeAudioRms(cut + 1000, recorded.end - 1000) > 0.01);
+
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::Notes), notes);
+        QVERIFY(eventsBetween(pitchEvents(pitch), recorded.start, cut).empty());
+        QVERIFY(!eventsBetween(pitchEvents(pitch), cut, recorded.end).empty());
+
+        auto notesLeft = noteEvents(notes);
+        QVERIFY(!notesLeft.empty());
+        for (const auto &e : notesLeft) {
+            QVERIFY2(e.getFrame() >= cut,
+                     "a note was left starting inside the erased range");
+        }
+        QVERIFY(!m_window->analysingRange());
+    }
+
+    // A range erased from the middle: the coverage, the strip and the
+    // note that ran through it are each in two parts afterwards
+    void erase_splits_a_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(sv::sv_frame_t(1.0 * rate));
+        take(1200);
+        if (QTest::currentTestFailed()) return;
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        Coverage::Range recorded = ranges[0];
+        sv::sv_frame_t from = recorded.start + sv::sv_frame_t(0.4 * rate);
+        sv::sv_frame_t to = recorded.start + sv::sv_frame_t(0.8 * rate);
+        QVERIFY(to < recorded.end);
+        sv::Layer *pitch = m_window->analyser2()->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = m_window->analyser2()->getLayer(Analyser::Notes);
+
+        m_window->selectRange(from, to);
+        m_window->doEraseSingingInSelection();
+
+        auto left = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(left.size()), 2);
+        QCOMPARE(left[0], Coverage::Range(recorded.start, from));
+        QCOMPARE(left[1], Coverage::Range(to, recorded.end));
+        QCOMPARE(int(stripEvents().size()), 2);
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(takeAudioRms(recorded.start + 1000, from - 1000) > 0.01);
+        QVERIFY(takeAudioRms(from + 1000, to - 1000) < 1e-6);
+        QVERIFY(takeAudioRms(to + 1000, recorded.end - 1000) > 0.01);
+
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::Notes), notes);
+        QVERIFY(!eventsBetween(pitchEvents(pitch), recorded.start,
+                               from).empty());
+        QVERIFY(eventsBetween(pitchEvents(pitch), from, to).empty());
+        QVERIFY(!eventsBetween(pitchEvents(pitch), to, recorded.end).empty());
+
+        // Nothing of a note is left over the erased audio
+        auto notesLeft = noteEvents(notes);
+        QVERIFY(!notesLeft.empty());
+        for (const auto &e : notesLeft) {
+            QVERIFY2(e.getFrame() + e.getDuration() <= from ||
+                     e.getFrame() >= to,
+                     "a note still runs through the erased range");
+        }
+        QVERIFY(!m_window->analysingRange());
+    }
+
+    // The coverage range the playhead is in becomes the selection; in a
+    // gap there is nothing to select, and what is selected is left alone
+    void select_recording_at_playhead() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+        m_window->clearSelections();
+
+        m_window->seekTo(ranges[0].start + ranges[0].length() / 2);
+        m_window->doSelectRecordingAtPlayhead();
+        QCOMPARE(int(m_window->selections().size()), 1);
+        QCOMPARE(m_window->selections().begin()->getStartFrame(),
+                 ranges[0].start);
+        QCOMPARE(m_window->selections().begin()->getEndFrame(), ranges[0].end);
+
+        // In the gap between the two recordings
+        m_window->seekTo((ranges[0].end + ranges[1].start) / 2);
+        m_window->doSelectRecordingAtPlayhead();
+        QCOMPARE(int(m_window->selections().size()), 1);
+        QCOMPARE(m_window->selections().begin()->getStartFrame(),
+                 ranges[0].start);
+
+        m_window->seekTo(ranges[1].start + ranges[1].length() / 2);
+        m_window->doSelectRecordingAtPlayhead();
+        QCOMPARE(int(m_window->selections().size()), 1);
+        QCOMPARE(m_window->selections().begin()->getStartFrame(),
+                 ranges[1].start);
+        QCOMPARE(m_window->selections().begin()->getEndFrame(), ranges[1].end);
+    }
+
+    // Neither action is to be had without a take with singing in it, nor
+    // while one is being recorded, and erasing needs a selection as well
+    void erase_actions_enabled_when_they_apply() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->selectRange(0, sv::sv_frame_t(0.5 * rate));
+        QVERIFY(!m_window->eraseSingingAction()->isEnabled());
+        QVERIFY(!m_window->selectRecordingAction()->isEnabled());
+
+        m_window->clearSelections();
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        // A take, but nothing selected to erase from it
+        m_window->clearSelections();
+        QVERIFY(m_window->selectRecordingAction()->isEnabled());
+        QVERIFY(!m_window->eraseSingingAction()->isEnabled());
+
+        m_window->selectRange(0, sv::sv_frame_t(0.5 * rate));
+        QVERIFY(m_window->selectRecordingAction()->isEnabled());
+        QVERIFY(m_window->eraseSingingAction()->isEnabled());
+
+        // and neither of them while the next take is being recorded
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->eraseSingingAction()->isEnabled());
+        QVERIFY(!m_window->selectRecordingAction()->isEnabled());
+        QTest::qWait(300);
+        stopTake();
     }
 
     // The alternate pitch track: the reference pitch track moved by

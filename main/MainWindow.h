@@ -63,6 +63,8 @@ signals:
     void canPlayNotes(bool);
     void canLoadSingingTrack(bool);
     void canShowRealtimePitch(bool);
+    void canEraseSinging(bool);
+    void canSelectRecording(bool);
 
 public slots:
     virtual bool commitData(bool mayAskUser); // on session shutdown
@@ -101,6 +103,12 @@ protected slots:
     virtual void togglePitchCandidates();
     virtual void switchPitchUp();
     virtual void switchPitchDown();
+
+    // Editing the singing of a take: what is in the selection is erased
+    // from its audio, and the coverage range at the playhead can be
+    // selected to erase a whole recording (spec 5.2)
+    virtual void eraseSingingInSelection();
+    virtual void selectRecordingAtPlayhead();
 
     virtual void snapNotesToPitches();
     virtual void splitNote();
@@ -292,6 +300,17 @@ protected:
     // Put the strip in step with the take's coverage: make it if there
     // is a take and none yet, take it away when the take goes
     void syncCoverageStrip();
+
+    // Erase Singing in Selection, and selecting the recording the
+    // playhead is in
+    QAction       *m_eraseSingingAction;
+    QAction       *m_selectRecordingAction;
+
+    // Take the pitch events and the notes in these ranges out of the
+    // take's layers, the erased audio having taken the singing they
+    // describe with it.  Straight on the models, as an analysis result
+    // is: phase 6 makes the erase as a whole undoable
+    void eraseTakeEvents(const Coverage::Ranges &erased);
 
     // Where on the reference's timeline the take being recorded, or the
     // one most recently recorded, starts: the playback position when

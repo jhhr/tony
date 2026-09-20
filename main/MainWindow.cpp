@@ -20,6 +20,7 @@
 #include "Analyser.h"
 #include "LatencyUtils.h"
 #include "PaneUtils.h"
+#include "TakeEvents.h"
 
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
@@ -136,6 +137,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_referencePitchHiddenForTake(false),
     m_takes(nullptr),
     m_coverageStrip(nullptr),
+    m_eraseSingingAction(nullptr),
+    m_selectRecordingAction(nullptr),
     m_takePosition(0),
     m_takePreRoll(0),
     m_takeEnd(-1),
@@ -812,6 +815,36 @@ MainWindow::setupEditMenu()
     connect(this, SIGNAL(canSnapNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
+
+    menu->addSeparator();
+    m_rightButtonMenu->addSeparator();
+
+    m_keyReference->setCategory(tr("Singing Track"));
+
+    // No shortcuts for these two: every key worth having in this menu is
+    // taken, and an erase is not something to reach by accident
+    m_selectRecordingAction =
+        new QAction(tr("Select Recording at Playhead"), this);
+    m_selectRecordingAction->setStatusTip
+        (tr("Select the range of recorded singing that the playback position is in"));
+    connect(m_selectRecordingAction, SIGNAL(triggered()),
+            this, SLOT(selectRecordingAtPlayhead()));
+    connect(this, SIGNAL(canSelectRecording(bool)),
+            m_selectRecordingAction, SLOT(setEnabled(bool)));
+    m_selectRecordingAction->setEnabled(false);
+    menu->addAction(m_selectRecordingAction);
+    m_rightButtonMenu->addAction(m_selectRecordingAction);
+
+    m_eraseSingingAction = new QAction(tr("Erase Singing in Selection"), this);
+    m_eraseSingingAction->setStatusTip
+        (tr("Remove the recorded singing within the selected region, leaving silence"));
+    connect(m_eraseSingingAction, SIGNAL(triggered()),
+            this, SLOT(eraseSingingInSelection()));
+    connect(this, SIGNAL(canEraseSinging(bool)),
+            m_eraseSingingAction, SLOT(setEnabled(bool)));
+    m_eraseSingingAction->setEnabled(false);
+    menu->addAction(m_eraseSingingAction);
+    m_rightButtonMenu->addAction(m_eraseSingingAction);
 }
 
 void
@@ -1836,6 +1869,20 @@ MainWindow::updateMenuStates()
     bool haveSinging = (m_analyser2 != nullptr) || (m_realtimePitchLayer != nullptr);
     emit canShowRealtimePitch(haveSinging);
 
+    // Editing the singing of a take: there has to be a take with
+    // something recorded in it, and no take being recorded just now.
+    // Erasing needs a selection to erase as well, and waits for the
+    // analysis of a recorded range: erasing swaps the take's audio,
+    // which would throw that analysis's result away (see
+    // eraseSingingInSelection())
+    bool inTake = (m_recordTarget && m_recordTarget->isRecording());
+    bool haveCoverage = m_takes && m_takes->haveTake() &&
+        !m_takes->getCoverage().isEmpty();
+    bool analysingRange = (m_analyser2 && m_analyser2->isAnalysingRange());
+    emit canSelectRecording(haveCoverage && !inTake);
+    emit canEraseSinging(haveCoverage && !inTake && haveSelection &&
+                         !analysingRange);
+
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
         m_showCandidatesAction->setStatusTip(tr("Remove the display of alternate pitch candidates for the selected region"));
@@ -2815,6 +2862,11 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     connect(m_analyser2, SIGNAL(layersChanged()),
             this, SLOT(updateLayerStatuses()));
     connect(m_analyser2, SIGNAL(layersChanged()),
+            this, SLOT(updateMenuStates()));
+
+    // Erase Singing is switched off while a recorded range is being
+    // analysed, so the menus have to hear when one is done with
+    connect(m_analyser2, SIGNAL(initialAnalysisCompleted()),
             this, SLOT(updateMenuStates()));
 
     // deferAnalysis=true: only set up waveform/visualisation layers now;
@@ -4097,6 +4149,9 @@ MainWindow::startTakeAnalysis(sv_frame_t start, sv_frame_t end)
     if (!m_analyser2->isAnalysingRange()) return false;
 
     m_takeAnalysisRange = Coverage::Range(start, end);
+
+    // Erasing is not to be had while this runs
+    updateMenuStates();
     return true;
 }
 
@@ -4115,6 +4170,152 @@ MainWindow::analyseTakeCoverage()
     if (ranges.empty()) return false;
 
     return startTakeAnalysis(ranges.front().start, ranges.back().end);
+}
+
+void
+MainWindow::eraseSingingInSelection()
+{
+    // The singing in the selected ranges goes out of the take: silence
+    // in place of it in a new audio file, the ranges out of the coverage,
+    // and the pitch and notes that were analysed there deleted.  Nothing
+    // is analysed: there is nothing left there to analyse.
+    //
+    // The action is disabled unless all of this holds, but a shortcut or
+    // a script can still reach it
+    if (!m_viewManager || !m_takes->haveTake()) return;
+    if (m_recordTarget && m_recordTarget->isRecording()) return;
+
+    // The analysis of a recorded range is merged into the very models
+    // the swap below hands over, and the swap would cancel it and lose
+    // its result.  It lasts a fraction of the recording it follows, so
+    // waiting for it is better than rescuing it
+    if (m_analyser2 && m_analyser2->isAnalysingRange()) return;
+
+    Coverage::Ranges selected;
+    for (const Selection &s : m_viewManager->getSelections()) {
+        selected.push_back(Coverage::Range(s.getStartFrame(),
+                                           s.getEndFrame()));
+    }
+    if (selected.empty()) return;
+
+    QString directory = RecordDirectory::getRecordDirectory();
+    QString error;
+
+    if (directory == "") {
+        error = tr("Could not find a directory to write the singing track "
+                   "into");
+    }
+
+    Coverage::Ranges erased;
+    if (error == "") {
+        error = m_takes->eraseRanges(selected, directory, &erased);
+    }
+
+    if (error != "") {
+        QMessageBox::warning
+            (this,
+             tr("Failed to erase the singing"),
+             tr("<b>The singing in the selection could not be erased</b>"
+                "<p>%1</p>").arg(error),
+             QMessageBox::Ok);
+        return;
+    }
+
+    if (erased.empty()) {
+        // Nothing of the selection held recorded singing
+        emit activity(tr("No recorded singing in the selection to erase"));
+        return;
+    }
+
+    QString path = m_takes->getAudioPath();
+
+    cerr << "MainWindow::eraseSingingInSelection: erased "
+         << erased.size() << " range(s) into " << path << endl;
+
+    // The new audio goes under the take's pitch and notes layers, which
+    // are edited below rather than analysed again
+    bool haveLayers = m_analyser2 &&
+        m_analyser2->getLayer(Analyser::PitchTrack) &&
+        m_analyser2->getLayer(Analyser::Notes);
+
+    QString showError = (haveLayers ? swapSingingAudio(path)
+                         : loadTakeAudio(path));
+
+    // The coverage has changed whether or not the new audio could be
+    // shown, and the strip says what it is now.  After the swap, which
+    // puts the pane's selected layer back as it found it, and the strip
+    // is never to be that
+    syncCoverageStrip();
+
+    eraseTakeEvents(erased);
+
+    if (showError != "") {
+        // As after a splice that could not be shown: the take's audio
+        // and its coverage have changed, and the screen has not
+        QMessageBox::warning
+            (this,
+             tr("Failed to show the erased singing"),
+             tr("<b>The singing was erased, but the result could not be "
+                "shown</b><p>%1</p><p>What is on screen is the singing track "
+                "as it was. The erased audio is in the take's audio file, "
+                "\"%2\".</p>").arg(showError).arg(path),
+             QMessageBox::Ok);
+    }
+
+    updateLayerStatuses();
+    updateMenuStates();
+    emit activity(tr("Erased the singing in the selection"));
+}
+
+void
+MainWindow::eraseTakeEvents(const Coverage::Ranges &erased)
+{
+    if (!m_analyser2) return;
+
+    Layer *pitchLayer = m_analyser2->getLayer(Analyser::PitchTrack);
+    Layer *notesLayer = m_analyser2->getLayer(Analyser::Notes);
+
+    auto pitch = pitchLayer ?
+        ModelById::getAs<SparseTimeValueModel>(pitchLayer->getModel()) :
+        nullptr;
+    auto notes = notesLayer ?
+        ModelById::getAs<NoteModel>(notesLayer->getModel()) : nullptr;
+
+    // Straight on the models, the way an analysis result is merged: no
+    // command and no undo entry.  Phase 6 makes the erase undoable as a
+    // whole, from the changes TakeEvents works out here
+    if (pitch) {
+        TakeEvents::Change change =
+            TakeEvents::erasePitch(pitch->getAllEvents(), erased);
+        for (const Event &e : change.removed) pitch->remove(e);
+        for (const Event &e : change.added) pitch->add(e);
+    }
+
+    if (notes) {
+        TakeEvents::Change change =
+            TakeEvents::eraseNotes(notes->getAllEvents(), erased);
+        for (const Event &e : change.removed) notes->remove(e);
+        for (const Event &e : change.added) notes->add(e);
+    }
+}
+
+void
+MainWindow::selectRecordingAtPlayhead()
+{
+    // The selection becomes the coverage range the playhead is in, so
+    // that erasing a whole recording is two commands.  In a gap there is
+    // nothing to select, and the selection is left as it was
+    if (!m_viewManager || !m_takes->haveTake()) return;
+    if (m_recordTarget && m_recordTarget->isRecording()) return;
+
+    Coverage::Range range;
+    if (!m_takes->getCoverage().getRangeAt
+        (m_viewManager->getPlaybackFrame(), range)) {
+        emit activity(tr("No recorded singing at the playback position"));
+        return;
+    }
+
+    m_viewManager->setSelection(Selection(range.start, range.end));
 }
 
 bool
