@@ -460,7 +460,13 @@ Analyser::addVisualisations()
     // This magical scale factor happens to get us a similar display
     // to Tony v1.0
     spectrogram->setGain(0.25f);
-    m_document->addLayerToView(m_pane, spectrogram);
+    // attachLayerToView() and not addLayerToView() throughout this class:
+    // an analyser's layers are Tony's own furniture, made and taken away
+    // by the analyser itself (removeAllLayers() and releaseLayers() use
+    // deleteLayer(force), which leaves an AddLayerCommand holding a
+    // deleted layer).  The undo history is for what the user did -- and
+    // after a take its top entry must be the take
+    m_document->attachLayerToView(m_pane, spectrogram);
     spectrogram->setLayerDormant(m_pane, true);
 
     m_layers[Spectrogram] = spectrogram;
@@ -520,7 +526,7 @@ Analyser::addWaveform()
         params->setPlayGain(1);
     }
     
-    m_document->addLayerToView(m_pane, waveform);
+    m_document->attachLayerToView(m_pane, waveform);
 
     m_layers[Audio] = waveform;
     return "";
@@ -659,7 +665,7 @@ Analyser::addAnalyses()
         if (f) m_layers[Notes] = f;
         if (t) m_layers[PitchTrack] = t;
         
-        m_document->addLayerToView(m_pane, layers[i]);
+        m_document->attachLayerToView(m_pane, layers[i]);
     }
 
     configureAnalysisLayers();
@@ -766,7 +772,7 @@ Analyser::addEmptyAnalyses()
         m_document->addNonDerivedModel(modelId);
 
         m_document->setModel(layer, modelId);
-        m_document->addLayerToView(m_pane, layer);
+        m_document->attachLayerToView(m_pane, layer);
         m_layers[w.component] = layer;
     }
 
@@ -1067,6 +1073,10 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
     // replaced again, so the first run's result is of no use to anyone
     discardRangedAnalysis();
 
+    // ... and neither is what the merge before it changed
+    m_rangedPitchChange = TakeEvents::Change();
+    m_rangedNotesChange = TakeEvents::Change();
+
     sv_samplerate_t rate = waveFileModel->getSampleRate();
 
     if (clipStart < 0) clipStart = 0;
@@ -1261,9 +1271,16 @@ Analyser::mergeRangedAnalysis()
          << wFrom << " to " << pitchTo << ", notes in " << wFrom << " to "
          << noteTo << endl;
 
+    // Every remove and add is noted as it is made: the two changes
+    // together are what an undo of the recording this analysis belongs to
+    // has to reverse (getRangedPitchChange())
+    m_rangedPitchChange = TakeEvents::Change();
+    m_rangedNotesChange = TakeEvents::Change();
+
     for (const Event &e :
              pitch->getEventsStartingWithin(wFrom, pitchTo - wFrom)) {
         pitch->remove(e);
+        m_rangedPitchChange.removed.push_back(e);
     }
     // pYIN in fixed-lag mode (the default, and what we run) stamps one
     // frame of every run twice: the last frame that process() emits is
@@ -1276,6 +1293,7 @@ Analyser::mergeRangedAnalysis()
         if (e.getFrame() >= wFrom && e.getFrame() < pitchTo &&
             e.getFrame() != lastAdded) {
             pitch->add(e);
+            m_rangedPitchChange.added.push_back(e);
             lastAdded = e.getFrame();
         }
     }
@@ -1323,6 +1341,7 @@ Analyser::mergeRangedAnalysis()
         sv_frame_t f = e.getFrame();
         if (f >= wFrom && f < noteTo) {
             notes->remove(e);
+            m_rangedNotesChange.removed.push_back(e);
         } else if (f < wFrom && firstAdded >= 0 &&
                    f + e.getDuration() > firstAdded) {
             // A note that runs into the window from before it is left as
@@ -1333,6 +1352,8 @@ Analyser::mergeRangedAnalysis()
             // stays one note
             notes->remove(e);
             notes->add(e.withDuration(firstAdded - f));
+            m_rangedNotesChange.removed.push_back(e);
+            m_rangedNotesChange.added.push_back(e.withDuration(firstAdded - f));
         }
     }
     for (Event e : adding) {
@@ -1352,17 +1373,19 @@ Analyser::mergeRangedAnalysis()
         // over it is cut back
         if (nextOldOnset > e.getFrame() &&
             e.getFrame() + e.getDuration() > nextOldOnset) {
-            notes->add(e.withDuration(nextOldOnset - e.getFrame()));
-        } else {
-            notes->add(e);
+            e = e.withDuration(nextOldOnset - e.getFrame());
         }
+        notes->add(e);
+        m_rangedNotesChange.added.push_back(e);
     }
 
-    // The events are in the models, not in a command: an analysis result
-    // never went onto the undo stack.  Phase 6 makes the recording that
-    // asked for this analysis undoable as a whole
+    // The events went straight into the models, as a transform's do, with
+    // no command of their own.  What the merge changed is remembered
+    // instead, for the command of the recording that asked for it: that
+    // one command undoes the splice and the analysis of it together
     discardRangedAnalysis();
 
+    emit rangedAnalysisMerged();
     emit initialAnalysisCompleted();
 }
 

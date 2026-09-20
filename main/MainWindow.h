@@ -22,6 +22,7 @@
 #include "AlternatePitchTrack.h"
 #include "CoverageStrip.h"
 #include "SingingTakes.h"
+#include "TakeCommands.h"
 #include "TakeTiming.h"
 
 #include <vector>
@@ -53,6 +54,20 @@ public:
      * will be analysed alongside the primary reference track.
      */
     void loadSingingTrack(QString path);
+
+    /**
+     * Put the take into the state a SingingTakeCommand holds: its audio
+     * file, its coverage, the events of its pitch track and notes, and, if
+     * the state names a range whose analysis never finished, that
+     * analysis started again.  Called by the command on undo and on redo;
+     * public only for that.  False if the audio could not be shown, in
+     * which case the user has been told.
+     */
+    bool applyTakeState(SingingTakeCommand *command, const TakeState &state);
+
+    // A session that has been saved names the take's audio file as it was
+    // at the time, so that file must outlive every other reference to it
+    bool saveSessionFile(QString path) override;
 
 signals:
     void canExportPitchTrack(bool);
@@ -309,8 +324,39 @@ protected:
     // Take the pitch events and the notes in these ranges out of the
     // take's layers, the erased audio having taken the singing they
     // describe with it.  Straight on the models, as an analysis result
-    // is: phase 6 makes the erase as a whole undoable
-    void eraseTakeEvents(const Coverage::Ranges &erased);
+    // is; what was changed comes back in the two Changes, for the undo
+    // command of the erase as a whole
+    void eraseTakeEvents(const Coverage::Ranges &erased,
+                         TakeEvents::Change *pitchChange = nullptr,
+                         TakeEvents::Change *notesChange = nullptr);
+
+    // Undo and redo of the singing of a take (spec 5.4).
+    //
+    // The command of the operation being made just now, from the splice
+    // or the erase until the analysis that follows a splice has been
+    // merged into the take's pitch and notes.  That merge arrives seconds
+    // after the splice, and amends this command, so that one Undo takes
+    // the recording and its analysis back together.  Null when no command
+    // is waiting for anything; never left pointing at a command the
+    // history may have deleted
+    SingingTakeCommand *m_openTakeCommand;
+
+    // Put a finished take operation on the undo stack, its work already
+    // done (CommandHistory::addCommand(command, false))
+    void addTakeCommand(SingingTakeCommand *command);
+
+    // Stop waiting for a merge into the open command.  With
+    // cancelAnalysis, a ranged analysis that is still running is
+    // abandoned first: its result belongs to a state that is being left
+    // behind, and must not land on the take afterwards
+    void closeOpenTakeCommand(bool cancelAnalysis);
+
+    // The ranged analysis has been merged: the events it changed go into
+    // the command of the recording that asked for it
+    void takeAnalysisMerged();
+
+    // Apply one command's event changes to the take's pitch and notes
+    void applyTakeEventChanges(const TakeState &state);
 
     // Where on the reference's timeline the take being recorded, or the
     // one most recently recorded, starts: the playback position when
@@ -499,6 +545,13 @@ protected:
     // are the caller's to prune, once a layer of its own holds the model
     FileOpenStatus openSingingAudioFile(QString path, sv::ModelId &modelId,
                                         std::vector<sv::Pane *> &extraPanes);
+
+    // Open a take's own audio file as a model of the document and nothing
+    // else: no pane, no layer and, above all, no undo command.  Every
+    // change to a take swaps its audio, including an undo, and a command
+    // pushed while an undo is running destroys the command that is running
+    // (see the comment on the definition)
+    FileOpenStatus openTakeAudioFile(QString path, sv::ModelId &modelId);
 
     // Remove an extra pane created by openAudio()/record() in
     // CreateAdditionalModel mode: delete the orphan layer(s) showing

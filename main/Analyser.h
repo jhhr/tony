@@ -23,6 +23,8 @@
 #include <map>
 #include <vector>
 
+#include "TakeEvents.h"
+
 #include "framework/Document.h"
 #include "base/Selection.h"
 #include "base/Clipboard.h"
@@ -192,10 +194,11 @@ public:
      * when both are complete their events replace what was in the
      * middle of the run -- a quarter of a second each side of the range
      * asked for, or out to an end of the run that was clipped -- and
-     * initialAnalysisCompleted() is emitted.  The rest of the run is
-     * context only: it is where pYIN knows least, so what is there
-     * already is left alone.  The merge is not undoable: an analysis
-     * result never was.
+     * rangedAnalysisMerged() and initialAnalysisCompleted() are emitted.
+     * The rest of the run is context only: it is where pYIN knows least,
+     * so what is there already is left alone.  The merge makes no command
+     * of its own; what it changed is kept, for the command of the
+     * recording that asked for it (getRangedPitchChange()).
      *
      * Returns "" if a run was started (or there was nothing to do), or
      * a user-readable error string.  A second call while one is running
@@ -224,6 +227,27 @@ public:
      */
     bool isAnalysingRange() const {
         return !m_rangedLayers.empty();
+    }
+
+    /**
+     * Abandon a ranged analysis if one is running, merging nothing.  For
+     * an undo of the recording that asked for it: the result must not
+     * land on a take that has been put back as it was.
+     */
+    void cancelRangedAnalysis() { discardRangedAnalysis(); }
+
+    /**
+     * What the last ranged merge took out of and put into the pitch
+     * track and the notes.  Reversing these two changes undoes the
+     * merge, which is how the recording that asked for it is made
+     * undoable (the merge itself still puts nothing on the undo stack).
+     * Valid from rangedAnalysisMerged() until the next analyseRange().
+     */
+    const TakeEvents::Change &getRangedPitchChange() const {
+        return m_rangedPitchChange;
+    }
+    const TakeEvents::Change &getRangedNotesChange() const {
+        return m_rangedNotesChange;
     }
 
     /**
@@ -328,6 +352,11 @@ signals:
     void layersChanged();
     void initialAnalysisCompleted();
 
+    // A ranged analysis has just been merged into the pitch and notes,
+    // and getRangedPitchChange() / getRangedNotesChange() say what it
+    // changed.  Emitted before initialAnalysisCompleted()
+    void rangedAnalysisMerged();
+
 protected slots:
     void layerAboutToBeDeleted(sv::Layer *);
     void layerCompletionChanged(sv::ModelId);
@@ -370,6 +399,11 @@ protected:
     // run stamped past it.  The near edge needs no such flag -- a run
     // cannot stamp anything before its own first two hops anyway
     bool m_rangedClippedEnd;
+
+    // What the last merge did, for the undo command of the recording
+    // that asked for the analysis (see getRangedPitchChange())
+    TakeEvents::Change m_rangedPitchChange;
+    TakeEvents::Change m_rangedNotesChange;
 
     QString doAllAnalyses(bool withPitchTrack);
 

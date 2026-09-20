@@ -117,7 +117,11 @@ AlternatePitchTrack::show(Document *document, Pane *pane)
 
     document->setModel(layer, modelId);
     takeLayer(document, pane, layer);
-    document->addLayerToView(pane, layer);
+
+    // Not addLayerToView(): this layer is Tony's own furniture, and hide()
+    // takes it away with deleteLayer(force), which leaves an AddLayerCommand
+    // holding a deleted layer.  Undo is for what the user did
+    document->attachLayerToView(pane, layer);
 
     return true;
 }

@@ -18,6 +18,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QSettings>
 
 #include <algorithm>
@@ -39,6 +40,8 @@ SingingTakes::clear()
     m_audioPath = "";
     m_coverage.clear();
     m_superseded.clear();
+    m_written.clear();
+    m_protected.clear();
 }
 
 void
@@ -49,6 +52,48 @@ SingingTakes::setTake(QString path, const Coverage &coverage)
     }
     m_audioPath = path;
     m_coverage = coverage;
+}
+
+void
+SingingTakes::restoreTake(QString path, const Coverage &coverage)
+{
+    m_audioPath = path;
+    m_coverage = coverage;
+}
+
+void
+SingingTakes::protectPath(QString path)
+{
+    if (path != "" && !m_protected.contains(path)) m_protected.push_back(path);
+}
+
+QStringList
+SingingTakes::unusedWrittenFiles() const
+{
+    QStringList unused;
+    for (const QString &path : m_written) {
+        if (path == m_audioPath) continue;
+        if (m_protected.contains(path)) continue;
+        if (unused.contains(path)) continue;
+        unused.push_back(path);
+    }
+    return unused;
+}
+
+QStringList
+SingingTakes::removeUnusedFiles()
+{
+    QStringList gone;
+    for (const QString &path : unusedWrittenFiles()) {
+        if (QFile::remove(path)) {
+            gone.push_back(path);
+            m_written.removeAll(path);
+        } else if (!QFile::exists(path)) {
+            // Something else has taken it away; it is not ours any more
+            m_written.removeAll(path);
+        }
+    }
+    return gone;
 }
 
 void
@@ -81,6 +126,7 @@ SingingTakes::spliceRecording(QString recordingPath,
 
     if (m_audioPath != "") m_superseded.push_back(m_audioPath);
     m_audioPath = outPath;
+    m_written.push_back(outPath);
     m_coverage.add(range.start, range.end);
 
     if (placed) *placed = range;
@@ -116,6 +162,7 @@ SingingTakes::eraseRanges(const Coverage::Ranges &ranges, QString directory,
 
     m_superseded.push_back(m_audioPath);
     m_audioPath = outPath;
+    m_written.push_back(outPath);
     for (const Coverage::Range &r : wanted.getRanges()) {
         m_coverage.remove(r.start, r.end);
     }

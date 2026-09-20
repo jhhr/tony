@@ -57,6 +57,16 @@ public:
     void setTake(QString path, const Coverage &coverage);
 
     /**
+     * The take is this file with this coverage again, because an undo or
+     * a redo has said so.  Unlike setTake(), nothing is added to the
+     * superseded list: both files were already known when the operation
+     * being undone was done, and undo and redo may swap between them any
+     * number of times.  An empty path is the state before the first
+     * recording of a take: no take at all.
+     */
+    void restoreTake(QString path, const Coverage &coverage);
+
+    /**
      * The take is the whole of this file: a singing track the user
      * loaded, or one restored from a session saved before coverage was
      * stored with it.
@@ -109,6 +119,36 @@ public:
      */
     const QStringList &getSupersededPaths() const { return m_superseded; }
 
+    /**
+     * The audio files this run wrote itself, oldest first.  A file the
+     * user loaded as a singing track is not one of them, however
+     * thoroughly it has since been superseded, so this is the list Tony
+     * may delete from (see removeUnusedFiles()).
+     */
+    const QStringList &getWrittenPaths() const { return m_written; }
+
+    /**
+     * Keep this file whatever happens, because something outside this
+     * object refers to it: a session file that has been saved names the
+     * take's audio as it was at the time, and that file must still be
+     * there when the session is opened again.
+     */
+    void protectPath(QString path);
+
+    /**
+     * The files this run wrote that nothing refers to any more: every
+     * one but the take's own audio and the protected ones.  Files the
+     * user brought are never in the list.
+     */
+    QStringList unusedWrittenFiles() const;
+
+    /**
+     * Delete the files unusedWrittenFiles() names and return those that
+     * really went.  For the close of a session: until then a superseded
+     * file may be wanted again by undo.
+     */
+    QStringList removeUnusedFiles();
+
     /// Recording from this frame on would record over material that is there
     bool coversPosition(sv::sv_frame_t position) const;
 
@@ -130,6 +170,8 @@ private:
     QString m_audioPath;
     Coverage m_coverage;
     QStringList m_superseded;
+    QStringList m_written;
+    QStringList m_protected;
 };
 
 #endif

@@ -387,6 +387,104 @@ private slots:
         QVERIFY(takes.getSupersededPaths().isEmpty());
     }
 
+    // Undo and redo swap the take between two files it has already had:
+    // neither is superseded by the other again, however often they change
+    // places, and neither becomes a file this run wrote
+    void restore_take_supersedes_nothing() {
+        SingingTakes takes;
+        QString recording = writeRecording(1000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 0, -1,
+                                      takeDirectory()).isEmpty());
+        QString first = takes.getAudioPath();
+        QVERIFY(takes.spliceRecording(recording, 0, 5000, -1,
+                                      takeDirectory()).isEmpty());
+        QString second = takes.getAudioPath();
+        Coverage after = takes.getCoverage();
+        QCOMPARE(takes.getSupersededPaths(), QStringList { first });
+
+        Coverage before;
+        before.add(0, 1000);
+
+        takes.restoreTake(first, before);
+        QCOMPARE(takes.getAudioPath(), first);
+        QVERIFY(takes.getCoverage() == before);
+        QCOMPARE(takes.getSupersededPaths(), QStringList { first });
+        QCOMPARE(takes.getWrittenPaths(), QStringList({ first, second }));
+
+        takes.restoreTake(second, after);
+        QCOMPARE(takes.getAudioPath(), second);
+        QVERIFY(takes.getCoverage() == after);
+        QCOMPARE(takes.getSupersededPaths(), QStringList { first });
+        QCOMPARE(takes.getWrittenPaths(), QStringList({ first, second }));
+
+        // Undo of the very first recording of a take: no take at all
+        takes.restoreTake("", Coverage());
+        QVERIFY(!takes.haveTake());
+        QVERIFY(takes.getCoverage().isEmpty());
+    }
+
+    // What a session close may delete: the files this run wrote that
+    // nothing refers to any more.  Never the file the take is in, and
+    // never a file the user brought, however thoroughly superseded
+    void only_unused_files_we_wrote_are_deleted() {
+        SingingTakes takes;
+
+        // The user's own singing track, recorded over twice
+        QString loaded = writeRecording(1000, 0.5f);
+        takes.setWholeFileTake(loaded, 1000);
+
+        QString recording = writeRecording(1000, 0.25f);
+        QVERIFY(takes.spliceRecording(recording, 0, 2000, -1,
+                                      takeDirectory()).isEmpty());
+        QString first = takes.getAudioPath();
+        QVERIFY(takes.spliceRecording(recording, 0, 5000, -1,
+                                      takeDirectory()).isEmpty());
+        QString second = takes.getAudioPath();
+
+        QCOMPARE(takes.getWrittenPaths(), QStringList({ first, second }));
+        QVERIFY(takes.getSupersededPaths().contains(loaded));
+
+        QCOMPARE(takes.unusedWrittenFiles(), QStringList { first });
+        QCOMPARE(takes.removeUnusedFiles(), QStringList { first });
+
+        QVERIFY2(!QFileInfo::exists(first), "a superseded file was kept");
+        QVERIFY2(QFileInfo::exists(second), "the take's own file was deleted");
+        QVERIFY2(QFileInfo::exists(loaded), "the user's own file was deleted");
+
+        // and nothing is deleted twice
+        QVERIFY(takes.unusedWrittenFiles().isEmpty());
+        QVERIFY(takes.removeUnusedFiles().isEmpty());
+    }
+
+    // The file a saved session names must be there when that session is
+    // opened again, however many recordings have superseded it since
+    void a_saved_session_keeps_its_file() {
+        SingingTakes takes;
+        QString recording = writeRecording(1000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 0, -1,
+                                      takeDirectory()).isEmpty());
+        QString saved = takes.getAudioPath();
+        takes.protectPath(saved);
+
+        QVERIFY(takes.spliceRecording(recording, 0, 5000, -1,
+                                      takeDirectory()).isEmpty());
+        QString second = takes.getAudioPath();
+        QVERIFY(takes.unusedWrittenFiles().isEmpty());
+
+        QVERIFY(takes.spliceRecording(recording, 0, 9000, -1,
+                                      takeDirectory()).isEmpty());
+        QCOMPARE(takes.unusedWrittenFiles(), QStringList { second });
+
+        QCOMPARE(takes.removeUnusedFiles(), QStringList { second });
+        QVERIFY(QFileInfo::exists(saved));
+        QVERIFY(QFileInfo::exists(takes.getAudioPath()));
+
+        // A new session starts with nothing to remember or protect
+        takes.clear();
+        QVERIFY(takes.getWrittenPaths().isEmpty());
+        QVERIFY(takes.unusedWrittenFiles().isEmpty());
+    }
+
     // The question before recording over something: asked inside the
     // covered ranges only, and not at all once the user has said so
     void overwrite_question() {

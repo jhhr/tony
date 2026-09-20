@@ -28,6 +28,7 @@
 #include "view/Pane.h"
 #include "view/PaneStack.h"
 #include "data/model/WaveFileModel.h"
+#include "data/model/ReadOnlyWaveFileModel.h"
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
@@ -139,6 +140,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_coverageStrip(nullptr),
     m_eraseSingingAction(nullptr),
     m_selectRecordingAction(nullptr),
+    m_openTakeCommand(nullptr),
     m_takePosition(0),
     m_takePreRoll(0),
     m_takeEnd(-1),
@@ -425,6 +427,14 @@ MainWindow::~MainWindow()
 {
     // Nothing must poll a take while the window is coming down
     stopTakePolling();
+
+    // The command history is a singleton and outlives the window, and a
+    // take's command holds the window it belongs to.  closeSession() has
+    // usually cleared it already; this is for the paths that do not go
+    // through it.  Before anything is torn down, while a command that has
+    // a layer to delete can still find the document
+    m_openTakeCommand = nullptr;
+    CommandHistory::getInstance()->clear();
 
     // Clean up secondary state that may not have been torn down if the
     // window was closed without going through closeSession() (e.g. on
@@ -2228,9 +2238,21 @@ MainWindow::closeSession()
     m_singingAudioMutedForTake = false;
     m_analysedMainModelId = {};
 
-    // The takes of the session go with it.  Their audio files are left
-    // where they are; deleting the ones nothing refers to any more is
-    // phase 6 of the takes work.
+    // Nothing is left waiting for a merge, and the history that holds the
+    // commands is cleared at the end of this function
+    m_openTakeCommand = nullptr;
+
+    // The takes of the session go with it, and so do the audio files this
+    // run wrote for them that nothing refers to any more (spec 5.4).  Not
+    // the file the take is in, even in a session that was never saved: it
+    // is the only copy of the singing apart from the raw recordings.  Not
+    // a file the user brought either -- only what Tony itself wrote
+    QStringList gone = m_takes->removeUnusedFiles();
+    if (!gone.isEmpty()) {
+        cerr << "MainWindow::closeSession: deleted " << gone.size()
+             << " superseded take audio file(s)" << endl;
+    }
+
     m_takes->clear();
     m_takePosition = 0;
     m_takePreRoll = 0;
@@ -2396,6 +2418,48 @@ MainWindow::openSingingAudioFile(QString path, sv::ModelId &modelId,
     return status;
 }
 
+MainWindow::FileOpenStatus
+MainWindow::openTakeAudioFile(QString path, sv::ModelId &modelId)
+{
+    // The audio file of a take, opened as a model of the document and
+    // nothing else: no pane, no layer, no entry in Recent Files and -- the
+    // point of it -- no command.
+    //
+    // openPath() cannot be used for these files.  It makes a pane through
+    // an AddPaneCommand, and CommandHistory::addCommand() clears the redo
+    // stack and deletes what is on it: a command pushed while an undo or a
+    // redo is running destroys the very command that is running.  Undo of
+    // a take swaps its audio, so this is not avoidable any other way.
+    modelId = {};
+
+    FileSource source(path);
+    if (!source.isAvailable()) return FileOpenFailed;
+    source.waitForData();
+
+    // The rate the rest of the session is at, as openAudio() works it out
+    sv_samplerate_t rate = 0;
+    if (Preferences::getInstance()->getFixedSampleRate() != 0) {
+        rate = Preferences::getInstance()->getFixedSampleRate();
+    } else if (Preferences::getInstance()->getResampleOnLoad() &&
+               getMainModel()) {
+        rate = getMainModel()->getSampleRate();
+    }
+
+    auto model = std::make_shared<ReadOnlyWaveFileModel>(source, rate);
+    if (!model->isOK()) return FileOpenFailed;
+
+    ModelId id = ModelById::add(model);
+    m_document->addNonDerivedModel(id);
+
+    // modelAdded() has just queued a call to set up a singing track on it,
+    // as it does for any audio model that is not the main one.  The caller
+    // makes the analyser itself, so that call must find nothing to do
+    m_pendingSingingModelId = {};
+
+    modelId = id;
+    return FileOpenSucceeded;
+}
+
 QString
 MainWindow::swapSingingAudio(QString path)
 {
@@ -2440,19 +2504,14 @@ MainWindow::swapSingingAudio(QString path)
     }
     Layer *selected = pane->getSelectedLayer();
 
-    // 1. The new audio, opened beside the reference as Load Singing Track
-    // does.  First, so that a file that cannot be read disturbs nothing
+    // 1. The new audio, as a model of the document and nothing more.
+    // First, so that a file that cannot be read disturbs nothing
     ModelId newAudio;
-    std::vector<Pane *> extraPanes;
-    FileOpenStatus status = openSingingAudioFile(path, newAudio, extraPanes);
+    FileOpenStatus status = openTakeAudioFile(path, newAudio);
 
     if (status != FileOpenSucceeded || newAudio.isNone()) {
-        for (Pane *extra : extraPanes) pruneExtraPane(extra, newAudio);
         return tr("The file \"%1\" could not be opened as audio").arg(path);
     }
-
-    // Not the analysis we want: it would be of the whole file
-    m_pendingSingingModelId = {};
 
     // 2. The old audio's waveform layer goes, and with it the old audio;
     // the pitch and notes layers stay in the pane with their events.  The
@@ -2478,12 +2537,10 @@ MainWindow::swapSingingAudio(QString path)
     setupSingingTrackAnalyser(newAudio, true);
     m_rebuildingTakeAudio = wasRebuilding;
 
-    // 5. The orphan waveform in the extra pane can go, now that the
-    // analyser's own waveform layer holds the new audio.  If the setup
-    // failed it is released with the orphan, and the layers are left
-    // showing a take whose audio has gone
-    for (Pane *extra : extraPanes) pruneExtraPane(extra, newAudio);
-
+    // 5. With no analyser there is no waveform layer holding the new
+    // audio, and the layers are left showing a take whose audio has gone.
+    // The model stays registered with the document, which releases it when
+    // it goes; see loadTakeAudio()
     if (!m_analyser2) {
         return tr("The singing track could not be set up on \"%1\"").arg(path);
     }
@@ -2616,7 +2673,7 @@ MainWindow::loadBackgroundMusic(QString path)
                 ColourDatabase *cdb = ColourDatabase::getInstance();
                 m_backgroundMusicLayer->setBaseColour(
                     cdb->getColourIndex(tr("Green")));
-                m_document->addLayerToView(pane, m_backgroundMusicLayer);
+                m_document->attachLayerToView(pane, m_backgroundMusicLayer);
 
                 // The waveform is only needed to register the model with
                 // the play source — we don't want it rendered on screen.
@@ -2730,6 +2787,9 @@ MainWindow::alternatePitchToggled()
         m_analyser->stackLayers();
         if (m_analyser2) m_analyser2->stackLayers();
         syncAlternatePitchTrack();
+        // As above: the layer arrives without a command, so the change to
+        // the session has to be noted here
+        documentModified();
     }
 
     updateLayerStatuses();
@@ -2868,6 +2928,11 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     // analysed, so the menus have to hear when one is done with
     connect(m_analyser2, SIGNAL(initialAnalysisCompleted()),
             this, SLOT(updateMenuStates()));
+
+    // The result of a ranged analysis completes the undo command of the
+    // recording that asked for it (spec 5.4)
+    connect(m_analyser2, &Analyser::rangedAnalysisMerged,
+            this, &MainWindow::takeAnalysisMerged);
 
     // deferAnalysis=true: only set up waveform/visualisation layers now;
     // pYIN will be run later by analyseNow() once recording is complete.
@@ -3168,7 +3233,7 @@ MainWindow::setupRealtimePitchLayer()
     ColourDatabase *cdb = ColourDatabase::getInstance();
     m_realtimePitchLayer->setBaseColour(cdb->getColourIndex(tr("Orange")));
 
-    m_document->addLayerToView(pane, m_realtimePitchLayer);
+    m_document->attachLayerToView(pane, m_realtimePitchLayer);
 
     // Create and start the pitch tracker.  Its thread reads new frames
     // from audioSourceId (the WritableWaveFileModel) and emits
@@ -3269,7 +3334,7 @@ MainWindow::setupRecordingLayer()
     }
 
     m_document->setModel(m_recordingLayer, m_currentRecordingModelId);
-    m_document->addLayerToView(pane, m_recordingLayer);
+    m_document->attachLayerToView(pane, m_recordingLayer);
     m_recordingLayer->showLayer(pane, false);
     if (auto params = m_recordingLayer->getPlayParameters()) {
         params->setPlayAudible(false);
@@ -3922,6 +3987,10 @@ MainWindow::finishSingingTake()
     QString error;
     Coverage::Range placed;
 
+    // What an undo of this recording has to put back
+    QString pathBefore = m_takes->getAudioPath();
+    Coverage coverageBefore = m_takes->getCoverage();
+
     if (recordingPath == "") {
         error = tr("The recording is no longer there to be used");
     } else {
@@ -3957,7 +4026,32 @@ MainWindow::finishSingingTake()
          << placed.start << "," << placed.end << ") of "
          << m_takes->getAudioPath() << endl;
 
+    // The command of this recording, made before the audio is shown and
+    // added to the history after: a range short enough is analysed and
+    // merged before the rebuild returns, and the merge has to find the
+    // command it belongs to.  Any command still waiting for an analysis is
+    // closed first -- the rebuild below folds that range into its own run,
+    // so the merge it was waiting for is never coming
+    closeOpenTakeCommand(false);
+    SingingTakeCommand *command =
+        new SingingTakeCommand(this, tr("Record Singing"),
+                               pathBefore, coverageBefore,
+                               m_takes->getAudioPath(), m_takes->getCoverage());
+    m_openTakeCommand = command;
+
     bool analysing = rebuildSingingTrackFromTake(placed);
+
+    if (analysing) {
+        // The events of this run are not in the command yet, and an undo
+        // pressed before they are abandons the run: a redo has to make it
+        // again, over the range the run really covers
+        command->setPendingAnalysis(m_takeAnalysisRange);
+    } else if (m_openTakeCommand == command) {
+        // Nothing was analysed, or it failed to start: nothing to wait for
+        m_openTakeCommand = nullptr;
+    }
+
+    addTakeCommand(command);
 
     // The coverage has changed whether or not the new audio could be
     // shown, and the strip says what it is now.  After the rebuild, not
@@ -4032,16 +4126,11 @@ MainWindow::loadTakeAudio(QString path)
     // a take that has its layers; the two are the same but for the
     // handing over
     ModelId audio;
-    std::vector<Pane *> extraPanes;
-    FileOpenStatus status = openSingingAudioFile(path, audio, extraPanes);
+    FileOpenStatus status = openTakeAudioFile(path, audio);
 
     if (status != FileOpenSucceeded || audio.isNone()) {
-        for (Pane *extra : extraPanes) pruneExtraPane(extra, audio);
         return tr("The file \"%1\" could not be opened as audio").arg(path);
     }
-
-    // Not the analysis we want: it would be of the whole file
-    m_pendingSingingModelId = {};
 
     // Layers of the take that no analyser owns are handed to the one
     // about to be made, as after a session restore
@@ -4054,11 +4143,11 @@ MainWindow::loadTakeAudio(QString path)
     setupSingingTrackAnalyser(audio, true);
     m_rebuildingTakeAudio = wasRebuilding;
 
-    // The orphan waveform in the extra pane can go now that the
-    // analyser's own waveform layer holds the audio
-    for (Pane *extra : extraPanes) pruneExtraPane(extra, audio);
-
     if (!m_analyser2) {
+        // The audio model is left registered with the document, which
+        // releases it when it goes: Document::releaseModel() is the
+        // document's own business, and holding a model nothing shows
+        // costs only memory
         return tr("The singing track could not be set up on \"%1\"").arg(path);
     }
 
@@ -4169,6 +4258,13 @@ MainWindow::analyseTakeCoverage()
     const Coverage::Ranges &ranges = m_takes->getCoverage().getRanges();
     if (ranges.empty()) return false;
 
+    // Analyse Now is not undoable (spec 7), and its merge must not be
+    // taken for the one a recording's command is waiting for.  The run
+    // that command was waiting for is about to be abandoned by this one,
+    // so the events it would have added never existed; the command keeps
+    // the range, and analyses it again if it is ever redone
+    closeOpenTakeCommand(false);
+
     return startTakeAnalysis(ranges.front().start, ranges.back().end);
 }
 
@@ -4205,6 +4301,10 @@ MainWindow::eraseSingingInSelection()
         error = tr("Could not find a directory to write the singing track "
                    "into");
     }
+
+    // What an undo of this erase has to put back
+    QString pathBefore = m_takes->getAudioPath();
+    Coverage coverageBefore = m_takes->getCoverage();
 
     Coverage::Ranges erased;
     if (error == "") {
@@ -4247,7 +4347,18 @@ MainWindow::eraseSingingInSelection()
     // is never to be that
     syncCoverageStrip();
 
-    eraseTakeEvents(erased);
+    TakeEvents::Change pitchChange, notesChange;
+    eraseTakeEvents(erased, &pitchChange, &notesChange);
+
+    // Undoable as a whole: the audio file, the coverage and the events
+    // that went with the singing.  Nothing was analysed, so the command is
+    // complete the moment it is made
+    SingingTakeCommand *command =
+        new SingingTakeCommand(this, tr("Erase Singing"),
+                               pathBefore, coverageBefore,
+                               m_takes->getAudioPath(), m_takes->getCoverage());
+    command->setEventChanges(pitchChange, notesChange);
+    addTakeCommand(command);
 
     if (showError != "") {
         // As after a splice that could not be shown: the take's audio
@@ -4268,7 +4379,9 @@ MainWindow::eraseSingingInSelection()
 }
 
 void
-MainWindow::eraseTakeEvents(const Coverage::Ranges &erased)
+MainWindow::eraseTakeEvents(const Coverage::Ranges &erased,
+                            TakeEvents::Change *pitchChange,
+                            TakeEvents::Change *notesChange)
 {
     if (!m_analyser2) return;
 
@@ -4282,13 +4395,14 @@ MainWindow::eraseTakeEvents(const Coverage::Ranges &erased)
         ModelById::getAs<NoteModel>(notesLayer->getModel()) : nullptr;
 
     // Straight on the models, the way an analysis result is merged: no
-    // command and no undo entry.  Phase 6 makes the erase undoable as a
-    // whole, from the changes TakeEvents works out here
+    // command of their own.  What was changed goes back to the caller,
+    // which puts the erase as a whole on the undo stack
     if (pitch) {
         TakeEvents::Change change =
             TakeEvents::erasePitch(pitch->getAllEvents(), erased);
         for (const Event &e : change.removed) pitch->remove(e);
         for (const Event &e : change.added) pitch->add(e);
+        if (pitchChange) *pitchChange = change;
     }
 
     if (notes) {
@@ -4296,7 +4410,185 @@ MainWindow::eraseTakeEvents(const Coverage::Ranges &erased)
             TakeEvents::eraseNotes(notes->getAllEvents(), erased);
         for (const Event &e : change.removed) notes->remove(e);
         for (const Event &e : change.added) notes->add(e);
+        if (notesChange) *notesChange = change;
     }
+}
+
+bool
+MainWindow::saveSessionFile(QString path)
+{
+    bool saved = MainWindowBase::saveSessionFile(path);
+
+    // The .ton that has just been written names the take's audio file.
+    // Recording into the take again writes another file and supersedes
+    // that one, but the saved session still needs it, so it is not ours to
+    // delete when the session closes
+    if (saved && m_takes) m_takes->protectPath(m_takes->getAudioPath());
+
+    return saved;
+}
+
+void
+MainWindow::addTakeCommand(SingingTakeCommand *command)
+{
+    if (!command) return;
+
+    // Undo after a take must undo the take, not take away some layer of
+    // Tony's own.  Everything this application adds to a pane is kept off
+    // the undo stack (Document::attachLayerToView()), but two places in
+    // the svapp fork still push commands that Tony cannot reach:
+    // MainWindowBase::record() in RecordCreateAdditionalModel mode
+    // ("Import Recorded Audio") and MainWindowBase::openAudio() in
+    // CreateAdditionalModel mode ("Import \"...\""), which every swap of
+    // the take's audio goes through.  Each makes a pane and a layer that
+    // Tony then deletes, so their unexecute() would work on freed memory.
+    // Until the fork stops making them, the history is cleared here:
+    // there is then one entry, and Undo is the take.  Nothing of an
+    // earlier operation is lost from disk -- every audio file a take has
+    // had stays there until the session closes.
+    //
+    // Any command still waiting for a merge goes with it, so nothing is
+    // left pointing at a command that has been deleted (the command being
+    // added is not on the stack yet, so the clear cannot reach it)
+    if (m_openTakeCommand != command) m_openTakeCommand = nullptr;
+    CommandHistory::getInstance()->clear();
+
+    // Already done: the take's audio has been written and is on screen.
+    // CommandHistory marks the document modified, which is right for both
+    // of these operations
+    CommandHistory::getInstance()->addCommand(command, false);
+}
+
+void
+MainWindow::closeOpenTakeCommand(bool cancelAnalysis)
+{
+    if (cancelAnalysis && m_analyser2 && m_analyser2->isAnalysingRange()) {
+        cerr << "MainWindow::closeOpenTakeCommand: abandoning the analysis of "
+             << "[" << m_takeAnalysisRange.start << ","
+             << m_takeAnalysisRange.end << ")" << endl;
+        m_analyser2->cancelRangedAnalysis();
+        m_takeAnalysisRange = Coverage::Range();
+
+        // The live dots of the take were waiting for that analysis to
+        // replace them, and it is not coming
+        teardownRealtimePitchLayer();
+
+        // Erasing is to be had again now that nothing is running
+        updateMenuStates();
+    }
+
+    m_openTakeCommand = nullptr;
+}
+
+void
+MainWindow::takeAnalysisMerged()
+{
+    if (!m_openTakeCommand || !m_analyser2) return;
+
+    // The recording is on the undo stack already, with the splice in it
+    // and nothing of the analysis: the events the merge has just changed
+    // complete it, so that one Undo takes both back
+    m_openTakeCommand->setEventChanges(m_analyser2->getRangedPitchChange(),
+                                       m_analyser2->getRangedNotesChange());
+    m_openTakeCommand = nullptr;
+}
+
+void
+MainWindow::applyTakeEventChanges(const TakeState &state)
+{
+    if (!m_analyser2) return;
+
+    Layer *pitchLayer = m_analyser2->getLayer(Analyser::PitchTrack);
+    Layer *notesLayer = m_analyser2->getLayer(Analyser::Notes);
+
+    auto pitch = pitchLayer ?
+        ModelById::getAs<SparseTimeValueModel>(pitchLayer->getModel()) :
+        nullptr;
+    auto notes = notesLayer ?
+        ModelById::getAs<NoteModel>(notesLayer->getModel()) : nullptr;
+
+    // The removals first, in both directions: where the audio did not
+    // change, an analysis can put back the very event it took out, and
+    // that event has to be there once at the end and not twice
+    if (pitch) {
+        for (const Event &e : state.pitchRemove) pitch->remove(e);
+        for (const Event &e : state.pitchAdd) pitch->add(e);
+    }
+    if (notes) {
+        for (const Event &e : state.notesRemove) notes->remove(e);
+        for (const Event &e : state.notesAdd) notes->add(e);
+    }
+}
+
+bool
+MainWindow::applyTakeState(SingingTakeCommand *command, const TakeState &state)
+{
+    // An undo or a redo of a recording or an erase.  Nothing of the
+    // command is a layer or a model: what the take is shown with now is
+    // found here, now, whatever it has been replaced by since
+    if (!m_document) return false;
+
+    // A recording can be undone while the analysis of it is still
+    // running.  That result belongs to the state being left behind, so the
+    // run is abandoned rather than allowed to land on the take we are
+    // putting back; the command remembers the range, and analyses it again
+    // if it is redone
+    closeOpenTakeCommand(true);
+
+    m_takes->restoreTake(state.path, state.coverage);
+
+    QString error;
+
+    if (state.path == "") {
+        // Undo of the first recording of a take: no audio to show, and no
+        // pitch or notes either, exactly as before that recording.  The
+        // next Record makes them again (rebuildSingingTrackFromTake())
+        teardownSingingTrackAnalyser();
+    } else {
+        bool haveLayers = m_analyser2 &&
+            m_analyser2->getLayer(Analyser::PitchTrack) &&
+            m_analyser2->getLayer(Analyser::Notes);
+        error = (haveLayers ? swapSingingAudio(state.path)
+                 : loadTakeAudio(state.path));
+        if (error == "" && m_analyser2) {
+            error = m_analyser2->addEmptyAnalyses();
+        }
+    }
+
+    // After the swap, which puts the pane's selected layer back as it
+    // found it, and the strip is never to be that
+    syncCoverageStrip();
+
+    if (error == "") applyTakeEventChanges(state);
+
+    if (error != "") {
+        QMessageBox::warning
+            (this,
+             tr("Failed to show the singing track"),
+             tr("<b>The singing track could not be shown as it was</b>"
+                "<p>%1</p><p>The take's audio is in the file \"%2\".</p>")
+             .arg(error).arg(state.path),
+             QMessageBox::Ok);
+    }
+
+    // A range whose analysis never finished: its result is in no event
+    // list, so it is analysed again rather than restored, and the command
+    // is open once more until that merge lands
+    if (error == "" && state.analyse.length() > 0) {
+        m_openTakeCommand = command;
+        if (!startTakeAnalysis(state.analyse.start, state.analyse.end) &&
+            m_openTakeCommand == command) {
+            m_openTakeCommand = nullptr;
+        }
+    }
+
+    updateLayerStatuses();
+    updateMenuStates();
+
+    emit activity(tr("The singing track is the take's file \"%1\" again")
+                  .arg(state.path == "" ? tr("(none)") : state.path));
+
+    return error == "";
 }
 
 void
@@ -5740,7 +6032,7 @@ MainWindow::analyseNewMainModel()
         SVDEBUG << "MainWindow::analyseNewMainModel: Adding pane and selection strip (ruler)" << endl;
         pane = m_paneStack->addPane();
         selectionStrip = m_paneStack->addPane();
-        m_document->addLayerToView
+        m_document->attachLayerToView
             (selectionStrip,
              m_document->createMainModelLayer(LayerFactory::TimeRuler));
     } else {

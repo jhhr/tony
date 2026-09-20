@@ -52,9 +52,11 @@
 #include "data/fileio/FileSource.h"
 #include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
+#include "base/Command.h"
 #include "base/PlayParameters.h"
 #include "base/RecordDirectory.h"
 #include "transform/ModelTransformerFactory.h"
+#include "widgets/CommandHistory.h"
 #include "widgets/InteractiveFileFinder.h"
 
 #include <QObject>
@@ -541,6 +543,76 @@ class TestRecordWorkflow : public QObject
         QVERIFY(m_window->analyser2());
         QCOMPARE(topNoteLayerInPane0(),
                  m_window->analyser2()->getLayer(Analyser::Notes));
+    }
+
+    // Undo and redo, and what they say they did.  CommandHistory has no
+    // accessor for the top of its stack, and the name of the command it
+    // unexecutes is the same thing; "" means there was nothing to undo
+    QString undoOnce() {
+        QString name;
+        auto *history = sv::CommandHistory::getInstance();
+        auto conn = connect(history, &sv::CommandHistory::commandUnexecuted,
+                            this, [&name](sv::Command *c) {
+                                if (c) name = c->getName();
+                            });
+        history->undo();
+        disconnect(conn);
+        return name;
+    }
+
+    QString redoOnce() {
+        QString name;
+        auto *history = sv::CommandHistory::getInstance();
+        auto conn = connect(history,
+                            qOverload<sv::Command *>
+                            (&sv::CommandHistory::commandExecuted),
+                            this, [&name](sv::Command *c) {
+                                if (c) name = c->getName();
+                            });
+        history->redo();
+        disconnect(conn);
+        return name;
+    }
+
+    // Everything about the singing of a take that an undo or a redo has
+    // to restore exactly
+    struct TakeSnapshot {
+        QString path;
+        Coverage::Ranges coverage;
+        sv::EventVector strip;
+        sv::EventVector pitch;
+        sv::EventVector notes;
+        sv::sv_frame_t frames = -1;
+    };
+
+    TakeSnapshot snapshotTake() {
+        TakeSnapshot s;
+        s.path = m_window->takes()->getAudioPath();
+        s.coverage = m_window->takes()->getCoverage().getRanges();
+        s.strip = stripEvents();
+        Analyser *a2 = m_window->analyser2();
+        s.pitch = pitchEvents(a2);
+        s.notes = a2 ? noteEvents(a2->getLayer(Analyser::Notes))
+            : sv::EventVector();
+        if (takeAudio()) s.frames = takeAudio()->getFrameCount();
+        return s;
+    }
+
+    // The same take again, down to every pitch event and note.  A model
+    // of a file that has just been opened takes a moment to say how long
+    // it is, so the frame count is the one thing worth waiting for
+    void verifyTakeMatches(const TakeSnapshot &s) {
+        QCOMPARE(m_window->takes()->getAudioPath(), s.path);
+        QCOMPARE(m_window->takes()->getCoverage().getRanges(), s.coverage);
+        QCOMPARE(stripEvents(), s.strip);
+        Analyser *a2 = m_window->analyser2();
+        QCOMPARE(pitchEvents(a2), s.pitch);
+        QCOMPARE(a2 ? noteEvents(a2->getLayer(Analyser::Notes))
+                 : sv::EventVector(), s.notes);
+        if (s.frames >= 0) {
+            QTRY_VERIFY(takeAudio() &&
+                        takeAudio()->getFrameCount() == s.frames);
+        }
     }
 
     int alternateLayersInDocument() {
@@ -3256,6 +3328,277 @@ private slots:
         QVERIFY(!m_window->selectRecordingAction()->isEnabled());
         QTest::qWait(300);
         stopTake();
+    }
+
+    // Undo and redo of the singing of a take (spec 5.4)
+
+    // A recording over material that is already there, undone and redone:
+    // the audio file, the coverage, the strip and every pitch event and
+    // note come back exactly as they were
+    void undo_redo_a_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 8.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // The material the second recording is undone back to
+        take(1000);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot before = snapshotTake();
+        QVERIFY(!before.pitch.empty());
+        QVERIFY(!before.notes.empty());
+        QVERIFY(before.frames > 0);
+
+        // A second recording, into the silence after the first
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        TakeSnapshot after = snapshotTake();
+        QVERIFY(after.path != before.path);
+        QCOMPARE(int(after.coverage.size()), 2);
+        QVERIFY(after.frames > before.frames);
+        Coverage::Range recorded = after.coverage[1];
+        QVERIFY(takeAudioRms(recorded.start + 1000, recorded.end - 1000)
+                > 0.01);
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        verifyTakeMatches(before);
+        if (QTest::currentTestFailed()) return;
+
+        // The file the take plays is the one from before, in which the
+        // second recording's range was never anything but silence
+        QVERIFY(takeAudioRms(recorded.start + 1000,
+                             std::min(recorded.end, before.frames) - 1000)
+                < 1e-6);
+        QVERIFY(!m_window->analysingRange());
+        verifyPlaySourceClean();
+
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        verifyTakeMatches(after);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(takeAudioRms(recorded.start + 1000, recorded.end - 1000)
+                > 0.01);
+
+        // The redo restored the analysis from the command; it did not run
+        // pYIN again
+        QVERIFY(!m_window->analysingRange());
+        verifyPlaySourceClean();
+    }
+
+    // An erase undone and redone, the same way
+    void undo_redo_an_erase() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(sv::sv_frame_t(1.0 * rate));
+        take(1200);
+        if (QTest::currentTestFailed()) return;
+
+        TakeSnapshot before = snapshotTake();
+        QCOMPARE(int(before.coverage.size()), 1);
+        QVERIFY(!before.pitch.empty());
+        QVERIFY(!before.notes.empty());
+
+        Coverage::Range recorded = before.coverage[0];
+        sv::sv_frame_t from = recorded.start + sv::sv_frame_t(0.4 * rate);
+        sv::sv_frame_t to = recorded.start + sv::sv_frame_t(0.8 * rate);
+        m_window->selectRange(from, to);
+        m_window->doEraseSingingInSelection();
+
+        TakeSnapshot after = snapshotTake();
+        QVERIFY(after.path != before.path);
+        QCOMPARE(int(after.coverage.size()), 2);
+        QVERIFY(eventsBetween(after.pitch, from, to).empty());
+        QVERIFY(takeAudioRms(from + 1000, to - 1000) < 1e-6);
+
+        QCOMPARE(undoOnce(), QString("Erase Singing"));
+        verifyTakeMatches(before);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(takeAudioRms(from + 1000, to - 1000) > 0.01);
+
+        QCOMPARE(redoOnce(), QString("Erase Singing"));
+        verifyTakeMatches(after);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(takeAudioRms(from + 1000, to - 1000) < 1e-6);
+
+        // The selection is still there and the reference's own
+        // re-analysis of it may still be running: let it finish before
+        // the window goes
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        verifyPlaySourceClean();
+    }
+
+    // Undo pressed while the analysis of the recorded range is still
+    // running: the run is abandoned, so nothing of it lands on the take
+    // that has been put back.  The redo has to run it again -- that
+    // result never existed to be restored
+    void undo_during_analysis_then_redo() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 8.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(1000);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot before = snapshotTake();
+        QVERIFY(!before.pitch.empty());
+
+        // Stop splices the recording in and starts the analysis of it
+        // there and then
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(700);
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY2(m_window->analysingRange(),
+                 "the race was not set up: no analysis was running after Stop");
+        sv::sv_frame_t analysedStart = m_window->analysedRangeStart();
+        sv::sv_frame_t analysedEnd = m_window->analysedRangeEnd();
+        QVERIFY(analysedEnd > analysedStart);
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QVERIFY2(!m_window->analysingRange(),
+                 "the analysis was left running over the undone take");
+        verifyTakeMatches(before);
+        if (QTest::currentTestFailed()) return;
+
+        // The live dots were waiting for that analysis; nothing is
+        QVERIFY(!m_window->realtimeLayer());
+        QVERIFY(m_window->eraseSingingAction()->isEnabled() ||
+                m_window->selections().empty());
+
+        // Redo: the range is analysed again, and this time the result
+        // reaches the take's pitch track
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        QCOMPARE(m_window->analysedRangeStart(), analysedStart);
+        QCOMPARE(m_window->analysedRangeEnd(), analysedEnd);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+        QVERIFY2(!eventsBetween(pitchEvents(m_window->analyser2()),
+                                ranges[1].start, ranges[1].end).empty(),
+                 "the redone recording was never analysed");
+        verifyPlaySourceClean();
+    }
+
+    // The first recording of a take undone: there is no take and no
+    // singing track at all, as before it, and Record still works
+    void undo_a_first_take_then_record_again() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 8.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        int panes = m_window->paneStack()->getPaneCount();
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->takes()->haveTake());
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QVERIFY(!m_window->takes()->haveTake());
+        QVERIFY(m_window->takes()->getCoverage().isEmpty());
+        QVERIFY2(!m_window->analyser2(),
+                 "the singing track was left behind with no audio");
+        QVERIFY(!m_window->coverageStrip()->isShown());
+        QCOMPARE(stripLayersInPane0(), 0);
+        QCOMPARE(noteLayersInPane0(), 1); // the reference's
+        QCOMPARE(m_window->paneStack()->getPaneCount(), panes);
+        verifyPlaySourceClean();
+
+        // and the reference is untouched
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(m_window->analyser())),
+                           lowHz)) < 10.0);
+
+        // Recording again makes a take from nothing, as the first
+        // recording did
+        m_window->seekTo(sv::sv_frame_t(1.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->takes()->haveTake());
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, sv::sv_frame_t(1.0 * rate));
+        QVERIFY(m_window->analyser2());
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+        QVERIFY(!noteEvents(m_window->analyser2()
+                            ->getLayer(Analyser::Notes)).empty());
+        verifyStripMatchesTake();
+        verifyPlaySourceClean();
+    }
+
+    // What one take leaves on the undo stack: the take, and nothing of
+    // the layers and panes Tony makes for itself along the way
+    void undo_stack_top_after_a_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // Nothing of loading and analysing the reference is undoable
+        // either: those layers are Tony's, not the user's
+        QCOMPARE(undoOnce(), QString());
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->isDocumentModified());
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QVERIFY(!m_window->takes()->haveTake());
+        QCOMPARE(undoOnce(), QString());
+
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        QVERIFY(m_window->takes()->haveTake());
+        QCOMPARE(redoOnce(), QString());
+    }
+
+    // The audio files a take has been through are kept until the session
+    // closes, and then only the ones nothing refers to any more go
+    void take_files_deleted_on_close() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        QStringList written = m_window->takes()->getWrittenPaths();
+        QCOMPARE(int(written.size()), 2);
+        QCOMPARE(written.last(), m_window->takes()->getAudioPath());
+        for (const QString &path : written) {
+            QVERIFY2(QFileInfo::exists(path), qPrintable(path));
+        }
+
+        // Only the superseded one is unused: the take's own file is kept
+        // even though this session was never saved
+        QCOMPARE(m_window->takes()->unusedWrittenFiles(),
+                 QStringList { written.first() });
+
+        m_window->doCloseSession();
+
+        QVERIFY2(!QFileInfo::exists(written.first()),
+                 "a superseded take audio file was left behind");
+        QVERIFY2(QFileInfo::exists(written.last()),
+                 "the take's own audio file was deleted");
+
+        // The commands that held those paths went with the session
+        QCOMPARE(undoOnce(), QString());
     }
 
     // The alternate pitch track: the reference pitch track moved by
