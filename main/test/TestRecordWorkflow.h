@@ -2260,6 +2260,60 @@ private slots:
                  "the take's notes did not come back when the take stopped");
     }
 
+    // The recording is held in the pane by a hidden waveform layer
+    // (setupRecordingLayer), because the document needs a layer to hold
+    // the model. A hidden layer must not be the pane's work model: the
+    // pane blocks off everything past that model's end frame with a pale
+    // wash and a vertical line, and a recording's end frame crawls along
+    // behind the playback cursor as it is written, so the pane would be
+    // greyed out from there to the right for the whole take.
+    void recording_does_not_grey_out_the_pane() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        QVERIFY(pane);
+        QCOMPARE(pane->getWorkModel(), m_window->mainModelId());
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->recordingLayer());
+        QVERIFY(!m_window->currentRecordingModelId().isNone());
+        QVERIFY2(pane->getWorkModel() != m_window->currentRecordingModelId(),
+                 "the pane blocks itself off at the end of the recording");
+        QCOMPARE(pane->getWorkModel(), m_window->mainModelId());
+
+        QTest::qWait(600);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(pane->getWorkModel(), m_window->mainModelId());
+
+        // And again with a take already there, whose own audio layer is
+        // in the pane as well
+        m_window->setRecordOverAnswer(true);
+        m_window->seekTo(0);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(pane->getWorkModel() != m_window->currentRecordingModelId(),
+                 "the pane blocks itself off at the end of the recording");
+
+        // Even with the pin taken off, the hidden layer that holds the
+        // recording must not be the one the pane chooses: a layer that
+        // is not shown is no part of what the pane is showing
+        pane->setWorkModel({});
+        QVERIFY2(pane->getWorkModel() != m_window->currentRecordingModelId(),
+                 "the model of a hidden layer was chosen as the work model");
+        pane->setWorkModel(m_window->mainModelId());
+
+        QTest::qWait(600);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(pane->getWorkModel(), m_window->mainModelId());
+    }
+
     // Review finding 3, at the device. The read-ahead that keeps the
     // take out of the output in no_self_monitoring is taken away here:
     // once more has been recorded than the play source buffers, playback

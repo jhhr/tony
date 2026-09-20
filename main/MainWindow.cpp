@@ -7352,6 +7352,14 @@ MainWindow::analyseNewMainModel()
 
     if (pane) {
 
+        // The reference is the work of this pane, and its end is the end
+        // of the song.  Without saying so, the pane blocks itself off at
+        // the end of whichever audio model happens to be topmost: the
+        // take's file, which stops where the singing did, or the
+        // recording in progress, whose end crawls along behind the
+        // playback cursor.  Either greys out the pane from there on.
+        pane->setWorkModel(getMainModelId());
+
         disconnect(pane, SIGNAL(regionOutlined(QRect)),
                    pane, SLOT(zoomToRegion(QRect)));
         connect(pane, SIGNAL(regionOutlined(QRect)),

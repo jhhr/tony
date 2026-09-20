@@ -74,6 +74,13 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `plotStyle` attribute.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
+- `Pane::setWorkModel()` / `getWorkModel()`: which model's extents are blocked off at the
+  ends of the pane (a pale wash and a line), and whose duration, title and alignment are
+  reported. The scan that chooses one now skips layers dormant in that pane. Tony's pane
+  holds three audio models, and the pane used to block itself off at the end of whichever
+  was topmost -- the take's file, which stops where the singing did, or the recording in
+  progress, whose end crawls along behind the playback cursor. `MainWindow` names the
+  reference instead.
 - `Layer::setSavedInSession(false)`: `View::toXml()` leaves the layer out.
 
 ## Known defects in the forks, not fixed

@@ -60,6 +60,10 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   model; `MainWindow::onRealtimePitchDetected()` writes it on the GUI thread (queued
   connection). Stop the tracker **before** releasing the model it reads.
 
+The reference is the pane's **work model** (`Pane::setWorkModel()`, svgui fork, set in
+`analyseNewMainModel()`). Without that the pane greys itself out from the end of the
+take's audio file, or of the recording being written.
+
 Colours: reference pitch black / notes bright blue; singing and live dots orange / notes
 bright purple; alternate pitch faded brown, dark brown while a take is recorded.
 
