@@ -245,6 +245,16 @@ SingingTakes::restoreTake(QString path, const Coverage &coverage)
 }
 
 void
+SingingTakes::relocateTake(int index, QString path)
+{
+    if (index < 0 || index >= int(m_takes.size())) return;
+    if (path == "" || m_takes[index].audioPath == path) return;
+
+    m_takes[index].audioPath = path;
+    if (!m_written.contains(path)) m_written.push_back(path);
+}
+
+void
 SingingTakes::protectPath(QString path)
 {
     if (path != "" && !m_protected.contains(path)) m_protected.push_back(path);

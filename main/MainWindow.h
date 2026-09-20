@@ -119,6 +119,11 @@ protected slots:
     virtual void saveSession();
     virtual void saveSessionInAudioPath();
     virtual void saveSessionAs();
+
+    // Save the session to this file and make it the session's own file:
+    // what Save As and Save In Audio Path do once they have a path.  False
+    // if it could not be saved, in which case the user has been told
+    bool saveSessionToPath(QString path);
     virtual void exportPitchLayer();
     virtual void exportNoteLayer();
     virtual void importPitchLayer();
@@ -339,6 +344,36 @@ protected:
     // is a take and none yet, take it away when the take goes
     void syncCoverageStrip();
 
+    // --- The audio folder of the session (spec 6.4) ---
+
+    // Where the next combined audio file of a take is to be written: the
+    // session's own "<name>.takes" folder once the session has a file, and
+    // the record directory before its first save, the save copying what is
+    // there into the folder.  "" if neither could be had
+    QString takeAudioDirectory();
+
+    // The session's takes folder, made if it is not there yet.  "" if it
+    // could not be made.  A folder this run made and left empty is removed
+    // again when the session closes
+    QString ensureTakesFolder(QString sessionPath);
+
+    // The takes folders this run made, so that an empty one can be taken
+    // away again on close.  A folder with anything in it is never removed:
+    // what is in it is not necessarily ours
+    QStringList m_takeFoldersMade;
+
+    // The session file being written, from the start of saveSessionFile()
+    // to its end: toXml() names each take's audio relative to it
+    QString m_savingSessionPath;
+
+    // Copy the audio of every take that is not in the folder of the
+    // session being saved to into it, and point the takes at the copies
+    // (TakesFile::copyTakeAudioInto()).  Copied, not moved: the active
+    // take's model has its file open.  False if a copy failed, in which
+    // case the user has been told and nothing has changed: the session is
+    // not to be saved naming files that are not there
+    bool copyTakeAudioForSave(QString sessionPath);
+
     // --- Several takes (spec 5.3) ---
     //
     // Every take of the session has its three layers in pane 0, named
@@ -379,8 +414,10 @@ protected:
     // claims them (no analysis), its coverage strip, and the layers
     // themselves visible, audible as the user asked and within reach of
     // the editing tools.  False if its audio could not be opened, in
-    // which case the user has been told
-    bool activateTake();
+    // which case the user has been told -- unless warnIfNoAudio is false,
+    // for a session load that has one warning of its own covering all of
+    // its takes
+    bool activateTake(bool warnIfNoAudio = true);
 
     // The takes of a session that has just been read back: the <takes>
     // element of the file says which takes there are, what their audio

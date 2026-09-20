@@ -30,6 +30,7 @@
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
 #include "../TakeLayers.h"
+#include "../TakesFile.h"
 
 #include "version.h"
 
@@ -136,6 +137,12 @@ public:
     }
     sv::sv_frame_t analysedRangeStart() { return m_takeAnalysisRange.start; }
     sv::sv_frame_t analysedRangeEnd() { return m_takeAnalysisRange.end; }
+
+    // Save As, with the file name given here instead of by a dialog: the
+    // session's own file is set, so that what is recorded next goes into
+    // its takes folder
+    bool doSaveSessionAs(QString path) { return saveSessionToPath(path); }
+    QString sessionFile() { return m_sessionFile; }
 
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
@@ -743,6 +750,17 @@ class TestRecordWorkflow : public QObject
         QVERIFY(m_window->analyser2());
         QCOMPARE(topNoteLayerInPane0(),
                  m_window->analyser2()->getLayer(Analyser::Notes));
+    }
+
+    // The take has its sound: there is audio under it, and the file the
+    // take names holds the singing
+    void verifyTakeHasSound() {
+        QVERIFY(m_window->takes()->haveTake());
+        QVERIFY(takeAudio());
+        Coverage::Ranges ranges = m_window->takes()->getCoverage().getRanges();
+        QVERIFY(!ranges.empty());
+        QVERIFY2(takeAudioRms(ranges[0].start + 1000, ranges[0].end - 1000) >
+                 0.01, "the file the take names holds no sound");
     }
 
     // Undo and redo, and what they say they did.  CommandHistory has no
@@ -4370,6 +4388,15 @@ private slots:
 
         QString session = m_dir.filePath("two-takes.ton");
         QVERIFY(m_window->saveSessionFile(session));
+
+        // The save copied both takes' audio into the session's own folder
+        // and the file names it there (spec 6.4), so that is where the
+        // takes come back from
+        first.path = m_window->takes()->getTake(0)->audioPath;
+        second.path = m_window->takes()->getTake(1)->audioPath;
+        QVERIFY2(TakesFile::isInFolder(TakesFile::takesFolder(session),
+                                       first.path), qPrintable(first.path));
+
         reopenSession(session);
         if (QTest::currentTestFailed()) return;
 
@@ -4474,16 +4501,21 @@ private slots:
 
         take(600);
         if (QTest::currentTestFailed()) return;
-        QString firstSaved = m_window->takes()->getAudioPath();
+        QString firstRecorded = m_window->takes()->getAudioPath();
 
         m_window->doNewEmptyTake();
         m_window->seekTo(sv::sv_frame_t(2.0 * rate));
         take(600);
         if (QTest::currentTestFailed()) return;
-        QString secondSaved = m_window->takes()->getAudioPath();
 
         QString session = m_dir.filePath("protected.ton");
-        QVERIFY(m_window->saveSessionFile(session));
+        QVERIFY(m_window->doSaveSessionAs(session));
+
+        // What the saved session names is the copy of each take's audio in
+        // its own folder (spec 6.4)
+        QString firstSaved = m_window->takes()->getTake(0)->audioPath;
+        QString secondSaved = m_window->takes()->getTake(1)->audioPath;
+        QVERIFY(firstSaved != firstRecorded);
 
         // Recording into the first take again supersedes the file the saved
         // session names for it
@@ -4492,8 +4524,13 @@ private slots:
         take(600);
         if (QTest::currentTestFailed()) return;
         QVERIFY(m_window->takes()->getAudioPath() != firstSaved);
-        QVERIFY2(m_window->takes()->unusedWrittenFiles().isEmpty(),
+
+        QStringList unused = m_window->takes()->unusedWrittenFiles();
+        QVERIFY2(!unused.contains(firstSaved) && !unused.contains(secondSaved),
                  "an audio file the saved session names was up for deletion");
+        QVERIFY2(unused.contains(firstRecorded),
+                 "the recording the save copied into the folder is still "
+                 "referred to by something");
 
         m_window->doCloseSession();
 
@@ -4503,6 +4540,12 @@ private slots:
         QVERIFY2(QFileInfo::exists(secondSaved),
                  "the audio the saved session names for the second take was "
                  "deleted when the session closed");
+
+        // The recording the save copied into the folder is nobody's now:
+        // that copy is the take's audio, and no undo is left to want this
+        QVERIFY2(!QFileInfo::exists(firstRecorded),
+                 "the recording that the save copied into the session's "
+                 "folder was left behind in the record directory");
     }
 
     // A take name with characters that XML cares about
@@ -4524,6 +4567,8 @@ private slots:
 
         QString session = m_dir.filePath("entities.ton");
         QVERIFY(m_window->saveSessionFile(session));
+        // The take's audio is in the session's folder now (spec 6.4)
+        before.path = m_window->takes()->getAudioPath();
         reopenSession(session);
         if (QTest::currentTestFailed()) return;
 
@@ -4549,10 +4594,12 @@ private slots:
 
         take(600);
         if (QTest::currentTestFailed()) return;
-        QString takePath = m_window->takes()->getAudioPath();
 
         QString session = m_dir.filePath("old.ton");
         QVERIFY(m_window->saveSessionFile(session));
+        // The save copied the take's audio into the session's folder; that
+        // copy is what the file names, and what must be left alone below
+        QString takePath = m_window->takes()->getAudioPath();
 
         // As a .ton written before this phase: the same document without
         // the element Tony's own pass reads
@@ -4606,6 +4653,9 @@ private slots:
 
         QString session = m_dir.filePath("missing.ton");
         QVERIFY(m_window->saveSessionFile(session));
+        // The save copied the take's audio into the session's folder, and
+        // that copy is the file the session names (spec 6.4)
+        before.path = m_window->takes()->getAudioPath();
 
         // The session names the take's audio once, in the takes element:
         // the document does not carry the audio model as well (the take's
@@ -4628,15 +4678,12 @@ private slots:
                  MainWindow::FileOpenSucceeded);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
 
-        // One warning of ours, naming the take and the file that is
-        // missing.  The session reader has its own two to say first -- it
-        // asks whether to locate the audio model that Document::toXml()
-        // wrote for the take's waveform layer, and then says the session is
-        // incomplete -- which is the reason for the fork change asked for
-        // in the phase's notes; the takes themselves need neither
-        QStringList ours = dialogsMatching("shown without its audio");
+        // One warning of ours for the session, naming the folder the takes'
+        // audio was expected in rather than one warning per take (spec 6.4)
+        QStringList ours = dialogsMatching("without their audio");
         QCOMPARE(ours.size(), 1);
-        QVERIFY2(ours[0].contains(QFileInfo(before.path).fileName()),
+        QVERIFY2(ours[0].contains(QFileInfo(TakesFile::takesFolder(session))
+                                  .fileName()),
                  qPrintable(ours[0]));
 
         // The take is there, with its pitch, its notes and its coverage,
@@ -4672,6 +4719,333 @@ private slots:
         QCOMPARE(m_window->takes()->getAudioPath(), before.path);
         QCOMPARE(m_window->takes()->getCoverage().getRanges(), before.coverage);
         QCOMPARE(stripEvents(), before.strip);
+    }
+
+    // --- The takes folder of a session (spec 6.4) ---
+    //
+    // A take's combined audio belongs to the song: it lives in
+    // "<session>.takes" beside the .ton, which names it relative to
+    // itself, so that the two can be moved together.  Before the first
+    // save there is no folder, so the files are written among the raw
+    // recordings and the save copies them across.
+
+    // The first save copies the take's audio into the session's folder and
+    // names it there, relative to the .ton.  The recording it was copied
+    // from belongs to nobody afterwards, and goes when the session closes
+    void first_save_copies_the_take_audio() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QString recorded = m_window->takes()->getAudioPath();
+
+        QString session = m_dir.filePath("copied.ton");
+        QString folder = TakesFile::takesFolder(session);
+        QVERIFY(!QFileInfo::exists(folder));
+
+        QVERIFY(m_window->doSaveSessionAs(session));
+        QCOMPARE(m_window->sessionFile(), session);
+
+        // The take's audio is the copy in the folder, under the name it had
+        QString copied = m_window->takes()->getAudioPath();
+        QVERIFY2(TakesFile::isInFolder(folder, copied), qPrintable(copied));
+        QCOMPARE(QFileInfo(copied).fileName(), QFileInfo(recorded).fileName());
+        QVERIFY(QFileInfo::exists(copied));
+
+        // Copied and not moved: the audio model has the old file open and
+        // goes on reading it
+        QVERIFY2(QFileInfo::exists(recorded),
+                 "the recording was moved out from under the open model");
+        QVERIFY(takeAudio());
+
+        // And the file names it relative to itself
+        {
+            sv::BZipFileDevice file(session);
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            QByteArray document = file.readAll();
+            file.close();
+            QByteArray wanted = "audio=\"copied.takes/" +
+                QFileInfo(copied).fileName().toUtf8() + "\"";
+            QVERIFY2(document.contains(wanted), qPrintable(document));
+        }
+
+        // Nothing refers to the recording now, and it is up for deletion
+        // when the session closes
+        QCOMPARE(m_window->takes()->unusedWrittenFiles(),
+                 QStringList { recorded });
+
+        // An undo and a redo after the save still find the files the
+        // commands hold: the recordings are there until the session closes.
+        // The redo leaves the take pointing outside the folder again, so the
+        // next save copies it in again -- beside the copy that is there
+        // already, never over it
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QVERIFY(!m_window->takes()->haveTake());
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        QCOMPARE(m_window->takes()->getAudioPath(), recorded);
+
+        QVERIFY(m_window->doSaveSessionAs(session));
+        QString again = m_window->takes()->getAudioPath();
+        QVERIFY2(TakesFile::isInFolder(folder, again), qPrintable(again));
+        QVERIFY2(again != copied, "the second copy was written over the first");
+        QVERIFY(QFileInfo::exists(copied));
+
+        m_window->doCloseSession();
+        QVERIFY2(!QFileInfo::exists(recorded),
+                 "the recording the save copied was left behind");
+        QVERIFY2(QFileInfo::exists(copied) && QFileInfo::exists(again),
+                 "audio that a saved session named was deleted on close");
+    }
+
+    // Once the session has a file, the next recording is written straight
+    // into its folder
+    void record_after_saving_writes_into_the_folder() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        QString session = m_dir.filePath("recorded-into.ton");
+        QVERIFY(m_window->doSaveSessionAs(session));
+        QString folder = TakesFile::takesFolder(session);
+
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        QString path = m_window->takes()->getAudioPath();
+        QVERIFY2(TakesFile::isInFolder(folder, path), qPrintable(path));
+        verifyTakeHasSound();
+        if (QTest::currentTestFailed()) return;
+
+        // The raw recordings are still where they were: only the combined
+        // files moved house
+        QVERIFY(QDir(sv::RecordDirectory::getRecordDirectory())
+                .entryList(QStringList { "*.wav" }, QDir::Files).size() > 0);
+    }
+
+    // Save As to another place copies the takes into the new session's
+    // folder and leaves the old one alone: the old .ton is still good
+    void save_as_copies_into_the_new_folder() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        QString first = m_dir.filePath("first.ton");
+        QVERIFY(m_window->doSaveSessionAs(first));
+        QString firstAudio = m_window->takes()->getAudioPath();
+
+        QVERIFY(QDir().mkpath(m_dir.filePath("other")));
+        QString second = QDir(m_dir.filePath("other")).filePath("second.ton");
+        QVERIFY(m_window->doSaveSessionAs(second));
+        QString secondAudio = m_window->takes()->getAudioPath();
+
+        QVERIFY2(TakesFile::isInFolder(TakesFile::takesFolder(second),
+                                       secondAudio), qPrintable(secondAudio));
+        QVERIFY2(QFileInfo::exists(firstAudio),
+                 "Save As took the audio of the session it was saved from");
+
+        // Both sessions open, with their own copy of the singing
+        for (QString session : { first, second }) {
+            reopenSession(session);
+            if (QTest::currentTestFailed()) return;
+            verifyTakeHasSound();
+            if (QTest::currentTestFailed()) return;
+            QVERIFY2(TakesFile::isInFolder(TakesFile::takesFolder(session),
+                                           m_window->takes()->getAudioPath()),
+                     qPrintable(m_window->takes()->getAudioPath()));
+        }
+    }
+
+    // Two takes sharing one audio file (a duplicate) share the copy of it
+    void duplicated_take_copies_its_audio_once() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        m_window->doDuplicateTake();
+        QCOMPARE(m_window->takes()->getTakeCount(), 2);
+        QCOMPARE(m_window->takes()->getTake(1)->audioPath,
+                 m_window->takes()->getTake(0)->audioPath);
+
+        QString session = m_dir.filePath("shared.ton");
+        QVERIFY(m_window->doSaveSessionAs(session));
+
+        QString folder = TakesFile::takesFolder(session);
+        QString copied = m_window->takes()->getTake(0)->audioPath;
+        QCOMPARE(m_window->takes()->getTake(1)->audioPath, copied);
+        QVERIFY2(TakesFile::isInFolder(folder, copied), qPrintable(copied));
+        QCOMPARE(QDir(folder).entryList(QStringList { "*.wav" },
+                                        QDir::Files).size(), 1);
+    }
+
+    // The .ton and its folder moved together: the paths in the file are
+    // relative, so the takes are found in the new place
+    void session_folder_moved_as_a_whole() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        QString home = m_dir.filePath("in-place");
+        QVERIFY(QDir().mkpath(home));
+        QString session = QDir(home).filePath("song.ton");
+        QVERIFY(m_window->doSaveSessionAs(session));
+        m_window->doCloseSession();
+
+        // The .ton and its "song.takes" folder, moved as one
+        QString moved = m_dir.filePath("moved-house");
+        QVERIFY2(QDir().rename(home, moved), "could not move the session");
+        QString movedSession = QDir(moved).filePath("song.ton");
+
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(movedSession, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+
+        verifyTakeHasSound();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(TakesFile::isInFolder(TakesFile::takesFolder(movedSession),
+                                       m_window->takes()->getAudioPath()),
+                 qPrintable(m_window->takes()->getAudioPath()));
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+    }
+
+    // The .ton moved without its folder: one warning for the session,
+    // naming the folder, and the take shows its pitch and notes with no
+    // sound
+    void session_moved_without_its_folder() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot before = snapshotTake();
+
+        QString session = m_dir.filePath("left-behind.ton");
+        QVERIFY(m_window->doSaveSessionAs(session));
+        m_window->doCloseSession();
+
+        // The file on its own, in a directory with no takes folder
+        QString elsewhere = m_dir.filePath("without-folder");
+        QVERIFY(QDir().mkpath(elsewhere));
+        QString moved = QDir(elsewhere).filePath("left-behind.ton");
+        QVERIFY(QFile::copy(session, moved));
+
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(moved, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+
+        // One warning, for the session and not for the take, naming the
+        // folder the audio was expected in
+        QStringList warnings = dialogsMatching("without their audio");
+        QCOMPARE(warnings.size(), 1);
+        QVERIFY2(warnings[0].contains("left-behind.takes"),
+                 qPrintable(warnings[0]));
+        QVERIFY(takeDialogs().isEmpty());
+
+        // The take is there with everything but its sound
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 1" });
+        QCOMPARE(m_window->takes()->getCoverage().getRanges(), before.coverage);
+        QVERIFY(!m_window->analyser2());
+        QVERIFY(!takeAudio());
+        TakeLayers::Found found = takeLayers("Take 1");
+        QVERIFY(found.pitch && found.notes && found.coverage);
+        verifyEventsSurvived(before.pitch, pitchEvents(found.pitch),
+                             "the pitch of a take whose folder was left "
+                             "behind");
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->coverageStrip()->isShown());
+    }
+
+    // A copy that cannot be made fails the save: the session is not written
+    // at all, and nothing about the takes changes
+    void a_failed_copy_fails_the_save() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QString firstAudio = m_window->takes()->getAudioPath();
+
+        m_window->doNewEmptyTake();
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QString secondAudio = m_window->takes()->getAudioPath();
+
+        QString session = m_dir.filePath("blocked.ton");
+        QString folder = TakesFile::takesFolder(session);
+
+        // There is a file where the folder would go, so it cannot be made
+        {
+            QFile blocker(folder);
+            QVERIFY(blocker.open(QIODevice::WriteOnly));
+            blocker.write("not a folder");
+            blocker.close();
+        }
+
+        QVERIFY2(!m_window->saveSessionFile(session),
+                 "the session was saved although its takes' audio could not "
+                 "be put beside it");
+        QCOMPARE(dialogsMatching("was not saved").size(), 1);
+        QVERIFY2(!QFileInfo::exists(session),
+                 "a session file was written that names audio which is not "
+                 "in its folder");
+        QCOMPARE(m_window->takes()->getTake(0)->audioPath, firstAudio);
+        QCOMPARE(m_window->takes()->getTake(1)->audioPath, secondAudio);
+
+        // Now the folder can be made, but the audio of the take that is not
+        // on show has gone from under us: the copy of the first take, which
+        // was made before the failure, is taken back again and the folder
+        // made for them is left empty
+        QVERIFY(QFile::remove(folder));
+        QVERIFY(m_window->doSwitchToTake(0));
+        QVERIFY2(QFile::remove(secondAudio),
+                 "the audio of the take that was put away is still open");
+
+        QVERIFY2(!m_window->saveSessionFile(session),
+                 "the session was saved although one take's audio was gone");
+        QCOMPARE(dialogsMatching("was not saved").size(), 1);
+        QVERIFY(!QFileInfo::exists(session));
+        QCOMPARE(m_window->takes()->getTake(0)->audioPath, firstAudio);
+        QCOMPARE(m_window->takes()->getTake(1)->audioPath, secondAudio);
+        QVERIFY(QDir(folder).exists());
+        QVERIFY2(QDir(folder).isEmpty(),
+                 "the copy made before the failure was left in the folder");
+
+        // An empty folder this run made goes with the session
+        m_window->doCloseSession();
+        QVERIFY2(!QFileInfo::exists(folder),
+                 "the empty takes folder was left behind");
     }
 
     // Saving while the analysis of a recorded range runs: the save waits

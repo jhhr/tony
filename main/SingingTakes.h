@@ -149,6 +149,20 @@ public:
     void restoreTake(QString path, const Coverage &coverage);
 
     /**
+     * The audio of the take at this index is this file instead: a copy of
+     * the same sound somewhere else, made because the session was saved
+     * and its takes' audio belongs beside it (spec 6.4, TakesFile).
+     *
+     * The file the take had is not superseded -- nothing about the take
+     * has changed, and the audio model that is showing it goes on
+     * reading it -- but it is no longer the take's, so the cleanup on
+     * close may take it away if this run wrote it and no saved session
+     * names it.  The copy counts as a file this run wrote, for the same
+     * reason.
+     */
+    void relocateTake(int index, QString path);
+
+    /**
      * The take is the whole of this file: a singing track the user
      * loaded, or one restored from a session saved before coverage was
      * stored with it.

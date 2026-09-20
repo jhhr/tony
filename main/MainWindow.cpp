@@ -2357,6 +2357,21 @@ MainWindow::closeSession()
              << " superseded take audio file(s)" << endl;
     }
 
+    // A takes folder this run made and that has nothing left in it goes as
+    // well (spec 6.4).  One with anything at all in it stays: what is in
+    // it was not necessarily put there by us
+    for (const QString &folder : m_takeFoldersMade) {
+        QDir dir(folder);
+        if (!dir.exists()) continue;
+        if (!dir.isEmpty(QDir::AllEntries | QDir::Hidden | QDir::System |
+                         QDir::NoDotAndDotDot)) continue;
+        if (QDir().rmdir(folder)) {
+            cerr << "MainWindow::closeSession: removed the empty takes folder "
+                 << folder << endl;
+        }
+    }
+    m_takeFoldersMade.clear();
+
     m_takes->clear();
     m_takePosition = 0;
     m_takePreRoll = 0;
@@ -4158,7 +4173,7 @@ MainWindow::finishSingingTake()
     if (recordingPath == "") {
         error = tr("The recording is no longer there to be used");
     } else {
-        QString directory = RecordDirectory::getRecordDirectory();
+        QString directory = takeAudioDirectory();
         if (directory == "") {
             error = tr("Could not find a directory to write the singing "
                        "track into");
@@ -4450,7 +4465,7 @@ MainWindow::eraseSingingInSelection()
     }
     if (selected.empty()) return;
 
-    QString directory = RecordDirectory::getRecordDirectory();
+    QString directory = takeAudioDirectory();
     QString error;
 
     if (directory == "") {
@@ -4570,6 +4585,84 @@ MainWindow::eraseTakeEvents(const Coverage::Ranges &erased,
     }
 }
 
+QString
+MainWindow::takeAudioDirectory()
+{
+    // A take's combined audio belongs to the song, in the session's own
+    // folder beside the .ton (spec 6.4).  Before the first save there is
+    // no folder to put it in, so it goes to the record directory with the
+    // raw recordings, and the save copies it across
+    if (m_sessionFile != "") {
+        QString folder = ensureTakesFolder(m_sessionFile);
+        if (folder != "") return folder;
+
+        // Nowhere to write it beside the session: better in the record
+        // directory than nowhere at all, and the next save says so when it
+        // cannot copy it either
+        cerr << "MainWindow::takeAudioDirectory: could not make the takes "
+             << "folder of \"" << m_sessionFile << "\"; writing to the record "
+             << "directory instead" << endl;
+    }
+
+    return RecordDirectory::getRecordDirectory();
+}
+
+QString
+MainWindow::ensureTakesFolder(QString sessionPath)
+{
+    QString folder = TakesFile::takesFolder(sessionPath);
+    if (folder == "") return "";
+
+    if (QFileInfo(folder).isDir()) return folder;
+
+    if (!QDir().mkpath(folder)) return "";
+
+    // Made here and empty so far: if nothing is left in it when the
+    // session closes, it goes again
+    if (!m_takeFoldersMade.contains(folder)) m_takeFoldersMade.push_back(folder);
+
+    return folder;
+}
+
+bool
+MainWindow::copyTakeAudioForSave(QString sessionPath)
+{
+    if (!m_takes || m_takes->getTakeCount() == 0) return true;
+
+    // Nothing to do for a session whose takes are all in its folder
+    // already, and no folder to make for one that has no audio at all
+    bool anyOutside = false;
+    QString folder = TakesFile::takesFolder(sessionPath);
+    for (const SingingTakes::Take &take : m_takes->getTakes()) {
+        if (take.audioPath == "") continue;
+        if (!TakesFile::isInFolder(folder, take.audioPath)) anyOutside = true;
+    }
+    if (!anyOutside) return true;
+
+    QString error;
+    QString made = ensureTakesFolder(sessionPath);
+
+    if (made == "") {
+        error = tr("The folder \"%1\", where the takes' audio belongs, could "
+                   "not be made").arg(folder);
+    } else {
+        error = TakesFile::copyTakeAudioInto(*m_takes, made);
+    }
+
+    if (error != "") {
+        QMessageBox::critical
+            (this,
+             tr("Failed to save the session"),
+             tr("<b>The session was not saved</b><p>The audio of its takes "
+                "must be in the folder beside it, and could not be put "
+                "there.</p><p>%1</p>").arg(error),
+             QMessageBox::Ok);
+        return false;
+    }
+
+    return true;
+}
+
 bool
 MainWindow::saveSessionFile(QString path)
 {
@@ -4577,7 +4670,16 @@ MainWindow::saveSessionFile(QString path)
     // hold neither the state before the merge nor the state after it
     if (!waitForRangedAnalysis()) return false;
 
+    // The takes' audio goes into the folder of the session being saved
+    // before the file is written, so that the file names it where it is.
+    // A Save As copies into the new session's folder and leaves the old
+    // one alone: it belongs to the .ton that is still there
+    if (!copyTakeAudioForSave(path)) return false;
+
+    // What toXml() names the takes' audio relative to
+    m_savingSessionPath = path;
     bool saved = MainWindowBase::saveSessionFile(path);
+    m_savingSessionPath = "";
 
     // The .ton that has just been written names the audio file of every
     // take of the session.  Recording into a take again writes another file
@@ -4625,7 +4727,7 @@ MainWindow::toXml(QTextStream &out, bool asTemplate)
     }
 
     out << document.left(closing)
-        << TakesFile::toXml(*m_takes)
+        << TakesFile::toXml(*m_takes, m_savingSessionPath)
         << document.mid(closing);
 }
 
@@ -4714,8 +4816,14 @@ MainWindow::restoreTakes(QString sessionPath)
             }
         }
 
+        // The stored path is relative to the session file, so that a song
+        // and its takes folder can be moved together (spec 6.4); a session
+        // saved before the folder names its audio absolutely
+        QString audioPath = TakesFile::resolveAudioPath(sessionPath,
+                                                        take.audioPath);
+
         // restoreTake() and not setTake(): nothing here supersedes a file
-        m_takes->restoreTake(take.audioPath, coverage);
+        m_takes->restoreTake(audioPath, coverage);
     }
 
     int active = m_takes->indexOf(stored.active);
@@ -4724,14 +4832,37 @@ MainWindow::restoreTakes(QString sessionPath)
     cerr << "MainWindow::restoreTakes: " << m_takes->getTakeCount()
          << " take(s) restored, active is \"" << stored.active << "\"" << endl;
 
+    // The .ton moved without its folder: every take is silent, and the
+    // user is told once, about the folder, rather than once per take
+    // (spec 6.4).  Only the active take opens its audio, so this is also
+    // the only place the other takes' files are ever looked for
+    QStringList missing;
+    for (const SingingTakes::Take &take : m_takes->getTakes()) {
+        if (take.audioPath == "" || QFileInfo::exists(take.audioPath)) continue;
+        missing.push_back(take.audioPath);
+    }
+
     if (active >= 0) {
         // The same path a switch uses: the take's audio under the take's
         // own layers, an analyser that claims them with no analysis, its
         // coverage strip, and every other take put away
         m_takes->setActiveIndex(active);
-        activateTake();
+        activateTake(missing.isEmpty());
     } else {
         putOtherTakeLayersAway();
+    }
+
+    if (!missing.isEmpty()) {
+        QMessageBox::warning
+            (this,
+             tr("Takes without their audio"),
+             tr("<b>The takes of this session are shown without their "
+                "audio</b><p>%1 audio file(s) were expected in \"%2\", and "
+                "are not there. Each take still has its pitch, its notes and "
+                "its coverage; only the sound is missing.</p>")
+             .arg(missing.size())
+             .arg(TakesFile::takesFolder(sessionPath)),
+             QMessageBox::Ok);
     }
 
     updateTakeCombo();
@@ -5190,7 +5321,7 @@ MainWindow::deactivateTake()
 }
 
 bool
-MainWindow::activateTake()
+MainWindow::activateTake(bool warnIfNoAudio)
 {
     Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
     if (!pane) return false;
@@ -5237,7 +5368,7 @@ MainWindow::activateTake()
     syncCoverageStrip();
     raiseActiveTakeLayers();
 
-    if (error != "") {
+    if (error != "" && warnIfNoAudio) {
         // Its pitch and notes are there; only the sound is missing
         // (spec 6.4, a missing audio file)
         QMessageBox::warning
@@ -5873,18 +6004,30 @@ MainWindow::saveSessionInAudioPath()
                              tr("Wait cancelled: the session has not been saved."));
     }
 
+    saveSessionToPath(path);
+}
+
+bool
+MainWindow::saveSessionToPath(QString path)
+{
     if (!saveSessionFile(path)) {
         QMessageBox::critical(this, tr("Failed to save file"),
                               tr("Session file \"%1\" could not be saved.").arg(path));
-    } else {
-        setWindowTitle(tr("%1: %2")
-                       .arg(QApplication::applicationName())
-                       .arg(QFileInfo(path).fileName()));
-        m_sessionFile = path;
-        CommandHistory::getInstance()->documentSaved();
-        documentRestored();
-        m_recentFiles.addFile(path);
+        return false;
     }
+
+    setWindowTitle(tr("%1: %2")
+                   .arg(QApplication::applicationName())
+                   .arg(QFileInfo(path).fileName()));
+
+    // From here on the session has a file, so the audio of a take recorded
+    // from now on is written into its folder (spec 6.4)
+    m_sessionFile = path;
+
+    CommandHistory::getInstance()->documentSaved();
+    documentRestored();
+    m_recentFiles.addFile(path);
+    return true;
 }
 
 void
@@ -5907,18 +6050,7 @@ MainWindow::saveSessionAs()
         return;
     }
 
-    if (!saveSessionFile(path)) {
-        QMessageBox::critical(this, tr("Failed to save file"),
-                              tr("Session file \"%1\" could not be saved.").arg(path));
-    } else {
-        setWindowTitle(tr("%1: %2")
-                       .arg(QApplication::applicationName())
-                       .arg(QFileInfo(path).fileName()));
-        m_sessionFile = path;
-        CommandHistory::getInstance()->documentSaved();
-        documentRestored();
-        m_recentFiles.addFile(path);
-    }
+    saveSessionToPath(path);
 }
 
 QString
