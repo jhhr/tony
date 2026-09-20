@@ -2778,9 +2778,15 @@ MainWindow::syncCoverageStrip()
     m_coverageStrip->setCoverage(m_takes->getCoverage());
 
     if (!wasShown) {
-        // The new layer is on top, where the editing tools look for the
-        // layer to act on: put the tracks that can be edited back there,
-        // as setupRecordingLayer() does
+        // The new layer is on top, where a tool would look for the layer
+        // to act on, so the tracks that can be edited go back there, as
+        // setupRecordingLayer() does.  That call does nothing in Tony,
+        // though: it goes through PaneStack::setCurrentLayer(), which
+        // needs a PropertyStack, and this pane stack has none.  What
+        // really keeps the strip out of reach is that no tool Tony sets
+        // for pane 0 acts on a layer of this kind -- NoteEditMode takes
+        // the pane's top FlexiNoteLayer, and SelectMode, which snaps to
+        // the top layer, is set only for the ruler pane
         m_analyser->stackLayers();
         if (m_analyser2) m_analyser2->stackLayers();
     }
