@@ -853,8 +853,9 @@ MainWindow::setupEditMenu()
 
     m_keyReference->setCategory(tr("Singing Track"));
 
-    // No shortcuts for these two: every key worth having in this menu is
-    // taken, and an erase is not something to reach by accident
+    // No shortcut for this one: the keys worth having in this menu are
+    // taken, and it is a step on the way to the erase rather than
+    // something to reach for on its own
     m_selectRecordingAction =
         new QAction(tr("Select Recording at Playhead"), this);
     m_selectRecordingAction->setStatusTip
@@ -868,8 +869,12 @@ MainWindow::setupEditMenu()
     m_rightButtonMenu->addAction(m_selectRecordingAction);
 
     m_eraseSingingAction = new QAction(tr("Erase Singing in Selection"), this);
+    // Ctrl+Backspace, the obvious partner to the Backspace of Delete
+    // Notes, is upstream Tony's Remove Pitches
+    m_eraseSingingAction->setShortcut(tr("Ctrl+D"));
     m_eraseSingingAction->setStatusTip
         (tr("Remove the recorded singing within the selected region, leaving silence"));
+    m_keyReference->registerShortcut(m_eraseSingingAction);
     connect(m_eraseSingingAction, SIGNAL(triggered()),
             this, SLOT(eraseSingingInSelection()));
     connect(this, SIGNAL(canEraseSinging(bool)),

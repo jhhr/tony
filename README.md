@@ -40,7 +40,8 @@ orange pitch track to compare with it.
    where there is singing and where there is not; recording over a part of it
    replaces just that part, and only the part that changed is analysed again
  * Edit -> Select Recording at Playhead and Edit -> Erase Singing in Selection
-   remove, trim or split what has been recorded
+   (Ctrl+D) remove, trim or split what has been recorded. A range is selected by
+   dragging in the thin ruler strip below the pane
  * recordings and erases can be undone and redone
  * several takes of a song in one session (the Takes menu and the "Take:" box in
    the toolbar): each keeps its own audio, pitch track and notes, and switching
