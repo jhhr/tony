@@ -101,3 +101,26 @@ Coverage::getEndFrame() const
     if (m_ranges.empty()) return 0;
     return m_ranges.back().end;
 }
+
+EventVector
+Coverage::toEvents() const
+{
+    EventVector events;
+    for (const Range &r : m_ranges) {
+        events.push_back(Event(r.start, 0.f, r.length(), regionLabel()));
+    }
+    return events;
+}
+
+Coverage
+Coverage::fromEvents(const EventVector &events)
+{
+    // add() sorts and joins, so regions in any order, and two that
+    // touch because the user recorded twice over the same place, come
+    // out as the ranges this coverage would have had all along
+    Coverage coverage;
+    for (const Event &e : events) {
+        coverage.add(e.getFrame(), e.getFrame() + e.getDuration());
+    }
+    return coverage;
+}

@@ -135,6 +135,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_alternatePitchDownAction(nullptr),
     m_referencePitchHiddenForTake(false),
     m_takes(nullptr),
+    m_coverageStrip(nullptr),
     m_takePosition(0),
     m_takePreRoll(0),
     m_takeEnd(-1),
@@ -361,6 +362,7 @@ MainWindow::MainWindow(AudioMode audioMode,
             this, SLOT(syncAlternatePitchTrack()));
 
     m_takes = new SingingTakes(this);
+    m_coverageStrip = new CoverageStrip(this);
 
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
@@ -445,6 +447,8 @@ MainWindow::~MainWindow()
     // document's layers, it does not own them
     delete m_alternatePitch;
     m_alternatePitch = nullptr;
+    delete m_coverageStrip;
+    m_coverageStrip = nullptr;
     delete m_analyser;
     delete m_keyReference;
     Profiles::getInstance()->dump();
@@ -2169,6 +2173,7 @@ MainWindow::closeSession()
     teardownSingingTrackAnalyser();
     teardownBackgroundMusic();
     m_alternatePitch->hide();
+    m_coverageStrip->hide();
     m_referencePitchHiddenForTake = false;
     m_pendingSingingModelId = {};
     m_currentRecordingModelId = {};
@@ -2745,6 +2750,43 @@ MainWindow::updateAlternatePitchForTake()
 }
 
 void
+MainWindow::syncCoverageStrip()
+{
+    // The strip is the store of the take's coverage as well as the
+    // picture of it, so it follows every change to the take: a recording
+    // spliced in, a file loaded, the session closed
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (!m_document || !pane) return;
+
+    if (!m_takes->haveTake() || m_takes->getCoverage().isEmpty()) {
+        m_coverageStrip->hide();
+        return;
+    }
+
+    bool wasShown = m_coverageStrip->isShown();
+    if (!m_coverageStrip->show(m_document, pane)) return;
+
+    // The play source takes in the model of every layer that is in a
+    // view, whether the model can be played or not, and the models it
+    // holds are what say where playback ends.  The strip is a picture,
+    // not sound: one left over from a longer singing file would hold
+    // playback open past the end of what there is to hear
+    if (m_playSource && !m_coverageStrip->getModelId().isNone()) {
+        m_playSource->removeModel(m_coverageStrip->getModelId());
+    }
+
+    m_coverageStrip->setCoverage(m_takes->getCoverage());
+
+    if (!wasShown) {
+        // The new layer is on top, where the editing tools look for the
+        // layer to act on: put the tracks that can be edited back there,
+        // as setupRecordingLayer() does
+        m_analyser->stackLayers();
+        if (m_analyser2) m_analyser2->stackLayers();
+    }
+}
+
+void
 MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnalysis)
 {
     if (!m_document) return;
@@ -2800,13 +2842,29 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     drainPendingExtraPanes(singingModelId);
 
     // The take's audio is the file behind this model.  All of a file the
-    // user loaded, or one a session restored, holds recorded singing; a
-    // file we have just spliced ourselves has the coverage the splice
-    // worked out, which must not be thrown away here.
+    // user loaded holds recorded singing; a file we have just spliced
+    // ourselves has the coverage the splice worked out, which must not be
+    // thrown away here.  A session that was saved with a coverage strip
+    // says for itself which parts of its take hold singing: that layer is
+    // in the pane already, waiting to be taken over.
     if (!m_rebuildingTakeAudio) {
         if (auto wfm = ModelById::getAs<WaveFileModel>(singingModelId)) {
-            m_takes->setWholeFileTake(wfm->getLocation(), wfm->getFrameCount());
+            Coverage stored;
+            if (!m_coverageStrip->isShown() &&
+                m_coverageStrip->adopt(m_document, pane)) {
+                stored = m_coverageStrip->getCoverage();
+            }
+            if (stored.isEmpty()) {
+                m_takes->setWholeFileTake(wfm->getLocation(),
+                                          wfm->getFrameCount());
+            } else {
+                cerr << "MainWindow::setupSingingTrackAnalyser: the session's "
+                     << "coverage strip has " << stored.getRanges().size()
+                     << " range(s) of recorded singing in it" << endl;
+                m_takes->setTake(wfm->getLocation(), stored);
+            }
         }
+        syncCoverageStrip();
     }
 
     // Re-stack layers so the primary pitch track stays on top
@@ -3842,6 +3900,12 @@ MainWindow::finishSingingTake()
          << m_takes->getAudioPath() << endl;
 
     bool analysing = rebuildSingingTrackFromTake(placed);
+
+    // The coverage has changed whether or not the new audio could be
+    // shown, and the strip says what it is now.  After the rebuild, not
+    // before: a swap puts the pane's selected layer back as it found it,
+    // and the strip is never to be that
+    syncCoverageStrip();
 
     // The dots stay until the analysis that replaces them is done
     recordingFinishedFull(analysing ? m_analyser2 : nullptr);

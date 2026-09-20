@@ -51,6 +51,12 @@ public:
     void clear();
 
     /**
+     * The take is this file, with the coverage a session kept for it in
+     * its coverage strip.
+     */
+    void setTake(QString path, const Coverage &coverage);
+
+    /**
      * The take is the whole of this file: a singing track the user
      * loaded, or one restored from a session saved before coverage was
      * stored with it.

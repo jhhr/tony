@@ -20,6 +20,7 @@
 #include "Analyser.h"
 #include "RealtimePitchTracker.h"
 #include "AlternatePitchTrack.h"
+#include "CoverageStrip.h"
 #include "SingingTakes.h"
 #include "TakeTiming.h"
 
@@ -283,6 +284,14 @@ protected:
     // the ranges of it that hold recorded singing.  MainWindow only
     // wires it: it decides where a recording goes and writes the files.
     SingingTakes  *m_takes;
+
+    // The coverage of the take, drawn in pane 0 and stored in the
+    // session with the layer that draws it.  Display only.
+    CoverageStrip *m_coverageStrip;
+
+    // Put the strip in step with the take's coverage: make it if there
+    // is a take and none yet, take it away when the take goes
+    void syncCoverageStrip();
 
     // Where on the reference's timeline the take being recorded, or the
     // one most recently recorded, starts: the playback position when

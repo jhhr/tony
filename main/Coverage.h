@@ -16,6 +16,7 @@
 #define TONY_COVERAGE_H
 
 #include "base/BaseTypes.h"
+#include "base/Event.h"
 
 #include <vector>
 
@@ -63,6 +64,23 @@ public:
 
     bool operator==(const Coverage &c) const { return m_ranges == c.m_ranges; }
     bool operator!=(const Coverage &c) const { return !(*this == c); }
+
+    /**
+     * Coverage has no file format of its own: it is stored as the
+     * regions of the coverage strip's RegionModel, one region per
+     * range.  These two are that conversion, and they are what a
+     * session load reads the coverage back with.
+     *
+     * A region's value is 0 (the strip shows where material is, not
+     * how much of anything) and its label is a single space, because a
+     * stock RegionLayer prints the value of any region that has no
+     * label: see CoverageStrip.
+     */
+    sv::EventVector toEvents() const;
+    static Coverage fromEvents(const sv::EventVector &events);
+
+    /// The label every coverage region carries, and why: see toEvents()
+    static QString regionLabel() { return " "; }
 
 private:
     Ranges m_ranges;

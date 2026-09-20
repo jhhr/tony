@@ -27,6 +27,7 @@
 
 #include "../MainWindow.h"
 #include "../Analyser.h"
+#include "../CoverageStrip.h"
 #include "../SingingTakes.h"
 
 #include "version.h"
@@ -40,12 +41,14 @@
 #include "layer/SingleColourLayer.h"
 #include "layer/TimeValueLayer.h"
 #include "layer/FlexiNoteLayer.h"
+#include "layer/RegionLayer.h"
 #include "layer/WaveformLayer.h"
 #include "audio/AudioCallbackPlaySource.h"
 #include "audio/AudioCallbackRecordTarget.h"
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
+#include "data/model/RegionModel.h"
 #include "data/fileio/FileSource.h"
 #include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
@@ -157,6 +160,8 @@ public:
     bool recordingAsSingingTrack() { return m_recordingAsSingingTrack; }
     sv::sv_frame_t recordingLatencyFrames() { return m_recordingLatencyFrames; }
     int pendingExtraPaneCount() { return int(m_pendingExtraPanes.size()); }
+
+    CoverageStrip *coverageStrip() { return m_coverageStrip; }
 
     AlternatePitchTrack *alternatePitch() { return m_alternatePitch; }
     void doToggleAlternatePitch() { alternatePitchToggled(); }
@@ -466,6 +471,66 @@ class TestRecordWorkflow : public QObject
                  "the shared time ruler was deleted from the document");
         QVERIFY2(paneHasLayer(1, m_window->timeRuler()),
                  "the shared time ruler is no longer in the ruler pane");
+    }
+
+    // The coverage strip: the layer in pane 0 whose regions are the
+    // ranges of the take that hold recorded singing
+
+    sv::RegionLayer *stripLayer() {
+        return m_window->coverageStrip()->getLayer();
+    }
+
+    int stripLayersInPane0() {
+        int n = 0;
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        if (!pane) return 0;
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            if (pane->getLayer(i)->objectName() ==
+                CoverageStrip::layerName()) ++n;
+        }
+        return n;
+    }
+
+    // What the strip shows, from the regions of its model rather than
+    // from the object that keeps it
+    sv::EventVector stripEvents() {
+        sv::RegionLayer *layer = stripLayer();
+        if (!layer) return {};
+        auto model = sv::ModelById::getAs<sv::RegionModel>(layer->getModel());
+        if (!model) return {};
+        return model->getAllEvents();
+    }
+
+    // The topmost note layer of pane 0: what Pane::getTopFlexiNoteLayer()
+    // finds, and what NoteEditMode -- the only editing mode Tony sets for
+    // that pane -- acts on
+    sv::Layer *topNoteLayerInPane0() {
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        if (!pane) return nullptr;
+        for (int i = pane->getLayerCount() - 1; i >= 0; --i) {
+            if (qobject_cast<sv::FlexiNoteLayer *>(pane->getLayer(i))) {
+                return pane->getLayer(i);
+            }
+        }
+        return nullptr;
+    }
+
+    // One strip, its regions the take's coverage, and out of reach of the
+    // editing tools: not the pane's selected layer, and the layer the
+    // note tool acts on is still the take's notes
+    void verifyStripMatchesTake() {
+        QCOMPARE(stripLayersInPane0(), 1);
+        QVERIFY(stripLayer());
+        QCOMPARE(stripEvents(),
+                 m_window->takes()->getCoverage().toEvents());
+
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        QVERIFY(pane && pane->getLayerCount() > 0);
+        QVERIFY2(pane->getSelectedLayer() != stripLayer(),
+                 "the coverage strip is the pane's selected layer");
+        QVERIFY(m_window->analyser2());
+        QCOMPARE(topNoteLayerInPane0(),
+                 m_window->analyser2()->getLayer(Analyser::Notes));
     }
 
     int alternateLayersInDocument() {
@@ -2714,9 +2779,9 @@ private slots:
                             .arg(after.front().getFrame())
                             .arg(firstEventBefore)));
 
-        // The take is the audio file the session pointed at.  Until the
-        // coverage is saved too (phase 5 of the takes work), a restored
-        // take counts as covering all of its file
+        // The take is the audio file the session pointed at, and its
+        // coverage comes from the coverage strip the session kept: one
+        // recording from frame 0, so all of the file
         QVERIFY(m_window->takes()->haveTake());
         auto ranges = m_window->takes()->getCoverage().getRanges();
         QCOMPARE(int(ranges.size()), 1);
@@ -2754,6 +2819,133 @@ private slots:
         QVERIFY(std::fabs(TestSignals::centsBetween
                           (medianHz(pitchEvents(m_window->analyser())),
                            highHz)) < 10.0);
+    }
+
+    // The coverage strip: one region per range of the take that holds
+    // recorded singing, drawn in pane 0 and stored in the session
+
+    void coverage_strip_follows_takes() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 5.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // Nothing recorded, nothing to show
+        QVERIFY(!m_window->coverageStrip()->isShown());
+        QCOMPARE(stripLayersInPane0(), 0);
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->coverageStrip()->isShown());
+        QCOMPARE(int(stripEvents().size()), 1);
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        // A second recording in a gap: a second bar, and the first
+        // exactly where it was
+        sv::sv_frame_t firstEnd =
+            m_window->takes()->getCoverage().getEndFrame();
+        const sv::sv_frame_t P = sv::sv_frame_t(2.0 * rate);
+        m_window->seekTo(P);
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(int(stripEvents().size()), 2);
+        QCOMPARE(stripEvents()[0].getFrame(), sv::sv_frame_t(0));
+        QCOMPARE(stripEvents()[0].getDuration(), firstEnd);
+        QCOMPARE(stripEvents()[1].getFrame(), P);
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        // A third that runs from inside the first range into the second:
+        // the two become one bar
+        m_window->seekTo(sv::sv_frame_t(0.5 * rate));
+        take(2000);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(int(stripEvents().size()), 1);
+        QCOMPARE(stripEvents()[0].getFrame(), sv::sv_frame_t(0));
+        QVERIFY2(stripEvents()[0].getDuration() > P,
+                 "the recording that joined the two ranges did not reach "
+                 "the second of them");
+        verifyStripMatchesTake();
+    }
+
+    // Coverage has no file format of its own: the strip's regions are
+    // where it is stored, and where it comes from when a session is
+    // opened again.  Before this a restored take covered all of its file
+    void coverage_strip_survives_a_session() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        Coverage::Ranges before = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(before.size()), 2);
+        QVERIFY(before[0].end < before[1].start);
+
+        QString session = m_dir.filePath("coverage.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        m_window->doCloseSession();
+        QVERIFY2(!m_window->coverageStrip()->isShown(),
+                 "the coverage strip outlived the session it was made in");
+
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        // The gap survived: a take restored before this phase covered all
+        // of its file, which would have been one range and no gap
+        QVERIFY(m_window->takes()->haveTake());
+        QCOMPARE(m_window->takes()->getCoverage().getRanges(), before);
+
+        // ... and the layer showing it is the one the session restored,
+        // not a second one made beside it
+        QVERIFY(m_window->coverageStrip()->isShown());
+        verifyStripMatchesTake();
+    }
+
+    // Nothing of a take's strip is left over for the next singing track
+    void coverage_strip_replaced_by_load_singing_track() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(int(stripEvents().size()), 1);
+        QVERIFY(stripEvents()[0].getFrame() > 0);
+
+        // A track loaded whole is a take whose singing is all of it: one
+        // bar, from frame 0, and no second strip beside the first
+        m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QCOMPARE(int(stripEvents().size()), 1);
+        QCOMPARE(stripEvents()[0].getFrame(), sv::sv_frame_t(0));
+        QCOMPARE(stripEvents()[0].getDuration(), wave->getFrameCount());
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        // And the session closes without leaving the layer behind
+        m_window->doCloseSession();
+        QVERIFY(!m_window->coverageStrip()->isShown());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(stripLayersInPane0(), 0);
     }
 
     // The alternate pitch track: the reference pitch track moved by

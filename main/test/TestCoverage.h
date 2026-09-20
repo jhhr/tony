@@ -169,6 +169,48 @@ private slots:
         b.remove(150, 160);
         QVERIFY(a != b);
     }
+
+    // Coverage is stored as the regions of the coverage strip's model,
+    // so it has to go there and come back unchanged
+
+    void events_round_trip() {
+        Coverage c;
+        c.add(100, 200);
+        c.add(4000, 9000);
+
+        sv::EventVector events = c.toEvents();
+        QCOMPARE(int(events.size()), 2);
+        QCOMPARE(events[0].getFrame(), sv::sv_frame_t(100));
+        QCOMPARE(events[0].getDuration(), sv::sv_frame_t(100));
+        QCOMPARE(events[1].getFrame(), sv::sv_frame_t(4000));
+        QCOMPARE(events[1].getDuration(), sv::sv_frame_t(5000));
+
+        // A stock RegionLayer prints the value of a region that has no
+        // label of its own, so every region has one
+        for (const sv::Event &e : events) {
+            QCOMPARE(e.getValue(), 0.f);
+            QCOMPARE(e.getLabel(), Coverage::regionLabel());
+        }
+
+        QCOMPARE(Coverage::fromEvents(events).getRanges(), c.getRanges());
+    }
+
+    void events_of_nothing() {
+        QVERIFY(Coverage().toEvents().empty());
+        QVERIFY(Coverage::fromEvents(sv::EventVector()).isEmpty());
+    }
+
+    void events_sorted_and_joined() {
+        // Whatever order a model hands its events back in, and whether
+        // or not two of them meet, what comes out is coverage
+        sv::EventVector events;
+        events.push_back(sv::Event(500, 0.f, 100, Coverage::regionLabel()));
+        events.push_back(sv::Event(100, 0.f, 100, Coverage::regionLabel()));
+        events.push_back(sv::Event(200, 0.f, 100, Coverage::regionLabel()));
+
+        QCOMPARE(Coverage::fromEvents(events).getRanges(),
+                 (Ranges { Range(100, 300), Range(500, 600) }));
+    }
 };
 
 #endif

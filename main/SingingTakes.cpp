@@ -40,14 +40,21 @@ SingingTakes::clear()
 }
 
 void
-SingingTakes::setWholeFileTake(QString path, sv_frame_t frames)
+SingingTakes::setTake(QString path, const Coverage &coverage)
 {
     if (m_audioPath != "" && m_audioPath != path) {
         m_superseded.push_back(m_audioPath);
     }
     m_audioPath = path;
-    m_coverage.clear();
-    m_coverage.add(0, frames);
+    m_coverage = coverage;
+}
+
+void
+SingingTakes::setWholeFileTake(QString path, sv_frame_t frames)
+{
+    Coverage whole;
+    whole.add(0, frames);
+    setTake(path, whole);
 }
 
 QString
