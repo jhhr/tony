@@ -3491,11 +3491,14 @@ MainWindow::record()
         m_recordingInProgress = false;
 
         m_recordingAsSingingTrack = true;
-        // Remember the pane count so we can prune the extra pane that
-        // MainWindowBase::record() creates via AddPaneCommand for the
-        // recording's waveform layer.  We want everything in pane 0.
+        // The recording is only to be added to the document as a model:
+        // the pane, the layer and the "Import Recorded Audio" undo entry
+        // that RecordCreateAdditionalModel makes for it are all things we
+        // would delete at once, leaving a command on the undo stack whose
+        // pane has gone.  The pane count is still remembered, so that the
+        // pruning code finds nothing to do rather than being taken out
         m_paneCountBeforeRecording = m_paneStack ? m_paneStack->getPaneCount() : 0;
-        setAudioRecordMode(RecordCreateAdditionalModel);
+        setAudioRecordMode(RecordCreateUnshownModel);
     } else {
         m_recordingAsSingingTrack = false;
         m_takePosition = 0;
@@ -4435,23 +4438,16 @@ MainWindow::addTakeCommand(SingingTakeCommand *command)
 
     // Undo after a take must undo the take, not take away some layer of
     // Tony's own.  Everything this application adds to a pane is kept off
-    // the undo stack (Document::attachLayerToView()), but two places in
-    // the svapp fork still push commands that Tony cannot reach:
-    // MainWindowBase::record() in RecordCreateAdditionalModel mode
-    // ("Import Recorded Audio") and MainWindowBase::openAudio() in
-    // CreateAdditionalModel mode ("Import \"...\""), which every swap of
-    // the take's audio goes through.  Each makes a pane and a layer that
-    // Tony then deletes, so their unexecute() would work on freed memory.
-    // Until the fork stops making them, the history is cleared here:
-    // there is then one entry, and Undo is the take.  Nothing of an
-    // earlier operation is lost from disk -- every audio file a take has
-    // had stays there until the session closes.
+    // the undo stack: its layers go in by Document::attachLayerToView(),
+    // a take's audio is opened by openTakeAudioFile(), and the recording
+    // itself is made in RecordCreateUnshownModel mode, which makes no
+    // pane and no "Import Recorded Audio" entry.  So the history is left
+    // as it is, and the takes and the edits made before this one can
+    // still be undone after it.
     //
-    // Any command still waiting for a merge goes with it, so nothing is
-    // left pointing at a command that has been deleted (the command being
-    // added is not on the stack yet, so the clear cannot reach it)
+    // A command still waiting for a merge is not this one's business any
+    // more: the callers close it before they get here
     if (m_openTakeCommand != command) m_openTakeCommand = nullptr;
-    CommandHistory::getInstance()->clear();
 
     // Already done: the take's audio has been written and is on screen.
     // CommandHistory marks the document modified, which is right for both

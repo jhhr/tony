@@ -3563,6 +3563,45 @@ private slots:
         QCOMPARE(redoOnce(), QString());
     }
 
+    // A take does not cost the takes before it their undo: each is an
+    // entry of its own, undone and redone in order
+    void undo_two_takes_in_order() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 5.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        if (QTest::currentTestFailed()) return;
+        QString firstPath = m_window->takes()->getAudioPath();
+        Coverage firstCoverage = m_window->takes()->getCoverage();
+
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        if (QTest::currentTestFailed()) return;
+        QString secondPath = m_window->takes()->getAudioPath();
+        QCOMPARE(int(m_window->takes()->getCoverage().getRanges().size()), 2);
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QCOMPARE(m_window->takes()->getAudioPath(), firstPath);
+        QVERIFY(m_window->takes()->getCoverage() == firstCoverage);
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QVERIFY(!m_window->takes()->haveTake());
+        QCOMPARE(undoOnce(), QString());
+
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        QCOMPARE(m_window->takes()->getAudioPath(), firstPath);
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        QCOMPARE(m_window->takes()->getAudioPath(), secondPath);
+        QCOMPARE(int(m_window->takes()->getCoverage().getRanges().size()), 2);
+    }
+
     // The audio files a take has been through are kept until the session
     // closes, and then only the ones nothing refers to any more go
     void take_files_deleted_on_close() {
