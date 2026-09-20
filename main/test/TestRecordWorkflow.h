@@ -4606,6 +4606,20 @@ private slots:
 
         QString session = m_dir.filePath("missing.ton");
         QVERIFY(m_window->saveSessionFile(session));
+
+        // The session names the take's audio once, in the takes element:
+        // the document does not carry the audio model as well (the take's
+        // waveform layer is not saved), which the session reader would
+        // ask the user to locate when the file has gone
+        {
+            sv::BZipFileDevice file(session);
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            QByteArray document = file.readAll();
+            file.close();
+            // (one wave file model: the reference)
+            QCOMPARE(int(document.count("type=\"wavefile\"")), 1);
+            QVERIFY(document.contains("<take name=\"Take 1\""));
+        }
         m_window->doCloseSession();
         QVERIFY(QFile::remove(before.path));
 

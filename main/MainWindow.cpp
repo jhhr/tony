@@ -3093,6 +3093,15 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
         return;
     }
 
+    // A take's audio is named in the session's <takes> element and opened
+    // from there, so neither the waveform layer nor the audio model is to
+    // be written to the session as well: a second copy, with an absolute
+    // path, that the session reader would ask the user to locate if the
+    // file had gone
+    if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
+        audio->setSavedInSession(false);
+    }
+
     // m_analyser2->newFileLoaded() has now created its own WaveformLayer
     // referencing singingModelId.  This means it is safe to delete the orphan
     // WaveformLayer that MainWindowBase::record() put in the extra pane:
@@ -3485,6 +3494,8 @@ MainWindow::setupRecordingLayer()
 
     m_document->setModel(m_recordingLayer, m_currentRecordingModelId);
     m_document->attachLayerToView(pane, m_recordingLayer);
+    // Raw material of a take in progress: no part of a session
+    m_recordingLayer->setSavedInSession(false);
     m_recordingLayer->showLayer(pane, false);
     if (auto params = m_recordingLayer->getPlayParameters()) {
         params->setPlayAudible(false);
@@ -4748,7 +4759,12 @@ MainWindow::dropRestoredSingingTrack(bool withTakeLayers)
         if (id == mainId) continue;
         if (ModelById::isa<WaveFileModel>(id)) audio.push_back(id);
     }
-    if (audio.empty()) return;
+
+    // (None, in a session saved since the take's waveform layer was kept
+    // out of the file -- Layer::setSavedInSession() -- but sessions saved
+    // before that carry one, and layers named after a take may be there
+    // to drop either way)
+    if (audio.empty() && !withTakeLayers) return;
 
     auto isAudio = [&audio](ModelId id) {
         return std::find(audio.begin(), audio.end(), id) != audio.end();
