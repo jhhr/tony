@@ -1600,8 +1600,20 @@ private slots:
         // analysis of the second recording takes for itself
         const sv::sv_frame_t P = sv::sv_frame_t(2.5 * rate);
         m_window->seekTo(P);
-        take(700);
+        startTake();
         if (QTest::currentTestFailed()) return;
+        QTest::qWait(700);
+
+        // Stop splices the recording in and asks for the analysis of the
+        // range it went into.  The range is read here, while that run is
+        // still going: it is remembered only until the merge, so a run that
+        // finishes before the splice call returns never records one at all
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        if (m_window->analysingRange()) {
+            QCOMPARE(m_window->analysedRangeStart(), P);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
         // The analysis of the take was not thrown away and run again: the
         // layers, and the models under them, are the same objects
@@ -1638,7 +1650,6 @@ private slots:
         // The second recording was analysed, and in the right place
         QVERIFY(!eventsBetween(pitchEvents(pitch), P,
                                P + sv::sv_frame_t(0.6 * rate)).empty());
-        QCOMPARE(m_window->analysedRangeStart(), P);
         verifyPlaySourceClean();
     }
 
