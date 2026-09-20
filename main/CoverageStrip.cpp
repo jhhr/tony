@@ -85,7 +85,11 @@ CoverageStrip::show(Document *document, Pane *pane)
 
     document->setModel(layer, modelId);
     takeLayer(document, pane, layer);
-    document->addLayerToView(pane, layer);
+
+    // Not addLayerToView(): the strip is part of the take, not something
+    // the user added, so undo must not take it away and making it does
+    // not count as a change to the session
+    document->attachLayerToView(pane, layer);
 
     return true;
 }
@@ -129,16 +133,12 @@ CoverageStrip::configureLayer()
     m_layer->setObjectName(layerName());
     m_layer->setPresentationName(tr("Singing Coverage"));
 
-    // EqualSpaced is the one vertical scale a RegionLayer does not draw
-    // and that nothing else in the pane may align itself to, so the
-    // pane's own log-frequency scale is left exactly as it was.  It puts
-    // the bar half way up the pane; the thin strip along the bottom that
-    // the design asks for needs a change in svgui
+    // A band along the bottom of the pane, filled where there is
+    // singing: a plot style the svgui fork has for this.  It has no
+    // vertical scale, no labels and takes no edits.  EqualSpaced as well,
+    // so that nothing in the pane can align its scale to this layer
     m_layer->setVerticalScale(RegionLayer::EqualSpaced);
-
-    // The other style, PlotSegmentation, fills the whole height of the
-    // pane with an opaque block per region
-    m_layer->setPlotStyle(RegionLayer::PlotLines);
+    m_layer->setPlotStyle(RegionLayer::PlotStrip);
 
     m_layer->setBaseColour
         (ColourDatabase::getInstance()->getColourIndex(tr("Orange")));

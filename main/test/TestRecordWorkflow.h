@@ -2857,6 +2857,42 @@ private slots:
         verifyStripMatchesTake();
         if (QTest::currentTestFailed()) return;
 
+        // What it looks like: a filled band along the bottom of the pane
+        // where there is singing, and nothing in the gap (the svgui
+        // fork's PlotStrip style).  The layer is painted on its own: what
+        // else is in the pane is not the point here
+        {
+            sv::Pane *pane = m_window->paneStack()->getPane(0);
+            QVERIFY(pane);
+            pane->resize(400, 200);
+            pane->setZoomLevel(sv::ZoomLevel
+                               (sv::ZoomLevel::FramesPerPixel, 512));
+            pane->setCentreFrame(sv::sv_frame_t(2.0 * rate));
+
+            QImage image(pane->width(), pane->height(), QImage::Format_RGB32);
+            image.fill(Qt::black);
+            {
+                QPainter painter(&image);
+                stripLayer()->paint(pane, painter, image.rect());
+            }
+
+            QRgb strip = sv::ColourDatabase::getInstance()->getColour
+                (stripLayer()->getBaseColour()).rgb();
+            QRgb black = QColor(Qt::black).rgb();
+            int y = image.height() - 3;
+            int inFirst = pane->getXForFrame(firstEnd / 2);
+            int inGap = pane->getXForFrame((firstEnd + P) / 2);
+            int inSecond = pane->getXForFrame(P + sv::sv_frame_t(0.3 * rate));
+            QVERIFY(inFirst >= 0 && inSecond < image.width());
+            QCOMPARE(image.pixel(inFirst, y), strip);
+            QCOMPARE(image.pixel(inSecond, y), strip);
+            QCOMPARE(image.pixel(inGap, y), black);
+            // a band, not a block, and nothing else of a region
+            for (int yy = 0; yy < image.height() - 12; ++yy) {
+                QCOMPARE(image.pixel(inFirst, yy), black);
+            }
+        }
+
         // A third that runs from inside the first range into the second:
         // the two become one bar
         m_window->seekTo(sv::sv_frame_t(0.5 * rate));
