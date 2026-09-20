@@ -49,6 +49,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 class TestSingingAnalysis : public QObject
@@ -190,10 +191,14 @@ class TestSingingAnalysis : public QObject
         return model->getAllEvents();
     }
 
-    static sv::EventVector noteEvents(Analyser &analyser) {
+    static std::shared_ptr<sv::NoteModel> notesModel(Analyser &analyser) {
         sv::Layer *layer = analyser.getLayer(Analyser::Notes);
-        if (!layer) return {};
-        auto model = sv::ModelById::getAs<sv::NoteModel>(layer->getModel());
+        if (!layer) return nullptr;
+        return sv::ModelById::getAs<sv::NoteModel>(layer->getModel());
+    }
+
+    static sv::EventVector noteEvents(Analyser &analyser) {
+        auto model = notesModel(analyser);
         if (!model) return {};
         return model->getAllEvents();
     }
@@ -273,6 +278,98 @@ class TestSingingAnalysis : public QObject
             }
         }
         return out;
+    }
+
+    // The window analyseRange() merges: half the margin on each side of
+    // the range asked for, inside the run, out to an edge of the run that
+    // the coverage limit clipped
+    static void mergeWindow(sv::sv_frame_t start, sv::sv_frame_t end,
+                            sv::sv_frame_t clipStart, sv::sv_frame_t clipEnd,
+                            sv::sv_frame_t &wFrom, sv::sv_frame_t &wTo) {
+        sv::sv_frame_t margin = sv::sv_frame_t(rate / 2);
+        sv::sv_frame_t from, to;
+        widenRange(start, end, clipStart, clipEnd, from, to);
+        wFrom = (start - margin < clipStart) ?
+            from : std::max(from, start - margin / 2);
+        wTo = (end + margin > clipEnd) ? to : std::min(to, end + margin / 2);
+    }
+
+    static std::set<sv::sv_frame_t> doubledFrames(const sv::EventVector &ev) {
+        std::set<sv::sv_frame_t> out;
+        for (size_t i = 1; i < ev.size(); ++i) {
+            if (ev[i].getFrame() == ev[i-1].getFrame()) {
+                out.insert(ev[i].getFrame());
+            }
+        }
+        return out;
+    }
+
+    static std::map<sv::sv_frame_t, float> byFrame(const sv::EventVector &ev) {
+        std::map<sv::sv_frame_t, float> m;
+        for (const auto &e : ev) m[e.getFrame()] = e.getValue();
+        return m;
+    }
+
+    // For a failure message: every note as onset+duration@Hz
+    static QString describeNotes(const sv::EventVector &events) {
+        QStringList out;
+        for (const auto &e : events) {
+            out << QString("%1+%2@%3").arg(e.getFrame())
+                .arg(e.getDuration()).arg(double(e.getValue()), 0, 'f', 1);
+        }
+        return "[" + out.join(" ") + "]";
+    }
+
+    // The pitch track of the whole file before and after a ranged run
+    // over audio that has not changed: the same frames, no frame twice,
+    // the same values outside the merge window and near enough inside it
+    void comparePitchAcrossFile(const sv::EventVector &was,
+                                const sv::EventVector &is,
+                                sv::sv_frame_t wFrom, sv::sv_frame_t wTo) {
+        // The merge may not leave two events on one frame. pYIN itself
+        // does, once per run: in fixed-lag mode it stamps the frame 100
+        // hops before the end of a run twice, so a frame that was already
+        // doubled in the whole-file track may still be
+        QStringList twice;
+        for (sv::sv_frame_t f : doubledFrames(is)) {
+            if (!doubledFrames(was).count(f)) {
+                twice << QString::number(f);
+            }
+        }
+        QVERIFY2(twice.isEmpty(),
+                 qPrintable(QString("two pitch events on one frame after the "
+                                    "merge (window %1 to %2): %3")
+                            .arg(wFrom).arg(wTo).arg(twice.join(" "))));
+
+        auto a = byFrame(was), b = byFrame(is);
+        QStringList odd;
+        for (const auto &p : a) if (!b.count(p.first)) odd << QString("-%1").arg(p.first);
+        for (const auto &p : b) if (!a.count(p.first)) odd << QString("+%1").arg(p.first);
+        QVERIFY2(odd.isEmpty(),
+                 qPrintable(QString("pitch frames lost (-) or gained (+) by "
+                                    "the ranged run, merge window %1 to %2: %3")
+                            .arg(wFrom).arg(wTo).arg(odd.join(" "))));
+        double worst = 0.0;
+        for (const auto &p : a) {
+            float now = b[p.first];
+            if (p.first >= wFrom && p.first < wTo) {
+                worst = std::max(worst, std::abs
+                                 (TestSignals::centsBetween(now, p.second)));
+            } else {
+                QVERIFY2(now == p.second,
+                         qPrintable(QString("pitch at %1 changed from %2 to "
+                                            "%3, outside the merge window "
+                                            "%4 to %5").arg(p.first)
+                                    .arg(p.second).arg(now)
+                                    .arg(wFrom).arg(wTo)));
+            }
+        }
+        // Measured: 0 cents. The window keeps a quarter of a second of
+        // the run away from its edges, and that is context enough for
+        // pYIN to say the same as it said about the whole file
+        QVERIFY2(worst < 20.0,
+                 qPrintable(QString("worst pitch difference inside the merge "
+                                    "window %1 cents").arg(worst)));
     }
 
     static double medianHz(const sv::EventVector &events) {
@@ -715,15 +812,17 @@ private slots:
         }
     }
 
-    void ranged_leaves_the_rest_alone() {
-        // A whole-file analysis, then the same audio analysed again over
-        // one range: outside the widened range not one event may move
+    // A whole-file analysis, then the same audio analysed again over one
+    // range: the file must come out of it exactly as a whole-file
+    // analysis left it. No hole where the merge window begins, no frame
+    // twice, no note split or shortened, nothing moved. Only the middle
+    // of the run is merged for the sake of this
+    void verifyRangedRunChangesNothing(sv::sv_frame_t start,
+                                       sv::sv_frame_t end) {
         auto data = fourNotes();
         sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
-        sv::sv_frame_t start = frameAt(thirdNoteFrom);
-        sv::sv_frame_t end = frameAt(thirdNoteTo);
-        sv::sv_frame_t from, to;
-        widenRange(start, end, 0, fileEnd, from, to);
+        sv::sv_frame_t wFrom, wTo;
+        mergeWindow(start, end, 0, fileEnd, wFrom, wTo);
 
         Analyser analyser(Analyser::SecondaryColors);
         analyse(analyser, addSingingModel(data));
@@ -732,6 +831,7 @@ private slots:
         sv::EventVector wasPitch = pitchEvents(analyser);
         sv::EventVector wasNotes = noteEvents(analyser);
         QCOMPARE(int(wasNotes.size()), 4);
+        QVERIFY2(wasPitch.size() > 200, "too few pitch events to test this");
 
         size_t layers = m_document->getLayers().size();
         size_t models = m_document->getModels().size();
@@ -742,43 +842,60 @@ private slots:
         if (QTest::currentTestFailed()) return;
         verifyNothingLeftOver(layers, models);
 
-        // pYIN stamps a block a quarter of a block in (two hops here), so
-        // its events reach a couple of hops past the end of the range
-        sv::EventVector wasOut = outsidePitch(wasPitch, from, to + 2 * hop);
-        sv::EventVector isOut = outsidePitch(pitchEvents(analyser),
-                                             from, to + 2 * hop);
-        QVERIFY2(wasOut.size() > 100,
-                 "the range covers too much of the file to test this");
-        QCOMPARE(isOut.size(), wasOut.size());
-        for (size_t i = 0; i < wasOut.size(); ++i) {
-            QCOMPARE(isOut[i].getFrame(), wasOut[i].getFrame());
-            QCOMPARE(isOut[i].getValue(), wasOut[i].getValue());
-        }
+        comparePitchAcrossFile(wasPitch, pitchEvents(analyser), wFrom, wTo);
+        if (QTest::currentTestFailed()) return;
 
-        // The notes of the file that lie wholly outside: the first two
-        // (0.6 to 1.1 s and 1.7 to 2.2 s) and the last (3.9 to 4.4 s)
-        sv::EventVector wasOutN = outsideNotes(wasNotes, from, to + 2 * hop);
-        sv::EventVector isOutN = outsideNotes(noteEvents(analyser),
-                                              from, to + 2 * hop);
-        QCOMPARE(int(wasOutN.size()), 3);
-        QCOMPARE(isOutN.size(), wasOutN.size());
-        for (size_t i = 0; i < wasOutN.size(); ++i) {
-            QCOMPARE(isOutN[i].getFrame(), wasOutN[i].getFrame());
-            QCOMPARE(isOutN[i].getDuration(), wasOutN[i].getDuration());
-            QCOMPARE(isOutN[i].getValue(), wasOutN[i].getValue());
+        // Still four notes, each where it was. A note whose onset is in
+        // the window is replaced by the run's own, which may sit a hop or
+        // two away; one whose onset is outside it is not touched at all
+        sv::EventVector isNotes = noteEvents(analyser);
+        QVERIFY2(isNotes.size() == wasNotes.size(),
+                 qPrintable(QString("the notes %1 became %2 (merge window "
+                                    "%3 to %4)").arg(describeNotes(wasNotes))
+                            .arg(describeNotes(isNotes))
+                            .arg(wFrom).arg(wTo)));
+        for (size_t i = 0; i < wasNotes.size(); ++i) {
+            sv::sv_frame_t f = wasNotes[i].getFrame();
+            sv::sv_frame_t slack = (f >= wFrom && f < wTo) ? 2 * hop : 0;
+            QVERIFY2(std::abs(isNotes[i].getFrame() - f) <= slack,
+                     qPrintable(QString("note %1 moved from %2 to %3")
+                                .arg(i).arg(f).arg(isNotes[i].getFrame())));
+            QVERIFY2(std::abs(isNotes[i].getDuration() -
+                              wasNotes[i].getDuration()) <= slack,
+                     qPrintable(QString("note %1 lasted %2, now %3").arg(i)
+                                .arg(wasNotes[i].getDuration())
+                                .arg(isNotes[i].getDuration())));
+            QVERIFY(std::abs(TestSignals::centsBetween
+                             (isNotes[i].getValue(),
+                              wasNotes[i].getValue())) < 20.0);
         }
-
-        // and the third note is still one note, near enough where it was
-        sv::EventVector was3 = notesIn(wasNotes, from, to + 2 * hop);
-        sv::EventVector is3 = notesIn(noteEvents(analyser), from, to + 2 * hop);
-        QCOMPARE(int(was3.size()), 1);
-        QCOMPARE(is3.size(), was3.size());
-        QVERIFY(std::abs(is3[0].getFrame() - was3[0].getFrame()) <= 2 * hop);
     }
 
-    void ranged_truncates_note_across_the_edge() {
-        // A note that runs into the widened range from the left is cut
-        // back to its edge; the analysis supplies what is inside
+    void ranged_leaves_the_rest_alone() {
+        // The third note of fourNotes() analysed again, with both edges of
+        // the merge window landing in the silence around it
+        verifyRangedRunChangesNothing(frameAt(thirdNoteFrom),
+                                      frameAt(thirdNoteTo));
+    }
+
+    void ranged_range_shorter_than_the_margin() {
+        // One hop asked for, in the middle of the third note: the merge
+        // window is half a second wide all the same, and its right edge
+        // now falls inside that note (which the run therefore replaces,
+        // whole, tail and all -- the note's end is inside the run)
+        sv::sv_frame_t start = frameAt(3.0);
+        sv::sv_frame_t wFrom, wTo;
+        mergeWindow(start, start + hop, 0, frameAt(5.0), wFrom, wTo);
+        QVERIFY(wFrom >= frameAt(2.75) && wTo > frameAt(3.25) &&
+                wTo < frameAt(3.3)); // the note runs 2.8 to 3.3 s
+        verifyRangedRunChangesNothing(start, start + hop);
+    }
+
+    void ranged_keeps_a_note_across_the_window_edge() {
+        // A note that runs into the merge window from before it: the run
+        // finds it going on from before the window too, so it has no note
+        // to add inside the window, and the one note stays one note --
+        // where it used to be cut in two
         std::vector<float> data;
         appendSilence(data, 0.3);
         auto lng = tone(singingHz, 2.0);
@@ -790,8 +907,8 @@ private slots:
 
         sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
         sv::sv_frame_t start = frameAt(1.5), end = frameAt(2.0);
-        sv::sv_frame_t from, to;
-        widenRange(start, end, 0, fileEnd, from, to);
+        sv::sv_frame_t wFrom, wTo;
+        mergeWindow(start, end, 0, fileEnd, wFrom, wTo);
 
         Analyser analyser(Analyser::SecondaryColors);
         analyse(analyser, addSingingModel(data));
@@ -799,14 +916,74 @@ private slots:
 
         // One long note from 0.3 to 2.3 s, and a short one after it
         sv::EventVector wasNotes = noteEvents(analyser);
+        sv::EventVector wasPitch = pitchEvents(analyser);
         QCOMPARE(int(wasNotes.size()), 2);
         sv::Event crossing = wasNotes[0];
-        QVERIFY2(crossing.getFrame() < from &&
-                 crossing.getFrame() + crossing.getDuration() > from,
+        QVERIFY2(crossing.getFrame() < wFrom &&
+                 crossing.getFrame() + crossing.getDuration() > wTo,
                  qPrintable(QString("the long note (%1 for %2) does not cross "
-                                    "the edge of the widened range at %3")
+                                    "the merge window %3 to %4")
                             .arg(crossing.getFrame())
-                            .arg(crossing.getDuration()).arg(from)));
+                            .arg(crossing.getDuration())
+                            .arg(wFrom).arg(wTo)));
+
+        QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+        QCOMPARE(analyser.analyseRange(start, end, 0, fileEnd), QString());
+        waitForRange(analyser, done);
+        if (QTest::currentTestFailed()) return;
+
+        // The run begins in the middle of the note, where it cannot stamp
+        // its first two hops: the pitch track of the whole file must come
+        // through it without a hole all the same
+        comparePitchAcrossFile(wasPitch, pitchEvents(analyser), wFrom, wTo);
+        if (QTest::currentTestFailed()) return;
+
+        sv::EventVector now = noteEvents(analyser);
+        QVERIFY2(now.size() == wasNotes.size() &&
+                 now[0].getFrame() == crossing.getFrame() &&
+                 now[0].getDuration() == crossing.getDuration(),
+                 qPrintable(QString("the notes %1 became %2 (merge window "
+                                    "%3 to %4)").arg(describeNotes(wasNotes))
+                            .arg(describeNotes(now)).arg(wFrom).arg(wTo)));
+
+        // and the note after the range is untouched
+        QCOMPARE(now.back().getFrame(), wasNotes[1].getFrame());
+        QCOMPARE(now.back().getDuration(), wasNotes[1].getDuration());
+    }
+
+    void ranged_cuts_a_new_note_at_the_next_old_note() {
+        // A new note may not run over an old note that begins at or after
+        // the window: the old onset stands and the new note is cut back to
+        // it. The old notes here are put in by hand, as notes that the
+        // user has edited or that belong to material the swap replaced
+        std::vector<float> data;
+        appendSilence(data, 1.4);
+        auto lng = tone(singingHz, 1.6); // 1.4 to 3.0 s
+        data.insert(data.end(), lng.begin(), lng.end());
+        appendSilence(data, 0.3);
+
+        sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
+        sv::sv_frame_t start = frameAt(1.5), end = frameAt(2.0);
+        sv::sv_frame_t wFrom, wTo;
+        mergeWindow(start, end, 0, fileEnd, wFrom, wTo);
+        QVERIFY(wFrom < frameAt(1.4) && wTo > frameAt(2.2));
+
+        sv::ModelId singing = addSingingModel(data);
+        addEmptyAnalyses(singing);
+        if (QTest::currentTestFailed()) return;
+
+        Analyser analyser(Analyser::SecondaryColors);
+        QCOMPARE(analyser.newFileLoaded(m_document, singing, m_paneStack,
+                                        m_pane, true), QString());
+        auto notes = notesModel(analyser);
+        QVERIFY(notes);
+
+        // Before the window, inside it, and one beginning after it that
+        // the run's note will want to run over
+        sv::Event before(frameAt(0.2), 200.f, frameAt(0.3), "before");
+        sv::Event inside(frameAt(1.6), 200.f, frameAt(0.3), "inside");
+        sv::Event after(wTo + frameAt(0.05), 200.f, frameAt(0.6), "after");
+        for (const auto &e : { before, inside, after }) notes->add(e);
 
         QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
         QCOMPARE(analyser.analyseRange(start, end, 0, fileEnd), QString());
@@ -814,21 +991,153 @@ private slots:
         if (QTest::currentTestFailed()) return;
 
         sv::EventVector now = noteEvents(analyser);
-        int atCrossing = 0, inRange = 0;
-        for (const auto &e : now) {
-            if (e.getFrame() == crossing.getFrame()) {
-                ++atCrossing;
-                QCOMPARE(e.getFrame() + e.getDuration(), from);
-                QCOMPARE(e.getValue(), crossing.getValue());
-            }
-            if (e.getFrame() >= from && e.getFrame() < to + 2 * hop) ++inRange;
-        }
-        QCOMPARE(atCrossing, 1);
-        QVERIFY2(inRange >= 1, "the analysed range came back with no note");
+        QVERIFY2(now.size() == 3,
+                 qPrintable("notes after the merge: " + describeNotes(now)));
 
-        // The note after the range is untouched
-        QCOMPARE(now.back().getFrame(), wasNotes[1].getFrame());
-        QCOMPARE(now.back().getDuration(), wasNotes[1].getDuration());
+        // The note before the window is untouched: no new note starts
+        // inside it
+        QCOMPARE(now[0].getFrame(), before.getFrame());
+        QCOMPARE(now[0].getDuration(), before.getDuration());
+
+        // The one inside it is gone, replaced by the run's note, which
+        // starts near the start of the tone and is cut back to the onset
+        // of the note after the window
+        QVERIFY2(std::abs(now[1].getFrame() - frameAt(1.4)) <= 4 * hop,
+                 qPrintable(QString("the run's note starts at %1, the tone at "
+                                    "%2").arg(now[1].getFrame())
+                            .arg(frameAt(1.4))));
+        QCOMPARE(now[1].getFrame() + now[1].getDuration(), after.getFrame());
+        QVERIFY(std::abs(TestSignals::centsBetween(now[1].getValue(),
+                                                   singingHz)) < 50.0);
+
+        // and the note after the window keeps its onset and its length
+        QCOMPARE(now[2].getFrame(), after.getFrame());
+        QCOMPARE(now[2].getDuration(), after.getDuration());
+    }
+
+    void ranged_at_the_edge_of_coverage() {
+        // Where the caller's coverage limit clips an edge of the run there
+        // is nothing beyond it but silence and no context worth keeping,
+        // so the window reaches that edge and takes in everything the run
+        // stamped there. Three cases: both edges clipped (the first
+        // recording of a take, with nothing in the models yet), the left
+        // edge, the right edge
+        std::vector<float> data;
+        appendSilence(data, 0.15);
+        auto first = tone(singingHz, 0.5);   // 0.15 to 0.65 s
+        data.insert(data.end(), first.begin(), first.end());
+        appendSilence(data, 0.4);
+        auto second = tone(referenceHz, 0.5); // 1.05 to 1.55 s
+        data.insert(data.end(), second.begin(), second.end());
+        appendSilence(data, 0.45);            // silence beyond the coverage
+
+        sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
+        sv::sv_frame_t coverEnd = frameAt(1.55);
+
+        sv::EventVector wholePitch, wholeNotes;
+        {
+            Analyser whole(Analyser::SecondaryColors);
+            analyse(whole, addSingingModel(data));
+            if (QTest::currentTestFailed()) return;
+            wholePitch = pitchEvents(whole);
+            wholeNotes = noteEvents(whole);
+            whole.removeAllLayers();
+        }
+        QCOMPARE(int(wholeNotes.size()), 2);
+
+        // Both edges: empty models, the coverage is the range recorded,
+        // and the run is the whole of it. Nothing may be dropped at
+        // either end, so the result is the whole-file result
+        {
+            sv::ModelId singing = addSingingModel(data);
+            addEmptyAnalyses(singing);
+            if (QTest::currentTestFailed()) return;
+            Analyser analyser(Analyser::SecondaryColors);
+            QCOMPARE(analyser.newFileLoaded(m_document, singing, m_paneStack,
+                                            m_pane, true), QString());
+            QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+            QCOMPARE(analyser.analyseRange(0, coverEnd, 0, coverEnd),
+                     QString());
+            waitForRange(analyser, done);
+            if (QTest::currentTestFailed()) return;
+
+            auto a = byFrame(wholePitch), b = byFrame(pitchEvents(analyser));
+            QStringList odd;
+            for (const auto &p : a) if (!b.count(p.first)) odd << QString("-%1").arg(p.first);
+            for (const auto &p : b) if (!a.count(p.first)) odd << QString("+%1").arg(p.first);
+            QVERIFY2(odd.isEmpty(),
+                     qPrintable("pitch frames lost (-) or gained (+) by the "
+                                "run over the whole coverage: " +
+                                odd.join(" ")));
+            sv::EventVector notes = noteEvents(analyser);
+            QVERIFY2(notes.size() == wholeNotes.size(),
+                     qPrintable("notes " + describeNotes(wholeNotes) +
+                                " became " + describeNotes(notes)));
+            for (size_t i = 0; i < notes.size(); ++i) {
+                QVERIFY(std::abs(notes[i].getFrame() -
+                                 wholeNotes[i].getFrame()) <= 2 * hop);
+            }
+            // or the next analyser would claim these layers as its own
+            analyser.removeAllLayers();
+        }
+
+        // The left edge only: a range at the very start of the coverage
+        // still gets its first note, and nothing before it is lost
+        {
+            Analyser analyser(Analyser::SecondaryColors);
+            analyse(analyser, addSingingModel(data));
+            if (QTest::currentTestFailed()) return;
+            sv::EventVector wasPitch = pitchEvents(analyser);
+            sv::sv_frame_t start = frameAt(0.1), end = frameAt(0.7);
+            sv::sv_frame_t wFrom, wTo;
+            mergeWindow(start, end, 0, fileEnd, wFrom, wTo);
+            QCOMPARE(wFrom, sv::sv_frame_t(0)); // clipped to nothing
+
+            QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+            QCOMPARE(analyser.analyseRange(start, end, 0, fileEnd), QString());
+            waitForRange(analyser, done);
+            if (QTest::currentTestFailed()) return;
+
+            sv::EventVector notes = noteEvents(analyser);
+            QVERIFY2(notes.size() == 2,
+                     qPrintable("notes after the merge: " +
+                                describeNotes(notes)));
+            QVERIFY(std::abs(notes[0].getFrame() -
+                             wholeNotes[0].getFrame()) <= 2 * hop);
+            comparePitchAcrossFile(wasPitch, pitchEvents(analyser), wFrom, wTo);
+            if (QTest::currentTestFailed()) return;
+            analyser.removeAllLayers();
+        }
+
+        // The right edge only: the run stops at the end of the coverage,
+        // and what it stamped past that end (pYIN stamps a block two hops
+        // in) is kept, so the last of the pitch track is not lost
+        {
+            Analyser analyser(Analyser::SecondaryColors);
+            analyse(analyser, addSingingModel(data));
+            if (QTest::currentTestFailed()) return;
+            sv::EventVector wasPitch = pitchEvents(analyser);
+            sv::sv_frame_t start = frameAt(1.2), end = coverEnd;
+            sv::sv_frame_t wFrom, wTo;
+            mergeWindow(start, end, 0, coverEnd, wFrom, wTo);
+            QVERIFY(wTo >= coverEnd);
+
+            QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+            QCOMPARE(analyser.analyseRange(start, end, 0, coverEnd), QString());
+            waitForRange(analyser, done);
+            if (QTest::currentTestFailed()) return;
+
+            sv::EventVector notes = noteEvents(analyser);
+            QVERIFY2(notes.size() == 2,
+                     qPrintable("notes after the merge: " +
+                                describeNotes(notes)));
+            QVERIFY(std::abs(notes[1].getFrame() -
+                             wholeNotes[1].getFrame()) <= 2 * hop);
+            // The window reaches past the end of the run here, so the
+            // comparison allows for the run's own last events
+            comparePitchAcrossFile(wasPitch, pitchEvents(analyser),
+                                   wFrom, wTo + 4 * hop);
+        }
     }
 
     void ranged_cancelled() {

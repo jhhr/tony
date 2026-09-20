@@ -190,8 +190,12 @@ public:
      *
      * The analysis runs into temporary layers that are in no view;
      * when both are complete their events replace what was in the
-     * widened range and initialAnalysisCompleted() is emitted.  The
-     * merge is not undoable: an analysis result never was.
+     * middle of the run -- a quarter of a second each side of the range
+     * asked for, or out to an end of the run that was clipped -- and
+     * initialAnalysisCompleted() is emitted.  The rest of the run is
+     * context only: it is where pYIN knows least, so what is there
+     * already is left alone.  The merge is not undoable: an analysis
+     * result never was.
      *
      * Returns "" if a run was started (or there was nothing to do), or
      * a user-readable error string.  A second call while one is running
@@ -345,7 +349,14 @@ protected:
     sv::ModelId m_rangedPitchModel;
     sv::ModelId m_rangedNotesModel;
     sv::sv_frame_t m_rangedStart;  // widened, grid-aligned: what is analysed
-    sv::sv_frame_t m_rangedEnd;    // and what the merge replaces
+    sv::sv_frame_t m_rangedEnd;
+    sv::sv_frame_t m_rangedMergeStart; // the window inside that which the
+    sv::sv_frame_t m_rangedMergeEnd;   // merge replaces (W)
+    // True where the run's far edge is the edge of the caller's coverage:
+    // there is no context to keep there, so the merge takes in what the
+    // run stamped past it.  The near edge needs no such flag -- a run
+    // cannot stamp anything before its own first two hops anyway
+    bool m_rangedClippedEnd;
 
     QString doAllAnalyses(bool withPitchTrack);
 

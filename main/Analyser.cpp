@@ -55,7 +55,10 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_candidatesVisible(false),
     m_currentAsyncHandle(0),
     m_rangedStart(0),
-    m_rangedEnd(0)
+    m_rangedEnd(0),
+    m_rangedMergeStart(0),
+    m_rangedMergeEnd(0),
+    m_rangedClippedEnd(false)
 {
     QSettings settings;
     settings.beginGroup("LayerDefaults");
@@ -941,6 +944,8 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
     // is found whole -- but never outside the material the caller says
     // is there to analyse (the take's coverage)
     sv_frame_t margin = sv_frame_t(rate / 2);
+    bool clippedStart = (start - margin < clipStart);
+    bool clippedEnd = (end + margin > clipEnd);
     sv_frame_t from = std::max(clipStart, start - margin);
     sv_frame_t to = std::min(clipEnd, end + margin);
 
@@ -993,6 +998,16 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
 
     m_rangedStart = from;
     m_rangedEnd = to;
+
+    // Only the middle of the run is merged (see mergeRangedAnalysis()):
+    // half the margin on each side of the range asked for, so that the
+    // run keeps a quarter of a second of its own context on each side
+    // that nothing is taken from. Where the run stopped at the edge of
+    // the caller's coverage there is no context to keep -- nothing but
+    // silence beyond -- and the window reaches that edge
+    m_rangedMergeStart = clippedStart ? from : std::max(from, start - margin/2);
+    m_rangedMergeEnd = clippedEnd ? to : std::min(to, end + margin/2);
+    m_rangedClippedEnd = clippedEnd;
 
     for (ModelId id : { m_rangedPitchModel, m_rangedNotesModel }) {
         auto model = ModelById::get(id);
@@ -1070,54 +1085,102 @@ Analyser::mergeRangedAnalysis()
         newNoteEvents.push_back(e.withFrame(e.getFrame() + m_rangedStart));
     }
 
-    // What the merge replaces is the widened range, extended to cover
-    // whatever the run actually produced: pYIN stamps a block a quarter
-    // of a block in (two hops here), so its events start a little after
-    // the range and end a little after it too.  Clearing exactly the
-    // span they occupy leaves neither a stale event where a new one
-    // goes nor two events on one frame
-    sv_frame_t pitchFrom = m_rangedStart, pitchTo = m_rangedEnd;
-    if (!newPitchEvents.empty()) {
-        pitchFrom = std::min(pitchFrom, newPitchEvents.front().getFrame());
-        pitchTo = std::max(pitchTo, newPitchEvents.back().getFrame() + 1);
-    }
+    // What the merge replaces is not the whole run but the window W in
+    // the middle of it (analyseRange() works it out).  The run's own
+    // ends are where pYIN has least context, and it cannot stamp its
+    // first two hops at all, so what it says there is worse than what
+    // the models hold already -- which, for audio that has not changed,
+    // is the answer of a whole-file run
+    sv_frame_t wFrom = m_rangedMergeStart;
+    sv_frame_t pitchTo = m_rangedMergeEnd, noteTo = m_rangedMergeEnd;
 
-    sv_frame_t noteFrom = m_rangedStart, noteTo = m_rangedEnd;
-    for (const Event &e : newNoteEvents) {
-        noteFrom = std::min(noteFrom, e.getFrame());
-        noteTo = std::max(noteTo, e.getFrame() + 1);
+    // The exception is an end of the run that stopped at the edge of the
+    // caller's coverage: nothing is kept beyond it, so the window takes
+    // in whatever the run stamped past it.  pYIN stamps a block a
+    // quarter of a block in (two hops here), so the last events of a run
+    // lie a little past its end
+    if (m_rangedClippedEnd) {
+        if (!newPitchEvents.empty()) {
+            pitchTo = std::max(pitchTo, newPitchEvents.back().getFrame() + 1);
+        }
+        for (const Event &e : newNoteEvents) {
+            noteTo = std::max(noteTo, e.getFrame() + 1);
+        }
     }
 
     cerr << "Analyser::mergeRangedAnalysis: " << newPitchEvents.size()
-         << " pitch event(s) and " << newNoteEvents.size() << " note(s) for "
-         << m_rangedStart << " to " << m_rangedEnd << "; replacing pitch in "
-         << pitchFrom << " to " << pitchTo << ", notes in " << noteFrom
-         << " to " << noteTo << endl;
+         << " pitch event(s) and " << newNoteEvents.size() << " note(s) from "
+         << m_rangedStart << " to " << m_rangedEnd << "; merging pitch in "
+         << wFrom << " to " << pitchTo << ", notes in " << wFrom << " to "
+         << noteTo << endl;
 
     for (const Event &e :
-             pitch->getEventsStartingWithin(pitchFrom, pitchTo - pitchFrom)) {
+             pitch->getEventsStartingWithin(wFrom, pitchTo - wFrom)) {
         pitch->remove(e);
     }
+    // pYIN in fixed-lag mode (the default, and what we run) stamps one
+    // frame of every run twice: the last frame that process() emits is
+    // emitted again as the first of getRemainingFeatures(), 100 hops
+    // before the end of the run.  A whole-file run has the same double
+    // frame near the end of the file, where it does no harm, but a ranged
+    // run puts it in the middle of the merge window, so drop it here
+    sv_frame_t lastAdded = -1;
     for (const Event &e : newPitchEvents) {
-        pitch->add(e);
-    }
-
-    // A note that starts in the range goes; one that runs into the range
-    // from the left is cut back to the edge of it, and the new notes
-    // supply everything from there on.  A note that reached out of the
-    // far end of the range loses that tail: the run has analysed the
-    // material there and says what is in it
-    for (const Event &e : notes->getAllEvents()) {
-        sv_frame_t f = e.getFrame();
-        if (f >= noteFrom && f < noteTo) {
-            notes->remove(e);
-        } else if (f < noteFrom && f + e.getDuration() > noteFrom) {
-            notes->remove(e);
-            notes->add(e.withDuration(noteFrom - f));
+        if (e.getFrame() >= wFrom && e.getFrame() < pitchTo &&
+            e.getFrame() != lastAdded) {
+            pitch->add(e);
+            lastAdded = e.getFrame();
         }
     }
+
+    // Notes go by their onset: the new notes that begin in the window
+    // replace the old ones that begin in it
+    EventVector adding;
     for (const Event &e : newNoteEvents) {
-        notes->add(e);
+        if (e.getFrame() >= wFrom && e.getFrame() < noteTo) {
+            adding.push_back(e);
+        }
+    }
+
+    EventVector oldNotes = notes->getAllEvents();
+
+    // The first of the new notes, and the first old note that begins at
+    // or after the window: the two notes the window's edges can run into
+    sv_frame_t firstAdded = adding.empty() ? -1 : adding.front().getFrame();
+    sv_frame_t nextOldOnset = -1;
+    for (const Event &e : oldNotes) {
+        if (e.getFrame() >= noteTo) {
+            nextOldOnset = e.getFrame();
+            break;
+        }
+    }
+
+    for (const Event &e : oldNotes) {
+        sv_frame_t f = e.getFrame();
+        if (f >= wFrom && f < noteTo) {
+            notes->remove(e);
+        } else if (f < wFrom && firstAdded >= 0 &&
+                   f + e.getDuration() > firstAdded) {
+            // A note that runs into the window from before it is left as
+            // it is unless one of the new notes starts inside it, when it
+            // is cut back to that onset.  Where the audio has not
+            // changed the run finds that note going on from before the
+            // window, has nothing to add inside it, and the one note
+            // stays one note
+            notes->remove(e);
+            notes->add(e.withDuration(firstAdded - f));
+        }
+    }
+    for (const Event &e : adding) {
+        // The far edge the same way round: an old note that begins at or
+        // after the window keeps its onset, and a new note that would run
+        // over it is cut back
+        if (nextOldOnset > e.getFrame() &&
+            e.getFrame() + e.getDuration() > nextOldOnset) {
+            notes->add(e.withDuration(nextOldOnset - e.getFrame()));
+        } else {
+            notes->add(e);
+        }
     }
 
     // The events are in the models, not in a command: an analysis result
