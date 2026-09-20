@@ -1110,6 +1110,7 @@ tony_app_files = [
   'main/NetworkPermissionTester.cpp',
   'main/PaneUtils.cpp',
   'main/TakeCommands.cpp',
+  'main/TakeLayers.cpp',
 ]
 
 tony_core_moc_files = qt.preprocess(

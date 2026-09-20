@@ -26,7 +26,9 @@
 using namespace sv;
 
 SingingTakes::SingingTakes(QObject *parent) :
-    QObject(parent)
+    QObject(parent),
+    m_active(-1),
+    m_named(0)
 {
 }
 
@@ -37,28 +39,195 @@ SingingTakes::~SingingTakes()
 void
 SingingTakes::clear()
 {
-    m_audioPath = "";
-    m_coverage.clear();
+    m_takes.clear();
+    m_active = -1;
+    m_named = 0;
+    m_reserved.clear();
     m_superseded.clear();
     m_written.clear();
     m_protected.clear();
 }
 
+const SingingTakes::Take *
+SingingTakes::activeTake() const
+{
+    if (m_active < 0 || m_active >= int(m_takes.size())) return nullptr;
+    return &m_takes[m_active];
+}
+
+SingingTakes::Take &
+SingingTakes::takeForRecording()
+{
+    if (m_active < 0 || m_active >= int(m_takes.size())) {
+        // The first recording of a session records into a take of its own
+        // (spec 5.3), and so does one made after every take was deleted
+        addTake();
+    }
+    return m_takes[m_active];
+}
+
+bool
+SingingTakes::haveTake() const
+{
+    const Take *take = activeTake();
+    return take && take->audioPath != "";
+}
+
+QString
+SingingTakes::getAudioPath() const
+{
+    const Take *take = activeTake();
+    return take ? take->audioPath : QString();
+}
+
+const Coverage &
+SingingTakes::getCoverage() const
+{
+    static const Coverage empty;
+    const Take *take = activeTake();
+    return take ? take->coverage : empty;
+}
+
+QString
+SingingTakes::getActiveName() const
+{
+    const Take *take = activeTake();
+    return take ? take->name : QString();
+}
+
+QStringList
+SingingTakes::getTakeNames() const
+{
+    QStringList names;
+    for (const Take &take : m_takes) names.push_back(take.name);
+    return names;
+}
+
+int
+SingingTakes::indexOf(QString name) const
+{
+    for (int i = 0; i < int(m_takes.size()); ++i) {
+        if (m_takes[i].name == name) return i;
+    }
+    return -1;
+}
+
+const SingingTakes::Take *
+SingingTakes::getTake(int index) const
+{
+    if (index < 0 || index >= int(m_takes.size())) return nullptr;
+    return &m_takes[index];
+}
+
+bool
+SingingTakes::setActiveIndex(int index)
+{
+    if (index < 0 || index >= int(m_takes.size())) return false;
+    m_active = index;
+    return true;
+}
+
+QString
+SingingTakes::addTake(QString name)
+{
+    Take take;
+
+    if (name != "" && indexOf(name) < 0) {
+        take.name = name;
+    } else {
+        // "Take N" with an N this session has not used, however many takes
+        // have been deleted since: the name is the take's identity, and
+        // the layers of a deleted take may still be in the document.  Not
+        // translated: the names of the take's layers are built from it and
+        // stored in the session file
+        do {
+            take.name = QString("Take %1").arg(++m_named);
+        } while (indexOf(take.name) >= 0 || m_reserved.contains(take.name));
+    }
+
+    m_takes.push_back(take);
+    m_active = int(m_takes.size()) - 1;
+    return take.name;
+}
+
+QString
+SingingTakes::duplicateActiveTake(QString name)
+{
+    const Take *from = activeTake();
+    if (!from) return "";
+
+    // Copied before addTake(), which may make the vector move
+    QString path = from->audioPath;
+    Coverage coverage = from->coverage;
+
+    QString made = addTake(name);
+    m_takes[m_active].audioPath = path;
+    m_takes[m_active].coverage = coverage;
+
+    // The audio file is not copied and not superseded: the two takes read
+    // the same one until one of them is recorded into or erased from,
+    // which writes a new file anyway (spec 5.4)
+    return made;
+}
+
+bool
+SingingTakes::renameTake(int index, QString name)
+{
+    if (index < 0 || index >= int(m_takes.size())) return false;
+
+    name = name.trimmed();
+    if (name == "") return false;
+
+    int existing = indexOf(name);
+    if (existing >= 0 && existing != index) return false;
+
+    m_takes[index].name = name;
+    return true;
+}
+
+void
+SingingTakes::reserveTakeName(QString name)
+{
+    if (name != "" && !m_reserved.contains(name)) m_reserved.push_back(name);
+}
+
+bool
+SingingTakes::removeTake(int index)
+{
+    if (index < 0 || index >= int(m_takes.size())) return false;
+
+    m_takes.erase(m_takes.begin() + index);
+
+    if (m_takes.empty()) {
+        m_active = -1;
+    } else if (index < m_active) {
+        --m_active;
+    } else if (index == m_active) {
+        // A neighbour takes over: the one before, or the first if this
+        // was it
+        m_active = (index > 0 ? index - 1 : 0);
+    }
+
+    return true;
+}
+
 void
 SingingTakes::setTake(QString path, const Coverage &coverage)
 {
-    if (m_audioPath != "" && m_audioPath != path) {
-        m_superseded.push_back(m_audioPath);
+    Take &take = takeForRecording();
+    if (take.audioPath != "" && take.audioPath != path) {
+        m_superseded.push_back(take.audioPath);
     }
-    m_audioPath = path;
-    m_coverage = coverage;
+    take.audioPath = path;
+    take.coverage = coverage;
 }
 
 void
 SingingTakes::restoreTake(QString path, const Coverage &coverage)
 {
-    m_audioPath = path;
-    m_coverage = coverage;
+    Take &take = takeForRecording();
+    take.audioPath = path;
+    take.coverage = coverage;
 }
 
 void
@@ -70,9 +239,14 @@ SingingTakes::protectPath(QString path)
 QStringList
 SingingTakes::unusedWrittenFiles() const
 {
+    QStringList inUse;
+    for (const Take &take : m_takes) {
+        if (take.audioPath != "") inUse.push_back(take.audioPath);
+    }
+
     QStringList unused;
     for (const QString &path : m_written) {
-        if (path == m_audioPath) continue;
+        if (inUse.contains(path)) continue;
         if (m_protected.contains(path)) continue;
         if (unused.contains(path)) continue;
         unused.push_back(path);
@@ -118,16 +292,18 @@ SingingTakes::spliceRecording(QString recordingPath,
                   "in \"%1\"").arg(directory);
     }
 
+    Take &take = takeForRecording();
+
     Coverage::Range range;
-    QString error = TakeAudio::splice(m_audioPath, recordingPath,
+    QString error = TakeAudio::splice(take.audioPath, recordingPath,
                                       recordingOffset, position, length,
                                       outPath, &range);
     if (error != "") return error;
 
-    if (m_audioPath != "") m_superseded.push_back(m_audioPath);
-    m_audioPath = outPath;
+    if (take.audioPath != "") m_superseded.push_back(take.audioPath);
+    take.audioPath = outPath;
     m_written.push_back(outPath);
-    m_coverage.add(range.start, range.end);
+    take.coverage.add(range.start, range.end);
 
     if (placed) *placed = range;
     return "";
@@ -144,11 +320,13 @@ SingingTakes::eraseRanges(const Coverage::Ranges &ranges, QString directory,
     // the end of the singing must not make the file any longer
     Coverage wanted;
     for (const Coverage::Range &r : ranges) {
-        for (const Coverage::Range &covered : m_coverage.getRanges()) {
+        for (const Coverage::Range &covered : getCoverage().getRanges()) {
             wanted.add(std::max(r.start, covered.start),
                        std::min(r.end, covered.end));
         }
     }
+    // Nothing in the selection holds recorded singing, and there may be no
+    // take at all
     if (wanted.isEmpty()) return "";
 
     QString outPath = nextAudioPath(directory);
@@ -157,14 +335,17 @@ SingingTakes::eraseRanges(const Coverage::Ranges &ranges, QString directory,
                   "in \"%1\"").arg(directory);
     }
 
-    QString error = TakeAudio::erase(m_audioPath, wanted.getRanges(), outPath);
+    Take &take = takeForRecording();
+
+    QString error = TakeAudio::erase(take.audioPath, wanted.getRanges(),
+                                     outPath);
     if (error != "") return error;
 
-    m_superseded.push_back(m_audioPath);
-    m_audioPath = outPath;
+    m_superseded.push_back(take.audioPath);
+    take.audioPath = outPath;
     m_written.push_back(outPath);
     for (const Coverage::Range &r : wanted.getRanges()) {
-        m_coverage.remove(r.start, r.end);
+        take.coverage.remove(r.start, r.end);
     }
 
     if (erased) *erased = wanted.getRanges();
@@ -174,7 +355,7 @@ SingingTakes::eraseRanges(const Coverage::Ranges &ranges, QString directory,
 bool
 SingingTakes::coversPosition(sv_frame_t position) const
 {
-    return m_coverage.contains(position);
+    return getCoverage().contains(position);
 }
 
 bool

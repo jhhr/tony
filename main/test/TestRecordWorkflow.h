@@ -29,6 +29,7 @@
 #include "../Analyser.h"
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
+#include "../TakeLayers.h"
 
 #include "version.h"
 
@@ -63,6 +64,7 @@
 #include <QtTest>
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QLabel>
 #include <QMessageBox>
 #include <QSettings>
@@ -103,6 +105,26 @@ public:
     QAction *eraseSingingAction() { return m_eraseSingingAction; }
     QAction *selectRecordingAction() { return m_selectRecordingAction; }
     void doUpdateMenuStates() { updateMenuStates(); }
+
+    // The takes of the session, as the Takes menu and the combo box do
+    bool doSwitchToTake(int index) { return switchToTake(index); }
+    void doChooseTakeInCombo(int index) { m_takeCombo->setCurrentIndex(index); }
+    void doNewEmptyTake() { newEmptyTake(); }
+    void doDuplicateTake() { duplicateTake(); }
+    void doRenameTake() { renameTake(); }
+    void doDeleteTake() { deleteTake(); }
+    bool doDeleteTakeAt(int index) { return deleteTakeAt(index); }
+    QComboBox *takeCombo() { return m_takeCombo; }
+    QAction *newTakeAction() { return m_newTakeAction; }
+    QAction *duplicateTakeAction() { return m_duplicateTakeAction; }
+    QAction *renameTakeAction() { return m_renameTakeAction; }
+    QAction *deleteTakeAction() { return m_deleteTakeAction; }
+
+    // The two questions the take operations ask, answered from here: the
+    // suite cannot answer a dialog
+    void setDeleteTakeAnswer(bool yes) { m_deleteTakeAnswer = yes; }
+    int deleteTakeQuestions() const { return m_deleteTakeQuestions; }
+    void setTakeNameAnswer(QString name) { m_takeNameAnswer = name; }
 
     // True between the start of the analysis of a recorded range and the
     // merge of its result into the take's pitch and notes
@@ -208,6 +230,15 @@ protected:
         return m_recordOverAnswer;
     }
 
+    bool confirmDeleteTake(QString) override {
+        ++m_deleteTakeQuestions;
+        return m_deleteTakeAnswer;
+    }
+
+    QString askForTakeName(QString current) override {
+        return m_takeNameAnswer == "" ? current : m_takeNameAnswer;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -216,6 +247,9 @@ private:
     bool m_installDevice;
     bool m_recordOverAnswer = true;
     int m_recordOverQuestions = 0;
+    bool m_deleteTakeAnswer = true;
+    int m_deleteTakeQuestions = 0;
+    QString m_takeNameAnswer;
 };
 
 class TestRecordWorkflow : public QObject
@@ -492,15 +526,67 @@ class TestRecordWorkflow : public QObject
         return m_window->coverageStrip()->getLayer();
     }
 
+    // The strips of the active take, and of every take: each take of the
+    // session has one, and only the active take's is on show
     int stripLayersInPane0() {
+        return stripLayersNamed
+            (CoverageStrip::layerName(m_window->takes()->getActiveName()));
+    }
+
+    int allStripLayersInPane0() {
+        return stripLayersNamed("");
+    }
+
+    int stripLayersNamed(QString name) {
         int n = 0;
         sv::Pane *pane = m_window->paneStack()->getPane(0);
         if (!pane) return 0;
         for (int i = 0; i < pane->getLayerCount(); ++i) {
-            if (pane->getLayer(i)->objectName() ==
-                CoverageStrip::layerName()) ++n;
+            QString takeName;
+            TakeLayers::Kind kind;
+            if (!TakeLayers::parse(pane->getLayer(i)->objectName(),
+                                   takeName, kind)) continue;
+            if (kind != TakeLayers::Coverage) continue;
+            if (name != "" && pane->getLayer(i)->objectName() != name) continue;
+            ++n;
         }
         return n;
+    }
+
+    // The layers of the take of this name, found the way MainWindow and
+    // (from 7b) a session restore find them: by their object names
+    TakeLayers::Found takeLayers(QString name) {
+        return TakeLayers::find(m_window->paneStack()->getPane(0), name);
+    }
+
+    // What a take that is not the active one has to be: hidden, silent and
+    // out of the play source, so that it is neither seen nor heard and
+    // cannot hold playback open past the end of the active take's audio
+    void verifyTakeIsPutAway(QString name) {
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        QVERIFY(pane);
+        TakeLayers::Found found = takeLayers(name);
+        auto models = m_window->playSource()->getModels();
+        for (sv::Layer *layer : { static_cast<sv::Layer *>(found.pitch),
+                                  static_cast<sv::Layer *>(found.notes),
+                                  static_cast<sv::Layer *>(found.coverage) }) {
+            if (!layer) continue;
+            QVERIFY2(layer->isLayerDormant(pane),
+                     qPrintable(QString("%1 is not hidden")
+                                .arg(layer->objectName())));
+            auto params = layer->getPlayParameters();
+            QVERIFY2(!params || !params->isPlayAudible(),
+                     qPrintable(QString("%1 can be heard")
+                                .arg(layer->objectName())));
+            QVERIFY2(!models.count(layer->getModel()),
+                     qPrintable(QString("%1 is still in the play source")
+                                .arg(layer->objectName())));
+            auto model = sv::ModelById::get(layer->getModel());
+            QVERIFY2(model && model->getSourceModel().isNone(),
+                     qPrintable(QString("%1 still has a source model, so an "
+                                        "analyser could claim it")
+                                .arg(layer->objectName())));
+        }
     }
 
     // What the strip shows, from the regions of its model rather than
@@ -2382,8 +2468,10 @@ private slots:
                                  (singing)->getFrameCount()));
     }
 
-    // Loading over a singing track that is already there: the path
-    // through teardownSingingTrackAnalyser() that record() does not take
+    // Loading a singing track over one that is already there.  Since
+    // phase 7a each load is a take of its own (spec 5.3): the first
+    // track's audio is released, but its pitch and notes are kept as the
+    // layers of the take that has been put away
     void reload_singing_track() {
         makeWindow(FakeAudioIO::Config());
         openReference(writeWav(tone(lowHz, 1.0)));
@@ -2401,22 +2489,32 @@ private slots:
         sv::ModelId second = m_window->analyser2()->getMainModelId();
         QVERIFY(second != first);
 
+        // Two takes, and the first one's audio is gone: only the active
+        // take has an audio model (spec 6.4)
+        QCOMPARE(m_window->takes()->getTakeNames(),
+                 QStringList({ "Take 1", "Take 2" }));
         QVERIFY2(!sv::ModelById::get(first),
                  "the first singing track's model was not released");
-        QVERIFY(!sv::ModelById::get(firstPitch));
+        QVERIFY2(sv::ModelById::get(firstPitch),
+                 "the first take's pitch track went with its audio");
         QCOMPARE(layersOnModel(second), 1);
         QCOMPARE(m_window->paneStack()->getPaneCount(), panes);
+
+        verifyTakeIsPutAway("Take 1");
+        if (QTest::currentTestFailed()) return;
 
         auto playing = m_window->playSource()->getModels();
         QVERIFY(!playing.count(first));
         QVERIFY(!playing.count(firstPitch));
         verifyPlaySourceClean();
         if (QTest::currentTestFailed()) return;
-        // audio, pitch track and notes, of the reference and of the track
+        // audio, pitch track and notes, of the reference and of the take
+        // that is on show
         QCOMPARE(int(playing.size()), 6);
 
         // A stale id used to keep the end of playback where the longest
-        // model ever loaded had ended
+        // model ever loaded had ended, and the pitch track of the take
+        // that has been put away -- of the 2 s file -- would do the same
         QVERIFY(m_window->playSource()->getPlayEndFrame() <
                 sv::sv_frame_t(1.2 * rate));
     }
@@ -3638,6 +3736,526 @@ private slots:
 
         // The commands that held those paths went with the session
         QCOMPARE(undoOnce(), QString());
+    }
+
+    // Several takes (spec 5.3).  Every take of the session has its three
+    // layers in pane 0, named after it; only the active take has an audio
+    // model and the singing analyser, and the rest are hidden and silent
+
+    void first_recording_makes_take_1() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // No take, nothing in the combo box, and nothing to act on
+        QCOMPARE(m_window->takes()->getTakeCount(), 0);
+        QCOMPARE(m_window->takeCombo()->count(), 0);
+        m_window->doUpdateMenuStates();
+        QVERIFY(m_window->newTakeAction()->isEnabled());
+        QVERIFY(!m_window->duplicateTakeAction()->isEnabled());
+        QVERIFY(!m_window->deleteTakeAction()->isEnabled());
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 1" });
+        QCOMPARE(m_window->takes()->getActiveIndex(), 0);
+
+        // The layers of the take carry its name, and they are the ones the
+        // analyser holds
+        Analyser *a2 = m_window->analyser2();
+        QVERIFY(a2);
+        TakeLayers::Found found = takeLayers("Take 1");
+        QCOMPARE(static_cast<sv::Layer *>(found.pitch),
+                 a2->getLayer(Analyser::PitchTrack));
+        QCOMPARE(static_cast<sv::Layer *>(found.notes),
+                 a2->getLayer(Analyser::Notes));
+        QCOMPARE(static_cast<sv::Layer *>(found.coverage),
+                 static_cast<sv::Layer *>(stripLayer()));
+
+        QCOMPARE(m_window->takeCombo()->count(), 1);
+        QCOMPARE(m_window->takeCombo()->currentText(), QString("Take 1"));
+        m_window->doUpdateMenuStates();
+        QVERIFY(m_window->duplicateTakeAction()->isEnabled());
+        QVERIFY(m_window->deleteTakeAction()->isEnabled());
+    }
+
+    // New Empty Take leaves the take that was on show as it is, and the
+    // next recording goes into the new one
+    void new_empty_take_then_record() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot first = snapshotTake();
+        QVERIFY(!first.pitch.empty());
+        QVERIFY(!first.notes.empty());
+        TakeLayers::Found one = takeLayers("Take 1");
+        QVERIFY(one.pitch && one.notes && one.coverage);
+
+        m_window->doNewEmptyTake();
+
+        // Two takes, the new one active with nothing in it and nothing to
+        // show it with
+        QCOMPARE(m_window->takes()->getTakeNames(),
+                 QStringList({ "Take 1", "Take 2" }));
+        QCOMPARE(m_window->takes()->getActiveIndex(), 1);
+        QVERIFY(!m_window->takes()->haveTake());
+        QVERIFY2(!m_window->analyser2(),
+                 "the empty take was given the singing analyser");
+        QVERIFY(!m_window->coverageStrip()->isShown());
+        QCOMPARE(m_window->takeCombo()->currentText(), QString("Take 2"));
+
+        // The first take's layers are the same objects, with their events,
+        // and they are put away
+        QCOMPARE(takeLayers("Take 1").pitch, one.pitch);
+        QCOMPARE(pitchEvents(one.pitch), first.pitch);
+        QCOMPARE(noteEvents(one.notes), first.notes);
+        verifyTakeIsPutAway("Take 1");
+        if (QTest::currentTestFailed()) return;
+
+        // Recording into the new take: its own audio file, its own layers
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(m_window->takes()->getActiveIndex(), 1);
+        QVERIFY(m_window->takes()->getAudioPath() != first.path);
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QVERIFY(ranges[0].start >= sv::sv_frame_t(2.0 * rate));
+
+        TakeLayers::Found two = takeLayers("Take 2");
+        QVERIFY(two.pitch && two.notes && two.coverage);
+        QVERIFY(two.pitch != one.pitch && two.notes != one.notes);
+        QCOMPARE(static_cast<sv::Layer *>(two.notes),
+                 m_window->analyser2()->getLayer(Analyser::Notes));
+        QVERIFY(!pitchEvents(two.pitch).empty());
+
+        // The first take is untouched by all of it
+        QCOMPARE(pitchEvents(one.pitch), first.pitch);
+        QCOMPARE(noteEvents(one.notes), first.notes);
+        QCOMPARE(m_window->takes()->getTake(0)->audioPath, first.path);
+        verifyTakeIsPutAway("Take 1");
+        if (QTest::currentTestFailed()) return;
+
+        // Each take has its own strip, and one of them is on show
+        QCOMPARE(allStripLayersInPane0(), 2);
+        verifyStripMatchesTake();
+        verifyPlaySourceClean();
+    }
+
+    // Switching back and forth: the take's audio, coverage, strip, pitch
+    // and notes come back exactly, the layers are the very same objects
+    // and nothing is analysed
+    void switch_between_takes() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot first = snapshotTake();
+        TakeLayers::Found one = takeLayers("Take 1");
+
+        m_window->doNewEmptyTake();
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot second = snapshotTake();
+        TakeLayers::Found two = takeLayers("Take 2");
+        QVERIFY(second.path != first.path);
+        QVERIFY(second.frames > 0 && first.frames > 0);
+
+        // Back to the first take, through the combo box as the user does
+        m_window->doChooseTakeInCombo(0);
+        QCOMPARE(m_window->takes()->getActiveIndex(), 0);
+
+        verifyTakeMatches(first);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(takeLayers("Take 1").pitch, one.pitch);
+        QCOMPARE(takeLayers("Take 1").notes, one.notes);
+        QCOMPARE(static_cast<sv::Layer *>(one.pitch),
+                 m_window->analyser2()->getLayer(Analyser::PitchTrack));
+        verifyTakeIsPutAway("Take 2");
+        if (QTest::currentTestFailed()) return;
+
+        // Nothing was analysed, then or when the queued calls ran
+        QVERIFY(!m_window->analysingRange());
+        QVERIFY(!sv::ModelTransformerFactory::getInstance()
+                ->haveRunningTransformers());
+        QCoreApplication::processEvents();
+        QVERIFY(!sv::ModelTransformerFactory::getInstance()
+                ->haveRunningTransformers());
+
+        // The note tool acts on the pane's topmost note layer: it has to
+        // be the take that is on show, not the one put away
+        QCOMPARE(topNoteLayerInPane0(), static_cast<sv::Layer *>(one.notes));
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        // The undo history goes with a switch (spec 5.4)
+        QCOMPARE(undoOnce(), QString());
+
+        // ... and back to the second
+        m_window->doChooseTakeInCombo(1);
+        QCOMPARE(m_window->takes()->getActiveIndex(), 1);
+        verifyTakeMatches(second);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(takeLayers("Take 2").notes, two.notes);
+        QCOMPARE(topNoteLayerInPane0(), static_cast<sv::Layer *>(two.notes));
+        verifyTakeIsPutAway("Take 1");
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->analysingRange());
+        verifyStripMatchesTake();
+        verifyPlaySourceClean();
+    }
+
+    // A take that is not on show is silent and cannot hold playback open
+    // past the end of the audio that is
+    void inactive_take_does_not_play() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // A take that reaches well past the end of the reference
+        take(1500);
+        if (QTest::currentTestFailed()) return;
+        sv::sv_frame_t longest = m_window->takes()->getCoverage().getEndFrame();
+        QVERIFY(longest > sv::sv_frame_t(1.2 * rate));
+        QVERIFY(m_window->playSource()->getPlayEndFrame() >= longest);
+
+        // ... and a short one beside it
+        m_window->doNewEmptyTake();
+        m_window->seekTo(0);
+        take(400);
+        if (QTest::currentTestFailed()) return;
+
+        verifyTakeIsPutAway("Take 1");
+        if (QTest::currentTestFailed()) return;
+
+        // Playback ends with the longest of what can be heard: the
+        // reference and the take on show, not the take put away
+        sv::sv_frame_t end = m_window->playSource()->getPlayEndFrame();
+        QVERIFY2(end < longest,
+                 qPrintable(QString("playback still runs to frame %1, the end "
+                                    "of the take that was put away (%2)")
+                            .arg(end).arg(longest)));
+        QVERIFY(end >= sv::sv_frame_t(1.0 * rate));
+        verifyPlaySourceClean();
+    }
+
+    // Duplicate Take: a copy of the take, sharing its audio file, and
+    // recording into the copy leaves the original alone
+    void duplicate_take_then_record() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot first = snapshotTake();
+        QVERIFY(!first.pitch.empty());
+        QVERIFY(!first.notes.empty());
+        TakeLayers::Found one = takeLayers("Take 1");
+
+        m_window->doDuplicateTake();
+
+        QCOMPARE(m_window->takes()->getTakeNames(),
+                 QStringList({ "Take 1", "Take 2" }));
+        QCOMPARE(m_window->takes()->getActiveIndex(), 1);
+
+        // The same audio file and coverage, and the same events in layers
+        // of its own
+        QCOMPARE(m_window->takes()->getAudioPath(), first.path);
+        QCOMPARE(m_window->takes()->getCoverage().getRanges(), first.coverage);
+        TakeLayers::Found two = takeLayers("Take 2");
+        QVERIFY(two.pitch && two.notes && two.coverage);
+        QVERIFY(two.pitch != one.pitch && two.notes != one.notes);
+        QCOMPARE(pitchEvents(two.pitch), first.pitch);
+        QCOMPARE(noteEvents(two.notes), first.notes);
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+        verifyTakeIsPutAway("Take 1");
+        if (QTest::currentTestFailed()) return;
+
+        // No audio file was written, and the shared one is not up for
+        // deletion however thoroughly either take supersedes it
+        QCOMPARE(m_window->takes()->getWrittenPaths(),
+                 QStringList { first.path });
+
+        // Recording into the copy: its own file from now on, and the take
+        // it was copied from is exactly as it was
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->takes()->getAudioPath() != first.path);
+        QCOMPARE(int(m_window->takes()->getCoverage().getRanges().size()), 2);
+        QCOMPARE(m_window->takes()->getTake(0)->audioPath, first.path);
+        QCOMPARE(m_window->takes()->getTake(0)->coverage.getRanges(),
+                 first.coverage);
+        QCOMPARE(pitchEvents(one.pitch), first.pitch);
+        QCOMPARE(noteEvents(one.notes), first.notes);
+        QVERIFY2(m_window->takes()->unusedWrittenFiles().isEmpty(),
+                 "the file the first take still plays was up for deletion");
+        QVERIFY(QFileInfo::exists(first.path));
+        verifyPlaySourceClean();
+    }
+
+    // Delete Take asks first, and deletes the take's layers and nothing
+    // else: never an audio file
+    void delete_the_active_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot first = snapshotTake();
+        TakeLayers::Found one = takeLayers("Take 1");
+
+        m_window->doNewEmptyTake();
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QString secondPath = m_window->takes()->getAudioPath();
+        TakeLayers::Found two = takeLayers("Take 2");
+
+        // Asked, and answered no: nothing happens
+        m_window->setDeleteTakeAnswer(false);
+        m_window->doDeleteTake();
+        QCOMPARE(m_window->deleteTakeQuestions(), 1);
+        QCOMPARE(m_window->takes()->getTakeCount(), 2);
+
+        m_window->setDeleteTakeAnswer(true);
+        m_window->doDeleteTake();
+        QCOMPARE(m_window->deleteTakeQuestions(), 2);
+
+        // The take before it is the active one, as it was
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 1" });
+        QCOMPARE(m_window->takes()->getActiveIndex(), 0);
+        verifyTakeMatches(first);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(takeLayers("Take 1").pitch, one.pitch);
+        QCOMPARE(static_cast<sv::Layer *>(one.notes),
+                 m_window->analyser2()->getLayer(Analyser::Notes));
+
+        // The deleted take's layers are gone from the pane and from the
+        // document, and its audio file is still on disk
+        QVERIFY(!takeLayers("Take 2").pitch);
+        QVERIFY(!takeLayers("Take 2").notes);
+        QVERIFY(!takeLayers("Take 2").coverage);
+        QVERIFY(!documentHasLayer(two.pitch));
+        QVERIFY(!documentHasLayer(two.notes));
+        QVERIFY(!documentHasLayer(two.coverage));
+        QCOMPARE(noteLayersInPane0(), 2); // the reference's and Take 1's
+        QVERIFY2(QFileInfo::exists(secondPath),
+                 "deleting a take deleted its audio file");
+        verifyStripMatchesTake();
+        verifyPlaySourceClean();
+        if (QTest::currentTestFailed()) return;
+
+        // And the last take can go too, leaving no take at all
+        m_window->doDeleteTake();
+        QCOMPARE(m_window->takes()->getTakeCount(), 0);
+        QCOMPARE(m_window->takes()->getActiveIndex(), -1);
+        QVERIFY(!m_window->analyser2());
+        QCOMPARE(allStripLayersInPane0(), 0);
+        QCOMPARE(noteLayersInPane0(), 1); // the reference's
+        QCOMPARE(m_window->takeCombo()->count(), 0);
+        QVERIFY(QFileInfo::exists(first.path));
+
+        // Recording again makes a take, as the first recording did
+        m_window->seekTo(0);
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 3" });
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+        verifyStripMatchesTake();
+    }
+
+    // Deleting a take that is not the active one: the one on show does not
+    // move
+    void delete_an_inactive_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeLayers::Found one = takeLayers("Take 1");
+
+        m_window->doNewEmptyTake();
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot second = snapshotTake();
+
+        QVERIFY(m_window->doDeleteTakeAt(0));
+
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 2" });
+        QCOMPARE(m_window->takes()->getActiveIndex(), 0);
+        verifyTakeMatches(second);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!takeLayers("Take 1").pitch);
+        QVERIFY(!documentHasLayer(one.pitch));
+        QCOMPARE(noteLayersInPane0(), 2);
+        verifyStripMatchesTake();
+        verifyPlaySourceClean();
+    }
+
+    // Rename Take: the take and its layers, and not the undo history
+    void rename_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeLayers::Found before = takeLayers("Take 1");
+        QVERIFY(before.pitch && before.notes && before.coverage);
+
+        m_window->setTakeNameAnswer("Chorus");
+        m_window->doRenameTake();
+
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Chorus" });
+        QCOMPARE(m_window->takeCombo()->currentText(), QString("Chorus"));
+
+        // The same layers, named after the take again
+        TakeLayers::Found after = takeLayers("Chorus");
+        QCOMPARE(after.pitch, before.pitch);
+        QCOMPARE(after.notes, before.notes);
+        QCOMPARE(after.coverage, before.coverage);
+        QVERIFY(!takeLayers("Take 1").pitch);
+        QCOMPARE(m_window->coverageStrip()->getTakeName(), QString("Chorus"));
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        // A rename is not a change to the singing, so the recording can
+        // still be undone (spec 5.4)
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+
+        // The take's audio is still under its layers after all that.  The
+        // layers are looked up again: an undo of the first recording of a
+        // take takes them away, and the redo makes them afresh
+        QVERIFY(m_window->analyser2());
+        QCOMPARE(static_cast<sv::Layer *>(takeLayers("Chorus").pitch),
+                 m_window->analyser2()->getLayer(Analyser::PitchTrack));
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Chorus" });
+    }
+
+    // The take operations are not to be had while a take is being
+    // recorded, and a new take then record is not the same as a switch
+    void take_actions_disabled_while_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        m_window->doUpdateMenuStates();
+        QVERIFY(m_window->takeCombo()->isEnabled());
+        QVERIFY(m_window->newTakeAction()->isEnabled());
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        m_window->doUpdateMenuStates();
+        QVERIFY2(!m_window->takeCombo()->isEnabled(),
+                 "takes could be switched while one was being recorded");
+        QVERIFY(!m_window->newTakeAction()->isEnabled());
+        QVERIFY(!m_window->duplicateTakeAction()->isEnabled());
+        QVERIFY(!m_window->deleteTakeAction()->isEnabled());
+
+        // And the calls themselves refuse, in case a script reaches them
+        QVERIFY(!m_window->doSwitchToTake(0));
+        m_window->doNewEmptyTake();
+        QCOMPARE(m_window->takes()->getTakeCount(), 1);
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        m_window->doUpdateMenuStates();
+        QVERIFY(m_window->takeCombo()->isEnabled());
+    }
+
+    // A session with two takes saved and opened again.  Phase 7b stores
+    // the takes properly; until then the session says only which audio
+    // file the active take was in, so that take comes back as a take of
+    // its own, analysed afresh, and the layers of both saved takes are
+    // left in the pane, hidden and owned by nobody
+    void two_takes_survive_a_session_opening() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        m_window->doNewEmptyTake();
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+
+        QString path = m_window->takes()->getAudioPath();
+        auto pitch = pitchEvents(m_window->analyser2());
+        QVERIFY(!pitch.empty());
+
+        QString session = m_dir.filePath("two-takes.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        m_window->doCloseSession();
+
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        // One take, in the audio file the active take was in, and named
+        // after neither of the takes whose layers the session holds
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 3" });
+        // A restored model reports its own file's path, whose drive letter
+        // Windows may have changed the case of
+        QCOMPARE(m_window->takes()->getAudioPath().toLower(), path.toLower());
+        QVERIFY(m_window->analyser2());
+        QCOMPARE(static_cast<sv::Layer *>(takeLayers("Take 3").pitch),
+                 m_window->analyser2()->getLayer(Analyser::PitchTrack));
+
+        // Analysed afresh rather than mixed up with another take's pitch
+        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
+
+        // Both saved takes' layers are still there, put away, and they are
+        // not the ones the take on show is using
+        QVERIFY(takeLayers("Take 1").pitch && takeLayers("Take 1").notes);
+        QVERIFY(takeLayers("Take 2").pitch && takeLayers("Take 2").notes);
+        QVERIFY(takeLayers("Take 3").pitch != takeLayers("Take 1").pitch);
+        QVERIFY(takeLayers("Take 3").pitch != takeLayers("Take 2").pitch);
+        verifyTakeIsPutAway("Take 1");
+        verifyTakeIsPutAway("Take 2");
+        if (QTest::currentTestFailed()) return;
+        verifyPlaySourceClean();
     }
 
     // The alternate pitch track: the reference pitch track moved by

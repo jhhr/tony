@@ -38,6 +38,11 @@ class RegionLayer;
  * session keeps them, and a session that has them is where the coverage
  * of its take comes from when it is loaded again.
  *
+ * Every take of the session has a strip of its own, under its own name,
+ * but only the active take's is held here: switching take lets one go
+ * (release(), which leaves it in the pane, hidden) and takes the other
+ * one up (adopt()).
+ *
  * The strip is display only.  It is never the pane's selected layer (the
  * caller re-stacks the editable tracks after it is created), its model
  * cannot be played (a RegionModel has no play parameters), and its
@@ -57,23 +62,35 @@ public:
     virtual ~CoverageStrip();
 
     /**
-     * Create the layer in the given pane, on top of whatever is there.
-     * Does nothing if the layer exists already.  Returns false if it
-     * could not be created.
+     * Create the layer of the take of this name in the given pane, on top
+     * of whatever is there.  Does nothing if the layer exists already.
+     * Returns false if it could not be created.
      */
-    bool show(sv::Document *document, sv::Pane *pane);
+    bool show(sv::Document *document, sv::Pane *pane, QString takeName);
 
     /**
-     * Take over a layer that show() made in an earlier run, and that a
-     * session load has put back into the pane.  Returns false if there
-     * is none; the coverage it holds is then read with getCoverage().
+     * Take over the layer of the take of this name that show() made
+     * before -- in an earlier run, that a session load has put back into
+     * the pane, or for a take that has been switched away from and back.
+     * Returns false if there is none; the coverage it holds is then read
+     * with getCoverage().
      */
-    bool adopt(sv::Document *document, sv::Pane *pane);
+    bool adopt(sv::Document *document, sv::Pane *pane, QString takeName);
 
     /// Delete the layer and its model from the document
     void hide();
 
+    /**
+     * Let go of the layer without deleting it: it stays in the pane,
+     * hidden, holding the coverage of a take that is no longer the active
+     * one.  adopt() takes it up again.
+     */
+    void release();
+
     bool isShown() const { return m_layer != nullptr; }
+
+    /// The name of the take whose strip this is, or "" when there is none
+    QString getTakeName() const { return m_takeName; }
 
     /// The ranges the strip shows, which are the take's coverage
     void setCoverage(const Coverage &coverage);
@@ -85,11 +102,10 @@ public:
     sv::ModelId getModelId() const;
 
     /**
-     * The layer's object name, which is how adopt() knows it again.
-     * One function because phase 7a of the takes work names the layer
-     * after its take.
+     * The layer's object name, which is how adopt() knows it again: the
+     * name of its take and what it is (TakeLayers).
      */
-    static QString layerName();
+    static QString layerName(QString takeName);
 
 private slots:
     void layerAboutToBeDeleted(sv::Layer *);
@@ -98,8 +114,9 @@ private:
     sv::Document *m_document;
     sv::Pane *m_pane;
     sv::RegionLayer *m_layer;
+    QString m_takeName;
 
-    void takeLayer(sv::Document *, sv::Pane *, sv::RegionLayer *);
+    void takeLayer(sv::Document *, sv::Pane *, sv::RegionLayer *, QString);
     void configureLayer();
 };
 

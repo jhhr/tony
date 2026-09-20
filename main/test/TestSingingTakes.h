@@ -124,6 +124,198 @@ private slots:
         QVERIFY(takes.getSupersededPaths().isEmpty());
     }
 
+    // Several takes (spec 5.3): a list, with one of them the active one,
+    // which is the take every single-take call is about
+
+    void takes_are_a_list() {
+        SingingTakes takes;
+        QCOMPARE(takes.getTakeCount(), 0);
+        QCOMPARE(takes.getActiveIndex(), -1);
+        QCOMPARE(takes.getActiveName(), QString());
+        QVERIFY(takes.getTakeNames().isEmpty());
+        QVERIFY(!takes.getTake(0));
+
+        // An empty take: there, active, and with nothing in it
+        QCOMPARE(takes.addTake(), QString("Take 1"));
+        QCOMPARE(takes.getTakeCount(), 1);
+        QCOMPARE(takes.getActiveIndex(), 0);
+        QVERIFY(!takes.haveTake());
+        QVERIFY(takes.getCoverage().isEmpty());
+
+        takes.setWholeFileTake("/somewhere/one.wav", 1000);
+        QVERIFY(takes.haveTake());
+
+        // A second take of its own: the first is left as it is
+        QCOMPARE(takes.addTake(), QString("Take 2"));
+        QCOMPARE(takes.getActiveIndex(), 1);
+        QVERIFY(!takes.haveTake());
+        QVERIFY(takes.getCoverage().isEmpty());
+        QCOMPARE(takes.getTakeNames(), QStringList({ "Take 1", "Take 2" }));
+
+        takes.setWholeFileTake("/somewhere/two.wav", 2000);
+
+        // Switching is the active index, and nothing else
+        QVERIFY(takes.setActiveIndex(0));
+        QCOMPARE(takes.getAudioPath(), QString("/somewhere/one.wav"));
+        QCOMPARE(takes.getCoverage().getRanges()[0], Coverage::Range(0, 1000));
+        QVERIFY(takes.setActiveIndex(1));
+        QCOMPARE(takes.getAudioPath(), QString("/somewhere/two.wav"));
+        QCOMPARE(takes.getCoverage().getRanges()[0], Coverage::Range(0, 2000));
+
+        QVERIFY(!takes.setActiveIndex(2));
+        QVERIFY(!takes.setActiveIndex(-1));
+        QCOMPARE(takes.getActiveIndex(), 1);
+
+        QCOMPARE(takes.indexOf("Take 1"), 0);
+        QCOMPARE(takes.indexOf("Take 3"), -1);
+
+        takes.clear();
+        QCOMPARE(takes.getTakeCount(), 0);
+        QCOMPARE(takes.getActiveIndex(), -1);
+    }
+
+    // The first recording of a session records into a take of its own,
+    // without anyone having to ask for one
+    void first_recording_makes_a_take() {
+        SingingTakes takes;
+        QString recording = writeRecording(1000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 0, -1,
+                                      takeDirectory()).isEmpty());
+        QCOMPARE(takes.getTakeCount(), 1);
+        QCOMPARE(takes.getActiveName(), QString("Take 1"));
+        QVERIFY(takes.haveTake());
+    }
+
+    // A name is never used twice in a session, however many takes have
+    // been deleted since: the layers of a take that has gone may still be
+    // in the document, under the name it had
+    void take_names_are_not_reused() {
+        SingingTakes takes;
+        QCOMPARE(takes.addTake(), QString("Take 1"));
+        QCOMPARE(takes.addTake(), QString("Take 2"));
+        QVERIFY(takes.removeTake(1));
+        QCOMPARE(takes.addTake(), QString("Take 3"));
+
+        // A name of the caller's own, and one that is taken already
+        QCOMPARE(takes.addTake("Chorus"), QString("Chorus"));
+        QCOMPARE(takes.addTake("Chorus"), QString("Take 4"));
+
+        takes.clear();
+        QCOMPARE(takes.addTake(), QString("Take 1"));
+    }
+
+    void rename_a_take() {
+        SingingTakes takes;
+        takes.addTake();
+        takes.addTake();
+
+        QVERIFY(takes.renameTake(0, "Chorus"));
+        QCOMPARE(takes.getTakeNames(), QStringList({ "Chorus", "Take 2" }));
+        QCOMPARE(takes.indexOf("Chorus"), 0);
+
+        // The name it has, which is not a change at all
+        QVERIFY(takes.renameTake(0, "Chorus"));
+
+        // Empty, whitespace only, another take's, and no such take
+        QVERIFY(!takes.renameTake(0, ""));
+        QVERIFY(!takes.renameTake(0, "  "));
+        QVERIFY(!takes.renameTake(0, "Take 2"));
+        QVERIFY(!takes.renameTake(2, "Verse"));
+        QCOMPARE(takes.getTakeNames(), QStringList({ "Chorus", "Take 2" }));
+
+        QVERIFY(takes.renameTake(1, "  Verse  "));
+        QCOMPARE(takes.getTakeNames(), QStringList({ "Chorus", "Verse" }));
+    }
+
+    // Deleting the active take leaves a neighbour active, and deleting the
+    // last of them leaves no take at all
+    void remove_take_activates_a_neighbour() {
+        SingingTakes takes;
+        takes.addTake();
+        takes.addTake();
+        takes.addTake();
+        QCOMPARE(takes.getActiveIndex(), 2);
+
+        QVERIFY(takes.removeTake(2));
+        QCOMPARE(takes.getActiveIndex(), 1);
+
+        // One before the active take: the same take stays active
+        QVERIFY(takes.setActiveIndex(1));
+        QVERIFY(takes.removeTake(0));
+        QCOMPARE(takes.getActiveIndex(), 0);
+        QCOMPARE(takes.getTakeNames(), QStringList { "Take 2" });
+
+        QVERIFY(takes.removeTake(0));
+        QCOMPARE(takes.getTakeCount(), 0);
+        QCOMPARE(takes.getActiveIndex(), -1);
+        QVERIFY(!takes.haveTake());
+
+        QVERIFY(!takes.removeTake(0));
+    }
+
+    // A duplicate shares the audio file of the take it was made from
+    // until one of them is recorded into or erased from, which writes a
+    // new file anyway (spec 5.4).  So a file is in use while any take
+    // refers to it
+    void duplicate_shares_the_audio_file() {
+        SingingTakes takes;
+        QString recording = writeRecording(1000, 0.5f);
+        QVERIFY(takes.spliceRecording(recording, 0, 0, -1,
+                                      takeDirectory()).isEmpty());
+        QString shared = takes.getAudioPath();
+        Coverage coverage = takes.getCoverage();
+
+        QCOMPARE(takes.duplicateActiveTake(), QString("Take 2"));
+        QCOMPARE(takes.getTakeCount(), 2);
+        QCOMPARE(takes.getActiveIndex(), 1);
+        QCOMPARE(takes.getAudioPath(), shared);
+        QVERIFY(takes.getCoverage() == coverage);
+
+        // No file was written and none superseded
+        QCOMPARE(takes.getWrittenPaths(), QStringList { shared });
+        QVERIFY(takes.getSupersededPaths().isEmpty());
+        QVERIFY(takes.unusedWrittenFiles().isEmpty());
+
+        // Recording into the copy writes a file of its own; the take it
+        // was copied from is untouched, and still uses the shared file
+        QVERIFY(takes.spliceRecording(recording, 0, 5000, -1,
+                                      takeDirectory()).isEmpty());
+        QVERIFY(takes.getAudioPath() != shared);
+        QCOMPARE(takes.getTake(0)->audioPath, shared);
+        QVERIFY(takes.getTake(0)->coverage == coverage);
+
+        // The shared file has been superseded for the copy, but the first
+        // take still plays it, so it is not ours to delete
+        QVERIFY(takes.getSupersededPaths().contains(shared));
+        QVERIFY2(takes.unusedWrittenFiles().isEmpty(),
+                 "a file another take is using was up for deletion");
+
+        // ... and once that take has gone, it is
+        QVERIFY(takes.removeTake(0));
+        QCOMPARE(takes.unusedWrittenFiles(), QStringList { shared });
+    }
+
+    // A take with no audio yet: its name is there, and the calls about the
+    // active take say there is nothing
+    void a_take_with_no_audio() {
+        SingingTakes takes;
+        takes.addTake();
+        QVERIFY(!takes.haveTake());
+        QCOMPARE(takes.getAudioPath(), QString());
+        QVERIFY(takes.getCoverage().isEmpty());
+        QVERIFY(!takes.coversPosition(0));
+        QVERIFY(!takes.shouldConfirmRecordingAt(0));
+        QVERIFY(takes.duplicateActiveTake() != "");
+        QVERIFY(!takes.haveTake());
+
+        // Nothing to erase, and no file written trying
+        Coverage::Ranges erased { Coverage::Range(1, 2) };
+        QCOMPARE(takes.eraseRanges(Coverage::Ranges { Coverage::Range(0, 100) },
+                                   takeDirectory(), &erased), QString());
+        QVERIFY(erased.empty());
+        QVERIFY(takes.getWrittenPaths().isEmpty());
+    }
+
     // Every audio file of a take gets a name of its own, in the directory
     // asked for, and never one that is taken: TakeAudio refuses to write
     // over a file, so a name that collides would lose a recording

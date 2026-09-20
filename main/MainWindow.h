@@ -31,6 +31,7 @@
 #include "data/model/SparseTimeValueModel.h"
 
 class QTimer;
+class QComboBox;
 
 namespace sv {
 class VersionTester;
@@ -80,6 +81,11 @@ signals:
     void canShowRealtimePitch(bool);
     void canEraseSinging(bool);
     void canSelectRecording(bool);
+    // Switching and making takes: not while a take is being recorded or a
+    // recorded range analysed.  The second is the same with a take there
+    // to be copied, renamed or deleted
+    void canChangeTakes(bool);
+    void canActOnTake(bool);
 
 public slots:
     virtual bool commitData(bool mayAskUser); // on session shutdown
@@ -124,6 +130,13 @@ protected slots:
     // selected to erase a whole recording (spec 5.2)
     virtual void eraseSingingInSelection();
     virtual void selectRecordingAtPlayhead();
+
+    // The Takes menu and the "Take:" combo box (spec 5.3)
+    virtual void takeChosenInCombo(int index);
+    virtual void newEmptyTake();
+    virtual void duplicateTake();
+    virtual void renameTake();
+    virtual void deleteTake();
 
     virtual void snapNotesToPitches();
     virtual void splitNote();
@@ -315,6 +328,85 @@ protected:
     // Put the strip in step with the take's coverage: make it if there
     // is a take and none yet, take it away when the take goes
     void syncCoverageStrip();
+
+    // --- Several takes (spec 5.3) ---
+    //
+    // Every take of the session has its three layers in pane 0, named
+    // after it (TakeLayers); only the active take has an audio model and
+    // the singing analyser.  The take a menu or the combo box asks for is
+    // made the active one by switchToTake(), which is the swap of 6.2
+    // with the layers of another take put in place of the ones on show.
+
+    QMenu         *m_takesMenu;
+    QComboBox     *m_takeCombo;
+    QAction       *m_newTakeAction;
+    QAction       *m_duplicateTakeAction;
+    QAction       *m_renameTakeAction;
+    QAction       *m_deleteTakeAction;
+
+    // Set while updateTakeCombo() fills the combo box, so that the
+    // currentIndexChanged it causes is not taken for the user's choice
+    bool           m_updatingTakeCombo;
+
+    void setupTakesMenu();
+
+    // The combo box lists the takes with the active one selected
+    void updateTakeCombo();
+
+    // Make the take at this index the active one: release the analyser
+    // keeping the layers, put the take's layers away, then show the other
+    // take's and open its audio underneath them.  Nothing is analysed.
+    // The undo history goes, as spec 5.4 says it must: its commands hold
+    // the state of a take that is no longer on show
+    bool switchToTake(int index);
+
+    // Release the singing analyser and the take's audio with it, and put
+    // the active take's layers away: still in the pane and in the
+    // session, hidden, silent and owned by nobody
+    void deactivateTake();
+
+    // Show the active take: its audio under its layers, an analyser that
+    // claims them (no analysis), its coverage strip, and the layers
+    // themselves visible, audible as the user asked and within reach of
+    // the editing tools.  False if its audio could not be opened, in
+    // which case the user has been told
+    bool activateTake();
+
+    // The name for the take that the singing track of a session being
+    // restored belongs to: the name its layers in the pane are under, or
+    // "" where the session does not say which take that is.  Reserves the
+    // names of the takes whose layers are left in the pane
+    QString restoredTakeName();
+
+    // Name the layers the singing analyser holds after the active take,
+    // which is what says whose they are (spec 6.4)
+    void nameActiveTakeLayers();
+
+    // Every take layer in pane 0 that is not the active take's: hidden,
+    // silent, out of the play source and with no source model, so that
+    // nothing claims it and nothing hears it.  The one place that
+    // enforces it, for a switch and for a session load alike
+    void putOtherTakeLayersAway();
+
+    // The active take's pitch and notes to the top of the pane, where the
+    // note tool looks for the layer to act on
+    void raiseActiveTakeLayers();
+
+    // Forget the take at this index, with its layers; no audio file is
+    // touched.  Deleting the active take activates a neighbour
+    bool deleteTakeAt(int index);
+
+    // A take may be switched, made, copied or deleted only when nothing
+    // is being recorded or analysed
+    bool takeOperationsAllowed() const;
+
+    // Every take operation but Rename clears the undo history (spec 5.4)
+    void clearTakeHistory();
+
+    // Ask before deleting a take, and for a take's new name.  Overridden
+    // by the tests, which cannot answer a dialog
+    virtual bool confirmDeleteTake(QString name);
+    virtual QString askForTakeName(QString current);
 
     // Erase Singing in Selection, and selecting the recording the
     // playhead is in

@@ -21,6 +21,7 @@
 #include "LatencyUtils.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
+#include "TakeLayers.h"
 
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
@@ -40,6 +41,7 @@
 #include "layer/WaveformLayer.h"
 #include "layer/TimeInstantLayer.h"
 #include "layer/TimeValueLayer.h"
+#include "layer/RegionLayer.h"
 #include "layer/SpectrogramLayer.h"
 #include "widgets/Fader.h"
 #include "view/Overview.h"
@@ -78,6 +80,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QMessageBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -138,6 +141,13 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_referencePitchHiddenForTake(false),
     m_takes(nullptr),
     m_coverageStrip(nullptr),
+    m_takesMenu(nullptr),
+    m_takeCombo(nullptr),
+    m_newTakeAction(nullptr),
+    m_duplicateTakeAction(nullptr),
+    m_renameTakeAction(nullptr),
+    m_deleteTakeAction(nullptr),
+    m_updatingTakeCombo(false),
     m_eraseSingingAction(nullptr),
     m_selectRecordingAction(nullptr),
     m_openTakeCommand(nullptr),
@@ -494,6 +504,7 @@ MainWindow::setupMenus()
     setupEditMenu();
     setupViewMenu();
     setupAnalysisMenu();
+    setupTakesMenu();
 
     m_mainMenusCreated = true;
 }
@@ -992,6 +1003,63 @@ MainWindow::setupAnalysisMenu()
 }
 
 void
+MainWindow::setupTakesMenu()
+{
+    if (m_mainMenusCreated) return;
+
+    // The takes of the session: each is a whole singing performance of
+    // its own, with its own audio, pitch track and notes (spec 5.3).
+    // Switching between them is the combo box in the playback toolbar;
+    // making, copying, renaming and deleting them are here.  None of it
+    // is undoable, and all of it clears the undo history but the rename
+    m_takesMenu = menuBar()->addMenu(tr("Ta&kes"));
+    m_takesMenu->setTearOffEnabled(true);
+
+    m_keyReference->setCategory(tr("Takes"));
+
+    m_newTakeAction = new QAction(tr("&New Empty Take"), this);
+    m_newTakeAction->setStatusTip
+        (tr("Start another take: an empty one, which the next recording "
+            "goes into, leaving this take as it is"));
+    connect(m_newTakeAction, SIGNAL(triggered()), this, SLOT(newEmptyTake()));
+    connect(this, SIGNAL(canChangeTakes(bool)),
+            m_newTakeAction, SLOT(setEnabled(bool)));
+    m_newTakeAction->setEnabled(false);
+    m_takesMenu->addAction(m_newTakeAction);
+
+    m_duplicateTakeAction = new QAction(tr("&Duplicate Take"), this);
+    m_duplicateTakeAction->setStatusTip
+        (tr("Start another take holding a copy of this one, and carry on "
+            "in the copy"));
+    connect(m_duplicateTakeAction, SIGNAL(triggered()),
+            this, SLOT(duplicateTake()));
+    connect(this, SIGNAL(canActOnTake(bool)),
+            m_duplicateTakeAction, SLOT(setEnabled(bool)));
+    m_duplicateTakeAction->setEnabled(false);
+    m_takesMenu->addAction(m_duplicateTakeAction);
+
+    m_takesMenu->addSeparator();
+
+    m_renameTakeAction = new QAction(tr("&Rename Take..."), this);
+    m_renameTakeAction->setStatusTip(tr("Give this take another name"));
+    connect(m_renameTakeAction, SIGNAL(triggered()), this, SLOT(renameTake()));
+    connect(this, SIGNAL(canActOnTake(bool)),
+            m_renameTakeAction, SLOT(setEnabled(bool)));
+    m_renameTakeAction->setEnabled(false);
+    m_takesMenu->addAction(m_renameTakeAction);
+
+    m_deleteTakeAction = new QAction(tr("De&lete Take"), this);
+    m_deleteTakeAction->setStatusTip
+        (tr("Delete this take, with its pitch track and notes. Its audio "
+            "file is not deleted."));
+    connect(m_deleteTakeAction, SIGNAL(triggered()), this, SLOT(deleteTake()));
+    connect(this, SIGNAL(canActOnTake(bool)),
+            m_deleteTakeAction, SLOT(setEnabled(bool)));
+    m_deleteTakeAction->setEnabled(false);
+    m_takesMenu->addAction(m_deleteTakeAction);
+}
+
+void
 MainWindow::resetAnalyseOptions()
 {
     QSettings settings;
@@ -1257,6 +1325,31 @@ MainWindow::setupToolbars()
 	    this, SLOT(analyseNow()));
     connect(this, SIGNAL(canRecord(bool)),
             recordAction, SLOT(setEnabled(bool)));
+
+    // The takes of the session, beside the recording controls: choosing
+    // one shows it, with its audio, pitch track and notes (spec 5.3).
+    // Making and deleting takes is the Takes menu
+    {
+        QLabel *takeLabel = new QLabel(tr(" Take:"));
+        QFont f = takeLabel->font();
+        f.setPointSize(f.pointSize() - 1);
+        takeLabel->setFont(f);
+        takeLabel->setEnabled(false); // greyed out — purely decorative
+        toolbar->addWidget(takeLabel);
+    }
+
+    m_takeCombo = new QComboBox;
+    m_takeCombo->setObjectName(tr("Take"));
+    m_takeCombo->setToolTip(tr("The take that is shown and played: its "
+                               "audio, its pitch track and its notes"));
+    m_takeCombo->setMinimumContentsLength(8);
+    m_takeCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_takeCombo->setEnabled(false);
+    connect(m_takeCombo, SIGNAL(currentIndexChanged(int)),
+            this, SLOT(takeChosenInCombo(int)));
+    connect(this, SIGNAL(canChangeTakes(bool)),
+            m_takeCombo, SLOT(setEnabled(bool)));
+    toolbar->addWidget(m_takeCombo);
 
     toolbar = addToolBar(tr("Play Mode Toolbar"));
 
@@ -1893,6 +1986,12 @@ MainWindow::updateMenuStates()
     emit canEraseSinging(haveCoverage && !inTake && haveSelection &&
                          !analysingRange);
 
+    // The takes of the session: switching and making one need a session
+    // and nothing running, and the rest need a take to act on as well
+    bool canChange = takeOperationsAllowed();
+    emit canChangeTakes(canChange);
+    emit canActOnTake(canChange && m_takes->getActiveIndex() >= 0);
+
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
         m_showCandidatesAction->setStatusTip(tr("Remove the display of alternate pitch candidates for the selected region"));
@@ -2258,6 +2357,7 @@ MainWindow::closeSession()
     m_takePreRoll = 0;
     m_takeEnd = -1;
     m_takeAnalysisRange = Coverage::Range();
+    updateTakeCombo();
 
     m_analyser->fileClosed();
 
@@ -2352,6 +2452,15 @@ MainWindow::loadSingingTrack(QString path)
 
     emit activity(tr("Load singing track \"%1\"").arg(path));
 
+    // A track the user loads is a take of its own, analysed in full, and
+    // the take that was on show is put away as it is (spec 5.3)
+    if (m_takes->getActiveIndex() >= 0) {
+        closeOpenTakeCommand(true);
+        deactivateTake();
+        m_takes->addTake();
+        putOtherTakeLayersAway();
+    }
+
     ModelId singingModelId;
     std::vector<Pane *> extraPanes;
     FileOpenStatus status =
@@ -2381,6 +2490,14 @@ MainWindow::loadSingingTrack(QString path)
     for (Pane *extra : extraPanes) {
         pruneExtraPane(extra, singingModelId);
     }
+
+    // The history goes, as it does on any change of take (spec 5.4): its
+    // take commands are about a take that is not on show any more, and
+    // openPath() has just pushed an "Import" command of its own whose
+    // pane was pruned away again above
+    clearTakeHistory();
+
+    updateTakeCombo();
 }
 
 MainWindow::FileOpenStatus
@@ -2601,8 +2718,54 @@ MainWindow::analyseRestoredSingingModel()
     // of the file again
     if (m_pendingSingingModelId.isNone()) return;
 
+    // Which take this is has to be settled first: its layers are found by
+    // its name, so it must have one before they are looked for
+    if (m_takes->getActiveIndex() < 0) {
+        m_takes->addTake(restoredTakeName());
+    }
+
     adoptTakeLayers(m_pendingSingingModelId);
     analyseNewSingingModel();
+}
+
+QString
+MainWindow::restoredTakeName()
+{
+    // The take that the singing track of a session being restored belongs
+    // to.  Its pitch, notes and coverage are in the pane already, named
+    // after it, so where the pane holds one take's layers this is that
+    // take and it claims them.
+    //
+    // Where it holds several takes' layers, nothing in the session file
+    // says which of them the audio belongs to -- phase 7b writes that
+    // down -- so this is a take of its own, with a name none of them uses
+    // and an analysis of its own, and they are left in the pane hidden,
+    // silent and owned by nobody.
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (!pane) return "";
+
+    QStringList names;
+
+    for (int i = 0; i < pane->getLayerCount(); ++i) {
+        QString name;
+        TakeLayers::Kind kind;
+        if (!TakeLayers::parse(pane->getLayer(i)->objectName(), name, kind)) {
+            continue;
+        }
+        if (!names.contains(name)) names.push_back(name);
+        m_takes->reserveTakeName(name);
+    }
+
+    if (names.size() == 1) return names[0];
+
+    if (names.size() > 1) {
+        cerr << "MainWindow::restoredTakeName: the session holds the layers of "
+             << names.size() << " takes and does not say which of them the "
+             << "singing track belongs to: it becomes a take of its own"
+             << endl;
+    }
+
+    return "";
 }
 
 void
@@ -2870,8 +3033,19 @@ MainWindow::syncCoverageStrip()
         return;
     }
 
+    // The strip of the take that is active now.  The strips of the other
+    // takes stay in the pane, hidden: each is the stored coverage of its
+    // own take, and release() is how this object lets go of one
+    QString name = m_takes->getActiveName();
+    if (m_coverageStrip->isShown() && m_coverageStrip->getTakeName() != name) {
+        m_coverageStrip->release();
+    }
+
     bool wasShown = m_coverageStrip->isShown();
-    if (!m_coverageStrip->show(m_document, pane)) return;
+    if (!m_coverageStrip->isShown()) {
+        m_coverageStrip->adopt(m_document, pane, name);
+    }
+    if (!m_coverageStrip->show(m_document, pane, name)) return;
 
     // The play source takes in the model of every layer that is in a
     // view, whether the model can be played or not, and the models it
@@ -2972,15 +3146,17 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     // in the pane already, waiting to be taken over.
     if (!m_rebuildingTakeAudio) {
         if (auto wfm = ModelById::getAs<WaveFileModel>(singingModelId)) {
+            // The take first, because its name is what the strip of a
+            // session that has one is stored under
+            m_takes->setWholeFileTake(wfm->getLocation(),
+                                      wfm->getFrameCount());
             Coverage stored;
             if (!m_coverageStrip->isShown() &&
-                m_coverageStrip->adopt(m_document, pane)) {
+                m_coverageStrip->adopt(m_document, pane,
+                                       m_takes->getActiveName())) {
                 stored = m_coverageStrip->getCoverage();
             }
-            if (stored.isEmpty()) {
-                m_takes->setWholeFileTake(wfm->getLocation(),
-                                          wfm->getFrameCount());
-            } else {
+            if (!stored.isEmpty()) {
                 cerr << "MainWindow::setupSingingTrackAnalyser: the session's "
                      << "coverage strip has " << stored.getRanges().size()
                      << " range(s) of recorded singing in it" << endl;
@@ -2990,8 +3166,15 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
         syncCoverageStrip();
     }
 
+    // These layers are the active take's, and everything in the pane that
+    // is some other take's is put away: the takes that are not on show
+    // must not be claimed by an analyser, heard, or painted
+    nameActiveTakeLayers();
+    putOtherTakeLayersAway();
+
     // Re-stack layers so the primary pitch track stays on top
     m_analyser->getLayer(Analyser::PitchTrack);  // ensure primary is on top
+    updateTakeCombo();
     updateLayerStatuses();
     updateMenuStates();
 
@@ -4099,6 +4282,12 @@ MainWindow::rebuildSingingTrackFromTake(const Coverage::Range &placed)
 
     if (error == "" && m_analyser2) {
         error = m_analyser2->addEmptyAnalyses();
+
+        // The first recording of a take has just been given its layers:
+        // they are named after it, and they go above the takes that are
+        // put away, where the note tool looks for the layer to act on
+        nameActiveTakeLayers();
+        raiseActiveTakeLayers();
     }
 
     if (error != "") {
@@ -4165,34 +4354,53 @@ MainWindow::adoptTakeLayers(ModelId audio)
     // (Analyser::claimExistingAnalyses()).  The layers of a take that
     // has had audio swapped under it have no such link: the model they
     // were derived from is long gone, and a session file keeps them as
-    // ordinary layers.  So the link is made here, for the layers in the
-    // pane that no analyser owns, just before the analyser that is to
-    // claim them is made.
+    // ordinary layers.  So the link is made here, for the layers of the
+    // active take, just before the analyser that is to claim them is made.
     Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
     if (!pane || audio.isNone()) return false;
 
-    TimeValueLayer *pitch = nullptr;
-    FlexiNoteLayer *notes = nullptr;
+    QString takeName = m_takes->getActiveName();
 
-    for (int i = 0; i < pane->getLayerCount(); ++i) {
+    // By name, which is what says whose a take's layers are (spec 6.4).
+    // The layers of the takes that are put away have no live source model
+    // either, so nothing but the name can tell them apart
+    TakeLayers::Found found = TakeLayers::find(pane, takeName);
+    TimeValueLayer *pitch = found.pitch;
+    FlexiNoteLayer *notes = found.notes;
 
-        Layer *layer = pane->getLayer(i);
+    if (!pitch || !notes) {
 
-        // Ours, and not a take's: the live dots of a take being
-        // recorded, and the reference's pitch track moved by octaves
-        if (layer == m_realtimePitchLayer) continue;
-        if (m_alternatePitch && layer == m_alternatePitch->getLayer()) continue;
+        // A session saved before takes had names of their own: its take's
+        // layers are the ones in the pane that belong to no analyser
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
 
-        auto model = ModelById::get(layer->getModel());
-        if (!model) continue;
+            Layer *layer = pane->getLayer(i);
 
-        // A layer whose source model is still there has an analyser of
-        // its own: the reference's pitch, notes and candidates, or a
-        // take whose audio has not been swapped since it was analysed
-        if (ModelById::get(model->getSourceModel())) continue;
+            // Ours, and not a take's: the live dots of a take being
+            // recorded, and the reference's pitch track moved by octaves
+            if (layer == m_realtimePitchLayer) continue;
+            if (m_alternatePitch &&
+                layer == m_alternatePitch->getLayer()) continue;
 
-        if (!pitch) pitch = qobject_cast<TimeValueLayer *>(layer);
-        if (!notes) notes = qobject_cast<FlexiNoteLayer *>(layer);
+            // Another take's, named as such: never ours to claim
+            QString otherName;
+            TakeLayers::Kind kind;
+            if (TakeLayers::parse(layer->objectName(), otherName, kind) &&
+                otherName != takeName) {
+                continue;
+            }
+
+            auto model = ModelById::get(layer->getModel());
+            if (!model) continue;
+
+            // A layer whose source model is still there has an analyser of
+            // its own: the reference's pitch, notes and candidates, or a
+            // take whose audio has not been swapped since it was analysed
+            if (ModelById::get(model->getSourceModel())) continue;
+
+            if (!pitch) pitch = qobject_cast<TimeValueLayer *>(layer);
+            if (!notes) notes = qobject_cast<FlexiNoteLayer *>(layer);
+        }
     }
 
     // Half a pair is no use: the analyser claims both or neither
@@ -4548,6 +4756,10 @@ MainWindow::applyTakeState(SingingTakeCommand *command, const TakeState &state)
                  : loadTakeAudio(state.path));
         if (error == "" && m_analyser2) {
             error = m_analyser2->addEmptyAnalyses();
+            // A redo of the first recording of a take makes its layers
+            // again, and they are the take's
+            nameActiveTakeLayers();
+            raiseActiveTakeLayers();
         }
     }
 
@@ -4631,6 +4843,485 @@ MainWindow::confirmRecordingOverTake()
     }
 
     return yes;
+}
+
+bool
+MainWindow::confirmDeleteTake(QString name)
+{
+    return QMessageBox::question
+        (this, tr("Delete this take?"),
+         tr("<b>Delete the take \"%1\"?</b><p>Its pitch track and its notes "
+            "go with it, and this cannot be undone. Its audio file is not "
+            "deleted.</p>").arg(name),
+         QMessageBox::Yes | QMessageBox::No,
+         QMessageBox::No) == QMessageBox::Yes;
+}
+
+QString
+MainWindow::askForTakeName(QString current)
+{
+    bool ok = false;
+    QString name = QInputDialog::getText
+        (this, tr("Rename take"), tr("Name for this take:"),
+         QLineEdit::Normal, current, &ok);
+    return ok ? name : QString();
+}
+
+bool
+MainWindow::takeOperationsAllowed() const
+{
+    // Nothing about the takes of the session changes while one is being
+    // recorded, or while the analysis of a recorded range is running: that
+    // analysis is merged into the models a switch would hand over, and the
+    // switch would lose its result (as an erase would, see
+    // eraseSingingInSelection())
+    if (!m_document) return false;
+    if (m_paneStack && m_paneStack->getPaneCount() < 1) return false;
+    if (!getMainModel()) return false;
+    if (m_recordTarget && m_recordTarget->isRecording()) return false;
+    if (m_analyser2 && m_analyser2->isAnalysingRange()) return false;
+    return true;
+}
+
+void
+MainWindow::clearTakeHistory()
+{
+    // A take command holds the state of one take, and after a switch, a
+    // new take, a duplicate or a delete it is not the take on show any
+    // more: undoing it would write one take's singing over another's.
+    // Spec 5.4: the whole history goes, with no prompt
+    closeOpenTakeCommand(true);
+    CommandHistory::getInstance()->clear();
+}
+
+void
+MainWindow::nameActiveTakeLayers()
+{
+    // The pitch and notes layers the singing analyser holds are the active
+    // take's, and their object names say so: that is the only link between
+    // a take and the layers that show it (spec 6.4).  A whole-file
+    // analysis and addEmptyAnalyses() both name them after the transform
+    // that made them, so this is done every time they change hands
+    QString name = m_takes->getActiveName();
+    if (name == "" || !m_analyser2) return;
+
+    const struct { Analyser::Component component; TakeLayers::Kind kind; }
+    wanted[] = {
+        { Analyser::PitchTrack, TakeLayers::Pitch },
+        { Analyser::Notes, TakeLayers::Notes }
+    };
+
+    for (const auto &w : wanted) {
+        Layer *layer = m_analyser2->getLayer(w.component);
+        if (!layer) continue;
+        QString objectName = TakeLayers::nameFor(name, w.kind);
+        if (layer->objectName() != objectName) {
+            layer->setObjectName(objectName);
+        }
+    }
+}
+
+void
+MainWindow::putOtherTakeLayersAway()
+{
+    // Everything in pane 0 that belongs to a take other than the active
+    // one: hidden, silent, out of the play source and with no source
+    // model.  Three things depend on this:
+    //
+    //  - an Analyser claims a pitch or notes layer whose model's source
+    //    model is its own audio, so a take that is put away must have no
+    //    source model at all (and adoptTakeLayers() goes by name);
+    //  - the play source takes in every model of a layer that is in a
+    //    view, and what it holds says where playback ends, so a take
+    //    longer than the active one would hold playback open past the end
+    //    of what there is to hear (5a's finding, as for the strip);
+    //  - a pitch track and a set of notes can be sonified in Tony, and a
+    //    take that is not on show is not to be heard.
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (!pane) return;
+
+    QString active = m_takes->getActiveName();
+
+    for (int i = 0; i < pane->getLayerCount(); ++i) {
+
+        Layer *layer = pane->getLayer(i);
+
+        QString name;
+        TakeLayers::Kind kind;
+        if (!TakeLayers::parse(layer->objectName(), name, kind)) continue;
+        if (name == active) continue;
+
+        layer->setLayerDormant(pane, true);
+
+        if (auto params = layer->getPlayParameters()) {
+            params->setPlayAudible(false);
+        }
+
+        ModelId modelId = layer->getModel();
+        if (auto model = ModelById::get(modelId)) {
+            model->setSourceModel(ModelId());
+        }
+        if (m_playSource && !modelId.isNone()) {
+            m_playSource->removeModel(modelId);
+        }
+    }
+}
+
+void
+MainWindow::raiseActiveTakeLayers()
+{
+    // The note tool acts on the pane's topmost note layer, whether that
+    // layer is dormant or not, so the active take's notes have to be above
+    // the ones of the takes that are put away.  A take's layers are added
+    // to the pane when it is first recorded into, so without this the
+    // newest take would keep the tools to itself
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (!pane || !m_analyser2) return;
+
+    for (Analyser::Component c : { Analyser::PitchTrack, Analyser::Notes }) {
+        if (Layer *layer = m_analyser2->getLayer(c)) {
+            TakeLayers::raise(pane, layer);
+        }
+    }
+}
+
+void
+MainWindow::deactivateTake()
+{
+    // The take being put away keeps its layers, with every event in them:
+    // they are where it is stored (spec 6.4).  What it loses is the
+    // analyser, the audio model under it, and its place in the mix
+    if (m_analyser2) {
+        m_analyser2->releaseLayers();
+        delete m_analyser2;
+        m_analyser2 = nullptr;
+    }
+
+    // The strip stays in the pane as well, holding this take's coverage
+    m_coverageStrip->release();
+
+    // Which leaves nothing belonging to the active take but its name:
+    // putOtherTakeLayersAway() does the rest once another take is active
+}
+
+bool
+MainWindow::activateTake()
+{
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (!pane) return false;
+
+    QString name = m_takes->getActiveName();
+    if (name == "") return false;
+
+    QString path = m_takes->getAudioPath();
+    QString error;
+
+    if (path != "") {
+        // The take's audio under the take's layers, with no analysis:
+        // loadTakeAudio() finds them by name (adoptTakeLayers()) and the
+        // new analyser claims them.  m_rebuildingTakeAudio: the coverage
+        // of this file is the take's own, not "the whole of it"
+        bool wasRebuilding = m_rebuildingTakeAudio;
+        m_rebuildingTakeAudio = true;
+        error = loadTakeAudio(path);
+        m_rebuildingTakeAudio = wasRebuilding;
+
+        // A take that has audio but no pitch and notes -- one whose
+        // layers were lost with a session that could not be read back --
+        // gets empty ones, so that the next recording has something to
+        // merge into
+        if (error == "" && m_analyser2) {
+            error = m_analyser2->addEmptyAnalyses();
+        }
+        nameActiveTakeLayers();
+    }
+
+    // The models of the take that is on show now are in the play source
+    // again: they came out of it when the take was put away.  Whether they
+    // are seen and heard is the analyser's business -- it has just loaded
+    // the show and play settings onto them, as it does for any file
+    if (m_analyser2 && m_playSource) {
+        for (Analyser::Component c : { Analyser::PitchTrack, Analyser::Notes }) {
+            Layer *layer = m_analyser2->getLayer(c);
+            if (!layer || layer->getModel().isNone()) continue;
+            m_playSource->addModel(layer->getModel());
+        }
+    }
+
+    putOtherTakeLayersAway();
+    syncCoverageStrip();
+    raiseActiveTakeLayers();
+
+    if (error != "") {
+        // Its pitch and notes are there; only the sound is missing
+        // (spec 6.4, a missing audio file)
+        QMessageBox::warning
+            (this,
+             tr("Failed to open the take's audio"),
+             tr("<b>The take \"%1\" is shown without its audio</b><p>%2</p>")
+             .arg(name).arg(error),
+             QMessageBox::Ok);
+    }
+
+    return error == "";
+}
+
+bool
+MainWindow::switchToTake(int index)
+{
+    if (!takeOperationsAllowed()) return false;
+    if (index == m_takes->getActiveIndex()) return true;
+    if (!m_takes->getTake(index)) return false;
+
+    cerr << "MainWindow::switchToTake: from take "
+         << m_takes->getActiveIndex() << " to " << index << endl;
+
+    clearTakeHistory();
+
+    deactivateTake();
+    m_takes->setActiveIndex(index);
+    bool ok = activateTake();
+
+    updateTakeCombo();
+    updateLayerStatuses();
+    updateMenuStates();
+
+    emit activity(tr("Switched to the take \"%1\"")
+                  .arg(m_takes->getActiveName()));
+
+    return ok;
+}
+
+void
+MainWindow::takeChosenInCombo(int index)
+{
+    if (m_updatingTakeCombo) return;
+    if (index < 0) return;
+    if (index == m_takes->getActiveIndex()) return;
+
+    if (!switchToTake(index)) {
+        // Whatever went wrong, the combo box must go on saying which take
+        // is the active one
+        updateTakeCombo();
+    }
+}
+
+void
+MainWindow::updateTakeCombo()
+{
+    if (!m_takeCombo) return;
+
+    m_updatingTakeCombo = true;
+
+    QStringList names = m_takes->getTakeNames();
+    QStringList shown;
+    for (int i = 0; i < m_takeCombo->count(); ++i) {
+        shown.push_back(m_takeCombo->itemText(i));
+    }
+
+    if (shown != names) {
+        m_takeCombo->clear();
+        m_takeCombo->addItems(names);
+    }
+    m_takeCombo->setCurrentIndex(m_takes->getActiveIndex());
+
+    m_updatingTakeCombo = false;
+}
+
+void
+MainWindow::newEmptyTake()
+{
+    if (!takeOperationsAllowed()) return;
+
+    clearTakeHistory();
+
+    // The take on show is put away as it is; the new one has no audio and
+    // no layers until the first recording goes into it
+    deactivateTake();
+    QString name = m_takes->addTake();
+    putOtherTakeLayersAway();
+    syncCoverageStrip();
+
+    updateTakeCombo();
+    updateLayerStatuses();
+    updateMenuStates();
+
+    // The session has a take it did not have before
+    documentModified();
+
+    emit activity(tr("Started the empty take \"%1\"").arg(name));
+}
+
+void
+MainWindow::duplicateTake()
+{
+    if (!takeOperationsAllowed()) return;
+    if (m_takes->getActiveIndex() < 0) return;
+
+    // The events of the take being copied, taken before anything moves:
+    // the copy gets models of its own holding the same events, and the
+    // same audio file, which neither take writes over (spec 5.4)
+    EventVector pitchEvents, notesEvents;
+    if (m_analyser2) {
+        if (Layer *layer = m_analyser2->getLayer(Analyser::PitchTrack)) {
+            if (auto model = ModelById::getAs<SparseTimeValueModel>
+                (layer->getModel())) {
+                pitchEvents = model->getAllEvents();
+            }
+        }
+        if (Layer *layer = m_analyser2->getLayer(Analyser::Notes)) {
+            if (auto model = ModelById::getAs<NoteModel>(layer->getModel())) {
+                notesEvents = model->getAllEvents();
+            }
+        }
+    }
+
+    clearTakeHistory();
+
+    QString from = m_takes->getActiveName();
+    deactivateTake();
+    QString name = m_takes->duplicateActiveTake();
+
+    // The copy has no layers of its own yet: activateTake() opens the
+    // audio, and addEmptyAnalyses() makes the pitch and notes that the
+    // events below go into
+    activateTake();
+
+    if (m_analyser2) {
+        if (Layer *layer = m_analyser2->getLayer(Analyser::PitchTrack)) {
+            if (auto model = ModelById::getAs<SparseTimeValueModel>
+                (layer->getModel())) {
+                for (const Event &e : pitchEvents) model->add(e);
+            }
+        }
+        if (Layer *layer = m_analyser2->getLayer(Analyser::Notes)) {
+            if (auto model = ModelById::getAs<NoteModel>(layer->getModel())) {
+                for (const Event &e : notesEvents) model->add(e);
+            }
+        }
+    }
+
+    updateTakeCombo();
+    updateLayerStatuses();
+    updateMenuStates();
+    documentModified();
+
+    emit activity(tr("Copied the take \"%1\" into \"%2\"")
+                  .arg(from).arg(name));
+}
+
+void
+MainWindow::renameTake()
+{
+    // The one take operation that leaves the undo history alone: nothing
+    // of the singing changes, only what the take is called
+    int index = m_takes->getActiveIndex();
+    if (index < 0) return;
+
+    QString current = m_takes->getActiveName();
+    QString name = askForTakeName(current);
+    if (name == "" || name == current) return;
+
+    if (!m_takes->renameTake(index, name)) {
+        QMessageBox::warning
+            (this, tr("Could not rename the take"),
+             tr("<b>The take could not be renamed to \"%1\"</b><p>Another "
+                "take of this session has that name.</p>").arg(name),
+             QMessageBox::Ok);
+        return;
+    }
+
+    name = m_takes->getActiveName();
+
+    // The take's layers are named after it, so they are renamed with it
+    nameActiveTakeLayers();
+
+    if (Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr) {
+        TakeLayers::Found found = TakeLayers::find(pane, current);
+        if (found.coverage) {
+            found.coverage->setObjectName
+                (TakeLayers::nameFor(name, TakeLayers::Coverage));
+        }
+        // The strip remembers the name it was adopted under, so it takes
+        // its layer up again under the new one
+        m_coverageStrip->release();
+        syncCoverageStrip();
+    }
+
+    updateTakeCombo();
+    updateMenuStates();
+    documentModified();
+
+    emit activity(tr("The take \"%1\" is called \"%2\" now")
+                  .arg(current).arg(name));
+}
+
+void
+MainWindow::deleteTake()
+{
+    if (!takeOperationsAllowed()) return;
+
+    int index = m_takes->getActiveIndex();
+    const SingingTakes::Take *take = m_takes->getTake(index);
+    if (!take) return;
+
+    if (!confirmDeleteTake(take->name)) return;
+
+    deleteTakeAt(index);
+}
+
+bool
+MainWindow::deleteTakeAt(int index)
+{
+    const SingingTakes::Take *take = m_takes->getTake(index);
+    if (!take) return false;
+    if (!m_document) return false;
+
+    QString name = take->name;
+    bool wasActive = (index == m_takes->getActiveIndex());
+
+    cerr << "MainWindow::deleteTakeAt: deleting take \"" << name
+         << "\" (" << (wasActive ? "active" : "inactive") << ")" << endl;
+
+    clearTakeHistory();
+
+    if (wasActive) {
+        // Its analyser and its audio go; the layers are deleted below
+        deactivateTake();
+    }
+
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+    if (pane) {
+        TakeLayers::Found found = TakeLayers::find(pane, name);
+        for (Layer *layer : { static_cast<Layer *>(found.pitch),
+                              static_cast<Layer *>(found.notes),
+                              static_cast<Layer *>(found.coverage) }) {
+            if (!layer) continue;
+            // As the analyser and the strip take their own layers away:
+            // no command, and the model goes with the layer
+            if (m_playSource && !layer->getModel().isNone()) {
+                m_playSource->removeModel(layer->getModel());
+            }
+            m_document->deleteLayer(layer, true);
+        }
+    }
+
+    m_takes->removeTake(index);
+
+    // A neighbour is the active take now, or there is none at all.  Its
+    // audio has to be opened either way: the take that was deleted had it
+    if (wasActive && m_takes->getActiveIndex() >= 0) {
+        activateTake();
+    }
+
+    updateTakeCombo();
+    updateLayerStatuses();
+    updateMenuStates();
+    documentModified();
+
+    emit activity(tr("Deleted the take \"%1\"").arg(name));
+
+    return true;
 }
 
 void

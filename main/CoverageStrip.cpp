@@ -14,6 +14,8 @@
 
 #include "CoverageStrip.h"
 
+#include "TakeLayers.h"
+
 #include "framework/Document.h"
 #include "view/Pane.h"
 #include "layer/RegionLayer.h"
@@ -51,18 +53,18 @@ CoverageStrip::~CoverageStrip()
 }
 
 QString
-CoverageStrip::layerName()
+CoverageStrip::layerName(QString takeName)
 {
     // Not translated: it is stored in the session file and adopt() looks
-    // it up.  Phase 7a of the takes work numbers it after its take
-    return "Take 1 Coverage";
+    // it up
+    return TakeLayers::nameFor(takeName, TakeLayers::Coverage);
 }
 
 bool
-CoverageStrip::show(Document *document, Pane *pane)
+CoverageStrip::show(Document *document, Pane *pane, QString takeName)
 {
     if (m_layer) return true;
-    if (!document || !pane) return false;
+    if (!document || !pane || takeName == "") return false;
 
     sv_samplerate_t rate = defaultSampleRate;
     if (auto main = ModelById::get(document->getMainModel())) {
@@ -84,7 +86,7 @@ CoverageStrip::show(Document *document, Pane *pane)
     }
 
     document->setModel(layer, modelId);
-    takeLayer(document, pane, layer);
+    takeLayer(document, pane, layer, takeName);
 
     // Not addLayerToView(): the strip is part of the take, not something
     // the user added, so undo must not take it away and making it does
@@ -95,16 +97,16 @@ CoverageStrip::show(Document *document, Pane *pane)
 }
 
 bool
-CoverageStrip::adopt(Document *document, Pane *pane)
+CoverageStrip::adopt(Document *document, Pane *pane, QString takeName)
 {
     if (m_layer) return true;
-    if (!document || !pane) return false;
+    if (!document || !pane || takeName == "") return false;
 
     for (int i = 0; i < pane->getLayerCount(); ++i) {
         auto layer = qobject_cast<RegionLayer *>(pane->getLayer(i));
-        if (!layer || layer->objectName() != layerName()) continue;
+        if (!layer || layer->objectName() != layerName(takeName)) continue;
         if (!ModelById::isa<RegionModel>(layer->getModel())) continue;
-        takeLayer(document, pane, layer);
+        takeLayer(document, pane, layer, takeName);
         return true;
     }
 
@@ -112,11 +114,13 @@ CoverageStrip::adopt(Document *document, Pane *pane)
 }
 
 void
-CoverageStrip::takeLayer(Document *document, Pane *pane, RegionLayer *layer)
+CoverageStrip::takeLayer(Document *document, Pane *pane, RegionLayer *layer,
+                         QString takeName)
 {
     m_document = document;
     m_pane = pane;
     m_layer = layer;
+    m_takeName = takeName;
 
     connect(m_document, &Document::layerAboutToBeDeleted,
             this, &CoverageStrip::layerAboutToBeDeleted,
@@ -130,8 +134,12 @@ CoverageStrip::configureLayer()
 {
     if (!m_layer) return;
 
-    m_layer->setObjectName(layerName());
-    m_layer->setPresentationName(tr("Singing Coverage"));
+    m_layer->setObjectName(layerName(m_takeName));
+    m_layer->setPresentationName(tr("%1 Coverage").arg(m_takeName));
+
+    // The strip of a take that is not the active one is hidden, and this
+    // one is the active take's
+    m_layer->setLayerDormant(m_pane, false);
 
     // A band along the bottom of the pane, filled where there is
     // singing: a plot style the svgui fork has for this.  It has no
@@ -168,6 +176,26 @@ CoverageStrip::hide()
     }
     m_document = nullptr;
     m_pane = nullptr;
+    m_takeName = "";
+}
+
+void
+CoverageStrip::release()
+{
+    // The layer stays where it is, hidden: it is the stored coverage of a
+    // take that is still in the session, only not the active one
+    if (m_layer && m_pane) {
+        m_layer->setLayerDormant(m_pane, true);
+    }
+
+    m_layer = nullptr;
+
+    if (m_document) {
+        disconnect(m_document, nullptr, this, nullptr);
+    }
+    m_document = nullptr;
+    m_pane = nullptr;
+    m_takeName = "";
 }
 
 void

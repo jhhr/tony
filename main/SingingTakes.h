@@ -23,14 +23,20 @@
 #include <QString>
 #include <QStringList>
 
+#include <vector>
+
 /**
- * The state of the singing takes of a session: the audio file each
- * take's singing lives in, and the ranges of that file that hold
- * recorded material.  Until takes proper arrive there is at most one.
+ * The state of the singing takes of a session: for each take, the audio
+ * file its singing lives in and the ranges of that file that hold
+ * recorded material.  One take is the active one, and the single-take
+ * calls below -- getAudioPath(), spliceRecording() and the rest -- are
+ * all about that one.
  *
  * It knows nothing of layers, models or windows: MainWindow asks it
  * where a recording is to go and what the take is afterwards, and puts
- * the answer on the screen itself.  The audio files are written by
+ * the answer on the screen itself.  A take's identity on the screen is
+ * its name, which is what the names of its layers are built from; no
+ * layer or model is named here.  The audio files are written by
  * TakeAudio.
  */
 class SingingTakes : public QObject
@@ -41,18 +47,90 @@ public:
     SingingTakes(QObject *parent = nullptr);
     virtual ~SingingTakes();
 
-    /// There is a take, with an audio file to play and analyse
-    bool haveTake() const { return m_audioPath != ""; }
+    /**
+     * One take: its name, the audio file that holds its singing (empty
+     * before its first recording) and the ranges of that file that hold
+     * recorded material.
+     */
+    struct Take {
+        QString name;
+        QString audioPath;
+        Coverage coverage;
+    };
 
-    QString getAudioPath() const { return m_audioPath; }
-    const Coverage &getCoverage() const { return m_coverage; }
+    typedef std::vector<Take> Takes;
+
+    /// There is an active take, with an audio file to play and analyse
+    bool haveTake() const;
+
+    QString getAudioPath() const;
+    const Coverage &getCoverage() const;
 
     /// Nothing recorded and nothing to go back to: a new session
     void clear();
 
+    // --- The takes of the session (spec 5.3) ---
+
+    const Takes &getTakes() const { return m_takes; }
+    int getTakeCount() const { return int(m_takes.size()); }
+
+    /// Which take is the active one, or -1 when there is no take at all
+    int getActiveIndex() const { return m_active; }
+
+    /// The name of the active take, or "" when there is none
+    QString getActiveName() const;
+
+    QStringList getTakeNames() const;
+
+    /// The take of this name, or -1
+    int indexOf(QString name) const;
+
+    /// The take at this index, or null
+    const Take *getTake(int index) const;
+
+    /// Make the take at this index the active one.  False if there is none
+    bool setActiveIndex(int index);
+
     /**
-     * The take is this file, with the coverage a session kept for it in
-     * its coverage strip.
+     * Add a take with no audio yet and make it the active one; the
+     * return is its name.  With no name given it is called "Take N",
+     * with an N that no take of this session has had.
+     */
+    QString addTake(QString name = "");
+
+    /**
+     * Add a take that holds the same audio file and coverage as the
+     * active one, and make it the active one; the return is its name, or
+     * "" if there was no take to copy.  The audio file is shared: both
+     * takes write a new one before they change anything in it.
+     */
+    QString duplicateActiveTake(QString name = "");
+
+    /**
+     * Rename the take at this index.  False if there is no such take, if
+     * the name is empty, or if another take has it already.
+     */
+    bool renameTake(int index, QString name);
+
+    /**
+     * Do not give this name to a take that is named by default, although
+     * no take of the session has it: the layers of a take that a session
+     * held and that this session has not taken up are in the document
+     * under it.  A name asked for by name is still given.
+     */
+    void reserveTakeName(QString name);
+
+    /**
+     * Forget the take at this index; no audio file is touched.  If it was
+     * the active one, the take before it becomes active, or the one after
+     * it if it was the first, or there is no active take left.  False if
+     * there is no such take.
+     */
+    bool removeTake(int index);
+
+    /**
+     * The active take is this file, with the coverage a session kept for
+     * it in its coverage strip.  With no take at all, one is added.
      */
     void setTake(QString path, const Coverage &coverage);
 
@@ -137,8 +215,9 @@ public:
 
     /**
      * The files this run wrote that nothing refers to any more: every
-     * one but the take's own audio and the protected ones.  Files the
-     * user brought are never in the list.
+     * one but the audio of a take -- any take, since a duplicate shares
+     * its file with the take it was made from -- and the protected ones.
+     * Files the user brought are never in the list.
      */
     QStringList unusedWrittenFiles() const;
 
@@ -167,11 +246,24 @@ public:
     static QString nextAudioPath(QString directory);
 
 private:
-    QString m_audioPath;
-    Coverage m_coverage;
+    Takes m_takes;
+    int m_active;
+
+    // Counts the takes this session has named, so that a name is never
+    // used twice even after the take that had it has gone
+    int m_named;
+
+    // Names no take has, that are not to be given to one all the same
+    QStringList m_reserved;
+
     QStringList m_superseded;
     QStringList m_written;
     QStringList m_protected;
+
+    // The active take, or null.  The non-const one adds a take if there
+    // is none: the first recording of a session makes "Take 1"
+    const Take *activeTake() const;
+    Take &takeForRecording();
 };
 
 #endif
