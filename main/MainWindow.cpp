@@ -22,6 +22,7 @@
 #include "PaneUtils.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
+#include "TakesFile.h"
 
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
@@ -33,6 +34,7 @@
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
+#include "data/model/RegionModel.h"
 #include "layer/FlexiNoteLayer.h"
 #include "view/ViewManager.h"
 #include "base/Preferences.h"
@@ -102,6 +104,8 @@
 #include <QActionGroup>
 #include <QRegularExpression>
 #include <QTimer>
+#include <QEventLoop>
+#include <QTextStream>
 
 #include <algorithm>
 #include <iostream>
@@ -148,6 +152,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_renameTakeAction(nullptr),
     m_deleteTakeAction(nullptr),
     m_updatingTakeCombo(false),
+    m_restoringSession(false),
     m_eraseSingingAction(nullptr),
     m_selectRecordingAction(nullptr),
     m_openTakeCommand(nullptr),
@@ -2709,63 +2714,25 @@ MainWindow::analyseNewSingingModel()
 void
 MainWindow::analyseRestoredSingingModel()
 {
-    // The queued call from modelAdded(), which is how the singing track
-    // of a session being restored arrives: loadSingingTrack() and the
-    // take's own paths have set their analyser up synchronously by now
-    // and left nothing pending.  A take that has been recorded into has
-    // pitch and notes layers in the pane that belong to no analyser, and
-    // the one about to be made is to claim them rather than analyse all
-    // of the file again
+    // The queued call from modelAdded(): an audio model has been added to
+    // the document by a route that has not set a singing analyser up for
+    // it.  The routes that do -- loadSingingTrack() and the take's own
+    // openTakeAudioFile() -- have cleared the pending id by now, and a
+    // session being restored is dealt with by restoreTakes(), which drops
+    // the audio model the document carried and opens each take's audio
+    // itself.  So this is the fallback, and what it finds is a take of its
+    // own, analysed in full
+    if (m_restoringSession) return;
     if (m_pendingSingingModelId.isNone()) return;
 
     // Which take this is has to be settled first: its layers are found by
     // its name, so it must have one before they are looked for
     if (m_takes->getActiveIndex() < 0) {
-        m_takes->addTake(restoredTakeName());
+        m_takes->addTake();
     }
 
     adoptTakeLayers(m_pendingSingingModelId);
     analyseNewSingingModel();
-}
-
-QString
-MainWindow::restoredTakeName()
-{
-    // The take that the singing track of a session being restored belongs
-    // to.  Its pitch, notes and coverage are in the pane already, named
-    // after it, so where the pane holds one take's layers this is that
-    // take and it claims them.
-    //
-    // Where it holds several takes' layers, nothing in the session file
-    // says which of them the audio belongs to -- phase 7b writes that
-    // down -- so this is a take of its own, with a name none of them uses
-    // and an analysis of its own, and they are left in the pane hidden,
-    // silent and owned by nobody.
-    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
-    if (!pane) return "";
-
-    QStringList names;
-
-    for (int i = 0; i < pane->getLayerCount(); ++i) {
-        QString name;
-        TakeLayers::Kind kind;
-        if (!TakeLayers::parse(pane->getLayer(i)->objectName(), name, kind)) {
-            continue;
-        }
-        if (!names.contains(name)) names.push_back(name);
-        m_takes->reserveTakeName(name);
-    }
-
-    if (names.size() == 1) return names[0];
-
-    if (names.size() > 1) {
-        cerr << "MainWindow::restoredTakeName: the session holds the layers of "
-             << names.size() << " takes and does not say which of them the "
-             << "singing track belongs to: it becomes a take of its own"
-             << endl;
-    }
-
-    return "";
 }
 
 void
@@ -4363,45 +4330,12 @@ MainWindow::adoptTakeLayers(ModelId audio)
 
     // By name, which is what says whose a take's layers are (spec 6.4).
     // The layers of the takes that are put away have no live source model
-    // either, so nothing but the name can tell them apart
+    // either, so nothing but the name can tell them apart.  (Before 7b
+    // there was a fallback for a session whose takes had no names of their
+    // own; a session that does not name its takes now opens without them.)
     TakeLayers::Found found = TakeLayers::find(pane, takeName);
     TimeValueLayer *pitch = found.pitch;
     FlexiNoteLayer *notes = found.notes;
-
-    if (!pitch || !notes) {
-
-        // A session saved before takes had names of their own: its take's
-        // layers are the ones in the pane that belong to no analyser
-        for (int i = 0; i < pane->getLayerCount(); ++i) {
-
-            Layer *layer = pane->getLayer(i);
-
-            // Ours, and not a take's: the live dots of a take being
-            // recorded, and the reference's pitch track moved by octaves
-            if (layer == m_realtimePitchLayer) continue;
-            if (m_alternatePitch &&
-                layer == m_alternatePitch->getLayer()) continue;
-
-            // Another take's, named as such: never ours to claim
-            QString otherName;
-            TakeLayers::Kind kind;
-            if (TakeLayers::parse(layer->objectName(), otherName, kind) &&
-                otherName != takeName) {
-                continue;
-            }
-
-            auto model = ModelById::get(layer->getModel());
-            if (!model) continue;
-
-            // A layer whose source model is still there has an analyser of
-            // its own: the reference's pitch, notes and candidates, or a
-            // take whose audio has not been swapped since it was analysed
-            if (ModelById::get(model->getSourceModel())) continue;
-
-            if (!pitch) pitch = qobject_cast<TimeValueLayer *>(layer);
-            if (!notes) notes = qobject_cast<FlexiNoteLayer *>(layer);
-        }
-    }
 
     // Half a pair is no use: the analyser claims both or neither
     if (!pitch || !notes) return false;
@@ -4628,15 +4562,250 @@ MainWindow::eraseTakeEvents(const Coverage::Ranges &erased,
 bool
 MainWindow::saveSessionFile(QString path)
 {
+    // Not while the analysis of a recorded range runs: the session would
+    // hold neither the state before the merge nor the state after it
+    if (!waitForRangedAnalysis()) return false;
+
     bool saved = MainWindowBase::saveSessionFile(path);
 
-    // The .ton that has just been written names the take's audio file.
-    // Recording into the take again writes another file and supersedes
-    // that one, but the saved session still needs it, so it is not ours to
-    // delete when the session closes
-    if (saved && m_takes) m_takes->protectPath(m_takes->getAudioPath());
+    // The .ton that has just been written names the audio file of every
+    // take of the session.  Recording into a take again writes another file
+    // and supersedes that one, but the saved session still needs it, so it
+    // is not ours to delete when the session closes
+    if (saved && m_takes) {
+        for (const SingingTakes::Take &take : m_takes->getTakes()) {
+            m_takes->protectPath(take.audioPath);
+        }
+    }
 
     return saved;
+}
+
+void
+MainWindow::toXml(QTextStream &out, bool asTemplate)
+{
+    // A template holds no session content, so it holds no takes either
+    if (asTemplate) {
+        MainWindowBase::toXml(out, asTemplate);
+        return;
+    }
+
+    // The takes of the session are one element of Tony's own inside the
+    // <sv> document (spec 6.4), which SVFileReader passes over with a
+    // warning on the terminal and nothing else.  The base class writes the
+    // document from <?xml?> to </sv> in one call and has no hook in the
+    // middle, so it writes into a string here and the element goes in
+    // before the closing tag.  A hook in the fork would save the copy.
+    QString document;
+    {
+        QTextStream buffer(&document);
+        MainWindowBase::toXml(buffer, asTemplate);
+        buffer.flush();
+    }
+
+    int closing = document.lastIndexOf("</sv>");
+
+    if (closing < 0) {
+        // Not a document we know where to write in: better saved without
+        // its takes than not saved at all
+        cerr << "MainWindow::toXml: no </sv> to write the takes before" << endl;
+        out << document;
+        return;
+    }
+
+    out << document.left(closing)
+        << TakesFile::toXml(*m_takes)
+        << document.mid(closing);
+}
+
+MainWindow::FileOpenStatus
+MainWindow::openSession(FileSource source)
+{
+    // m_restoringSession: modelAdded() queues a call that would make a take
+    // of the audio model the document carries, and restoreTakes() is what
+    // deals with that model instead
+    m_restoringSession = true;
+    FileOpenStatus status = MainWindowBase::openSession(source);
+    m_restoringSession = false;
+
+    if (status != FileOpenSucceeded) return status;
+
+    // The document is in the panes now, with every take's layers in pane 0,
+    // and nothing has been analysed
+    restoreTakes(source.getLocalFilename());
+
+    return status;
+}
+
+void
+MainWindow::restoreTakes(QString sessionPath)
+{
+    if (!m_document) return;
+
+    TakesFile::Takes stored = TakesFile::read(sessionPath);
+
+    // Opening a session is not a change to it, whatever is done below
+    bool wasModified = m_documentModified;
+
+    // The audio model of the active take, which the document carried
+    // because the waveform layer showing it is in pane 0: of no use here,
+    // and not to be mistaken for a singing track of its own
+    dropRestoredSingingTrack(!stored.found);
+
+    if (!stored.found) {
+        // A session saved before the takes were stored (spec 3, "Old
+        // sessions"): it opens without its singing track, and the layers
+        // that showed one have gone with it
+        cerr << "MainWindow::restoreTakes: the session has no takes element: "
+             << "it opens without a singing track" << endl;
+        updateTakeCombo();
+        updateLayerStatuses();
+        updateMenuStates();
+        if (!wasModified) documentRestored();
+        return;
+    }
+
+    Pane *pane = m_paneStack ? m_paneStack->getPane(0) : nullptr;
+
+    // Every name the session used is reserved before any take is made, so
+    // that the numbering carries on from it and no new take can be given
+    // the name of a take of the session -- or of one whose layers are in
+    // the pane although no take claims them any more
+    for (const TakesFile::Take &take : stored.takes) {
+        m_takes->reserveTakeName(take.name);
+    }
+    if (pane) {
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            QString name;
+            TakeLayers::Kind kind;
+            if (TakeLayers::parse(pane->getLayer(i)->objectName(),
+                                  name, kind)) {
+                m_takes->reserveTakeName(name);
+            }
+        }
+    }
+
+    for (const TakesFile::Take &take : stored.takes) {
+
+        QString name = m_takes->addTake(take.name);
+
+        // The coverage of a take is stored in the regions of its own
+        // coverage strip, which the document has put back into the pane
+        // (5a); a take with no recording in it yet has neither
+        Coverage coverage;
+        if (pane) {
+            TakeLayers::Found found = TakeLayers::find(pane, name);
+            if (found.coverage) {
+                if (auto model = ModelById::getAs<RegionModel>
+                    (found.coverage->getModel())) {
+                    coverage = Coverage::fromEvents(model->getAllEvents());
+                }
+            }
+        }
+
+        // restoreTake() and not setTake(): nothing here supersedes a file
+        m_takes->restoreTake(take.audioPath, coverage);
+    }
+
+    int active = m_takes->indexOf(stored.active);
+    if (active < 0 && m_takes->getTakeCount() > 0) active = 0;
+
+    cerr << "MainWindow::restoreTakes: " << m_takes->getTakeCount()
+         << " take(s) restored, active is \"" << stored.active << "\"" << endl;
+
+    if (active >= 0) {
+        // The same path a switch uses: the take's audio under the take's
+        // own layers, an analyser that claims them with no analysis, its
+        // coverage strip, and every other take put away
+        m_takes->setActiveIndex(active);
+        activateTake();
+    } else {
+        putOtherTakeLayersAway();
+    }
+
+    updateTakeCombo();
+    updateLayerStatuses();
+    updateMenuStates();
+
+    // Whatever was done above, the session is as it was saved
+    if (!wasModified) documentRestored();
+}
+
+void
+MainWindow::dropRestoredSingingTrack(bool withTakeLayers)
+{
+    // Nothing is to make a take of the audio model the session carried:
+    // restoreTakes() opens each take's audio from the path in <takes>
+    m_pendingSingingModelId = {};
+
+    if (!m_document) return;
+
+    // The reference is the main model; every other audio model in a
+    // restored document belongs to a singing track
+    ModelId mainId = getMainModelId();
+    std::vector<ModelId> audio;
+    for (ModelId id : m_document->getModels()) {
+        if (id == mainId) continue;
+        if (ModelById::isa<WaveFileModel>(id)) audio.push_back(id);
+    }
+    if (audio.empty()) return;
+
+    auto isAudio = [&audio](ModelId id) {
+        return std::find(audio.begin(), audio.end(), id) != audio.end();
+    };
+
+    // Collected before anything is deleted: releasing a model clears the
+    // source of what was derived from it
+    std::vector<Layer *> going;
+
+    for (Layer *layer : m_document->getLayers()) {
+
+        ModelId modelId = layer->getModel();
+
+        if (isAudio(modelId)) {
+            going.push_back(layer);
+            continue;
+        }
+
+        if (!withTakeLayers) continue;
+
+        // The pitch and notes of that singing track, whether they are
+        // named after a take or (in a session from before this feature)
+        // simply derived from its audio
+        auto model = ModelById::get(modelId);
+        if (model && isAudio(model->getSourceModel())) {
+            going.push_back(layer);
+            continue;
+        }
+
+        QString takeName;
+        TakeLayers::Kind kind;
+        if (TakeLayers::parse(layer->objectName(), takeName, kind)) {
+            going.push_back(layer);
+        }
+    }
+
+    cerr << "MainWindow::dropRestoredSingingTrack: dropping " << going.size()
+         << " restored layer(s) of the singing track the document carried"
+         << endl;
+
+    for (Layer *layer : going) dropLayerSilently(layer);
+}
+
+void
+MainWindow::dropLayerSilently(Layer *layer)
+{
+    if (!layer || !m_document) return;
+
+    // The play source takes in the model of every layer that is in a view,
+    // and a forced delete does not fire layerInAView() to take it out again
+    if (m_playSource && !layer->getModel().isNone()) {
+        m_playSource->removeModel(layer->getModel());
+    }
+
+    // deleteLayer(force) and nothing else: no undo command, out of every
+    // view it is in, and the model goes with it if nothing else uses it
+    m_document->deleteLayer(layer, true);
 }
 
 void
@@ -5085,6 +5254,10 @@ MainWindow::switchToTake(int index)
     updateTakeCombo();
     updateLayerStatuses();
     updateMenuStates();
+
+    // Which take is the active one is stored in the session (spec 6.4), so
+    // a switch is a change to it
+    documentModified();
 
     emit activity(tr("Switched to the take \"%1\"")
                   .arg(m_takes->getActiveName()));
@@ -5578,6 +5751,48 @@ MainWindow::waitForInitialAnalysis()
     } else {
         return false;
     }
+}
+
+bool
+MainWindow::waitForRangedAnalysis()
+{
+    // A session must not be saved in the middle of the analysis of a
+    // recorded range (spec 6.3): the take's pitch and notes still hold the
+    // state before the merge, and the two models the run works in are in
+    // the document, in no pane, so both would be written.  The run takes a
+    // fraction of the recording it follows -- a second or so -- and its
+    // merge is driven by the event loop, so it is waited for here rather
+    // than with the dialog waitForInitialAnalysis() puts up for the
+    // reference's first analysis, which can take as long as the song.
+    if (!m_analyser2 || !m_analyser2->isAnalysingRange()) return true;
+
+    cerr << "MainWindow::waitForRangedAnalysis: waiting for the analysis of ["
+         << m_takeAnalysisRange.start << "," << m_takeAnalysisRange.end
+         << ") to be merged" << endl;
+
+    QEventLoop loop;
+
+    QTimer poll;
+    connect(&poll, &QTimer::timeout, &loop, [this, &loop]() {
+        if (!m_analyser2 || !m_analyser2->isAnalysingRange()) loop.quit();
+    });
+    poll.start(10);
+
+    // A run that never finishes must not hold the save for ever
+    QTimer::singleShot(30000, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    if (m_analyser2 && m_analyser2->isAnalysingRange()) {
+        // Abandoning it loses the analysis of that range, which the user
+        // can ask for again with Analyse Now; writing its temporary models
+        // into the session would leave the session itself wrong
+        cerr << "MainWindow::waitForRangedAnalysis: the analysis has not "
+             << "finished; abandoning it so that the session can be saved"
+             << endl;
+        closeOpenTakeCommand(true);
+    }
+
+    return true;
 }
 
 void
@@ -6773,44 +6988,10 @@ MainWindow::analyseNewMainModel()
         m_analyser->setAudible(Analyser::Notes, false);
     }
 
-    // Session restore: if the loaded session contained a second audio model
-    // (i.e. a previously loaded singing track), set up the secondary analyser
-    // for it now.  We scan all document models for a WaveFileModel that is
-    // not the main model and not already being tracked as a singing model.
-    // We only do this if we don't already have a secondary analyser (it may
-    // have been set up already e.g. via modelAdded() during session load).
-    // Skip the scan while a singing model is pending: openAudio() emits
-    // audioFileLoaded() for CreateAdditionalModel too, and loadSingingTrack()
-    // is about to set up that model itself.  A second, queued setup would
-    // tear down m_analyser2's layers — the only references to the singing
-    // model — releasing it before the re-setup.
-    if (!m_analyser2 && m_document && m_pendingSingingModelId.isNone()) {
-        ModelId mainId = getMainModelId();
-        ModelId foundSinging;
-        for (ModelId mid : m_document->getModels()) {
-            if (mid == mainId) continue;
-            if (mid == m_realtimePitchModelId) continue;
-            if (mid == m_backgroundMusicModelId) continue;
-            if (ModelById::isa<WaveFileModel>(mid)) {
-                foundSinging = mid;
-                break;
-            }
-        }
-        if (!foundSinging.isNone()) {
-            cerr << "analyseNewMainModel: found existing singing track model "
-                 << foundSinging << " in session, setting up secondary analyser" << endl;
-            // Defer so that the primary analyser's layers are fully in place
-            // before the secondary analyser tries to share the same pane.
-            QTimer::singleShot(0, this, [this, foundSinging]() {
-                // A take recorded into is saved with pitch and notes
-                // layers that belong to no analyser (the model they were
-                // derived from went with the swap that put this audio
-                // under them): they are this analyser's to claim
-                adoptTakeLayers(foundSinging);
-                setupSingingTrackAnalyser(foundSinging);
-            });
-        }
-    }
+    // A session used to be searched here for a second WaveFileModel, which
+    // was then set up as the singing track.  The takes of a session come
+    // from its <takes> element now (spec 7), and restoreTakes() opens the
+    // audio of the active take itself, so there is nothing to look for.
 
     updateLayerStatuses();
     documentRestored();

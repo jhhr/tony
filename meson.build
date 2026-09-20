@@ -1099,6 +1099,7 @@ tony_core_files = [
   'main/SingingTakes.cpp',
   'main/TakeAudio.cpp',
   'main/TakeEvents.cpp',
+  'main/TakesFile.cpp',
   'main/TakeTiming.cpp',
 ]
 
@@ -1353,6 +1354,7 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestTakeAudio.h',
   'main/test/TestTakeEvents.h',
   'main/test/TestSingingTakes.h',
+  'main/test/TestTakesFile.h',
   'main/test/TestTakeTiming.h',
 ])
 

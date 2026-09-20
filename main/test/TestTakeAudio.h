@@ -368,8 +368,12 @@ private slots:
                                   0, 0, -1, out) != "");
         QVERIFY(!QFile::exists(out));
 
-        QVERIFY(TakeAudio::splice(m_dir.filePath("absent.wav"), recording,
-                                  0, 0, -1, out) != "");
+        // The take's own file gone missing: the message says so, and does
+        // not claim that the file being written exists already
+        QString missing = m_dir.filePath("absent.wav");
+        QString error = TakeAudio::splice(missing, recording, 0, 0, -1, out);
+        QVERIFY2(error.contains("absent.wav") && !error.contains(out),
+                 qPrintable(error));
         QVERIFY(!QFile::exists(out));
 
         QVERIFY(TakeAudio::splice(old, other, 0, 0, -1, out) != "");

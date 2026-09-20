@@ -168,11 +168,23 @@ QString write(WavFileReader *old, sv_samplerate_t rate, int channels,
 QString checkOutPath(QString outPath, QString oldPath)
 {
     if (outPath == "") return tr("No file name given to write to");
-    if (QFileInfo(outPath) == QFileInfo(oldPath) ||
-        QFileInfo::exists(outPath)) {
+
+    // Not QFileInfo == QFileInfo: that compares canonical paths, which are
+    // both empty for two files that do not exist, so a take whose audio
+    // file has gone missing was refused with this message instead of the
+    // one that says what is really wrong
+    if (oldPath != "" &&
+        QFileInfo(outPath).absoluteFilePath() ==
+        QFileInfo(oldPath).absoluteFilePath()) {
+        return tr("File \"%1\" is the one being read from, and is not to be "
+                  "overwritten").arg(outPath);
+    }
+
+    if (QFileInfo::exists(outPath)) {
         return tr("File \"%1\" exists already, and is not to be overwritten")
             .arg(outPath);
     }
+
     return "";
 }
 

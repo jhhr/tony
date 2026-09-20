@@ -19,6 +19,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QRegularExpression>
 #include <QSettings>
 
 #include <algorithm>
@@ -188,7 +189,20 @@ SingingTakes::renameTake(int index, QString name)
 void
 SingingTakes::reserveTakeName(QString name)
 {
-    if (name != "" && !m_reserved.contains(name)) m_reserved.push_back(name);
+    if (name == "") return;
+
+    if (!m_reserved.contains(name)) m_reserved.push_back(name);
+
+    // A session that had a "Take 7" in it goes on at "Take 8", however
+    // many of the takes before it have been deleted since: the default
+    // names carry on where the session left off rather than starting again
+    // at the first number no take happens to be using
+    static const QRegularExpression pattern("^Take (\\d+)$");
+    QRegularExpressionMatch match = pattern.match(name);
+    if (match.hasMatch()) {
+        int number = match.captured(1).toInt();
+        if (number > m_named) m_named = number;
+    }
 }
 
 bool

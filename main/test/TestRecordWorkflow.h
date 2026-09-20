@@ -50,6 +50,7 @@
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
 #include "data/model/RegionModel.h"
+#include "data/fileio/BZipFileDevice.h"
 #include "data/fileio/FileSource.h"
 #include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
@@ -62,6 +63,7 @@
 
 #include <QObject>
 #include <QtTest>
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
@@ -73,6 +75,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 /**
@@ -511,6 +514,117 @@ class TestRecordWorkflow : public QObject
         QVERIFY(paneHasLayer(1, m_window->timeRuler()));
     }
 
+    // Open a session that has just been saved, with the reference analysed
+    // (claimed, in fact: a restored session has its layers) and the takes
+    // of the session read from the file
+    void reopenSession(QString path) {
+        m_window->doCloseSession();
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(path, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+    }
+
+    // Take the <takes> element out of a saved session file, making it what
+    // a .ton written before phase 7b is: the same document with no takes in
+    // it.  The file is bzip2, as the session reader and writer leave it
+    // "" on success, else what went wrong
+    QString removeTakesElement(QString path) {
+        QByteArray document;
+        {
+            sv::BZipFileDevice file(path);
+            if (!file.open(QIODevice::ReadOnly)) {
+                return "could not read " + path + ": " + file.errorString();
+            }
+            document = file.readAll();
+            file.close();
+        }
+        if (document.isEmpty()) return "read nothing from " + path;
+
+        int from = document.indexOf("<takes");
+        int to = document.indexOf("</takes>");
+        if (from < 0 || to < from) return "no takes element in " + path;
+        document.remove(from, to + int(strlen("</takes>")) - from);
+
+        sv::BZipFileDevice out(path);
+        if (!out.open(QIODevice::WriteOnly)) {
+            return "could not write " + path + ": " + out.errorString();
+        }
+        qint64 written = out.write(document);
+        out.close();
+        if (written != document.size()) {
+            return QString("wrote %1 of %2 bytes to ").arg(written)
+                .arg(document.size()) + path;
+        }
+        return "";
+    }
+
+    // The dialogs the watchdog has dismissed so far, taken off the list so
+    // that cleanup() does not fail the test with them: for a test that
+    // expects one
+    QStringList takeDialogs() {
+        QStringList dialogs = m_dialogs;
+        m_dialogs.clear();
+        return dialogs;
+    }
+
+    // The dialogs seen so far whose text holds this, taken off the list
+    // along with the ones before them: for a test that expects one of its
+    // own among the dialogs another part of the application showed first
+    QStringList dialogsMatching(QString text) {
+        QStringList matching;
+        for (const QString &dialog : takeDialogs()) {
+            if (dialog.contains(text)) matching.push_back(dialog);
+        }
+        return matching;
+    }
+
+    // Audio in the session besides the reference: one model per take that
+    // is on show, and nothing left over from a session load
+    int audioModelsBesidesReference() {
+        int n = 0;
+        for (sv::ModelId id : m_window->document()->getModels()) {
+            if (id == m_window->mainModelId()) continue;
+            if (sv::ModelById::isa<sv::WaveFileModel>(id)) ++n;
+        }
+        return n;
+    }
+
+    int waveformLayersInPane0() {
+        int n = 0;
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        if (!pane) return 0;
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            if (qobject_cast<sv::WaveformLayer *>(pane->getLayer(i))) ++n;
+        }
+        return n;
+    }
+
+    // The same events after a session round trip. Frames, durations and
+    // labels come back exactly; a value goes through QString::arg(float)
+    // in Event::toXml(), which keeps six significant figures
+    void verifyEventsSurvived(const sv::EventVector &before,
+                              const sv::EventVector &after,
+                              const char *what) {
+        QVERIFY2(before.size() == after.size(),
+                 qPrintable(QString("%1: %2 events before, %3 after")
+                            .arg(what).arg(before.size()).arg(after.size())));
+        for (size_t i = 0; i < before.size(); ++i) {
+            QVERIFY2(before[i].getFrame() == after[i].getFrame(),
+                     qPrintable(QString("%1: event %2 was at frame %3, is at %4")
+                                .arg(what).arg(i)
+                                .arg(before[i].getFrame())
+                                .arg(after[i].getFrame())));
+            QCOMPARE(after[i].getDuration(), before[i].getDuration());
+            double value = before[i].getValue();
+            QVERIFY2(std::fabs(after[i].getValue() - value) <=
+                     1e-5 * std::fabs(value) + 1e-6,
+                     qPrintable(QString("%1: event %2 had the value %3, has %4")
+                                .arg(what).arg(i).arg(value)
+                                .arg(after[i].getValue())));
+        }
+    }
+
     void verifyRulerIntact() {
         QVERIFY(m_window->timeRuler());
         QVERIFY2(documentHasLayer(m_window->timeRuler()),
@@ -754,8 +868,20 @@ class TestRecordWorkflow : public QObject
         QString description = modal->windowTitle();
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
+            m_dialogs.push_back(description);
+            // A question with buttons of its own is not answered by
+            // rejecting it: the session reader's "do you want to locate
+            // this file?" asks again until one of its buttons is pressed
+            // (InteractiveFileFinder::locateInteractive()).  The last
+            // button is Cancel in every question Tony can show
+            QList<QAbstractButton *> buttons = box->buttons();
+            if (!buttons.isEmpty()) {
+                buttons.last()->click();
+                return;
+            }
+        } else {
+            m_dialogs.push_back(description);
         }
-        m_dialogs.push_back(description);
         if (auto dialog = qobject_cast<QDialog *>(modal)) {
             dialog->reject();
         } else {
@@ -4200,11 +4326,12 @@ private slots:
         QVERIFY(m_window->takeCombo()->isEnabled());
     }
 
-    // A session with two takes saved and opened again.  Phase 7b stores
-    // the takes properly; until then the session says only which audio
-    // file the active take was in, so that take comes back as a take of
-    // its own, analysed afresh, and the layers of both saved takes are
-    // left in the pane, hidden and owned by nobody
+    // The takes of a session in the .ton (spec 6.4): the <takes> element
+    // says which takes there are, where their audio is and which was on
+    // show; their pitch, notes and coverage come back as the layers they
+    // are stored in, and nothing is analysed
+
+    // Two takes, the second of them active, saved and opened again
     void two_takes_survive_a_session_opening() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 6.0);
@@ -4212,49 +4339,363 @@ private slots:
         openReference(writeWav(tone(lowHz, 4.0)));
         if (QTest::currentTestFailed()) return;
 
+        // A take with a gap in its coverage, and a second take beside it
         take(700);
         if (QTest::currentTestFailed()) return;
-        m_window->doNewEmptyTake();
         m_window->seekTo(sv::sv_frame_t(2.0 * rate));
         take(700);
         if (QTest::currentTestFailed()) return;
+        TakeSnapshot first = snapshotTake();
+        QCOMPARE(int(first.coverage.size()), 2);
+        QVERIFY(!first.pitch.empty() && !first.notes.empty());
 
-        QString path = m_window->takes()->getAudioPath();
-        auto pitch = pitchEvents(m_window->analyser2());
-        QVERIFY(!pitch.empty());
+        m_window->doNewEmptyTake();
+        m_window->seekTo(sv::sv_frame_t(1.0 * rate));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot second = snapshotTake();
+        QVERIFY(second.path != first.path);
+        QVERIFY(!second.pitch.empty() && !second.notes.empty());
 
         QString session = m_dir.filePath("two-takes.ton");
         QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        // Both takes, under their own names, with the one that was on show
+        // active again
+        QCOMPARE(m_window->takes()->getTakeNames(),
+                 QStringList({ "Take 1", "Take 2" }));
+        QCOMPARE(m_window->takes()->getActiveIndex(), 1);
+        QCOMPARE(m_window->takes()->getAudioPath(), second.path);
+        QCOMPARE(m_window->takes()->getCoverage().getRanges(), second.coverage);
+        QCOMPARE(m_window->takes()->getTake(0)->audioPath, first.path);
+        QCOMPARE(m_window->takes()->getTake(0)->coverage.getRanges(),
+                 first.coverage);
+
+        // The active take's own layers are the ones the analyser holds, and
+        // its audio is under them
+        Analyser *a2 = m_window->analyser2();
+        QVERIFY(a2);
+        QCOMPARE(static_cast<sv::Layer *>(takeLayers("Take 2").pitch),
+                 a2->getLayer(Analyser::PitchTrack));
+        QVERIFY(takeAudio());
+        QCOMPARE(takeAudio()->getStartFrame(), sv::sv_frame_t(0));
+
+        // The pitch and the notes of both takes came back as they were: a
+        // session file keeps a value to six figures, nothing else changes
+        verifyEventsSurvived(second.pitch, pitchEvents(a2), "the active take's pitch");
+        verifyEventsSurvived(second.notes,
+                             noteEvents(a2->getLayer(Analyser::Notes)),
+                             "the active take's notes");
+        verifyEventsSurvived(first.pitch, pitchEvents(takeLayers("Take 1").pitch),
+                             "the stored take's pitch");
+        verifyEventsSurvived(first.notes, noteEvents(takeLayers("Take 1").notes),
+                             "the stored take's notes");
+        if (QTest::currentTestFailed()) return;
+
+        // Nothing was analysed on the way in, then or when the queued
+        // calls of the load ran
+        QVERIFY(!m_window->analysingRange());
+        QCoreApplication::processEvents();
+        QTest::qWait(100);
+        QVERIFY2(!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(),
+                 "the session load started an analysis of a take");
+        QCOMPARE(noteLayersInPane0(), 3); // the reference's and the two takes'
+
+        // The take that is not on show is hidden, silent and owned by
+        // nobody; the one that is can be heard, and playback runs to the
+        // end of it
+        verifyTakeIsPutAway("Take 1");
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(a2->isAudible(Analyser::Audio));
+        QVERIFY(m_window->playSource()->getModels()
+                .count(a2->getMainModelId()));
+        QVERIFY(m_window->playSource()->getPlayEndFrame() >=
+                m_window->takes()->getCoverage().getEndFrame());
+
+        // Each take has its strip; the active one's is on show and is the
+        // coverage the take came back with
+        QCOMPARE(allStripLayersInPane0(), 2);
+        verifyStripMatchesTake();
+        if (QTest::currentTestFailed()) return;
+
+        // One copy of the take's audio and no leftovers of the load: the
+        // waveform layer and model that Document::toXml() wrote for the
+        // active take were dropped (spec 6.4)
+        QCOMPARE(m_window->paneStack()->getPaneCount(), 2);
+        QCOMPARE(m_window->paneStack()->getHiddenPaneCount(), 0);
+        QCOMPARE(audioModelsBesidesReference(), 1);
+        QCOMPARE(waveformLayersInPane0(), 2); // the reference's and the take's
+        verifyPlaySourceClean();
+        QVERIFY2(!m_window->isDocumentModified(),
+                 "opening a session left it looking modified");
+        QCOMPARE(undoOnce(), QString()); // and nothing on the undo stack
+        if (QTest::currentTestFailed()) return;
+
+        // Switching takes works after a load like any other time
+        QVERIFY(m_window->doSwitchToTake(0));
+        QCOMPARE(m_window->takes()->getAudioPath(), first.path);
+        verifyEventsSurvived(first.pitch, pitchEvents(m_window->analyser2()),
+                             "the take switched to after a load");
+        if (QTest::currentTestFailed()) return;
+        verifyTakeIsPutAway("Take 2");
+        if (QTest::currentTestFailed()) return;
+        verifyStripMatchesTake();
+        QVERIFY(!m_window->analysingRange());
+        QVERIFY2(m_window->isDocumentModified(),
+                 "switching take did not mark the session modified");
+
+        // A take made now carries the numbering on from the session
+        m_window->doNewEmptyTake();
+        QCOMPARE(m_window->takes()->getActiveName(), QString("Take 3"));
+    }
+
+    // A saved session names the audio file of every take, so none of them
+    // is deleted on close, however thoroughly it has been superseded since
+    void saved_session_protects_every_take_audio() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QString firstSaved = m_window->takes()->getAudioPath();
+
+        m_window->doNewEmptyTake();
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QString secondSaved = m_window->takes()->getAudioPath();
+
+        QString session = m_dir.filePath("protected.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+
+        // Recording into the first take again supersedes the file the saved
+        // session names for it
+        QVERIFY(m_window->doSwitchToTake(0));
+        m_window->seekTo(sv::sv_frame_t(1.0 * rate));
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->takes()->getAudioPath() != firstSaved);
+        QVERIFY2(m_window->takes()->unusedWrittenFiles().isEmpty(),
+                 "an audio file the saved session names was up for deletion");
+
         m_window->doCloseSession();
+
+        QVERIFY2(QFileInfo::exists(firstSaved),
+                 "the audio the saved session names for the first take was "
+                 "deleted when the session closed");
+        QVERIFY2(QFileInfo::exists(secondSaved),
+                 "the audio the saved session names for the second take was "
+                 "deleted when the session closed");
+    }
+
+    // A take name with characters that XML cares about
+    void take_name_with_entities_survives_a_session() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        const QString name = "Rock & \"Roll\" <2>";
+        m_window->setTakeNameAnswer(name);
+        m_window->doRenameTake();
+        QCOMPARE(m_window->takes()->getActiveName(), name);
+        TakeSnapshot before = snapshotTake();
+
+        QString session = m_dir.filePath("entities.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { name });
+        QCOMPARE(m_window->takes()->getAudioPath(), before.path);
+        QVERIFY(m_window->analyser2());
+        QCOMPARE(static_cast<sv::Layer *>(takeLayers(name).pitch),
+                 m_window->analyser2()->getLayer(Analyser::PitchTrack));
+        verifyEventsSurvived(before.pitch, pitchEvents(m_window->analyser2()),
+                             "the pitch of a take with an escaped name");
+        if (QTest::currentTestFailed()) return;
+        verifyStripMatchesTake();
+    }
+
+    // A session from before the takes were stored opens without its
+    // singing track, and nothing of one is left in the pane (spec 3)
+    void session_without_takes_opens_without_singing() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QString takePath = m_window->takes()->getAudioPath();
+
+        QString session = m_dir.filePath("old.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+
+        // As a .ton written before this phase: the same document without
+        // the element Tony's own pass reads
+        QString stripped = removeTakesElement(session);
+        QVERIFY2(stripped == "", qPrintable(stripped));
+
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        // No take, and no analyser or layers of one
+        QCOMPARE(m_window->takes()->getTakeCount(), 0);
+        QVERIFY(!m_window->takes()->haveTake());
+        QVERIFY2(!m_window->analyser2(),
+                 "the singing track of an old session was set up as a take");
+        QVERIFY(!m_window->coverageStrip()->isShown());
+        QCOMPARE(allStripLayersInPane0(), 0);
+        QCOMPARE(noteLayersInPane0(), 1);       // the reference's
+        QCOMPARE(waveformLayersInPane0(), 1);   // the reference's
+        QCOMPARE(audioModelsBesidesReference(), 0);
+        QCOMPARE(m_window->paneStack()->getPaneCount(), 2);
+        verifyPlaySourceClean();
+        QVERIFY(!m_window->isDocumentModified());
+
+        // The audio file was not touched, and the reference is intact
+        QVERIFY(QFileInfo::exists(takePath));
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitchEvents(m_window->analyser())),
+                           lowHz)) < 10.0);
+
+        // Recording makes the session's first take, as in a new session
+        m_window->seekTo(0);
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 1" });
+        verifyStripMatchesTake();
+    }
+
+    // The audio file of a take is gone when the session is opened: one
+    // warning, and the take is shown without its sound (spec 6.4)
+    void session_take_with_missing_audio() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot before = snapshotTake();
+        QVERIFY(!before.pitch.empty());
+
+        QString session = m_dir.filePath("missing.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        m_window->doCloseSession();
+        QVERIFY(QFile::remove(before.path));
 
         m_window->discardModifications();
         QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
                  MainWindow::FileOpenSucceeded);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
-        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
-        // One take, in the audio file the active take was in, and named
-        // after neither of the takes whose layers the session holds
-        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 3" });
-        // A restored model reports its own file's path, whose drive letter
-        // Windows may have changed the case of
-        QCOMPARE(m_window->takes()->getAudioPath().toLower(), path.toLower());
-        QVERIFY(m_window->analyser2());
-        QCOMPARE(static_cast<sv::Layer *>(takeLayers("Take 3").pitch),
-                 m_window->analyser2()->getLayer(Analyser::PitchTrack));
+        // One warning of ours, naming the take and the file that is
+        // missing.  The session reader has its own two to say first -- it
+        // asks whether to locate the audio model that Document::toXml()
+        // wrote for the take's waveform layer, and then says the session is
+        // incomplete -- which is the reason for the fork change asked for
+        // in the phase's notes; the takes themselves need neither
+        QStringList ours = dialogsMatching("shown without its audio");
+        QCOMPARE(ours.size(), 1);
+        QVERIFY2(ours[0].contains(QFileInfo(before.path).fileName()),
+                 qPrintable(ours[0]));
 
-        // Analysed afresh rather than mixed up with another take's pitch
-        QVERIFY(!pitchEvents(m_window->analyser2()).empty());
-
-        // Both saved takes' layers are still there, put away, and they are
-        // not the ones the take on show is using
-        QVERIFY(takeLayers("Take 1").pitch && takeLayers("Take 1").notes);
-        QVERIFY(takeLayers("Take 2").pitch && takeLayers("Take 2").notes);
-        QVERIFY(takeLayers("Take 3").pitch != takeLayers("Take 1").pitch);
-        QVERIFY(takeLayers("Take 3").pitch != takeLayers("Take 2").pitch);
-        verifyTakeIsPutAway("Take 1");
-        verifyTakeIsPutAway("Take 2");
+        // The take is there, with its pitch, its notes and its coverage,
+        // and no audio
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 1" });
+        QCOMPARE(m_window->takes()->getAudioPath(), before.path);
+        QCOMPARE(m_window->takes()->getCoverage().getRanges(), before.coverage);
+        QVERIFY(!m_window->analyser2());
+        QVERIFY(!takeAudio());
+        TakeLayers::Found found = takeLayers("Take 1");
+        QVERIFY(found.pitch && found.notes && found.coverage);
+        verifyEventsSurvived(before.pitch, pitchEvents(found.pitch),
+                             "the pitch of a take whose audio is missing");
         if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->coverageStrip()->isShown());
+        QCOMPARE(stripEvents(), before.strip);
+        verifyPlaySourceClean();
+
+        // Recording into it is refused, with one warning, and the take is
+        // left exactly as it was: splicing needs the file it adds to
+        m_window->seekTo(0);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(400);
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+
+        QStringList refusals = dialogsMatching("could not be added");
+        QCOMPARE(refusals.size(), 1);
+        QVERIFY2(refusals[0].contains(QFileInfo(before.path).fileName()),
+                 qPrintable(refusals[0]));
+        QVERIFY(takeDialogs().isEmpty());
+        QCOMPARE(m_window->takes()->getAudioPath(), before.path);
+        QCOMPARE(m_window->takes()->getCoverage().getRanges(), before.coverage);
+        QCOMPARE(stripEvents(), before.strip);
+    }
+
+    // Saving while the analysis of a recorded range runs: the save waits
+    // for the merge, so the session holds the take's own pitch and notes
+    // and neither the state before the merge nor the run's two temporary
+    // models
+    void save_during_ranged_analysis() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(700);
+
+        // Stop splices the recording in and starts the analysis of it there
+        // and then, so it is running when the session is saved
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY2(m_window->analysingRange(),
+                 "the test shows nothing: no analysis was running when the "
+                 "session was saved");
+
+        QString session = m_dir.filePath("mid-analysis.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+
+        QVERIFY2(!m_window->analysingRange(),
+                 "the save did not wait for the analysis of the recording");
+        TakeSnapshot before = snapshotTake();
+        QVERIFY(!before.pitch.empty());
+
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        // The merged pitch and notes are what the session holds, in the
+        // take's own layers and no others
+        QVERIFY(m_window->analyser2());
+        verifyEventsSurvived(before.pitch, pitchEvents(m_window->analyser2()),
+                             "the pitch saved during an analysis");
+        verifyEventsSurvived(before.notes,
+                             noteEvents(m_window->analyser2()
+                                        ->getLayer(Analyser::Notes)),
+                             "the notes saved during an analysis");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(noteLayersInPane0(), 2);
+        QCOMPARE(audioModelsBesidesReference(), 1);
+        verifyStripMatchesTake();
         verifyPlaySourceClean();
     }
 

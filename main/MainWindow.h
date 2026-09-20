@@ -66,9 +66,19 @@ public:
      */
     bool applyTakeState(SingingTakeCommand *command, const TakeState &state);
 
-    // A session that has been saved names the take's audio file as it was
-    // at the time, so that file must outlive every other reference to it
+    // A session that has been saved names the audio file of every take as
+    // it was at the time, so those files must outlive every other
+    // reference to them.  This is also where a save waits for the analysis
+    // of a recorded range, so that no session holds the state half way
+    // through one (see waitForRangedAnalysis())
     bool saveSessionFile(QString path) override;
+
+    // The takes of the session are written into the <sv> document as one
+    // element of Tony's own (spec 6.4), which the base class knows nothing
+    // of; and after the base class has read a session back, the same
+    // element is read from the file and the takes put back from it
+    void toXml(QTextStream &out, bool asTemplate) override;
+    FileOpenStatus openSession(sv::FileSource source) override;
 
 signals:
     void canExportPitchTrack(bool);
@@ -372,11 +382,36 @@ protected:
     // which case the user has been told
     bool activateTake();
 
-    // The name for the take that the singing track of a session being
-    // restored belongs to: the name its layers in the pane are under, or
-    // "" where the session does not say which take that is.  Reserves the
-    // names of the takes whose layers are left in the pane
-    QString restoredTakeName();
+    // The takes of a session that has just been read back: the <takes>
+    // element of the file says which takes there are, what their audio
+    // files are and which of them was on show, and the layers the document
+    // restored say what is in them (spec 6.4).  Each take's coverage comes
+    // from its own coverage strip; the active take is shown by the same
+    // path a switch uses, and nothing is analysed.  A session with no
+    // <takes> element opens without a singing track at all (spec 3).
+    void restoreTakes(QString sessionPath);
+
+    // Drop the audio model of the singing track that a session restored:
+    // Document::toXml() writes it because the active take's waveform layer
+    // is in pane 0, and it is of no use here -- the take's audio is opened
+    // from the path in <takes>, as it is for a switch.  Silently: no undo
+    // entry, no pane, nothing left in the play source, and
+    // m_pendingSingingModelId cleared so that nothing makes a take of it.
+    //
+    // withTakeLayers: its pitch, notes and coverage layers as well, for a
+    // session that has no <takes> element -- it opens without its singing
+    // track, and nothing of one is left in the pane to be mistaken for a
+    // take.
+    void dropRestoredSingingTrack(bool withTakeLayers);
+
+    // Take a layer and its model out of the document with no trace: no
+    // undo entry, and nothing left in the play source
+    void dropLayerSilently(sv::Layer *layer);
+
+    // Set while a session is being read, so that the queued call which
+    // makes a take of a newly added audio model (modelAdded()) leaves the
+    // restored one alone: restoreTakes() deals with it
+    bool m_restoringSession;
 
     // Name the layers the singing analyser holds after the active take,
     // which is what says whose they are (spec 6.4)
@@ -777,6 +812,13 @@ protected:
     virtual void closeEvent(QCloseEvent *e);
     bool checkSaveModified();
     bool waitForInitialAnalysis();
+
+    // A session must not be saved in the middle of the analysis of a
+    // recorded range: the take's pitch and notes still hold the state
+    // before the merge, and the two models the run works in are in the
+    // document.  Waits for the merge, as waitForInitialAnalysis() waits
+    // for the reference's first analysis
+    bool waitForRangedAnalysis();
 
     virtual void updateVisibleRangeDisplay(sv::Pane *p) const;
     virtual void updatePositionStatusDisplays() const;

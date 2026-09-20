@@ -117,6 +117,10 @@ public:
      * no take of the session has it: the layers of a take that a session
      * held and that this session has not taken up are in the document
      * under it.  A name asked for by name is still given.
+     *
+     * A name of the "Take N" form also carries the numbering on: after
+     * "Take 7" has been reserved the next take named by default is "Take
+     * 8", whatever has happened to the takes before it.
      */
     void reserveTakeName(QString name);
 
