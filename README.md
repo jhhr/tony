@@ -23,6 +23,31 @@ Features
  * import/export of pitch track and note track
 
 
+Singing practice
+----------------
+
+This fork adds a singing practice mode: a reference recording is loaded and
+analysed as usual, and your own singing is recorded alongside it as a second,
+orange pitch track to compare with it.
+
+ * record from the playback position, not only from the start of the song, so
+   you can practise one phrase without singing everything before it
+ * an optional pre-roll: the reference starts a few seconds early and the
+   status bar counts you in, and nothing sung during the lead-in is kept
+ * an optional "record into the selection only": select the phrase, and the
+   recording starts and stops at the ends of the selection by itself
+ * a take is one recording or many. A strip along the bottom of the pane shows
+   where there is singing and where there is not; recording over a part of it
+   replaces just that part, and only the part that changed is analysed again
+ * Edit -> Select Recording at Playhead and Edit -> Erase Singing in Selection
+   remove, trim or split what has been recorded
+ * recordings and erases can be undone and redone
+ * several takes of a song in one session (the Takes menu and the "Take:" box in
+   the toolbar): each keeps its own audio, pitch track and notes, and switching
+   between them needs no re-analysis. The audio of a session's takes is kept in
+   a folder named after the session beside it, so the two can be moved together
+
+
 Authors, Citation, License and Use
 ----------------------------------
 
