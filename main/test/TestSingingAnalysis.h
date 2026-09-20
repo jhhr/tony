@@ -203,19 +203,18 @@ class TestSingingAnalysis : public QObject
         return model->getAllEvents();
     }
 
-    // The singing track as 4c will set it up for the first recording of
-    // a take: empty pitch and notes layers on the singing model, which a
-    // deferred analyser claims without analysing anything (4a)
-    void addEmptyAnalyses(sv::ModelId singing) {
-        for (auto type : { sv::LayerFactory::TimeValues,
-                           sv::LayerFactory::FlexiNotes }) {
-            sv::Layer *layer = m_document->createEmptyLayer(type);
-            QVERIFY(layer);
-            auto model = sv::ModelById::get(layer->getModel());
-            QVERIFY(model);
-            model->setSourceModel(singing);
-            m_document->addLayerToView(m_pane, layer);
-        }
+    // The singing track as MainWindow sets it up for the first recording
+    // of a take: the analyser takes the audio without analysing any of it
+    // and makes empty pitch and notes layers for the analysis of the
+    // recorded range to be merged into
+    void setUpEmpty(Analyser &analyser, sv::ModelId singing) {
+        QCOMPARE(analyser.newFileLoaded(m_document, singing, m_paneStack,
+                                        m_pane, true), QString());
+        QCOMPARE(analyser.addEmptyAnalyses(), QString());
+        QVERIFY(analyser.getLayer(Analyser::PitchTrack));
+        QVERIFY(analyser.getLayer(Analyser::Notes));
+        QVERIFY(pitchEvents(analyser).empty());
+        QVERIFY(noteEvents(analyser).empty());
     }
 
     // Wait for a ranged analysis to be merged
@@ -684,17 +683,9 @@ private slots:
         }
         QCOMPARE(int(wholeNotes.size()), 4);
 
-        sv::ModelId singing = addSingingModel(data);
-        addEmptyAnalyses(singing);
-        if (QTest::currentTestFailed()) return;
-
         Analyser analyser(Analyser::SecondaryColors);
-        QCOMPARE(analyser.newFileLoaded(m_document, singing, m_paneStack,
-                                        m_pane, true), QString());
-        QVERIFY(analyser.getLayer(Analyser::PitchTrack));
-        QVERIFY(analyser.getLayer(Analyser::Notes));
-        QVERIFY(pitchEvents(analyser).empty());
-        QVERIFY(noteEvents(analyser).empty());
+        setUpEmpty(analyser, addSingingModel(data));
+        if (QTest::currentTestFailed()) return;
 
         size_t layers = m_document->getLayers().size();
         size_t models = m_document->getModels().size();
@@ -943,13 +934,9 @@ private slots:
         mergeWindow(start, end, 0, fileEnd, wFrom, wTo);
         QVERIFY(wFrom < frameAt(1.4) && wTo > frameAt(2.2));
 
-        sv::ModelId singing = addSingingModel(data);
-        addEmptyAnalyses(singing);
-        if (QTest::currentTestFailed()) return;
-
         Analyser analyser(Analyser::SecondaryColors);
-        QCOMPARE(analyser.newFileLoaded(m_document, singing, m_paneStack,
-                                        m_pane, true), QString());
+        setUpEmpty(analyser, addSingingModel(data));
+        if (QTest::currentTestFailed()) return;
         auto notes = notesModel(analyser);
         QVERIFY(notes);
 
@@ -990,6 +977,56 @@ private slots:
         QCOMPARE(now[2].getDuration(), after.getDuration());
     }
 
+    void ranged_keeps_the_end_of_a_note_past_the_run() {
+        // A note that begins inside the merge window and is still going
+        // when the run ends: the run had to cut it off where it stopped
+        // listening, but the audio out there has not changed, so the note
+        // ends where the old note that covered the run's end ended
+        std::vector<float> data;
+        appendSilence(data, 1.4);
+        auto lng = tone(singingHz, 2.4);      // 1.4 to 3.8 s
+        data.insert(data.end(), lng.begin(), lng.end());
+        appendSilence(data, 0.3);
+
+        sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
+        sv::sv_frame_t start = frameAt(1.5), end = frameAt(2.0);
+        sv::sv_frame_t from, to, wFrom, wTo;
+        widenRange(start, end, 0, fileEnd, from, to);
+        mergeWindow(start, end, 0, fileEnd, wFrom, wTo);
+        // The note begins inside the window and outlasts the run
+        QVERIFY(wFrom < frameAt(1.4) && wTo > frameAt(1.4));
+        QVERIFY(to < frameAt(3.5));
+
+        Analyser analyser(Analyser::SecondaryColors);
+        analyse(analyser, addSingingModel(data));
+        if (QTest::currentTestFailed()) return;
+
+        sv::EventVector wasNotes = noteEvents(analyser);
+        QCOMPARE(int(wasNotes.size()), 1);
+        sv::sv_frame_t wasEnd =
+            wasNotes[0].getFrame() + wasNotes[0].getDuration();
+        QVERIFY2(wasEnd > to,
+                 qPrintable(QString("the long note (%1 for %2) does not "
+                                    "outlast the run, which ends at %3")
+                            .arg(wasNotes[0].getFrame())
+                            .arg(wasNotes[0].getDuration()).arg(to)));
+
+        QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+        QCOMPARE(analyser.analyseRange(start, end, 0, fileEnd), QString());
+        waitForRange(analyser, done);
+        if (QTest::currentTestFailed()) return;
+
+        sv::EventVector now = noteEvents(analyser);
+        QVERIFY2(now.size() == 1,
+                 qPrintable("notes after the merge: " + describeNotes(now)));
+        QVERIFY(std::abs(now[0].getFrame() - wasNotes[0].getFrame()) <=
+                4 * hop);
+        QVERIFY2(now[0].getFrame() + now[0].getDuration() == wasEnd,
+                 qPrintable(QString("the note %1 was cut off at the end of "
+                                    "the run (%2); it used to end at %3")
+                            .arg(describeNotes(now)).arg(to).arg(wasEnd)));
+    }
+
     void ranged_at_the_edge_of_coverage() {
         // Where the caller's coverage limit clips an edge of the run there
         // is nothing beyond it but silence and no context worth keeping,
@@ -1024,12 +1061,9 @@ private slots:
         // and the run is the whole of it. Nothing may be dropped at
         // either end, so the result is the whole-file result
         {
-            sv::ModelId singing = addSingingModel(data);
-            addEmptyAnalyses(singing);
-            if (QTest::currentTestFailed()) return;
             Analyser analyser(Analyser::SecondaryColors);
-            QCOMPARE(analyser.newFileLoaded(m_document, singing, m_paneStack,
-                                            m_pane, true), QString());
+            setUpEmpty(analyser, addSingingModel(data));
+            if (QTest::currentTestFailed()) return;
             QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
             QCOMPARE(analyser.analyseRange(0, coverEnd, 0, coverEnd),
                      QString());
@@ -1213,13 +1247,10 @@ private slots:
         widenRange(start, end, 0, fileEnd, from, to);
         QVERIFY(abandoned1 < from); // the two ranges do not meet
 
-        sv::ModelId singing = addSingingModel(data);
-        addEmptyAnalyses(singing);
+        Analyser analyser(Analyser::SecondaryColors);
+        setUpEmpty(analyser, addSingingModel(data));
         if (QTest::currentTestFailed()) return;
 
-        Analyser analyser(Analyser::SecondaryColors);
-        QCOMPARE(analyser.newFileLoaded(m_document, singing, m_paneStack,
-                                        m_pane, true), QString());
         size_t layers = m_document->getLayers().size();
         size_t models = m_document->getModels().size();
 

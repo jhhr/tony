@@ -206,6 +206,19 @@ public:
                          sv::sv_frame_t clipEnd = -1);
 
     /**
+     * Make an empty pitch track and empty notes for our audio, where a
+     * whole-file analysis would have made them full: the first
+     * recording of a take has nothing to keep, but analyseRange() needs
+     * models to merge its result into (spec 6.2, last paragraph).  The
+     * layers, their models and everything set on them are as an
+     * analysed pair's are, so that this analyser's own scan for
+     * existing layers, a swap and a session restore cannot tell the two
+     * apart.  Does nothing if both layers are there already; an odd one
+     * out is replaced.  "" on success, else an error string.
+     */
+    QString addEmptyAnalyses();
+
+    /**
      * Return true between the start of a ranged analysis and the merge
      * (or the abandonment) of its result.
      */
@@ -363,6 +376,14 @@ protected:
     QString addVisualisations();
     QString addWaveform();
     QString addAnalyses();
+
+    // The colours and play parameters of the pitch and notes layers,
+    // whichever way they were made
+    void configureAnalysisLayers();
+
+    // The singing track's pitch and notes are to be seen and not heard:
+    // there is a pitch track and a set of notes being sonified already
+    void silenceSecondaryAnalysisLayers();
 
     // The two pYIN transforms of a full analysis (smoothed pitch track
     // and notes) with the parameters the settings ask for. Shared with

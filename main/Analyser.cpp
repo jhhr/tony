@@ -34,6 +34,8 @@
 #include "layer/SpectrogramLayer.h"
 #include "layer/Colour3DPlotLayer.h"
 #include "layer/ShowLayerCommand.h"
+#include "data/model/SparseTimeValueModel.h"
+#include "data/model/NoteModel.h"
 
 #include <QSettings>
 #include <QMutexLocker>
@@ -45,6 +47,14 @@ using std::cerr;
 using std::endl;
 
 using namespace sv;
+
+// The two pYIN outputs of a full analysis, and the step size they are
+// run at: the grid every result of ours sits on
+static const QString pyinPlugin = "pYIN";
+static const QString pyinBase = "vamp:pyin:pyin:";
+static const QString pyinPitchOutput = "smoothedpitchtrack";
+static const QString pyinNotesOutput = "notes";
+static const int analysisStepSize = 256;
 
 Analyser::Analyser(ColorScheme colorScheme) :
     m_colorScheme(colorScheme),
@@ -187,19 +197,7 @@ Analyser::doAllAnalyses(bool withPitchTrack)
     loadState(Notes);
     loadState(Spectrogram);
 
-    // The secondary analyser's pitch and note tracks are visual-only (there is
-    // no UI toggle to control their audibility, and sonifying two pitch/note
-    // tracks at once is confusing).  Mute them directly — do NOT call
-    // setAudible(), which would also call saveState() and corrupt the primary
-    // analyser's shared settings key.
-    if (m_colorScheme == SecondaryColors) {
-        for (Component c : { PitchTrack, Notes }) {
-            if (m_layers[c]) {
-                auto params = m_layers[c]->getPlayParameters();
-                if (params) params->setPlayAudible(false);
-            }
-        }
-    }
+    silenceSecondaryAnalysisLayers();
 
     stackLayers();
 
@@ -538,10 +536,10 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
 
     TransformFactory *tf = TransformFactory::getInstance();
 
-    QString plugname = "pYIN";
-    QString base = "vamp:pyin:pyin:";
-    QString f0out = "smoothedpitchtrack";
-    QString noteout = "notes";
+    QString plugname = pyinPlugin;
+    QString base = pyinBase;
+    QString f0out = pyinPitchOutput;
+    QString noteout = pyinNotesOutput;
 
     QString notFound = tr("Transform \"%1\" not found. Unable to analyse audio file.<br><br>Is the %2 Vamp plugin correctly installed?");
     if (!tf->haveTransform(base + f0out)) {
@@ -578,7 +576,7 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
 
     Transform t = tf->getDefaultTransformFor
         (base + f0out, waveFileModel->getSampleRate());
-    t.setStepSize(256);
+    t.setStepSize(analysisStepSize);
     t.setBlockSize(2048);
 
     if (precise) {
@@ -663,7 +661,132 @@ Analyser::addAnalyses()
         
         m_document->addLayerToView(m_pane, layers[i]);
     }
-    
+
+    configureAnalysisLayers();
+    connectAnalysisLayers();
+
+    return "";
+}
+
+QString
+Analyser::addEmptyAnalyses()
+{
+    // The first recording of a take has no analysis to keep and none to
+    // run: what it sings is analysed over its own range and merged into
+    // the pitch track and notes of the take (spec 6.2, last paragraph),
+    // which therefore have to exist, empty, first.  They are made here
+    // rather than in MainWindow so that they are the same layers on the
+    // same kind of model as a whole-file analysis leaves behind -- type,
+    // resolution, units, colours, names, play parameters and the source
+    // model that lets an analyser claim them again after a swap or a
+    // session restore.
+    auto waveFileModel = ModelById::getAs<WaveFileModel>(m_fileModel);
+    if (!waveFileModel) {
+        return "Internal error: Analyser::addEmptyAnalyses() called with no model present";
+    }
+    if (!m_document || !m_pane) {
+        return "Internal error: Analyser::addEmptyAnalyses() called with no document or pane present";
+    }
+
+    // Nothing to do for a take that has them: the usual case
+    if (m_layers[PitchTrack] && m_layers[Notes]) return "";
+
+    // Half a pair is partial state from a failed analysis, and no use
+    // to the merge either
+    for (Component c : { PitchTrack, Notes }) {
+        if (m_layers[c]) {
+            m_document->removeLayerFromView(m_pane, m_layers[c]);
+            m_layers[c] = nullptr;
+        }
+    }
+
+    sv_samplerate_t rate = waveFileModel->getSampleRate();
+
+    // The names a transform's output models are given
+    // (ModelTransformerFactory::transformMultiple): they are what the
+    // layer's presentation name and the session file show
+    TransformFactory *tf = TransformFactory::getInstance();
+    QString sourceName = waveFileModel->objectName();
+
+    struct Wanted {
+        Component component;
+        LayerFactory::LayerType layerType;
+        QString output;
+    };
+
+    const Wanted wanted[] = {
+        { PitchTrack, LayerFactory::TimeValues, pyinPitchOutput },
+        { Notes, LayerFactory::FlexiNotes, pyinNotesOutput }
+    };
+
+    for (const Wanted &w : wanted) {
+
+        // The layer first: a model registered with the document is not
+        // ours to release again (see the ownership rules in the dev doc),
+        // so nothing is registered until there is a layer to hold it.
+        // Not createEmptyLayer(): that makes a model of its own, on the
+        // main model's sample rate and with a resolution of 1
+        Layer *layer = m_document->createLayer(w.layerType);
+        if (!layer) {
+            return "Internal error: Analyser::addEmptyAnalyses() could not create a layer";
+        }
+
+        // One value per hop of the pitch track, notes with a duration
+        // at the same resolution, both in Hz, as pYIN's outputs are
+        // described.  Notified on add, which is the state a transform's
+        // model is switched to when it completes; these are complete
+        // from the start
+        std::shared_ptr<Model> model;
+        if (w.component == PitchTrack) {
+            auto pitch = std::make_shared<SparseTimeValueModel>
+                (rate, analysisStepSize, true);
+            pitch->setScaleUnits("Hz");
+            model = pitch;
+        } else {
+            auto notes = std::make_shared<NoteModel>
+                (rate, analysisStepSize, true, NoteModel::FLEXI_NOTE);
+            notes->setScaleUnits("Hz");
+            model = notes;
+        }
+
+        QString transformName =
+            tf->getTransformFriendlyName(pyinBase + w.output);
+        if (sourceName != "" && transformName != "") {
+            model->setObjectName(tr("%1: %2").arg(sourceName)
+                                 .arg(transformName));
+        } else if (transformName != "") {
+            model->setObjectName(transformName);
+        }
+
+        // The link a whole-file analysis makes by deriving the model
+        // from the audio: it is what claimExistingAnalyses() looks for
+        model->setSourceModel(m_fileModel);
+
+        ModelId modelId = ModelById::add(model);
+        m_document->addNonDerivedModel(modelId);
+
+        m_document->setModel(layer, modelId);
+        m_document->addLayerToView(m_pane, layer);
+        m_layers[w.component] = layer;
+    }
+
+    configureAnalysisLayers();
+    connectAnalysisLayers();
+
+    // As doAllAnalyses() does for the layers it has just made
+    loadState(PitchTrack);
+    loadState(Notes);
+    silenceSecondaryAnalysisLayers();
+    stackLayers();
+
+    emit layersChanged();
+
+    return "";
+}
+
+void
+Analyser::configureAnalysisLayers()
+{
     ColourDatabase *cdb = ColourDatabase::getInstance();
 
     // Choose colors based on color scheme:
@@ -673,8 +796,8 @@ Analyser::addAnalyses()
         ? tr("Orange") : tr("Black");
     QString notesColour = (m_colorScheme == SecondaryColors)
         ? tr("Bright Purple") : tr("Bright Blue");
-    
-    TimeValueLayer *pitchLayer = 
+
+    TimeValueLayer *pitchLayer =
         qobject_cast<TimeValueLayer *>(m_layers[PitchTrack]);
     if (pitchLayer) {
         pitchLayer->setBaseColour(cdb->getColourIndex(pitchColour));
@@ -685,7 +808,7 @@ Analyser::addAnalyses()
         }
     }
 
-    FlexiNoteLayer *flexiNoteLayer = 
+    FlexiNoteLayer *flexiNoteLayer =
         qobject_cast<FlexiNoteLayer *>(m_layers[Notes]);
     if (flexiNoteLayer) {
         flexiNoteLayer->setBaseColour(cdb->getColourIndex(notesColour));
@@ -695,10 +818,24 @@ Analyser::addAnalyses()
             params->setPlayGain(0.5);
         }
     }
+}
 
-    connectAnalysisLayers();
+void
+Analyser::silenceSecondaryAnalysisLayers()
+{
+    // The secondary analyser's pitch and note tracks are visual-only (there is
+    // no UI toggle to control their audibility, and sonifying two pitch/note
+    // tracks at once is confusing).  Mute them directly — do NOT call
+    // setAudible(), which would also call saveState() and corrupt the primary
+    // analyser's shared settings key.
+    if (m_colorScheme != SecondaryColors) return;
 
-    return "";
+    for (Component c : { PitchTrack, Notes }) {
+        if (m_layers[c]) {
+            auto params = m_layers[c]->getPlayParameters();
+            if (params) params->setPlayAudible(false);
+        }
+    }
 }
 
 bool
@@ -933,9 +1070,19 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
     sv_samplerate_t rate = waveFileModel->getSampleRate();
 
     if (clipStart < 0) clipStart = 0;
-    if (clipEnd < 0 || clipEnd > waveFileModel->getEndFrame()) {
-        clipEnd = waveFileModel->getEndFrame();
+
+    if (waveFileModel->isReady()) {
+        sv_frame_t fileEnd = waveFileModel->getEndFrame();
+        if (clipEnd < 0 || clipEnd > fileEnd) clipEnd = fileEnd;
+    } else if (clipEnd < 0) {
+        // A file that is still being decoded reports a frame count that
+        // is still growing, so it cannot say where its end is; the
+        // caller has not said either.  Whatever is asked for, the run
+        // stops at the end of the file, and the transform waits for the
+        // model before it reads any of it
+        clipEnd = end;
     }
+
     if (start < clipStart) start = clipStart;
     if (end > clipEnd) end = clipEnd;
     if (end <= start) return "";
@@ -954,7 +1101,7 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
     // notes of a ranged run are placed relative to its first block (see
     // mergeRangedAnalysis()), so only a start on the grid puts them
     // where a whole-file run would have put them
-    const sv_frame_t grid = 256;
+    const sv_frame_t grid = analysisStepSize;
     from = (from / grid) * grid;
     to = ((to + grid - 1) / grid) * grid;
     if (to <= from) return "";
@@ -1155,6 +1302,23 @@ Analyser::mergeRangedAnalysis()
         }
     }
 
+    // The end of an old note that carries on past the end of the run.
+    // The run had to stop singing that note where it stopped listening,
+    // and the audio out there has not changed, so the old note is the
+    // one that knows where it really ends.  Not where the run's end is
+    // the edge of the coverage: there is nothing beyond that but
+    // silence, and no old note to believe
+    sv_frame_t endBeyondRun = -1;
+    if (!m_rangedClippedEnd) {
+        for (const Event &e : oldNotes) {
+            if (e.getFrame() < m_rangedEnd &&
+                e.getFrame() + e.getDuration() > m_rangedEnd) {
+                endBeyondRun = e.getFrame() + e.getDuration();
+                break;
+            }
+        }
+    }
+
     for (const Event &e : oldNotes) {
         sv_frame_t f = e.getFrame();
         if (f >= wFrom && f < noteTo) {
@@ -1171,7 +1335,18 @@ Analyser::mergeRangedAnalysis()
             notes->add(e.withDuration(firstAdded - f));
         }
     }
-    for (const Event &e : adding) {
+    for (Event e : adding) {
+        // A note that the end of the run cut off goes on to where the
+        // old note it belongs to ended.  A few hops of slack: the run's
+        // last note ends within a block or so of where it stopped
+        if (endBeyondRun > 0) {
+            sv_frame_t end = e.getFrame() + e.getDuration();
+            sv_frame_t slack = 4 * analysisStepSize;
+            if (end > m_rangedEnd - slack && end < m_rangedEnd + slack &&
+                endBeyondRun > end) {
+                e = e.withDuration(endBeyondRun - e.getFrame());
+            }
+        }
         // The far edge the same way round: an old note that begins at or
         // after the window keeps its onset, and a new note that would run
         // over it is cut back
