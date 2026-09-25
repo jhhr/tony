@@ -121,7 +121,9 @@ push, amend, stash, or `git add -A`.
     `relative_audio_path`, `resolve_audio_path`, `in_folder`). They use Windows paths
     (`C:\Songs\...`, case-insensitive) and fail on Linux only. Not yours to fix; your
     final runs must show exactly these 4 and nothing else.
-  - app suite: see the log's lead entry after the first full run.
+  - app suite: all green, `TestRecordWorkflow` 92 tests in about 4.5 minutes. The lead
+    also made `stale_pitch_event_ignored` queue its event as a functor (`e13fb9a`),
+    because invoking a slot by name with an `sv::` argument type fails under Qt 6.4.
 
 ## 4. Phases
 
