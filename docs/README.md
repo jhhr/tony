@@ -19,3 +19,5 @@ methods, and they do not tell the story of fixed bugs.
 | [forks.md](forks.md) | The `jhhr/*` library forks: how to change one, what each adds, known defects |
 | [open-points.md](open-points.md) | Decisions waiting for the user, things not built, weak spots |
 | [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes — none of it tried yet |
+| [mobile-port.md](mobile-port.md) | Porting to a phone: decisions, what in the code any port depends on, Android against Sailfish OS |
+| [port-android.md](port-android.md), [port-sailfish.md](port-sailfish.md) | Platform facts with sources, the work, and the first test port for each |

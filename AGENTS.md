@@ -20,6 +20,7 @@ code.
 | [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore |
 | [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/` |
 | [docs/open-points.md](docs/open-points.md), [docs/manual-checklist.md](docs/manual-checklist.md) | choosing what to do next, or saying what the user should try by hand |
+| [docs/mobile-port.md](docs/mobile-port.md), then [docs/port-android.md](docs/port-android.md) or [docs/port-sailfish.md](docs/port-sailfish.md) | starting or working on a phone port |
 
 ## Build and test
 
