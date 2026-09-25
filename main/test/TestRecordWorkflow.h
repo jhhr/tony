@@ -1161,10 +1161,14 @@ private slots:
         // it, so it would make a dot. The tracker may have queued
         // events of its own as well; the same goes for them
         QCOMPARE(m_window->recordingLatencyFrames(), sv::sv_frame_t(0));
+        // Queued as a functor: invoking the slot by name depends on the
+        // Qt version matching "sv::sv_frame_t" against what moc recorded,
+        // and Qt 6.4 does not
+        TestMainWindow *window = m_window;
         QVERIFY2(QMetaObject::invokeMethod
-                 (m_window, "onRealtimePitchDetected", Qt::QueuedConnection,
-                  Q_ARG(sv::sv_frame_t, sv::sv_frame_t(20000)),
-                  Q_ARG(double, 440.0)),
+                 (m_window, [window]() {
+                      window->doRealtimePitchDetected(20000, 440.0);
+                  }, Qt::QueuedConnection),
                  "the pitch event could not be queued");
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
