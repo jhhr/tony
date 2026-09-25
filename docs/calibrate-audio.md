@@ -145,6 +145,8 @@ goes in `tony_core`.
     Each event is a sweep of 1 → 8 kHz, 200 ms, with 10 ms edges and a −12 dBFS peak,
     followed by a tone at a pitch pYIN tracks (196, 220.5, 245 or 294 Hz; see
     `docs/testing.md`). Gaps between events are irregular (1.6–2.6 s, all different).
+    Only eleven gaps can differ by 0.1 s in that range, so the *long* layout repeats
+    the calibration's eleven, and the gaps around *dev*'s held tones are longer.
     The generator returns every sweep's exact frame.
   - **Analysis:**
     - FFT matched filter in the sweep band (bqfft), then its envelope;
@@ -269,7 +271,7 @@ marked "Done" when it is committed.
 
 1. **Core.**
    - **A1** Test reference and sweep finder: `LatencyCheck` generator and per-event
-     analysis.
+     analysis. Done.
    - **A2** Verdicts and calibration arithmetic: aggregation over events and punch-ins.
 2. **Runner, dialog and calibration page** (every build), with app tests.
    - **B1** The alignment check runner and its app tests.

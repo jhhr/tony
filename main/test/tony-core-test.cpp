@@ -20,6 +20,7 @@
 #include "TestSingingTakes.h"
 #include "TestTakesFile.h"
 #include "TestTakeTiming.h"
+#include "TestLatencyCheck.h"
 
 #include "RunSuite.h"
 
@@ -94,6 +95,12 @@ int main(int argc, char *argv[])
 
     {
         TestTakeTiming t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLatencyCheck t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

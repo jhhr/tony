@@ -242,3 +242,20 @@ Template:
     Choices / deviations: ...
     The next phase must know: ...
     Left open: ...
+
+### Phase A1 — 2026-09-25
+Built: `main/LatencyCheck.{h,cpp}` in `tony_core`: `calibrationLayout()`, `devLayout()`, `longLayout()` (rate defaults to 44100), `sweep(rate)`, `generate(layout)`, `findSweep(samples, count, rate, expectedSeconds)` → `Arrival {found, errorFrames, errorSeconds, peakOverMedianDb, peakOverSecondDb, levelDb, inputPeak}`. Thresholds are `k…` constants in the header. `main/test/TestLatencyCheck.h`: 16 tests, 1.4 s.
+Choices / deviations:
+- Linear sweep: flat spectrum, narrowest peak; an exponential sweep's harmonics match it 67/106 ms *early*, where the earliest-peak rule looks.
+- Envelope = magnitude of the analytic signal (a second inverse FFT gives the Hilbert part).
+- Earlier peak counts if it is a local maximum, within 6 dB, and ≥ 1 ms before the largest. No dip rule: one arrival with a hole in its band beats, with deep dips, so only time tells arrivals apart (`finder_takes_one_arrival_as_one`).
+- No band mask beyond the matched filter itself: a 0 dBFS 100 Hz hum already comes through 100 dB down; a mask changed nothing measurable.
+- Confidences are the chosen (earliest) peak's; "second" is the envelope's maximum more than 10 ms from it.
+- A gap is sweep to sweep. Calibration sweeps at 1.0, 3.1, 4.7, 7.2, 9.1, 11.4, 13.1, 15.7, 17.7, 19.5, 21.9, 24.1 s; each tone starts 0.3 s after its sweep, 0.8 s long. Dev adds 3 s held tones after sweeps at 26.9, 30.9, 35.2 s (40 s). Long: 113 events, 240 s.
+- Reflection test at 5.5 dB (direct found) and 7 dB (reflection taken): exactly 6 dB passes here only by rounding (6.1 dB flips).
+The next phase must know:
+- Pass the take's samples at their own rate, and the expected time in seconds (layout frame / layout rate).
+- A take of 48 kHz samples read as 44.1 kHz (sweeps stretched 8.8%) finds nothing: level −22 dB, 0.1 dB over the second. `findSweep` at 48000 finds them. A2's "resampled by 48000/44100" case must be built as misplaced frames, or try both rates.
+- Measured: noise alone 6–12 dB over the median (threshold 15); SNR 0 / −10 dB: 38 / 28 dB over the median, 26 / 16 dB over the second. In digital silence the median is ~0, so over-the-median reads up to the 200 dB clamp.
+- About 20 ms per call. The second peak's position is computed but not returned; second arrivals (A2) need it.
+Left open: every threshold untuned; nothing reads `inputPeak` yet.
