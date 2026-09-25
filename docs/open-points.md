@@ -22,9 +22,15 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - Background music is not saved in the session; it is reloaded by hand.
 - An old session (before takes) loses its singing track without telling the user why.
 - Recording that starts before frame 0 of the reference.
+- A phone version. Android and Sailfish OS were researched and nothing was built; see
+  [mobile-port.md](mobile-port.md).
 
 ## Weak spots
 
+- **A recording device not at 44.1 kHz** probably places take audio at the wrong scale:
+  recordings are written at the device's rate, take timing uses the reference's 44.1 kHz,
+  and the splice does not resample. Unverified; see
+  [mobile-port.md](mobile-port.md#sample-rate).
 - **If pYIN fails part-way, the live dots wait for ever**: they are removed on
   `initialAnalysisCompleted`, which then never comes.
 - **`Analyser::newFileLoaded()` error path for the singing track** (pYIN plugin missing):
