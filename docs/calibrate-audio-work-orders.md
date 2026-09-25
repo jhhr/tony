@@ -53,10 +53,13 @@ MinGW setup.
 - Build:
 
       cd /home/user/tony
-      ninja -j 4 -C build_linux tony test-tony-core test-tony-app > tmp/build.log 2>&1; echo "exit:$?" >> tmp/build.log; tail -5 tmp/build.log
+      ninja -j 4 -C build_linux tony test-tony-core test-tony-app pyin.so > tmp/build.log 2>&1; echo "exit:$?" >> tmp/build.log; tail -5 tmp/build.log
 
   Search the log for `error:`; never read it whole. meson reconfigures by itself after
   `meson.build` changes. Targets have no `.exe`.
+- **`pyin.so` must be built too.** The app suite sets `VAMP_PATH` to its own directory.
+  Without the plugin, every test that waits for pitch analysis hangs until QtTest's
+  5-minute watchdog aborts the run.
 - Test, from `build_linux/`:
 
       mkdir -p ../tmp/tl && rm -f ../tmp/tl/*.txt
@@ -80,7 +83,12 @@ MinGW setup.
   `git checkout` or `git restore` a file to revert an experiment.
 - Do not weaken or delete an existing test to get green. If one is wrong because the
   behaviour was meant to change, change it and say so.
-- **Linux traps:** see section 3 for suite results known before this work started.
+- **Linux traps:**
+  - Section 3 lists suite results known before this work started.
+  - Qt 6.4 does not match a `SIGNAL()`/`SLOT()` string naming `ModelId` or `sv_frame_t`
+    with moc's `sv::` names: the connection fails at run time with "No such slot". The
+    user's Qt happens to match them, so a string connect can pass there and fail here.
+    Use member-pointer `connect` only, and grep test output for "No such slot".
 
 **Docs: almost none.** The documentation phase (D) brings `docs/` up to date. You
 write only:
@@ -107,7 +115,13 @@ push, amend, stash, or `git add -A`.
 
 - Nothing of the feature exists yet. The spec's §11 lists the facts about today's code
   that the phases build on.
-- **Linux baseline:** (filled in by the lead after the first build)
+- **Linux baseline** (after the lead cherry-picked the member-pointer connect fix from
+  the lyrics branch, `e2cf7c0`):
+  - core suite: all green except 4 tests in `TestTakesFile` (`takes_folder`,
+    `relative_audio_path`, `resolve_audio_path`, `in_folder`). They use Windows paths
+    (`C:\Songs\...`, case-insensitive) and fail on Linux only. Not yours to fix; your
+    final runs must show exactly these 4 and nothing else.
+  - app suite: see the log's lead entry after the first full run.
 
 ## 4. Phases
 
