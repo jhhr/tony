@@ -14,6 +14,7 @@
 #include "TestSingingDocument.h"
 #include "TestSingingAnalysis.h"
 #include "TestRecordWorkflow.h"
+#include "TestLyricsLayer.h"
 
 #include "RunSuite.h"
 
@@ -60,6 +61,12 @@ int main(int argc, char *argv[])
 
     {
         TestSingingAnalysis t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsLayer t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

@@ -1395,6 +1395,7 @@ tony_app_test_moc_files = qt.preprocess(
   'main/test/TestSingingDocument.h',
   'main/test/TestSingingAnalysis.h',
   'main/test/TestRecordWorkflow.h',
+  'main/test/TestLyricsLayer.h',
 ])
 
 tony_app_test_exe = executable(
