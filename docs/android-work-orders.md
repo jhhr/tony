@@ -121,12 +121,22 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 | No Qt Multimedia | Its input path is not low-latency and reports no latency (port-android.md, Audio) |
 | Features beyond the spec (latency calibration setting, session bundle) are not built unless a phone test shows they are needed | The spec says so |
 
-## 4. State of the code (kept by the lead; as of 2026-09-25, after phase A0)
+## 4. State of the code (kept by the lead; as of 2026-09-25, after phase A1)
 
-- Nothing of the port exists yet. The branch holds `default`, the research docs, and the
-  container setup script `deploy/linux/container-setup.sh`.
+- The branch holds `default`, the research docs, the container setup script
+  `deploy/linux/container-setup.sh`, and A1's fix.
 - Both suites pass on Linux (Qt 6.11.2 from conda-forge). `TestTakesFile`'s Windows path
   assertions run on Windows only.
+- A device at another rate than the reference's works: the recording is resampled to the
+  reference's rate before the splice (`SingingTakes::spliceRecording(..., rate)`,
+  `TakeAudio::resample()`), and `TakeTiming` converts between device frames (latency,
+  frames received, the live tracker) and reference frames (`recordRate`,
+  `recordedToReference()`, `referenceToRecorded()`). An Oboe backend at 48 kHz needs
+  nothing more from Tony for placement.
+- Known and not fixed: while recording at a device rate other than 44.1 kHz the play
+  cursor runs fast (svgui's `ViewManager::getPlaybackFrame()` adds device frames). A
+  `QEXPECT_FAIL` in `takes_placed_from_a_device_at_48000` marks it. It needs changes in
+  svcore, svgui and svapp; the lead has not made them.
 
 ## 5. Phases
 
@@ -136,7 +146,7 @@ needs the result of that phone test. A8 is last. (Since 2026-09-25 `download.qt.
 builds happen in the container.)
 
 - A0 — Desktop build and tests in the container. Done.
-- A1 — Sample rate: a device that is not at 44.1 kHz.
+- A1 — Sample rate: a device that is not at 44.1 kHz. Done.
 - A2 — Android toolchain and C libraries.
 - A3 — Tony as an APK (no audio): the test port.
 - A4 — Touch gestures on the panes.
@@ -302,3 +312,29 @@ Left open:
   no model has: a warning in every recording test, on every platform. Not touched.
 - architecture.md "Signals" says such string connects never match: true for pointers
   (`Layer *`), but registered types match from Qt 6.5. For A8.
+
+### Phase A1 — 2026-09-25
+Built: the misplacement was real (`FakeAudioIO` at 48 kHz: take audio at 0.919 × its
+place, coverage 8.8% too long). `TakeAudio::resample()` (streaming, bqresample's
+libsamplerate medium sinc, as svcore uses) and `sampleRate()`; `spliceRecording(..., rate)`
+converts a recording at another rate in a `QTemporaryDir` beside the take's files before
+the splice, so take WAVs are always at the reference's rate. `TakeTiming::recordRate`:
+L and every count off the record target are device frames; `spliceOffset()`,
+`liveFrameIntoTake()` and the countdown answer in the reference's, `autoStopFrames()` in
+the device's. `MainWindow` fills `recordRate` from the recording model, converts the play
+source's output latency and block (`m_recordFramesPerPlayFrame`) to device frames, and
+gives the live-dot model the main model's rate.
+Choices / deviations:
+- Sung test input at 48 kHz is sines at 220.5/294 Hz: pYIN needs whole-sample periods at
+  44.1 kHz, and sawtooths whole at both rates went an octave low by alignment.
+- `getTargetPlayLatency()` is taken as reference-rate frames: bqaudioio's ResamplerWrapper
+  converts it only if the device opened after a model was loaded (else ~1-3 ms off).
+- The 48 kHz start gap is ~25 frames short of the first audible sample: the wrapper's
+  resampler delays playback and reports nothing. The test allows 64 frames.
+The next phase must know: recordings stay at the device's rate; take audio is converted.
+Left open:
+- svgui fork: while recording, `ViewManager::getPlaybackFrame()` adds device frames, so the
+  cursor runs 8.8% fast at 48 kHz (QEXPECT_FAIL in `takes_placed_from_a_device_at_48000`).
+- A loaded singing track not at 44.1 kHz: the splice refuses it and erase misplaces.
+- For A8: takes.md "Known limitations" (last bullet), open-points.md weak spot,
+  recording.md "Latency" (units), testing.md (tones for another device rate).
