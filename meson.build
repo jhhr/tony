@@ -1095,6 +1095,7 @@ tony_entry_files = [
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
   'main/Coverage.cpp',
+  'main/Lyrics.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
   'main/TakeAudio.cpp',
@@ -1356,7 +1357,12 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestSingingTakes.h',
   'main/test/TestTakesFile.h',
   'main/test/TestTakeTiming.h',
+  'main/test/TestLyrics.h',
 ])
+
+# Where the suites find the files in testdata/. Forward slashes: a
+# backslash of a Windows path would start an escape in the C string.
+tony_test_data_dir = import('fs').as_posix(meson.current_source_dir() / 'testdata')
 
 tony_core_test_exe = executable(
   'test-tony-core',
@@ -1375,6 +1381,7 @@ tony_core_test_exe = executable(
   cpp_args: [
     feature_defines,
     general_defines,
+    '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
   ],
   link_args: [
     feature_additional_libs,
