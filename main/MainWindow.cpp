@@ -19,6 +19,7 @@
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
 #include "LatencyUtils.h"
+#include "Lyrics.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
@@ -92,6 +93,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QInputDialog>
+#include <QFileDialog>
 #include <QStatusBar>
 #include <QFileInfo>
 #include <QDir>
@@ -149,6 +151,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_singingNotesHiddenForTake(false),
     m_takes(nullptr),
     m_coverageStrip(nullptr),
+    m_lyrics(nullptr),
+    m_importLyricsAction(nullptr),
+    m_removeLyricsAction(nullptr),
+    m_showLyrics(nullptr),
     m_takesMenu(nullptr),
     m_takeCombo(nullptr),
     m_newTakeAction(nullptr),
@@ -393,6 +399,7 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
+    m_lyrics = new LyricsTrack(this);
 
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
@@ -487,6 +494,8 @@ MainWindow::~MainWindow()
     m_alternatePitch = nullptr;
     delete m_coverageStrip;
     m_coverageStrip = nullptr;
+    delete m_lyrics;
+    m_lyrics = nullptr;
     delete m_analyser;
     delete m_keyReference;
     Profiles::getInstance()->dump();
@@ -604,6 +613,19 @@ MainWindow::setupFileMenu()
     connect(m_loadBackgroundMusicAction, SIGNAL(triggered()), this, SLOT(openBackgroundMusic()));
     connect(this, SIGNAL(canPlay(bool)), m_loadBackgroundMusicAction, SLOT(setEnabled(bool)));
     menu->addAction(m_loadBackgroundMusicAction);
+
+    // Enabled in updateMenuStates()
+    m_importLyricsAction = new QAction(il.load("fileopen"), tr("Import &Lyrics..."), this);
+    m_importLyricsAction->setStatusTip(tr("Import timed lyrics from an LRC file, to be shown along the top of the pane"));
+    m_importLyricsAction->setEnabled(false);
+    connect(m_importLyricsAction, &QAction::triggered, this, &MainWindow::importLyrics);
+    menu->addAction(m_importLyricsAction);
+
+    m_removeLyricsAction = new QAction(tr("Remove Lyrics"), this);
+    m_removeLyricsAction->setStatusTip(tr("Take the imported lyrics out of the session"));
+    m_removeLyricsAction->setEnabled(false);
+    connect(m_removeLyricsAction, &QAction::triggered, this, &MainWindow::removeLyrics);
+    menu->addAction(m_removeLyricsAction);
 
     menu->addSeparator();
 
@@ -960,6 +982,17 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Set the minimum and maximum frequencies in the visible display"));
     connect(action, SIGNAL(triggered()), this, SLOT(editDisplayExtents()));
     menu->addAction(action);
+
+    menu->addSeparator();
+
+    // Enabled and checked in updateLayerStatuses().  Not "Show &Lyrics":
+    // Peek Left has the L
+    m_showLyrics = new QAction(tr("Show L&yrics"), this);
+    m_showLyrics->setCheckable(true);
+    m_showLyrics->setStatusTip(tr("Show or hide the imported lyrics along the top of the pane"));
+    m_showLyrics->setEnabled(false);
+    connect(m_showLyrics, &QAction::triggered, this, &MainWindow::showLyricsToggled);
+    menu->addAction(m_showLyrics);
 }
 
 void
@@ -2206,6 +2239,13 @@ MainWindow::updateMenuStates()
     emit canChangeTakes(canChange);
     emit canActOnTake(canChange && m_takes->getActiveIndex() >= 0);
 
+    if (m_importLyricsAction) {
+        m_importLyricsAction->setEnabled(lyricsImportAllowed());
+    }
+    if (m_removeLyricsAction) {
+        m_removeLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
+    }
+
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
         m_showCandidatesAction->setStatusTip(tr("Remove the display of alternate pitch candidates for the selected region"));
@@ -2420,6 +2460,12 @@ MainWindow::updateLayerStatuses()
             (shown && !inTake && m_alternatePitch->canStep(false));
     }
 
+    // Lyrics: shown or hidden once there are some
+    if (m_showLyrics && m_lyrics) {
+        m_showLyrics->setEnabled(m_lyrics->isShown());
+        m_showLyrics->setChecked(m_lyrics->isVisible());
+    }
+
     // Background music toggle: enabled when a background music track is loaded
     if (m_playBackgroundMusic) {
         bool haveBgMusic = (m_backgroundMusicLayer != nullptr);
@@ -2544,6 +2590,7 @@ MainWindow::closeSession()
     teardownBackgroundMusic();
     m_alternatePitch->hide();
     m_coverageStrip->hide();
+    m_lyrics->hide();
     m_referencePitchHiddenForTake = false;
     m_singingPitchHiddenForTake = false;
     m_singingNotesHiddenForTake = false;
@@ -3298,6 +3345,164 @@ MainWindow::syncCoverageStrip()
         m_analyser->stackLayers();
         if (m_analyser2) m_analyser2->stackLayers();
     }
+}
+
+bool
+MainWindow::lyricsImportAllowed() const
+{
+    // The words are put on the reference's timeline, in pane 0.  Not
+    // while a take is being recorded: the singer is reading the words
+    // that are there
+    if (!m_document || !getMainModel()) return false;
+    if (!m_paneStack || m_paneStack->getPaneCount() < 1) return false;
+    if (m_recordTarget && m_recordTarget->isRecording()) return false;
+    return true;
+}
+
+QString
+MainWindow::askForLyricsFile()
+{
+    // Lyrics are for the reference, and likely to be kept next to it
+    QString dir;
+    if (auto reference = getMainModel()) {
+        QFileInfo info(reference->getLocation());
+        if (info.exists()) dir = info.absolutePath();
+    }
+
+    return QFileDialog::getOpenFileName
+        (this, tr("Import Lyrics"), dir,
+         tr("LRC lyrics (*.lrc)") + ";;" + tr("Text files (*.txt)") + ";;" +
+         tr("All files (*)"));
+}
+
+void
+MainWindow::importLyrics()
+{
+    if (!lyricsImportAllowed()) return;
+    QString path = askForLyricsFile();
+    if (path.isEmpty()) return;
+    importLyricsFrom(path);
+}
+
+bool
+MainWindow::importLyricsFrom(QString path)
+{
+    if (!lyricsImportAllowed()) return false;
+
+    Pane *pane = m_paneStack->getPane(0);
+    auto reference = getMainModel();
+
+    emit activity(tr("Import lyrics \"%1\"").arg(path));
+
+    // An LRC file is a few kB.  One chosen by mistake, a recording say, is
+    // not read at all; and the read stops just past the limit, which
+    // parseLrc() enforces too, in case the file grows in the meantime
+    QString error;
+    QByteArray bytes;
+    QFileInfo info(path);
+    if (!info.isFile()) {
+        error = tr("File \"%1\" could not be found.").arg(path);
+    } else if (info.size() > Lyrics::maxFileBytes) {
+        error = tr("The file is over 1 MB, too big to be an LRC file.");
+    } else {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            error = tr("File \"%1\" could not be opened: %2")
+                .arg(path).arg(file.errorString());
+        } else {
+            bytes = file.read(Lyrics::maxFileBytes + 1);
+        }
+    }
+
+    LyricsParseResult parsed;
+    if (error == "") {
+        parsed = parseLrc(bytes);
+        error = parsed.error;
+    }
+
+    // Nothing has changed yet, and nothing does: the lyrics there are
+    // stay
+    if (error != "") {
+        QMessageBox::warning(this, tr("Could not import lyrics"), error);
+        return false;
+    }
+
+    const Lyrics &lyrics = parsed.lyrics;
+    EventVector events = lyricsToEvents(lyrics, reference->getSampleRate());
+
+    // Words after the end of the reference are shown where there is
+    // nothing to hear: the lyrics may be of another recording of the song
+    sv_frame_t end = reference->getEndFrame();
+    int pastEnd = int(std::count_if(events.begin(), events.end(),
+                                    [end](const Event &e) {
+                                        return e.getFrame() >= end;
+                                    }));
+
+    QString name = (lyrics.title != "" ? lyrics.title : tr("Lyrics"));
+    if (!m_lyrics->show(m_document, pane, events, name)) {
+        // Only if the layer could not be made
+        updateMenuStates();
+        updateLayerStatuses();
+        return false;
+    }
+
+    // The play source takes in the model of every layer that is in a
+    // view, whether the model can be played or not, and the models it
+    // holds are what say where playback ends.  Words past the end of the
+    // reference would hold playback open, with nothing to hear
+    if (m_playSource && !m_lyrics->getModelId().isNone()) {
+        m_playSource->removeModel(m_lyrics->getModelId());
+    }
+
+    // The layer arrived without a command, as it must, and an import is
+    // not undoable; but the session has changed
+    documentModified();
+    updateMenuStates();
+    updateLayerStatuses();
+
+    // Kept as the status message, so that the pane's context help, when
+    // it has nothing to say, gives this back rather than clearing it
+    int wordCount = int(lyrics.words.size());
+    int lineCount = lyrics.lineCount();
+    QStringList messages;
+    messages << tr("Imported %1 in %2.")
+        .arg(wordCount == 1 ? tr("1 word") : tr("%1 words").arg(wordCount),
+             lineCount == 1 ? tr("1 line") : tr("%1 lines").arg(lineCount));
+    messages << parsed.warnings;
+    if (pastEnd == 1) {
+        messages << tr("1 word starts after the end of the reference.");
+    } else if (pastEnd > 1) {
+        messages << tr("%1 words start after the end of the reference.")
+            .arg(pastEnd);
+    }
+    m_myStatusMessage = messages.join(" ");
+    getStatusLabel()->setText(m_myStatusMessage);
+
+    return true;
+}
+
+void
+MainWindow::removeLyrics()
+{
+    if (!m_lyrics->isShown()) return;
+    m_lyrics->hide();
+    // As for the import: no command, but the session has changed
+    documentModified();
+    updateMenuStates();
+    updateLayerStatuses();
+}
+
+void
+MainWindow::showLyricsToggled()
+{
+    // Straight on the layer, with no command and nothing in the settings:
+    // the pane writes the layer's visibility into the session, which is
+    // where it belongs
+    if (m_lyrics->isShown()) {
+        m_lyrics->setVisible(!m_lyrics->isVisible());
+        documentModified();
+    }
+    updateLayerStatuses();
 }
 
 void

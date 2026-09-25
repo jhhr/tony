@@ -1107,6 +1107,7 @@ tony_core_files = [
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
   'main/CoverageStrip.cpp',
+  'main/LyricsTrack.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
@@ -1127,6 +1128,7 @@ tony_app_moc_files = qt.preprocess(
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
   'main/CoverageStrip.h',
+  'main/LyricsTrack.h',
 ])
 
 qt_resource_files = qt.preprocess(
@@ -1414,6 +1416,7 @@ tony_app_test_exe = executable(
   cpp_args: [
     feature_defines,
     general_defines,
+    '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
   ],
   link_args: [
     feature_additional_libs,

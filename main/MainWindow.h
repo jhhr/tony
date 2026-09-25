@@ -21,6 +21,7 @@
 #include "RealtimePitchTracker.h"
 #include "AlternatePitchTrack.h"
 #include "CoverageStrip.h"
+#include "LyricsTrack.h"
 #include "SingingTakes.h"
 #include "TakeCommands.h"
 #include "TakeTiming.h"
@@ -178,6 +179,10 @@ protected slots:
     virtual void alternatePitchUp();
     virtual void alternatePitchDown();
     virtual void syncAlternatePitchTrack();
+
+    virtual void importLyrics();
+    virtual void removeLyrics();
+    virtual void showLyricsToggled();
 
     virtual void editDisplayExtents();
 
@@ -358,6 +363,30 @@ protected:
     // Put the strip in step with the take's coverage: make it if there
     // is a take and none yet, take it away when the take goes
     void syncCoverageStrip();
+
+    // The timed lyrics of the session, drawn along the top of pane 0 and
+    // stored in the session with the layer that draws them.  They belong
+    // to the song, not to a take.  Display only
+    LyricsTrack   *m_lyrics;
+    QAction       *m_importLyricsAction;
+    QAction       *m_removeLyricsAction;
+    QAction       *m_showLyrics;
+
+    // Put the lyrics of this LRC file on the reference's timeline, in
+    // place of any there are.  Not undoable, as loading background music
+    // is not, and nothing goes onto the undo stack.  False if the file
+    // could not be read or holds no timed lyrics, which the user is told
+    // in a dialog, or if lyricsImportAllowed() says no; nothing has
+    // changed then
+    bool importLyricsFrom(QString path);
+
+    // Lyrics can be imported once there is a reference, and not while a
+    // take is being recorded
+    bool lyricsImportAllowed() const;
+
+    // Ask for the LRC file to import, "" if the user cancelled.
+    // Overridden by the tests, which cannot answer a dialog
+    virtual QString askForLyricsFile();
 
     // --- The audio folder of the session (spec 6.4) ---
 

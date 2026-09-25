@@ -28,6 +28,8 @@
 #include "../MainWindow.h"
 #include "../Analyser.h"
 #include "../CoverageStrip.h"
+#include "../Lyrics.h"
+#include "../LyricsTrack.h"
 #include "../SingingTakes.h"
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
@@ -68,6 +70,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QFile>
 #include <QLabel>
 #include <QMessageBox>
 #include <QSettings>
@@ -216,6 +219,17 @@ public:
     QAction *alternatePitchUpAction() { return m_alternatePitchUpAction; }
     QAction *alternatePitchDownAction() { return m_alternatePitchDownAction; }
 
+    // The timed lyrics, and the three menu actions that act on them
+    LyricsTrack *lyrics() { return m_lyrics; }
+    bool doImportLyricsFrom(QString path) { return importLyricsFrom(path); }
+    QAction *importLyricsAction() { return m_importLyricsAction; }
+    QAction *removeLyricsAction() { return m_removeLyricsAction; }
+    QAction *showLyricsAction() { return m_showLyrics; }
+
+    // The file Import Lyrics asks for, answered from here: "" is Cancel
+    void setLyricsFileAnswer(QString path) { m_lyricsFileAnswer = path; }
+    int lyricsFileQuestions() const { return m_lyricsFileQuestions; }
+
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
         onRealtimePitchDetected(frame, hz);
     }
@@ -249,6 +263,11 @@ protected:
         return m_takeNameAnswer == "" ? current : m_takeNameAnswer;
     }
 
+    QString askForLyricsFile() override {
+        ++m_lyricsFileQuestions;
+        return m_lyricsFileAnswer;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -260,6 +279,8 @@ private:
     bool m_deleteTakeAnswer = true;
     int m_deleteTakeQuestions = 0;
     QString m_takeNameAnswer;
+    QString m_lyricsFileAnswer;
+    int m_lyricsFileQuestions = 0;
 };
 
 class TestRecordWorkflow : public QObject
@@ -857,6 +878,63 @@ class TestRecordWorkflow : public QObject
             }
         }
         return true;
+    }
+
+    // The timed lyrics.  The layers are counted by the name a session
+    // knows the lyrics by, spelled out here: it is part of the file format
+
+    int lyricsLayersInDocument() {
+        int n = 0;
+        for (sv::Layer *layer : m_window->document()->getLayers()) {
+            if (layer->objectName() == "Lyrics") ++n;
+        }
+        return n;
+    }
+
+    int lyricsLayersInPane0() {
+        int n = 0;
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        if (!pane) return 0;
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            if (pane->getLayer(i)->objectName() == "Lyrics") ++n;
+        }
+        return n;
+    }
+
+    sv::EventVector lyricsEvents() {
+        sv::RegionLayer *layer = m_window->lyrics()->getLayer();
+        if (!layer) return {};
+        auto model = sv::ModelById::getAs<sv::RegionModel>(layer->getModel());
+        return model ? model->getAllEvents() : sv::EventVector();
+    }
+
+    static QString lyricsFixture(const char *name) {
+        return QString(TONY_TEST_DATA_DIR) + "/lyrics/" + name;
+    }
+
+    static Lyrics lyricsIn(QString path) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) return {};
+        return parseLrc(file.readAll()).lyrics;
+    }
+
+    // What an import of this file has to put in the model: the words on
+    // the reference's timeline
+    sv::EventVector expectedLyricsEvents(QString path) {
+        auto reference = sv::ModelById::get(m_window->mainModelId());
+        if (!reference) return {};
+        return lyricsToEvents(lyricsIn(path), reference->getSampleRate());
+    }
+
+    QString writeLrc(const QByteArray &text) {
+        QString path = m_dir.filePath
+            (QString("lyrics-%1.lrc").arg(++m_fileCounter));
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) ||
+            file.write(text) != text.size()) {
+            return {};
+        }
+        return path;
     }
 
     // The pre-roll's length has no UI: it is read from the settings when
@@ -5426,6 +5504,339 @@ private slots:
                            lowHz)) < 10.0);
         QVERIFY(m_window->paneStack()->getPane(0)->getSelectedLayer()
                 != alt->getLayer());
+    }
+
+    // Timed lyrics: an LRC file imported onto the reference's timeline,
+    // drawn along the top of pane 0 by LyricsTrack's layer
+
+    void lyrics_import_shows_words() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QString path = lyricsFixture("moises-exporter-words.lrc");
+        QVERIFY(m_window->doImportLyricsFrom(path));
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QVERIFY(lyrics->isShown());
+        QVERIFY(lyrics->isVisible());
+        QCOMPARE(lyricsLayersInDocument(), 1);
+        QCOMPARE(lyricsLayersInPane0(), 1);
+        sv::RegionLayer *layer = lyrics->getLayer();
+        QVERIFY(paneHasLayer(0, layer));
+        QCOMPARE(int(layer->getPlotStyle()), int(sv::RegionLayer::PlotLyrics));
+        QCOMPARE(int(layer->getVerticalScale()),
+                 int(sv::RegionLayer::EqualSpaced));
+        QCOMPARE(colourOf(layer), colourNamed("Grey"));
+        QVERIFY(!layer->isLayerEditable());
+        QCOMPARE(layer->getLayerPresentationName(),
+                 QString("Kesäyön testilaulu"));
+
+        // Every word, at its frame, with its label
+        sv::EventVector expected = expectedLyricsEvents(path);
+        QCOMPARE(int(expected.size()), 13);
+        QCOMPARE(lyricsEvents(), expected);
+
+        Lyrics parsed = lyricsIn(path);
+        QString counts = QString("Imported %1 words in %2 lines.")
+            .arg(parsed.words.size()).arg(parsed.lineCount());
+        QVERIFY2(m_window->statusText().startsWith(counts),
+                 qPrintable(m_window->statusText()));
+
+        QVERIFY(m_window->removeLyricsAction()->isEnabled());
+        QVERIFY(m_window->showLyricsAction()->isEnabled());
+        QVERIFY(m_window->showLyricsAction()->isChecked());
+    }
+
+    // Like loading background music: not undoable, and nothing goes onto
+    // the undo stack or comes off it, but the session has changed
+    void lyrics_import_leaves_history_alone() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        auto *history = sv::CommandHistory::getInstance();
+        history->addCommand(new sv::GenericCommand
+                            ("Earlier Edit", []() {}, []() {}), false);
+        m_window->discardModifications();
+        QSignalSpy commands(history, qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        QCOMPARE(int(commands.count()), 0);
+        QVERIFY(m_window->isDocumentModified());
+
+        sv::Layer *layer = m_window->lyrics()->getLayer();
+        QCOMPARE(undoOnce(), QString("Earlier Edit"));
+        QCOMPARE(undoOnce(), QString());
+        QVERIFY(m_window->lyrics()->isShown());
+        QVERIFY(m_window->lyrics()->getLayer() == layer);
+        QVERIFY(paneHasLayer(0, layer));
+    }
+
+    // The play source takes in the model of every layer in a view, and
+    // the last end of them is where playback ends
+    void lyrics_do_not_extend_playback() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        sv::AudioCallbackPlaySource *playSource = m_window->playSource();
+        sv::sv_frame_t playEnd = playSource->getPlayEndFrame();
+        QVERIFY(playEnd > 0);
+
+        // Two words within the second of reference, and one well after it
+        QVERIFY(m_window->doImportLyricsFrom
+                (writeLrc("[00:00.20]<00:00.20>Yksi <00:00.60>kaksi\n"
+                          "[00:03.00]<00:03.00>Kolme\n")));
+        sv::ModelId model = m_window->lyrics()->getModelId();
+        QVERIFY(!model.isNone());
+        QVERIFY2(sv::ModelById::get(model)->getEndFrame() > playEnd,
+                 "the lyrics end within the reference: this shows nothing");
+
+        QVERIFY2(playSource->getModels().count(model) == 0,
+                 "the play source holds the lyrics");
+        // Not equal: taking a model out works the end out again from the
+        // models' ends as they are now, and one of pYIN's may be shorter
+        // than it was when it came in
+        QVERIFY2(playSource->getPlayEndFrame() <= playEnd,
+                 qPrintable(QString("playback ends at frame %1, later than "
+                                    "%2 before the import")
+                            .arg(playSource->getPlayEndFrame()).arg(playEnd)));
+        verifyPlaySourceClean();
+
+        QVERIFY2(m_window->statusText().contains
+                 ("1 word starts after the end of the reference."),
+                 qPrintable(m_window->statusText()));
+    }
+
+    void lyrics_reimport_replaces() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::ModelId first = lyrics->getModelId();
+
+        QString path = lyricsFixture("lrc-with-ends.lrc");
+        QVERIFY(m_window->doImportLyricsFrom(path));
+        QCOMPARE(lyricsLayersInDocument(), 1);
+        QCOMPARE(lyricsLayersInPane0(), 1);
+        QVERIFY(lyrics->getModelId() != first);
+        QCOMPARE(lyricsEvents(), expectedLyricsEvents(path));
+        QCOMPARE(lyrics->getLayer()->getLayerPresentationName(),
+                 QString("Päivä [Live]"));
+
+        // A model id is never used twice, unlike the address of a layer
+        QVERIFY2(!sv::ModelById::get(first),
+                 "the first lyrics' model was not released");
+        QVERIFY(m_window->document()->getModels().count(first) == 0);
+        verifyPlaySourceClean();
+    }
+
+    void lyrics_remove() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::ModelId model = lyrics->getModelId();
+        m_window->discardModifications();
+
+        m_window->removeLyricsAction()->trigger();
+        QVERIFY(!lyrics->isShown());
+        QCOMPARE(lyricsLayersInDocument(), 0);
+        QVERIFY2(!sv::ModelById::get(model), "the lyrics model was not released");
+        QVERIFY(m_window->document()->getModels().count(model) == 0);
+        QVERIFY(m_window->isDocumentModified());
+        QCOMPARE(undoOnce(), QString());
+        verifyPlaySourceClean();
+
+        QVERIFY(!m_window->removeLyricsAction()->isEnabled());
+        QVERIFY(!m_window->showLyricsAction()->isEnabled());
+        QVERIFY(!m_window->showLyricsAction()->isChecked());
+        QVERIFY(m_window->importLyricsAction()->isEnabled());
+    }
+
+    // Hidden, not removed; not in the settings, and no command
+    void lyrics_show_toggle() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::Layer *layer = lyrics->getLayer();
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        m_window->discardModifications();
+        auto *history = sv::CommandHistory::getInstance();
+        QSignalSpy commands(history, qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+
+        QAction *show = m_window->showLyricsAction();
+        show->trigger();
+        QVERIFY(layer->isLayerDormant(pane));
+        QVERIFY(!lyrics->isVisible());
+        QVERIFY(!show->isChecked());
+        QVERIFY(show->isEnabled());
+        QVERIFY(lyrics->getLayer() == layer);
+        QVERIFY(paneHasLayer(0, layer));
+        QVERIFY(m_window->isDocumentModified());
+
+        show->trigger();
+        QVERIFY(!layer->isLayerDormant(pane));
+        QVERIFY(lyrics->isVisible());
+        QVERIFY(show->isChecked());
+
+        QCOMPARE(int(commands.count()), 0);
+        QCOMPARE(undoOnce(), QString());
+        for (const QString &key : QSettings().allKeys()) {
+            QVERIFY2(!key.contains("lyrics", Qt::CaseInsensitive),
+                     qPrintable("in the settings: " + key));
+        }
+    }
+
+    // The pane takes its hover readout and its vertical scale from its
+    // top layer, and the lyrics have neither
+    void lyrics_keep_top_layer() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        sv::Layer *top = pane->getTopLayer();
+        QVERIFY(top);
+        sv::Layer *reference =
+            m_window->analyser()->getLayer(Analyser::PitchTrack);
+        double r0 = 0, r1 = 0;
+        bool referenceScale = reference->getDisplayExtents(r0, r1);
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::Layer *layer = m_window->lyrics()->getLayer();
+        QVERIFY2(pane->getTopLayer() == top,
+                 "the lyrics are the pane's top layer");
+        QVERIFY(pane->getLayer(pane->getLayerCount() - 2) == layer);
+
+        double s0 = 0, s1 = 0;
+        QCOMPARE(reference->getDisplayExtents(s0, s1), referenceScale);
+        QCOMPARE(s0, r0);
+        QCOMPARE(s1, r1);
+    }
+
+    // One dialog each, and nothing changes: not even lyrics that are there
+    void lyrics_import_failure() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        m_window->discardModifications();
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QString untimed = writeLrc("Just some words\nwith no times at all\n");
+        QVector<QPair<QString, QString>> failures {
+            { untimed, "No timed lyrics were found" },
+            { m_dir.filePath("no-such-lyrics.lrc"), "could not be found" },
+            { writeLrc(QByteArray(int(Lyrics::maxFileBytes) + 1, 'a')),
+              "over 1 MB" },
+        };
+        for (const auto &f : failures) {
+            QVERIFY2(!m_window->doImportLyricsFrom(f.first),
+                     qPrintable(f.first));
+            QStringList dialogs = dialogsMatching("Could not import lyrics");
+            QCOMPARE(dialogs.size(), 1);
+            QVERIFY2(dialogs[0].contains(f.second), qPrintable(dialogs[0]));
+            QVERIFY(!lyrics->isShown());
+            QCOMPARE(lyricsLayersInDocument(), 0);
+            QVERIFY(!m_window->isDocumentModified());
+        }
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::ModelId model = lyrics->getModelId();
+        sv::EventVector events = lyricsEvents();
+        m_window->discardModifications();
+
+        QVERIFY(!m_window->doImportLyricsFrom(untimed));
+        QCOMPARE(dialogsMatching("Could not import lyrics").size(), 1);
+        QVERIFY(lyrics->getModelId() == model);
+        QCOMPARE(lyricsEvents(), events);
+        QCOMPARE(lyricsLayersInDocument(), 1);
+        QVERIFY(!m_window->isDocumentModified());
+    }
+
+    // File > Import Lyrics..., with the file dialog answered from here
+    void lyrics_import_through_the_menu() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *import = m_window->importLyricsAction();
+        QVERIFY2(!import->isEnabled(), "there is no reference yet");
+        QVERIFY(!m_window->removeLyricsAction()->isEnabled());
+        QVERIFY(!m_window->showLyricsAction()->isEnabled());
+
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(import->isEnabled());
+
+        // Line timing, as the exporter writes it
+        QString path = lyricsFixture("moises-exporter-lines.lrc");
+        m_window->setLyricsFileAnswer(path);
+        import->trigger();
+        QCOMPARE(m_window->lyricsFileQuestions(), 1);
+        QVERIFY(m_window->lyrics()->isShown());
+        QCOMPARE(lyricsEvents(), expectedLyricsEvents(path));
+        QVERIFY(m_window->isDocumentModified());
+    }
+
+    void lyrics_import_cancelled() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::ModelId model = lyrics->getModelId();
+        sv::EventVector events = lyricsEvents();
+        m_window->discardModifications();
+
+        m_window->setLyricsFileAnswer("");
+        m_window->importLyricsAction()->trigger();
+        QCOMPARE(m_window->lyricsFileQuestions(), 1);
+        QVERIFY(lyrics->getModelId() == model);
+        QCOMPARE(lyricsEvents(), events);
+        QCOMPARE(lyricsLayersInDocument(), 1);
+        QVERIFY(!m_window->isDocumentModified());
+    }
+
+    // The singer is reading the lyrics there are
+    void lyrics_import_disabled_while_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QAction *import = m_window->importLyricsAction();
+        QVERIFY(import->isEnabled());
+        QString path = lyricsFixture("moises-exporter-words.lrc");
+        m_window->setLyricsFileAnswer(path);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!import->isEnabled(), 2000);
+        import->trigger();
+        QCOMPARE(m_window->lyricsFileQuestions(), 0);
+        QVERIFY(!m_window->doImportLyricsFrom(path));
+        QVERIFY(!m_window->lyrics()->isShown());
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(import->isEnabled(), 2000);
     }
 
     // Closing while pYIN is still running on the take (review finding
