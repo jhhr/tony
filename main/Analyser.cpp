@@ -908,19 +908,23 @@ Analyser::connectAnalysisLayers()
     // Claimed layers need these as much as ones we made ourselves: the
     // analyser they belonged to before is gone, and with it its
     // connections.  Unique, because an analyser handed the same layers
-    // twice would otherwise hear each signal twice
+    // twice would otherwise hear each signal twice.  By member pointer
+    // where the arguments are sv types: moc records this class's slots
+    // as taking sv::ModelId and sv::sv_frame_t, and whether a SLOT()
+    // string saying ModelId matches that depends on the Qt version (6.4
+    // says "No such slot")
     if (auto pitchLayer = qobject_cast<TimeValueLayer *>(m_layers[PitchTrack])) {
-        connect(pitchLayer, SIGNAL(modelCompletionChanged(ModelId)),
-                this, SLOT(layerCompletionChanged(ModelId)),
+        connect(pitchLayer, &Layer::modelCompletionChanged,
+                this, &Analyser::layerCompletionChanged,
                 Qt::UniqueConnection);
     }
 
     if (auto noteLayer = qobject_cast<FlexiNoteLayer *>(m_layers[Notes])) {
-        connect(noteLayer, SIGNAL(modelCompletionChanged(ModelId)),
-                this, SLOT(layerCompletionChanged(ModelId)),
+        connect(noteLayer, &Layer::modelCompletionChanged,
+                this, &Analyser::layerCompletionChanged,
                 Qt::UniqueConnection);
-        connect(noteLayer, SIGNAL(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)),
-                this, SLOT(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)),
+        connect(noteLayer, &FlexiNoteLayer::reAnalyseRegion,
+                this, &Analyser::reAnalyseRegion,
                 Qt::UniqueConnection);
         connect(noteLayer, SIGNAL(materialiseReAnalysis()),
                 this, SLOT(materialiseReAnalysis()),
@@ -1170,9 +1174,10 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
         auto model = ModelById::get(id);
         if (!model) continue;
         // Emitted on the transform's own thread, so delivered here as a
-        // queued call: the merge happens on this thread like any other
-        connect(model.get(), SIGNAL(completionChanged(ModelId)),
-                this, SLOT(rangedAnalysisCompletionChanged(ModelId)));
+        // queued call: the merge happens on this thread like any other.
+        // By member pointer, as in connectAnalysisLayers()
+        connect(model.get(), &Model::completionChanged,
+                this, &Analyser::rangedAnalysisCompletionChanged);
     }
 
     // createDerivedLayers() returns only once the transform has set both

@@ -291,8 +291,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     // We have a pane stack: it comes with the territory. However, we
     // have a fixed and known number of panes in it -- it isn't
     // variable
-    connect(m_paneStack, SIGNAL(doubleClickSelectInvoked(sv_frame_t)),
-            this, SLOT(doubleClickSelectInvoked(sv_frame_t)));
+    // By member pointer: the slot takes sv::sv_frame_t, which a SLOT()
+    // string saying sv_frame_t does not match under every Qt version
+    connect(m_paneStack, &PaneStack::doubleClickSelectInvoked,
+            this, &MainWindow::doubleClickSelectInvoked);
     scroll->setWidget(m_paneStack);
 
     m_overview = new Overview(frame);
