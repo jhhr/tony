@@ -5,8 +5,8 @@ QtTest suites in `main/test/`, in two executables that mirror the two libraries
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestSingingAnalysis`, `TestRecordWorkflow` | about 4.5 minutes (measured 2026-09-20), nearly all of it `TestRecordWorkflow`: takes are recorded in real time |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics` | seconds |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow` | about 4.5 minutes (measured 2026-09-20), nearly all of it `TestRecordWorkflow`: takes are recorded in real time |
 
 `meson test` / `build.bat test` runs both plus four svcore suites.
 
@@ -33,6 +33,10 @@ suite needs nothing but itself (a private slot). **Every private slot runs as a 
 helpers must not be slots; connect to lambdas instead. For access to private statics use
 `friend class TestX;`, as `RealtimePitchTracker.h` does.
 
+Suites find the files in `testdata/` through `TONY_TEST_DATA_DIR`, which `meson.build`
+defines for both test executables as a path with forward slashes: the backslash of a
+Windows path would start an escape in the C string.
+
 ## Running
 
 - `RunSuite.h` writes each suite's results to `$TONY_TEST_LOG_DIR/<SuiteClassName>.txt`.
@@ -43,6 +47,14 @@ helpers must not be slots; connect to lambdas instead. For access to private sta
   the exit status of a run with names is always 1. Only a run with no names has a
   meaningful exit status.
 - `QT_QPA_PLATFORM=offscreen` is set by `main()` when not given.
+- **Built on Linux with Qt 6.4**, some tests are expected to fail, whatever the change.
+  Core: `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and
+  `in_folder`, which test Windows paths (`C:\...`, case-insensitive). App, all
+  `TestRecordWorkflow`: `stale_pitch_event_ignored`, whose string-based `invokeMethod`
+  with an `sv::` type Qt 6.4 cannot match; and `take_analysis_covers_the_range_it_lost`,
+  `range_analysis_torn_down_while_running`, `save_during_ranged_analysis` and
+  `undo_during_analysis_then_redo`, where the analysis finishes before the race they need
+  can be set up. Which of those four fail changes from run to run.
 
 ## Design principles
 
@@ -57,6 +69,12 @@ helpers must not be slots; connect to lambdas instead. For access to private sta
 - **Ranged analysis is judged against a whole-file analysis of the same audio**, over the
   whole file, not just around the range (`ranged_leaves_the_rest_alone`): that is what
   caught the merge damaging unchanged audio half a second away.
+- **A layer painted in strips must equal the layer painted whole**
+  (`painting_in_strips_matches_painting_whole`, `TestLyricsLayer`). A view that scrolls
+  repaints only the strip that comes into sight, so anything a layer lays out from its
+  neighbours must not depend on the rect being painted. The test paints into an image once
+  whole and once strip by strip, and compares the pixels; a layout worked out from the
+  painted rect fails it.
 
 ## What is there to reuse (`TestRecordWorkflow.h`)
 
@@ -68,13 +86,14 @@ helpers must not be slots; connect to lambdas instead. For access to private sta
 - `TestMainWindow`: subclass of `MainWindow` that exposes protected operations as
   `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on, installs the
   fake device through `createAudioIO()`, and **answers dialogs through virtual seams**:
-  `confirmRecordingOverTake()`, `confirmDeleteTake()`, `askForTakeName()`, each with a
-  `set...Answer()` and a counter of questions asked. A test cannot answer a real dialog:
-  anything new that asks the user needs such a virtual.
+  `confirmRecordingOverTake()`, `confirmDeleteTake()`, `askForTakeName()`,
+  `askForLyricsFile()`, each with a `set...Answer()` and a counter of questions asked. A
+  test cannot answer a real dialog: anything new that asks the user needs such a virtual.
 - Fixture helpers: `makeWindow(config)`, `writeWav()`, `openReference()`, `startTake()` /
   `stopTake()` / `take(ms)`, `verifyPlaySourceClean()`, `layersOnModel()`,
   `paneHasLayer()`, `documentHasLayer()`, `reopenAsSession()` / `reopenSession()`,
-  `verifyEventsSurvived()`.
+  `verifyEventsSurvived()`; for the lyrics `lyricsFixture()`, `writeLrc()`,
+  `verifyLyricsUntouched()`.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
   dialogs a test does expect.
@@ -87,6 +106,10 @@ helpers must not be slots; connect to lambdas instead. For access to private sta
   of its own because the Vamp *plugin* SDK headers must not meet the *host* SDK headers
   svcore uses.
 - `testdata/happy_birthday_gp_masked.wav`: a real sung recording.
+- `testdata/lyrics/`: LRC files with invented text. Two are in the exact format of the
+  Moises lyrics exporter (word timing and line timing: no end times, a `♪` gap line, a
+  word with punctuation glued to the one before, a line its clamp stamped 0); the third is
+  a generic LRC that does give ends.
 
 Prefer signals that describe themselves: `TestTakeAudio` uses constants and ramps so that
 every sample says where it came from. Assert **identity** as well as equality where the

@@ -104,3 +104,36 @@ Launch with `.\build.bat run`.
 36. Alternate pitch track: faded brown is readable but secondary; dark brown during a take
     is distinct from black; `8vb` / `8va` buttons look acceptable; the track stays in view
     after an octave step.
+
+## Lyrics
+
+37. **Legibility**: the words are readable over the reference and singing pitch tracks,
+    the alternate pitch track and the live dots, and the pitch shows through between them.
+    Grey bars: right colour?
+38. **Band height and font** at the zoom used while singing: can the words be read while
+    singing, and does the band hide too much of the top of the pitch range?
+39. **Density**: zoom out until words drop out (they are left out, never drawn over each
+    other) and back in (they return). At the usual zoom on a fast song, how many drop out:
+    are two rows enough?
+40. **Bold line starts**: do they read as the start of a phrase, or as noise?
+41. **The left edge**: a word in the first ~30 px of the view (at 0 s, with the view at the
+    start) is under the pane's vertical scale. How much does that matter in use?
+42. **Inferred ends**: the exporter writes no end times. With word timing the last word of
+    a line ends at the next line but at most 2 s after it starts, unless a `♪` line marks
+    the end; with line timing a line lasts until the next one, and the last line 5 s. Do
+    those bars mislead? The start times are exact.
+43. **Hover readout**: with the lyrics shown, hovering over the pitch tracks gives the same
+    readout and the same vertical scale as without them, also after turning the alternate
+    pitch track off and after deleting a take.
+44. **A real Moises export** of one of your songs (exporter offset 0, gap threshold low),
+    imported onto the Moises stem or the original mix: the words line up with the vocal, by
+    eye and while playing. All early or late by the same amount means the reference is not
+    the recording Moises timed; an `[offset:]` line in the file moves them.
+45. **Finnish text**: ä and ö come out right in the pane, and again after save and reopen.
+46. **Show Lyrics and Remove Lyrics**: hiding keeps the words for later, Remove takes them
+    out, a second import replaces the first; each makes Close ask whether to save. The
+    status bar after an import counts words and lines and names anything skipped.
+47. **Session**: save and reopen: the same words, hidden or shown as saved; playback still
+    ends at the end of the song, even with words past it.
+48. **During a take**: the words stay on show and readable while recording, with the
+    countdown and the live dots; Import Lyrics is greyed out while recording.

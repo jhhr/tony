@@ -14,8 +14,9 @@ Upstream Tony analyses the pitch of one recording. This fork makes it a singing 
 4. **Partial recordings and takes**: record from the playhead into part of the song, keep
    the rest, erase, undo, and keep several takes. See [takes.md](takes.md).
 5. Around that: play the reference while recording, latency compensation, pre-roll,
-   record into selection, an octave-shifted "alternate" pitch track to follow, and a
-   background music track that is played but never analysed.
+   record into selection, an octave-shifted "alternate" pitch track to follow, timed
+   lyrics along the top of the pane, and a background music track that is played but
+   never analysed.
 
 The user-facing description is in the [README](../README.md).
 
@@ -30,8 +31,8 @@ only what they need:
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `LatencyUtils.h` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `TakeCommands`, `TakeLayers`, `PaneUtils` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LatencyUtils.h` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `TakeCommands`, `TakeLayers`, `PaneUtils` |
 
 When adding a file: put it in the right `*_files` list, and in the matching `*_moc_files`
 list **only if** it has `Q_OBJECT`. Logic that can be written as pure functions or a plain
@@ -52,9 +53,10 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   inactive takes have their source model cleared (see [takes.md](takes.md)).
 - `Analyser::fileClosed()` clears the layers but **not** `m_fileModel`.
 - Helper objects that own one layer each and are only wired by `MainWindow`:
-  `AlternatePitchTrack`, `CoverageStrip`. Both watch `Document::layerAboutToBeDeleted`
-  in case someone else deletes their layer, and both must be deleted in `~MainWindow`
-  **before** the base class deletes the document (as must `m_analyser2`).
+  `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`. All three watch
+  `Document::layerAboutToBeDeleted` in case someone else deletes their layer, and all
+  three must be deleted in `~MainWindow` **before** the base class deletes the document
+  (as must `m_analyser2`).
 - `RealtimePitchTracker` is a `QThread` that only **reads** the recording's
   `WritableWaveFileModel` and emits `pitchDetected(frame, hz)`. It never touches the pitch
   model; `MainWindow::onRealtimePitchDetected()` writes it on the GUI thread (queued
@@ -96,10 +98,11 @@ These were all learned from crashes or wrong behaviour. They hold for any new co
 ### Tony's own layers make no undo commands
 
 Every layer Tony makes for itself — analysers' layers, live dots, the recording's hidden
-waveform, the alternate pitch track, the coverage strip, background music — is added with
-**`Document::attachLayerToView()`** (svapp fork): in the view and in the layer-view map, so
-the session keeps it, but no command and no modified flag. `addLayerToView()` (the
-undoable Add Layer) must not be used for these: Undo after a take has to find the take.
+waveform, the alternate pitch track, the coverage strip, the lyrics, background music — is
+added with **`Document::attachLayerToView()`** (svapp fork): in the view and in the
+layer-view map, so the session keeps it, but no command and no modified flag.
+`addLayerToView()` (the undoable Add Layer) must not be used for these: Undo after a take
+has to find the take.
 Whoever attaches the layer calls `documentModified()` if the change should count.
 
 ### Commands
@@ -118,7 +121,9 @@ Whoever attaches the layer calls `documentModified()` if the change should count
 
 - The play source takes in the model of **every layer in a view**, playable or not, and
   what it holds decides where playback ends. Models that must not extend playback
-  (coverage strip, layers of inactive takes) are taken out with `m_playSource->removeModel()`.
+  (coverage strip, lyrics, layers of inactive takes) are taken out with
+  `m_playSource->removeModel()`. A session load adds each layer to its view and so puts
+  their models back in: take them out after a load too.
 - The svapp fork emits `Document::modelAboutToBeReleased(ModelId)` and `MainWindowBase`
   removes the model from the play source on it. Upstream only did so from
   `RemoveLayerCommand`, which forced deletes never run.
@@ -141,8 +146,10 @@ Whoever attaches the layer calls `documentModified()` if the change should count
 
 - Connect with **member pointers**, not `SIGNAL()`/`SLOT()` strings, for anything whose
   signature has `sv::` types when the receiving class is outside namespace `sv`: the
-  string form never matches and fails silently at run time (this kept
-  `Analyser::layerAboutToBeDeleted` from ever being called).
+  string form need not match, and then fails silently at run time (this kept
+  `Analyser::layerAboutToBeDeleted` from ever being called). Whether it matches can
+  depend on the Qt version: Qt 6.4 does not match `ModelId` in a string against a slot
+  moc recorded as taking `sv::ModelId`, where the Qt used for development does.
 - `audioFileLoaded()` is emitted for `CreateAdditionalModel` too (singing track, background
   music). `analyseNewMainModel()` returns early if the main model is the one it already
   analysed (`m_analysedMainModelId`); handing the reference to `m_analyser` twice forgets
@@ -162,7 +169,8 @@ Whoever attaches the layer calls `documentModified()` if the change should count
 - An event's value is written with six significant figures. After a round trip compare
   frames exactly and values with a tolerance.
 - Layer **object names carry identity** across a save: `"Alternate Pitch Track -1"` holds
-  the octave count, `"Take 2 Pitch"` links a layer to its take. They are not translated.
+  the octave count, `"Take 2 Pitch"` links a layer to its take, `"Lyrics"` marks the
+  lyrics. They are not translated.
 
 ### Miscellaneous
 
@@ -195,3 +203,25 @@ saved in the session.
 after `openPath()`, and only then prune the extra pane — the imported waveform in that pane
 is the only reference to the model until `m_analyser2` has a layer of its own. It ends with
 `clearTakeHistory()`, which also disposes of the "Import" command for the pruned pane.
+
+**Lyrics** (`Lyrics` parses the LRC file, `LyricsTrack` owns the layer): one `RegionModel`
+in pane 0 on the reference's timeline, a region per word (or per line, for a line with no
+word times): frame = start, duration = end - start (at least one frame), label = the word,
+value = the line's index, which is what the bold line starts go by. It is drawn by the
+svgui fork's `PlotLyrics` style ([forks.md](forks.md)), because a session restores only
+layers `LayerFactory` can make. Found again after a session load by its untranslated object
+name `"Lyrics"`, in `analyseNewMainModel()` after the alternate pitch track. Its model is
+taken out of the play source after an import and again after a load: a word past the end
+of the reference would hold playback open. It is **never the pane's top layer**, because
+the pane takes its hover readout and vertical scale from the top layer and this one has
+neither. `show()` raises the layer that was on top before; `adopt()` raises the one under
+the lyrics if the session was saved with them on top; and when any other layer is deleted
+(the alternate pitch track turned off, a take deleted) a zero-time timer does the same,
+because that layer is still in the pane when `layerAboutToBeDeleted` arrives. Not tied to
+takes: the take code finds layers by take name, source model or extra pane, so it never
+finds this one, and it stays on show during a take, when the singer needs the words most.
+Import and Remove push no command and leave the undo history alone, like Load Background
+Music: the simpler option, and the file is still there to import again. Show Lyrics is the layer's own
+visibility, which the session saves, not a QSettings key. The parser strips control
+characters (and U+FFFE, U+FFFF, which the UTF-8 decoder lets through) from every label:
+XML 1.0 cannot hold them, and one in a label would make the `.ton` unreadable.

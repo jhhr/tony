@@ -72,6 +72,17 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   away from the dots.
 - `RegionLayer::PlotStrip` plot style: the coverage strip. Saved through the existing
   `plotStyle` attribute.
+- `RegionLayer::PlotLyrics` plot style, after `PlotStrip` so saved numbers keep their
+  meaning: the lyrics. Each region's label along the top of the view over a bar as long as
+  the region, in two rows, the first word of a line (where the value changes) in bold; no
+  vertical scale, no feature description, not editable. The static, pure
+  `assignLabelRows()` places the labels (Tony's app suite tests it): a label that fits in
+  no row is left out. Where a label goes depends on the labels before it, so the layout is
+  made for the **whole model** at once and cached per zoom level and font; a strip newly
+  scrolled into sight then agrees with what is already on show. That is what lets the
+  layer stay **scrollable**: `View::getNonScrollableFrontLayers()` treats every layer in
+  front of a non-scrollable one as non-scrollable too, so the pitch tracks above the
+  lyrics would repaint on every cursor update.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
 - `Pane::setWorkModel()` / `getWorkModel()`: which model's extents are blocked off at the

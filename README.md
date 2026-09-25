@@ -47,6 +47,19 @@ orange pitch track to compare with it.
    the toolbar): each keeps its own audio, pitch track and notes, and switching
    between them needs no re-analysis. The audio of a session's takes is kept in
    a folder named after the session beside it, so the two can be moved together
+ * timed lyrics: File -> Import Lyrics... reads an LRC file, timed by line or
+   by word, and shows the words along the top of the pane, each over a bar for
+   as long as it is sung. They are saved with the session; View -> Show Lyrics
+   hides them and File -> Remove Lyrics takes them out. The reference must be
+   the recording the lyrics were timed to (a Moises stem and its original mix
+   share a timeline); to change a word or its time, edit the file and import it
+   again
+ * LRC files can be exported from Moises with the Moises-Lyric-Exporter browser
+   extension. Set its offset to 0 (otherwise every line is 0.2 s early, and
+   Tony cannot tell) and its gap threshold as low as it goes (so that it marks
+   where lines end). It is unofficial and not made by Moises: install it
+   unpacked from a commit that has been reviewed, and do not update it without
+   reviewing the change
 
 
 Authors, Citation, License and Use
