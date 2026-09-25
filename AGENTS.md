@@ -27,7 +27,7 @@ From **Git Bash** (the usual agent shell). `build.bat` does not run from sh.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe > tmp/build.log 2>&1
+ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-device.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 ```
 

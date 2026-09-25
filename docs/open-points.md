@@ -10,10 +10,24 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   Is 3 s right, and should there be a control?
 - **No overwrite question when recording into a selection**: the selection is taken as the
   consent. Right in use?
-- **Constrain Playback to Selection + pre-roll**: the play source constrains playback to
-  the selection, the lead-in is outside it, so it is cut short. Nothing keeps the two apart.
+- **Constrain Playback to Selection + pre-roll**: worse than a short lead-in. The play
+  source starts playback at the selection, so none of the lead-in is played, and the splice,
+  which takes playback to have started a pre-roll earlier, places what was sung a whole
+  pre-roll too early (`preroll_with_playback_constrained_to_the_selection`, expected to
+  fail). Keep the two apart, or start playback at the lead-in regardless?
 - **Take operations clear the undo history with no prompt** (all but Rename).
-- None of the [manual checklist](manual-checklist.md) has been run.
+- **A selection is an entry of the undo history**: making one re-analyses the reference in
+  it (upstream Tony's pitch candidates) and pushes "Re-Analyse Selection". Selecting for
+  Record into Selection or for Erase therefore puts such entries between "Record Singing"
+  and "Erase Singing", and if the re-analysis finishes after an erase, Ctrl+Z takes it
+  back instead of the erase.
+- **The Edit tool edits the take's note at the time it is used, wherever in the pane**,
+  the band of the coverage strip included. The strip itself takes no edits. Should the band
+  keep the tools off the notes?
+- **The alternate pitch track at ±3 octaves** of a 220 Hz reference (28 Hz, 1.8 kHz) is
+  outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
+- Of the [manual checklist](manual-checklist.md), the device check has been run only in
+  the cloud (no sound card, and the fake device); nothing yet on real hardware.
 
 ## Not built
 
@@ -24,6 +38,32 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - Recording that starts before frame 0 of the reference.
 
 ## Weak spots
+
+Defects the checks of `TestUiChecks` found, each committed as a test expected to fail
+(`QEXPECT_FAIL` names the cause):
+
+- **Live dots stop being drawn during a take.** The dot model is made with `notifyOnAdd`
+  false, so a dot added tells the pane nothing; dots are drawn only when one widens the
+  model's pitch range or the pane redraws for another reason (a page turn, a zoom). On a
+  steady note they stall within half a second (`live_dots_under_the_cursor`). Making the
+  model with `notifyOnAdd` true fixes it, as tried: the pane then repaints for every dot,
+  about 170 times a second, coalesced by Qt; whether that is cheap enough on the
+  development machine has not been measured.
+- **The band of the coverage strip is hidden after the second recording.** The audio swap
+  makes the take's waveform layer again, on top, and `syncCoverageStrip()` raises nothing
+  once the strip is shown (`strip_on_top_after_another_recording`).
+- **`commitData()` writes `~/.sv1/tmp-*.sv`**, Sonic Visualiser's extension; Tony opens
+  only `.ton` as a session, so what it saved at logout does not open from Recent Files
+  (`commit_data_writes_a_playable_session`; renamed to `.ton` it opens and plays).
+
+Seen and not pinned by a test:
+
+- After playback the pane's own cache of what it drew holds the translucent note boxes
+  painted twice over themselves, darker, until the next zoom or scroll. Seen with the
+  offscreen platform, through the window's backing store; whether it shows on a real screen
+  is not known. `TestUiChecks::grabPaneRedrawn()` works around it.
+- With no audio device at all, "Couldn't open audio device" is shown again for every file
+  opened (`MainWindowBase::createAudioIO()` tries each time).
 
 - **If pYIN fails part-way, the live dots wait for ever**: they are removed on
   `initialAnalysisCompleted`, which then never comes.
@@ -40,5 +80,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   that printed the value otherwise. With `PlotStrip` it is no longer needed.
 - Untested by any suite: removal of dots placed before the latency was measured; the
   deferred and error paths of the dot teardown; `ContinuousSynth` deletion in the svapp
-  fork; the 30 s give-up of `waitForRangedAnalysis()`; `commitData()` relocating takes;
-  the two other ways `MainWindowBase::record()` can fail.
+  fork; the 30 s give-up of `waitForRangedAnalysis()`; `commitData()` relocating takes on
+  Windows (the test runs elsewhere only); the two other ways `MainWindowBase::record()` can
+  fail.

@@ -1,0 +1,1561 @@
+/* -*- c-basic-offset: 4 indent-tabs-mode: nil -*-  vi:set ts=8 sts=4 sw=4: */
+/*
+    Tony
+    An intonation analysis and annotation tool
+    Centre for Digital Music, Queen Mary, University of London.
+
+    This program is free software; you can redistribute it and/or
+    modify it under the terms of the GNU General Public License as
+    published by the Free Software Foundation; either version 2 of the
+    License, or (at your option) any later version.  See the file
+    COPYING included with this distribution for more information.
+*/
+
+#ifndef TEST_UI_CHECKS_H
+#define TEST_UI_CHECKS_H
+
+// Tier 6: the window as the user sees and handles it. The same
+// MainWindow and fake device as TestRecordWorkflow, but shown, driven
+// with key presses, mouse gestures and its own dialogs, and judged by
+// the pixels of pane 0 as it is drawn -- the items of the manual
+// checklist that are about what is on the screen.
+//
+// With TONY_TEST_SHOT_DIR set, the suite also saves what it looked at,
+// as PNG files, for a person to look over.
+
+#include "TestSignals.h"
+#include "TestMainWindow.h"
+
+#include "../AlternatePitchTrack.h"
+#include "../TakeLayers.h"
+
+#include "version.h"
+
+#include "framework/Document.h"
+#include "view/Pane.h"
+#include "view/PaneStack.h"
+#include "layer/Layer.h"
+#include "layer/ColourDatabase.h"
+#include "data/model/SparseTimeValueModel.h"
+#include "data/model/NoteModel.h"
+#include "data/model/RegionModel.h"
+#include "data/fileio/WavFileReader.h"
+#include "data/fileio/WavFileWriter.h"
+#include "data/fileio/FileSource.h"
+#include "base/RecordDirectory.h"
+#include "transform/ModelTransformerFactory.h"
+#include "widgets/CommandHistory.h"
+#include "widgets/InteractiveFileFinder.h"
+
+#include <QObject>
+#include <QtTest>
+#include <QAbstractButton>
+#include <QAction>
+#include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QImage>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QScreen>
+#include <QSettings>
+#include <QTemporaryDir>
+#include <QTimer>
+#include <QToolBar>
+
+#include <cmath>
+#include <functional>
+#include <map>
+#include <vector>
+
+class TestUiChecks : public QObject
+{
+    Q_OBJECT
+
+    static constexpr double rate = 44100.0;
+
+    // Whole numbers of samples per period: see TestSingingAnalysis.h
+    static constexpr double lowHz = 220.5;
+    static constexpr double highHz = 294.0;
+
+    QTemporaryDir m_dir;
+    int m_fileCounter = 0;
+    TestMainWindow *m_window = nullptr;
+    QTimer m_watchdog;
+    QStringList m_dialogs;
+    QString m_shotDir;
+
+    // Given each modal dialog before the watchdog dismisses it: true if
+    // it answered the dialog itself
+    std::function<bool(QWidget *)> m_answerDialog;
+
+    static std::vector<float> tone(double hz, double seconds) {
+        return TestSignals::sawtooth(hz, rate, int(seconds * rate), 0.5f);
+    }
+
+    static sv::sv_frame_t frames(double seconds) {
+        return sv::sv_frame_t(seconds * rate);
+    }
+
+    QString writeWav(const std::vector<float> &data) {
+        QString path = m_dir.filePath
+            (QString("audio-%1.wav").arg(++m_fileCounter));
+        sv::WavFileWriter writer(path, rate, 1,
+                                 sv::WavFileWriter::WriteToTarget);
+        const float *ptr = data.data();
+        if (!writer.isOK() ||
+            !writer.writeSamples(&ptr, sv::sv_frame_t(data.size())) ||
+            !writer.close()) {
+            return {};
+        }
+        return path;
+    }
+
+    // Shown at a fixed size and active, as the user has it: key presses
+    // reach the window's shortcuts only when it is the active window
+    void makeWindow(FakeAudioIO::Config config) {
+        delete m_window;
+        m_window = new TestMainWindow(config);
+        m_window->resize(1200, 800);
+        m_window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(m_window));
+        m_window->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(m_window));
+    }
+
+    static bool analysed(Analyser *a) {
+        return a && a->getLayer(Analyser::PitchTrack) &&
+            a->getLayer(Analyser::Notes) &&
+            a->getInitialAnalysisCompletion() >= 100 &&
+            !a->isAnalysingRange() &&
+            !sv::ModelTransformerFactory::getInstance()
+            ->haveRunningTransformers();
+    }
+
+    void openReference(QString path) {
+        QVERIFY(!path.isEmpty());
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(path, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+    }
+
+    void startTake() {
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        m_window->doRecord();
+        QVERIFY(m_window->recordTarget()->isRecording());
+    }
+
+    void stopTake() {
+        QVERIFY(m_window->recordTarget()->isRecording());
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+    }
+
+    void take(int ms) {
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(ms);
+        stopTake();
+    }
+
+    sv::Pane *pane0() { return m_window->paneStack()->getPane(0); }
+
+    // Whatever is seen of the page from start to end, and a little room
+    // either side
+    void showSeconds(double start, double end) {
+        sv::Pane *pane = pane0();
+        int width = pane->width();
+        int perPixel = int(std::ceil((end - start) * rate / (width * 0.8)));
+        pane->setZoomLevel(sv::ZoomLevel(sv::ZoomLevel::FramesPerPixel,
+                                         std::max(1, perPixel)));
+        pane->setCentreFrame(frames((start + end) / 2.0));
+    }
+
+    // Pane 0 as it is on the screen just now: the window's backing store,
+    // which holds what the pane's own paint events put there. Not
+    // QWidget::grab(), which has the pane paint itself once more for the
+    // occasion and so can show what the screen does not
+    QImage grabPane() {
+        QCoreApplication::processEvents();
+        QPixmap window = m_window->screen()->grabWindow(m_window->winId());
+        QRect rect(pane0()->mapTo(m_window, QPoint(0, 0)), pane0()->size());
+        return window.copy(rect).toImage()
+            .convertToFormat(QImage::Format_RGB32);
+    }
+
+    // ... and drawn afresh, all of it. After playback the pane's own
+    // cache of what it drew holds the translucent note boxes painted a
+    // second time over themselves, until the next zoom or scroll; that
+    // is how the view composes itself, not what a layer draws, and would
+    // otherwise be taken for a change to the layers
+    QImage grabPaneRedrawn() {
+        sv::Pane *pane = pane0();
+        sv::ZoomLevel zoom = pane->getZoomLevel();
+        sv::sv_frame_t centre = pane->getCentreFrame();
+        // (a zoom level only one step away snaps back to this one)
+        pane->setZoomLevel(sv::ZoomLevel(zoom.zone, zoom.level * 2));
+        grabPane();
+        pane->setZoomLevel(zoom);
+        pane->setCentreFrame(centre);
+        return grabPane();
+    }
+
+    void saveShot(QString name, const QImage &image) {
+        if (m_shotDir == "") return;
+        QDir().mkpath(m_shotDir);
+        QString test = QTest::currentTestFunction();
+        image.save(QDir(m_shotDir).filePath(test + "-" + name + ".png"));
+    }
+
+    // The whole window, as grabPane() takes the pane
+    void saveWindowShot(QString name) {
+        if (m_shotDir == "") return;
+        QCoreApplication::processEvents();
+        saveShot(name, m_window->screen()->grabWindow(m_window->winId())
+                 .toImage());
+    }
+
+    static bool closeTo(QRgb pixel, QColor colour, int tolerance) {
+        return std::abs(qRed(pixel) - colour.red()) <= tolerance &&
+            std::abs(qGreen(pixel) - colour.green()) <= tolerance &&
+            std::abs(qBlue(pixel) - colour.blue()) <= tolerance;
+    }
+
+    static QColor named(QString name) {
+        auto cdb = sv::ColourDatabase::getInstance();
+        return cdb->getColour(cdb->getColourIndex(name));
+    }
+
+    // The orange of the live dots, the take's pitch track and the
+    // coverage strip; the purple of the take's notes
+    static bool isOrange(QRgb pixel) {
+        return closeTo(pixel, named("Orange"), 30);
+    }
+    static bool isPurple(QRgb pixel) {
+        return closeTo(pixel, named("Bright Purple"), 30);
+    }
+
+    // Orange, or orange seen through the translucent fill of the take's
+    // notes, which are drawn over its pitch track: what is sung, as it is
+    // drawn. Not the brighter orange of the pitch candidates
+    static bool isSinging(QRgb pixel) {
+        return qRed(pixel) >= 200 && qGreen(pixel) >= 90 &&
+            qGreen(pixel) <= 170 && qBlue(pixel) <= 140;
+    }
+
+    // Pixels of a colour in the columns [x0, x1), above the band of the
+    // coverage strip at the bottom of the pane
+    static int countAbove(const QImage &image, int x0, int x1,
+                          std::function<bool(QRgb)> is) {
+        int n = 0;
+        x0 = std::max(0, x0);
+        x1 = std::min(image.width(), x1);
+        for (int x = x0; x < x1; ++x) {
+            for (int y = 0; y < image.height() - 10; ++y) {
+                if (is(image.pixel(x, y))) ++n;
+            }
+        }
+        return n;
+    }
+
+    // Leftmost and rightmost column holding such a pixel, or -1
+    static std::pair<int, int> extentAbove(const QImage &image,
+                                           std::function<bool(QRgb)> is) {
+        int left = -1, right = -1;
+        for (int x = 0; x < image.width(); ++x) {
+            for (int y = 0; y < image.height() - 10; ++y) {
+                if (is(image.pixel(x, y))) {
+                    if (left < 0) left = x;
+                    right = x;
+                    break;
+                }
+            }
+        }
+        return { left, right };
+    }
+
+    // The play pointer as View::drawPlayPointer() draws it: a line of the
+    // background colour between two of the foreground, the whole height
+    // of the pane. -1 if there is none
+    static int pointerX(const QImage &image) {
+        auto dark = [](QRgb p) { return qGray(p) < 80; };
+        auto light = [](QRgb p) { return qGray(p) > 200; };
+        int h = image.height();
+        for (int x = 1; x + 1 < image.width(); ++x) {
+            int n = 0;
+            for (int y = 1; y + 1 < h; ++y) {
+                if (dark(image.pixel(x - 1, y)) && light(image.pixel(x, y)) &&
+                    dark(image.pixel(x + 1, y))) ++n;
+            }
+            if (n > (h * 9) / 10) return x;
+        }
+        return -1;
+    }
+
+    QMenu *menuTitled(QString title) {
+        for (QAction *a : m_window->menuBar()->actions()) {
+            if (a->menu() && a->text() == title) return a->menu();
+        }
+        return nullptr;
+    }
+
+    // The Undo item of the Edit menu, as the user reads it
+    QString undoText() {
+        QMenu *edit = menuTitled(tr("&Edit"));
+        if (!edit) return "(no Edit menu)";
+        for (QAction *a : edit->actions()) {
+            if (a->shortcut() == QKeySequence(tr("Ctrl+Z"))) return a->text();
+        }
+        return "(no Undo item)";
+    }
+
+    void press(QKeySequence keys) {
+        QVERIFY(QTest::qWaitForWindowActive(m_window));
+        QTest::keySequence(m_window, keys);
+        QCoreApplication::processEvents();
+    }
+
+    Coverage::Ranges coverage() {
+        return m_window->takes()->getCoverage().getRanges();
+    }
+
+    // Everything in pane 0 a gesture could change: the events of every
+    // layer's model, how each layer scales itself, the zoom, the
+    // selection and the undo history. The centre frame is left out:
+    // dragging with the navigate tool is meant to scroll
+    struct PaneState {
+        std::map<QString, sv::EventVector> events;
+        std::map<QString, std::pair<double, double>> extents;
+        std::vector<QString> layers;
+        sv::ZoomLevel zoom;
+        sv::MultiSelection::SelectionList selections;
+        QString undo;
+
+        bool operator==(const PaneState &s) const {
+            return events == s.events && extents == s.extents &&
+                layers == s.layers && zoom == s.zoom &&
+                selections == s.selections && undo == s.undo;
+        }
+    };
+
+    PaneState paneState() {
+        PaneState s;
+        sv::Pane *pane = pane0();
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            sv::Layer *layer = pane->getLayer(i);
+            QString key = QString("%1 %2").arg(i).arg(layer->objectName());
+            s.layers.push_back(key);
+            sv::ModelId id = layer->getModel();
+            if (auto m = sv::ModelById::getAs<sv::SparseTimeValueModel>(id)) {
+                s.events[key] = m->getAllEvents();
+            } else if (auto m = sv::ModelById::getAs<sv::NoteModel>(id)) {
+                s.events[key] = m->getAllEvents();
+            } else if (auto m = sv::ModelById::getAs<sv::RegionModel>(id)) {
+                s.events[key] = m->getAllEvents();
+            }
+            double min = 0.0, max = 0.0;
+            if (layer->getDisplayExtents(min, max)) {
+                s.extents[key] = { min, max };
+            }
+        }
+        s.zoom = pane->getZoomLevel();
+        s.selections = m_window->selections();
+        s.undo = undoText();
+        return s;
+    }
+
+    static QString describe(const PaneState &a, const PaneState &b) {
+        QStringList what;
+        if (a.layers != b.layers) what << "the layers of the pane";
+        for (const auto &e : a.events) {
+            auto i = b.events.find(e.first);
+            if (i == b.events.end() || i->second != e.second) {
+                what << QString("the events of \"%1\"").arg(e.first);
+            }
+        }
+        for (const auto &e : a.extents) {
+            auto i = b.extents.find(e.first);
+            if (i == b.extents.end() || i->second != e.second) {
+                what << QString("the scale of \"%1\"").arg(e.first);
+            }
+        }
+        if (!(a.zoom == b.zoom)) what << "the zoom";
+        if (a.selections != b.selections) what << "the selection";
+        if (a.undo != b.undo) what << "the undo history (" + b.undo + ")";
+        return what.join(", ");
+    }
+
+    // Not a slot: QtTest would run it as a test
+    void dismissDialog() {
+        QWidget *modal = QApplication::activeModalWidget();
+        if (!modal) return;
+        if (m_answerDialog && m_answerDialog(modal)) return;
+        QString description = modal->windowTitle();
+        if (auto box = qobject_cast<QMessageBox *>(modal)) {
+            description += ": " + box->text();
+            m_dialogs.push_back(description);
+            // The last button is Cancel (or No) in every question Tony
+            // asks; see TestRecordWorkflow::dismissDialog()
+            QList<QAbstractButton *> buttons = box->buttons();
+            if (!buttons.isEmpty()) {
+                buttons.last()->click();
+                return;
+            }
+        } else {
+            m_dialogs.push_back(description);
+        }
+        if (auto dialog = qobject_cast<QDialog *>(modal)) {
+            dialog->reject();
+        } else {
+            modal->close();
+        }
+    }
+
+    // Press the button of this role in a message box, ticking its check
+    // box first if asked to; the text of the box goes into asked
+    static std::function<bool(QWidget *)>
+    answerWith(QMessageBox::StandardButton button, bool tick,
+               QStringList *asked) {
+        return [=](QWidget *modal) {
+            auto box = qobject_cast<QMessageBox *>(modal);
+            if (!box || !box->button(button)) return false;
+            if (asked) asked->push_back(box->windowTitle());
+            if (tick && box->checkBox()) box->checkBox()->setChecked(true);
+            box->button(button)->click();
+            return true;
+        };
+    }
+
+private slots:
+    void initTestCase() {
+        QVERIFY(m_dir.isValid());
+        m_shotDir = qEnvironmentVariable("TONY_TEST_SHOT_DIR");
+
+        QSettings().clear();
+
+        // As TestRecordWorkflow: no network question, .ton is a session,
+        // takes go into the temporary directory
+        QSettings settings;
+        settings.beginGroup("Preferences");
+        settings.setValue(QString("network-permission-%1").arg(TONY_VERSION),
+                          false);
+        settings.endGroup();
+
+        sv::InteractiveFileFinder::getInstance()
+            ->setApplicationSessionExtension("ton");
+
+        sv::RecordDirectory::setRecordContainerDirectory
+            (m_dir.filePath("recorded"));
+
+        connect(&m_watchdog, &QTimer::timeout,
+                this, [this]() { dismissDialog(); });
+        m_watchdog.start(50);
+    }
+
+    void init() {
+        m_dialogs.clear();
+        m_answerDialog = nullptr;
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        settings.setValue("playrefwhilerecording", false);
+        settings.setValue("preroll", false);
+        settings.setValue("recordintoselection", false);
+        settings.remove("prerollseconds");
+        settings.endGroup();
+        settings.beginGroup("Analyser");
+        settings.remove("");
+        settings.endGroup();
+        SingingTakes::setOverwriteConfirmationWanted(true);
+    }
+
+    void cleanup() {
+        m_answerDialog = nullptr;
+        if (m_window) {
+            if (m_window->recordTarget()->isRecording()) {
+                m_window->doRecord();
+            }
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(), 30000);
+            m_window->doCloseSession();
+            delete m_window;
+            m_window = nullptr;
+        }
+        QVERIFY2(m_dialogs.isEmpty(),
+                 qPrintable("unexpected dialog: " + m_dialogs.join(" | ")));
+    }
+
+    void cleanupTestCase() {
+        m_watchdog.stop();
+        sv::RecordDirectory::setRecordContainerDirectory("");
+    }
+
+    // Checklist: live dots appear under the playback cursor, not behind
+    // it; during a take at P > 0 the cursor starts at P, the pane follows
+    // it, and cursor and dots are in the same place. Singing exactly in
+    // time with the reference, through a device with latency
+    void live_dots_under_the_cursor() {
+        FakeAudioIO::Config config;
+        config.recordLatency = 512;
+        config.playbackLatency = 1024;
+        config.inputDelay = 1536;
+        config.inputFollowsPlayback = true;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 12.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // A page of about two seconds, so that the take runs off it
+        const sv::sv_frame_t P = frames(4.0);
+        showSeconds(3.5, 5.5);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+
+        // The most the newest dot may trail the cursor by: the latency of
+        // the device, YIN's window and the delivery of the dots, with room
+        // to spare. A dot a whole latency out, or one at the take's own
+        // frame rather than the song's, is far more than this
+        const sv::sv_frame_t lag = frames(0.3);
+        sv::Pane *pane = pane0();
+        QElapsedTimer timer;
+        timer.start();
+        int pages = 0, looked = 0;
+        int firstPageStart = -1;
+        bool sawFirstDots = false;
+        sv::sv_frame_t worstLag = 0;
+        QString worst;
+
+        while (timer.elapsed() < 3000) {
+            QTest::qWait(150);
+            sv::sv_frame_t cursorBefore = m_window->playbackFrame();
+            QImage image = grabPane();
+            sv::sv_frame_t cursor = m_window->playbackFrame();
+            int x = pointerX(image);
+            QVERIFY2(x >= 0,
+                     qPrintable(QString("%1 ms into the take there is no play "
+                                        "pointer on the pane: it has not "
+                                        "followed the cursor (frame %2)")
+                                .arg(timer.elapsed()).arg(cursor)));
+            // The view moves its pointer on a timer of its own (20 ms in
+            // the svgui fork), so it may be one tick behind
+            int earliest = pane->getXForFrame(cursorBefore - frames(0.05));
+            int latest = pane->getXForFrame(cursor);
+            QVERIFY2(x >= earliest - 2 && x <= latest + 2,
+                     qPrintable(QString("the pointer is drawn at x = %1, the "
+                                        "playback frame is between x = %2 "
+                                        "and %3")
+                                .arg(x).arg(earliest).arg(latest)));
+
+            int start = int(pane->getStartFrame());
+            if (firstPageStart < 0) firstPageStart = start;
+            else if (start != firstPageStart) ++pages;
+
+            auto dots = extentAbove(image, isSinging);
+            if (dots.second < 0) continue;
+            ++looked;
+
+            // Never ahead of the cursor; how far behind it, and the
+            // newest dot the model has, for the worst moment
+            sv::sv_frame_t newest = pane->getFrameForX(dots.second);
+            QVERIFY2(newest <= cursor + pane->getZoomLevel().level * 3,
+                     qPrintable(QString("%1 ms into the take a dot is drawn at "
+                                        "frame %2, ahead of the cursor at %3")
+                                .arg(timer.elapsed()).arg(newest)
+                                .arg(cursor)));
+            if (cursor - newest > worstLag) {
+                worstLag = cursor - newest;
+                sv::sv_frame_t inModel = -1;
+                if (auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+                    (m_window->realtimeModelId())) {
+                    auto all = model->getAllEvents();
+                    if (!all.empty()) inModel = all.back().getFrame();
+                }
+                worst = QString("%1 ms into the take the newest dot drawn is "
+                                "%2 ms behind the cursor; the newest in the "
+                                "model is %3 ms behind it")
+                    .arg(timer.elapsed())
+                    .arg(double(cursor - newest) * 1000.0 / rate, 0, 'f', 0)
+                    .arg(double(cursor - inModel) * 1000.0 / rate, 0, 'f', 0);
+            }
+
+            // The first dots of the take are at P, where the singing began
+            if (!sawFirstDots && pane->getStartFrame() < P) {
+                sawFirstDots = true;
+                sv::sv_frame_t oldest = pane->getFrameForX(dots.first);
+                QVERIFY2(std::llabs(oldest - P) < frames(0.1),
+                         qPrintable(QString("the first dot of a take at frame "
+                                            "%1 is at frame %2")
+                                    .arg(P).arg(oldest)));
+                saveShot("first-dots", image);
+                qInfo("newest dot %.0f ms behind the cursor",
+                      double(cursor - newest) * 1000.0 / rate);
+            }
+        }
+        QVERIFY2(looked >= 5, "hardly any live dots were drawn");
+        QVERIFY(sawFirstDots);
+        QVERIFY2(pages >= 1, "the take never ran off the first page, so "
+                 "whether the pane follows it was not seen");
+        saveWindowShot("during");
+        qInfo("%s", qPrintable(worst));
+        QEXPECT_FAIL("", "the live dot model is made with notifyOnAdd false, "
+                     "so a dot added to it tells the pane nothing: dots are "
+                     "drawn only when one widens the model's range or the "
+                     "pane redraws for another reason", Continue);
+        QVERIFY2(worstLag <= lag, qPrintable(worst));
+
+        // The dots stay until the take's pitch track is there, which is
+        // drawn over the same place in the same orange: at no moment is
+        // what was sung missing from the pane
+        const sv::sv_frame_t end = m_window->playbackFrame();
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        showSeconds(4.0, 4.0 + double(end - P) / rate);
+        int sungFrom = pane->getXForFrame(P + frames(0.2));
+        int sungTo = pane->getXForFrame(end - frames(0.5));
+        QElapsedTimer sinceStop;
+        sinceStop.start();
+        while (!analysed(m_window->analyser2())) {
+            QVERIFY2(countAbove(grabPane(), sungFrom, sungTo, isSinging) > 0,
+                     qPrintable(QString("%1 ms after Stop nothing of what was "
+                                        "sung is drawn")
+                                .arg(sinceStop.elapsed())));
+            QVERIFY(sinceStop.elapsed() < 30000);
+            QTest::qWait(20);
+        }
+        QImage after = grabPane();
+        QVERIFY(countAbove(after, sungFrom, sungTo, isSinging) > 0);
+        saveShot("analysed", after);
+
+        // The status bar is still once nothing is recorded or played
+        QTest::qWait(100);
+        QString status = m_window->statusText();
+        QTest::qWait(400);
+        QCOMPARE(m_window->statusText(), status);
+    }
+
+    // Checklist: recording over singing that is there, that take's own
+    // pitch track and notes are out of sight for the take, so only the
+    // dots are drawn, and they are back when the take stops
+    void own_pitch_out_of_sight_while_recording_over_it() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 8.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(2200);
+        if (QTest::currentTestFailed()) return;
+        showSeconds(0.0, 3.0);
+        sv::Pane *pane = pane0();
+
+        const sv::sv_frame_t P = frames(0.4);
+        int ahead0 = pane->getXForFrame(frames(1.3));
+        int ahead1 = pane->getXForFrame(frames(1.9));
+        QImage before = grabPane();
+        QVERIFY2(countAbove(before, ahead0, ahead1, isSinging) > 0,
+                 "the first take's pitch track is not drawn");
+        QVERIFY2(countAbove(before, 0, before.width(), isPurple) > 0,
+                 "the first take's notes are not drawn");
+        saveShot("before", before);
+
+        m_window->seekTo(P);
+        m_window->setRecordOverAnswer(true);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(500);
+
+        // Ahead of the cursor, where the old singing is and nothing new
+        // has been sung yet, nothing of the take is drawn. (Record puts
+        // the view back on P, so where things are is asked again)
+        QImage during = grabPane();
+        ahead0 = pane->getXForFrame(frames(1.3));
+        ahead1 = pane->getXForFrame(frames(1.9));
+        int x = pointerX(during);
+        QVERIFY2(x >= 0 && x < ahead0,
+                 qPrintable(QString("the pointer is at x = %1, the old "
+                                    "singing to look at from x = %2")
+                            .arg(x).arg(ahead0)));
+        QVERIFY2(countAbove(during, ahead0, ahead1, isSinging) == 0,
+                 "the take's own pitch track is drawn during a take over it");
+        QVERIFY2(countAbove(during, 0, during.width(), isPurple) == 0,
+                 "the take's own notes are drawn during a take over it");
+        QVERIFY2(countAbove(during, pane->getXForFrame(P), x, isSinging) > 0,
+                 "no live dots behind the cursor");
+        saveShot("during", during);
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QImage after = grabPane();
+        ahead0 = pane->getXForFrame(frames(1.3));
+        ahead1 = pane->getXForFrame(frames(1.9));
+        QVERIFY2(countAbove(after, ahead0, ahead1, isSinging) > 0,
+                 "the rest of the old pitch track did not come back");
+        QVERIFY2(countAbove(after, 0, after.width(), isPurple) > 0,
+                 "the notes did not come back");
+        saveShot("after", after);
+    }
+
+    // Checklist: the coverage strip cannot be touched. Clicking, double-
+    // clicking and dragging on it with either tool creates, moves, selects
+    // and edits nothing of its own and does not change the pane's scale.
+    // The Edit tool acts on the take's note at the time it is used,
+    // wherever in the pane that is -- the band too -- so an edit of that
+    // note is what it may do, and one undo takes that back exactly
+    void strip_ignores_the_mouse() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // One recording: see strip_on_top_after_another_recording
+        m_window->seekTo(frames(0.5));
+        take(1500);
+        if (QTest::currentTestFailed()) return;
+        m_window->clearSelections();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        showSeconds(0.0, 3.0);
+
+        sv::Pane *pane = pane0();
+        auto range = coverage()[0];
+        QImage image = grabPaneRedrawn();
+        const int y = image.height() - 3;
+        const int inBand = pane->getXForFrame(range.start + frames(0.3));
+        const int atEnd = pane->getXForFrame(range.end) - 1;
+        const int beyond = pane->getXForFrame(range.end + frames(0.4));
+        QVERIFY2(isOrange(image.pixel(inBand, y)) &&
+                 isOrange(image.pixel(atEnd - 2, y)) &&
+                 !isOrange(image.pixel(beyond, y)),
+                 "the strip is not where the gestures are going to be made");
+        saveShot("strip", image);
+
+        auto drag = [&](int from, int to) {
+            QTest::mousePress(pane, Qt::LeftButton, Qt::NoModifier,
+                              QPoint(from, y));
+            for (int i = 1; i <= 10; ++i) {
+                QTest::mouseMove(pane, QPoint(from + (to - from) * i / 10, y));
+                QTest::qWait(10);
+            }
+            QTest::mouseRelease(pane, Qt::LeftButton, Qt::NoModifier,
+                                QPoint(to, y));
+        };
+
+        struct Gesture { QString name; std::function<void()> act; };
+        std::vector<Gesture> gestures {
+            { "a click in the band", [&]() {
+                QTest::mouseClick(pane, Qt::LeftButton, Qt::NoModifier,
+                                  QPoint(inBand, y)); } },
+            { "a double-click in the band", [&]() {
+                QTest::mouseDClick(pane, Qt::LeftButton, Qt::NoModifier,
+                                   QPoint(inBand, y)); } },
+            { "a click at its end", [&]() {
+                QTest::mouseClick(pane, Qt::LeftButton, Qt::NoModifier,
+                                  QPoint(atEnd, y)); } },
+            { "a drag along it", [&]() { drag(inBand, atEnd); } },
+            { "a drag off its end", [&]() { drag(atEnd, beyond); } },
+            { "a drag onto it", [&]() { drag(beyond, inBand); } },
+        };
+
+        // Everything but the take's notes and the undo history
+        auto apartFromNotes = [&](PaneState s) {
+            for (auto i = s.events.begin(); i != s.events.end(); ) {
+                if (i->first.endsWith(TakeLayers::nameFor
+                                      (m_window->takes()->getActiveName(),
+                                       TakeLayers::Notes))) {
+                    i = s.events.erase(i);
+                } else {
+                    ++i;
+                }
+            }
+            s.undo = "";
+            return s;
+        };
+
+        int noteEdits = 0;
+        for (QString tool : { QString("navigate"), QString("edit") }) {
+            press(QKeySequence(tool == "navigate" ? "1" : "2"));
+            for (const Gesture &g : gestures) {
+                sv::sv_frame_t centre = pane->getCentreFrame();
+                const PaneState before = paneState();
+                g.act();
+                QTest::qWait(300); // outlast the double-click interval
+                // The navigate tool scrolls when dragged, as anywhere
+                pane->setCentreFrame(centre);
+                PaneState after = paneState();
+                if (tool == "navigate") {
+                    QVERIFY2(after == before,
+                             qPrintable(QString("with the navigate tool, %1 "
+                                                "changed %2")
+                                        .arg(g.name)
+                                        .arg(describe(before, after))));
+                    continue;
+                }
+                QVERIFY2(apartFromNotes(after) == apartFromNotes(before),
+                         qPrintable(QString("with the edit tool, %1 changed "
+                                            "%2")
+                                    .arg(g.name)
+                                    .arg(describe(before, after))));
+                if (after.undo != before.undo) {
+                    ++noteEdits;
+                    press(QKeySequence(tr("Ctrl+Z")));
+                    PaneState undone = paneState();
+                    QVERIFY2(undone == before,
+                             qPrintable(QString("undoing what %1 did with "
+                                                "the edit tool left %2")
+                                        .arg(g.name)
+                                        .arg(describe(before, undone))));
+                }
+            }
+        }
+        qInfo("%d of the gestures with the edit tool edited the take's note",
+              noteEdits);
+        press(QKeySequence("1"));
+    }
+
+    // Checklist: the band is readable over waveform and dots at every
+    // zoom: where there is singing the band is drawn over whatever else
+    // is there, band high, and nowhere else
+    void strip_band_at_every_zoom() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 6.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(frames(1.0));
+        take(1500);
+        if (QTest::currentTestFailed()) return;
+        auto ranges = coverage();
+        QCOMPARE(int(ranges.size()), 1);
+        const auto range = ranges[0];
+
+        sv::Pane *pane = pane0();
+        for (int perPixel : { 16, 128, 1024, 8192 }) {
+            // Centred on the end of the singing: some of the band, and
+            // some of the pane with nothing recorded, at every zoom
+            pane->setZoomLevel(sv::ZoomLevel(sv::ZoomLevel::FramesPerPixel,
+                                             perPixel));
+            pane->setCentreFrame(range.end);
+            QImage image = grabPaneRedrawn();
+            saveShot(QString("zoom-%1").arg(perPixel), image);
+            const int h = image.height();
+
+            // Not under the vertical scale at the left, nor where the play
+            // pointer is drawn over everything
+            int pointer = pointerX(image);
+            int inRange = 0, outside = 0;
+            for (int x = pane->getVerticalScaleWidth() + 1;
+                 x < image.width(); ++x) {
+                if (pointer >= 0 && std::abs(x - pointer) <= 2) continue;
+                sv::sv_frame_t f0 = pane->getFrameForX(x);
+                sv::sv_frame_t f1 = pane->getFrameForX(x + 1);
+                if (f0 < 0) continue;
+                if (f0 >= range.start && f1 <= range.end) {
+                    ++inRange;
+                    for (int yy = h - 6; yy < h; ++yy) {
+                        QVERIFY2(isOrange(image.pixel(x, yy)),
+                                 qPrintable(QString("at %1 frames per pixel "
+                                                    "the band has a hole at "
+                                                    "x = %2, y = %3")
+                                            .arg(perPixel).arg(x).arg(yy)));
+                    }
+                    QVERIFY2(!isOrange(image.pixel(x, h - 9)),
+                             qPrintable(QString("at %1 frames per pixel the "
+                                                "band is more than a band "
+                                                "high at x = %2")
+                                        .arg(perPixel).arg(x)));
+                } else if (f1 <= range.start || f0 >= range.end) {
+                    ++outside;
+                    QVERIFY2(!isOrange(image.pixel(x, h - 3)),
+                             qPrintable(QString("at %1 frames per pixel the "
+                                                "band is drawn at x = %2, "
+                                                "where nothing was recorded")
+                                        .arg(perPixel).arg(x)));
+                }
+            }
+            QVERIFY2(inRange >= 3 && outside >= 10,
+                     qPrintable(QString("at %1 frames per pixel %2 columns "
+                                        "of the band and %3 without it are in "
+                                        "view")
+                                .arg(perPixel).arg(inRange).arg(outside)));
+        }
+        saveWindowShot("window");
+    }
+
+    // The band after a second recording, in a gap of the first: the take's
+    // audio is swapped for a file holding both, and the band has to stay
+    // on top of the waveform of the new file
+    void strip_on_top_after_another_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(1000);
+        if (QTest::currentTestFailed()) return;
+        showSeconds(0.0, 3.0);
+        sv::Pane *pane = pane0();
+        const sv::sv_frame_t inFirst = frames(0.4);
+        QImage image = grabPaneRedrawn();
+        QVERIFY(isOrange(image.pixel(pane->getXForFrame(inFirst),
+                                     image.height() - 3)));
+
+        m_window->seekTo(frames(2.0));
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        showSeconds(0.0, 3.0);
+        image = grabPaneRedrawn();
+        saveShot("after-second", image);
+        int y = image.height() - 3;
+        QEXPECT_FAIL("", "the take's waveform layer made by the audio swap "
+                     "is attached above the coverage strip and covers the "
+                     "band (syncCoverageStrip() raises nothing once the "
+                     "strip is shown)", Continue);
+        QVERIFY2(isOrange(image.pixel(pane->getXForFrame(inFirst), y)) &&
+                 isOrange(image.pixel(pane->getXForFrame(frames(2.2)), y)),
+                 "after a second recording the band is not drawn");
+    }
+
+    // Checklist: Erase and Select Recording are greyed out with no take,
+    // no selection, while recording and during the analysis after Stop;
+    // the Takes menu and combo during a take -- and all of them come
+    // back by themselves, with nothing but the take's own events to
+    // update them
+    void menus_follow_the_take_by_themselves() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QAction *erase = m_window->eraseSingingAction();
+        QAction *select = m_window->selectRecordingAction();
+        QMenu *takes = m_window->takesMenu();
+        QVERIFY(takes);
+        QVERIFY(menuTitled(tr("&Edit"))->actions().contains(erase));
+        QVERIFY(menuTitled(tr("&Edit"))->actions().contains(select));
+
+        auto takeItemsEnabled = [&]() {
+            int n = 0;
+            for (QAction *a : takes->actions()) {
+                if (!a->isSeparator() && a->isEnabled()) ++n;
+            }
+            return n;
+        };
+
+        // No take
+        m_window->selectRange(0, frames(0.5));
+        QVERIFY(!erase->isEnabled());
+        QVERIFY(!select->isEnabled());
+        m_window->clearSelections();
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(200);
+        QVERIFY2(!m_window->takeCombo()->isEnabled(),
+                 "the take combo can be used during a take");
+        QVERIFY2(takeItemsEnabled() == 0,
+                 "items of the Takes menu can be used during a take");
+        m_window->selectRange(0, frames(0.3));
+        QVERIFY(!erase->isEnabled());
+        QVERIFY(!select->isEnabled());
+        QTest::qWait(600);
+
+        // Stop, and the moment after it: the recorded range is being
+        // analysed, and erasing would throw that away
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(m_window->analysingRange());
+        QVERIFY2(!erase->isEnabled(),
+                 "Erase can be used while the take is being analysed");
+
+        // ... and everything back, by itself
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        QTRY_VERIFY2(erase->isEnabled(),
+                     "Erase did not come back after the analysis");
+        QVERIFY(select->isEnabled());
+        QVERIFY(m_window->takeCombo()->isEnabled());
+        QVERIFY(takeItemsEnabled() > 0);
+
+        // No selection, nothing to erase
+        m_window->clearSelections();
+        QVERIFY(!erase->isEnabled());
+        QVERIFY(select->isEnabled());
+    }
+
+    // Checklist: three recordings, Ctrl+Z three times, each takes back
+    // exactly one; the menu says "Record Singing" / "Erase Singing" and
+    // never anything about a layer or pane. With the keys, as the user
+    // does it
+    void ctrl_z_takes_back_one_recording_at_a_time() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 8.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(undoText(), tr("Nothing to undo"));
+
+        for (double at : { 0.0, 1.5, 3.0 }) {
+            m_window->seekTo(frames(at));
+            take(600);
+            if (QTest::currentTestFailed()) return;
+        }
+        QCOMPARE(int(coverage().size()), 3);
+
+        // Every name the user can see in the Edit menu and in the undo
+        // and redo menus of the toolbar
+        auto verifyNames = [this]() {
+            QStringList seen;
+            for (QAction *a : menuTitled(tr("&Edit"))->actions()) {
+                seen << a->text();
+            }
+            for (QToolBar *bar : m_window->findChildren<QToolBar *>()) {
+                for (QAction *a : bar->actions()) {
+                    if (!a->menu()) continue;
+                    for (QAction *b : a->menu()->actions()) seen << b->text();
+                }
+            }
+            for (QString text : seen) {
+                QVERIFY2(!text.contains("Layer", Qt::CaseInsensitive) &&
+                         !text.contains("Pane", Qt::CaseInsensitive),
+                         qPrintable("the undo history shows \"" + text + "\""));
+            }
+        };
+
+        for (int left : { 2, 1, 0 }) {
+            QCOMPARE(undoText(), tr("&Undo %1").arg(tr("Record Singing")));
+            verifyNames();
+            if (QTest::currentTestFailed()) return;
+            press(QKeySequence(tr("Ctrl+Z")));
+            QTRY_VERIFY(m_window->takes()->haveTake() ?
+                        int(coverage().size()) == left : left == 0);
+        }
+        QCOMPARE(undoText(), tr("Nothing to undo"));
+
+        // ... and all three back
+        for (int back : { 1, 2, 3 }) {
+            press(QKeySequence(tr("Ctrl+Shift+Z")));
+            QTRY_VERIFY(m_window->takes()->haveTake() &&
+                        int(coverage().size()) == back);
+        }
+        QVERIFY(!m_window->analysingRange());
+        QCOMPARE(undoText(), tr("&Undo %1").arg(tr("Record Singing")));
+
+        // Erase the middle of the second, with its shortcut. A selection
+        // has the reference's pitch analysed again in it, and that is an
+        // entry of the undo history of its own; it is waited for here, so
+        // that it is not what the next Ctrl+Z takes back
+        auto second = coverage()[1];
+        m_window->selectRange(second.start + frames(0.1),
+                              second.start + frames(0.3));
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        QTest::qWait(200);
+        qInfo("after making a selection the Edit menu says \"%s\"",
+              qPrintable(undoText()));
+        QTRY_VERIFY(m_window->eraseSingingAction()->isEnabled());
+        press(QKeySequence(tr("Ctrl+D")));
+        QTRY_COMPARE(int(coverage().size()), 4);
+        QCOMPARE(undoText(), tr("&Undo %1").arg(tr("Erase Singing")));
+        verifyNames();
+        if (QTest::currentTestFailed()) return;
+
+        press(QKeySequence(tr("Ctrl+Z")));
+        QTRY_COMPARE(int(coverage().size()), 3);
+        QCOMPARE(coverage()[1], second);
+    }
+
+    // Checklist: recording again inside singing that is there asks first;
+    // No records nothing; "Don't ask again" with Yes holds across
+    // sessions. The dialog MainWindow shows, answered with its buttons
+    void record_over_question_in_its_dialog() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 8.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        m_window->setRecordOverAskedInDialog(true);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(1500);
+        if (QTest::currentTestFailed()) return;
+        const Coverage::Ranges first = coverage();
+        const QString firstPath = m_window->takes()->getAudioPath();
+
+        // No: nothing recorded, and nothing left running
+        QStringList asked;
+        m_answerDialog = answerWith(QMessageBox::No, false, &asked);
+        m_window->seekTo(frames(0.5));
+        m_window->doRecord();
+        QCOMPARE(asked.size(), 1);
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(!m_window->recordingInProgress());
+        QTest::qWait(300);
+        QCOMPARE(coverage(), first);
+        QCOMPARE(m_window->takes()->getAudioPath(), firstPath);
+
+        // Yes, and don't ask again
+        m_answerDialog = answerWith(QMessageBox::Yes, true, &asked);
+        m_window->seekTo(frames(0.5));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(asked.size(), 2);
+        QTest::qWait(500);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->takes()->getAudioPath() != firstPath);
+
+        // A session of its own, in a window of its own: not asked
+        m_answerDialog = answerWith(QMessageBox::Yes, false, &asked);
+        m_window->doCloseSession();
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        m_window->setRecordOverAskedInDialog(true);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+        take(1200);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(frames(0.3));
+        take(400);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(asked.size(), 2);
+        QVERIFY(!SingingTakes::isOverwriteConfirmationWanted());
+    }
+
+    // Checklist: pitch and notes outside the recorded range (± about
+    // 0.25 s) must not flicker or move at all. The pane before and after a
+    // recording into the middle of a take, compared pixel for pixel
+    // outside it, and the take's layers the same objects throughout
+    void nothing_outside_the_range_moves() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 8.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(3500);
+        if (QTest::currentTestFailed()) return;
+        showSeconds(0.0, 3.8);
+        const sv::sv_frame_t P = frames(1.4);
+        m_window->seekTo(P);
+        QImage before = grabPaneRedrawn();
+        saveShot("before", before);
+        sv::Layer *pitch = m_window->analyser2()->getLayer(Analyser::PitchTrack);
+        sv::Layer *notes = m_window->analyser2()->getLayer(Analyser::Notes);
+
+        QSignalSpy relayered(m_window->analyser2(), SIGNAL(layersChanged()));
+        m_window->setRecordOverAnswer(true);
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::PitchTrack), pitch);
+        QCOMPARE(m_window->analyser2()->getLayer(Analyser::Notes), notes);
+        QVERIFY2(relayered.isEmpty(),
+                 "the take's layers were replaced: they would have vanished "
+                 "from the pane for a moment");
+
+        m_window->seekTo(P);
+        showSeconds(0.0, 3.8);
+        QImage after = grabPaneRedrawn();
+        saveShot("after", after);
+
+        // What was recorded is at most as long as the wait for it; the
+        // analysis of it reaches a quarter of a second either side
+        sv::Pane *pane = pane0();
+        int left = pane->getXForFrame(P - frames(0.3));
+        int right = pane->getXForFrame(P + frames(0.8) + frames(0.3));
+        int pointer = pane->getXForFrame(P);
+        QVERIFY(left > 20 && right < before.width() - 20);
+
+        // The band of the coverage strip along the bottom is left to
+        // strip_on_top_after_another_recording
+        int differing = 0;
+        QString first;
+        for (int x = 0; x < before.width(); ++x) {
+            if (x >= left && x <= right) continue;
+            if (std::abs(x - pointer) <= 3) continue;
+            for (int y = 0; y < before.height() - 10; ++y) {
+                if (before.pixel(x, y) != after.pixel(x, y)) {
+                    if (first == "") {
+                        first = QString("x = %1, y = %2").arg(x).arg(y);
+                    }
+                    ++differing;
+                }
+            }
+        }
+        QVERIFY2(differing == 0,
+                 qPrintable(QString("%1 pixels outside the recorded range "
+                                    "and its margin changed, the first at %2 "
+                                    "(range drawn from x = %3 to %4)")
+                            .arg(differing).arg(first).arg(left).arg(right)));
+    }
+
+    // Checklist: open a .ton, Load Singing Track, then Record: closing
+    // afterwards asks whether to save. The window's own close, as the
+    // title bar's button does it
+    void closing_after_a_take_asks_to_save() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        QString session = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(session));
+        openReference(session);
+        if (QTest::currentTestFailed()) return;
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        m_window->seekTo(frames(1.2));
+        take(500);
+        if (QTest::currentTestFailed()) return;
+
+        QStringList asked;
+        m_answerDialog = answerWith(QMessageBox::Cancel, false, &asked);
+        QVERIFY(!m_window->close());
+        QCOMPARE(asked, QStringList({ tr("Session modified") }));
+        QVERIFY2(m_window->isVisible(), "Cancel did not keep the window open");
+        QVERIFY(m_window->takes()->haveTake());
+    }
+
+    // Checklist: stop a take and close the window at once: no crash.
+    // Closed and deleted while the take is still being analysed
+    void stop_then_close_the_window_at_once() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(1000);
+        m_window->doRecord();
+        QVERIFY(m_window->analysingRange());
+
+        QStringList asked;
+        m_answerDialog = answerWith(QMessageBox::No, false, &asked);
+        QVERIFY(m_window->close());
+        QCOMPARE(asked, QStringList({ tr("Session modified") }));
+        delete m_window;
+        m_window = nullptr;
+
+        // Whatever was still running finishes with no window to go to
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        QTest::qWait(500);
+    }
+
+    // Checklist: log out with unsaved takes: what commitData writes into
+    // ~/.sv1 is playable. Only where the home directory can be moved
+    // for the test: on Windows it is the profile's, whatever HOME says
+    void commit_data_writes_a_playable_session() {
+#ifdef Q_OS_WIN
+        QSKIP("commitData() writes into the real profile's .sv1 on Windows");
+#else
+        QByteArray home = qgetenv("HOME");
+        QString fakeHome = m_dir.filePath("home");
+        QVERIFY(QDir().mkpath(fakeHome));
+        qputenv("HOME", fakeHome.toLocal8Bit());
+        QCOMPARE(QDir::homePath(), fakeHome);
+
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+        take(1000);
+        if (QTest::currentTestFailed()) return;
+        const Coverage::Ranges recorded = coverage();
+
+        bool committed = m_window->commitData(false);
+        qputenv("HOME", home);
+        QVERIFY(committed);
+
+        QStringList written = QDir(fakeHome + "/.sv1")
+            .entryList({ "tmp-*" }, QDir::Files);
+        QCOMPARE(written.size(), 1);
+        QString path = fakeHome + "/.sv1/" + written[0];
+
+        // It goes on the Recent Files list, which opens it with openPath()
+        m_window->doCloseSession();
+        MainWindow::FileOpenStatus opened =
+            m_window->openPath(path, MainWindow::ReplaceSession);
+        QEXPECT_FAIL("", "commitData() names the file tmp-*.sv, Sonic "
+                     "Visualiser's session extension; Tony opens only .ton "
+                     "as a session", Continue);
+        QCOMPARE(opened, MainWindow::FileOpenSucceeded);
+
+        // What is in it, under the name Tony would open
+        m_window->doCloseSession();
+        QString ton = QFileInfo(path).path() + "/" +
+            QFileInfo(path).completeBaseName() + ".ton";
+        QVERIFY(QFile::rename(path, ton));
+        QCOMPARE(m_window->openPath(ton, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QVERIFY2(m_window->takes()->haveTake(),
+                 "the session written at logout has no take in it");
+        QCOMPARE(coverage(), recorded);
+
+        QString audio = m_window->takes()->getAudioPath();
+        QVERIFY2(QFileInfo(audio).exists(),
+                 qPrintable("the take's audio is not there: " + audio));
+        sv::WavFileReader reader { sv::FileSource(audio) };
+        QVERIFY(reader.isOK());
+        auto data = reader.getInterleavedFrames
+            (recorded[0].start + 2000, recorded[0].end - recorded[0].start - 4000);
+        double sum = 0.0;
+        for (float v : data) sum += double(v) * double(v);
+        QVERIFY2(!data.empty() && std::sqrt(sum / double(data.size())) > 0.01,
+                 "the take in the session written at logout is silent");
+#endif
+    }
+
+    // Checklist: the alternate pitch track is faded brown, dark brown
+    // during a take, and stays in view after an octave step
+    void alternate_pitch_track_colours() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+        showSeconds(0.0, 3.0);
+
+        QColor faded(164, 146, 136), dark(74, 37, 17);
+        auto isFaded = [&](QRgb p) { return closeTo(p, faded, 12); };
+        auto isDark = [&](QRgb p) { return closeTo(p, dark, 12); };
+
+        m_window->doToggleAlternatePitch();
+        QTRY_VERIFY(m_window->alternatePitch()->getLayer());
+        QTest::qWait(200);
+        QImage image = grabPane();
+        QVERIFY2(countAbove(image, 0, image.width(), isFaded) > 0,
+                 "no faded brown track is drawn");
+        saveShot("faded", image);
+
+        // Wide enough for the whole of every toolbar, 8vb and 8va included
+        QSize size = m_window->size();
+        m_window->resize(1920, 1000);
+        saveWindowShot("window");
+        m_window->resize(size);
+        showSeconds(0.0, 3.0);
+
+        // Two octaves either way stay in view of a 220 Hz reference. The
+        // third is only reported: 28 Hz and 1.8 kHz are past the range the
+        // pane shows, and nothing scrolls to them
+        auto inView = [&]() {
+            QTest::qWait(300);
+            image = grabPane();
+            int octaves = m_window->alternatePitch()->getOctaves();
+            saveShot(QString("octaves%1").arg(octaves), image);
+            return countAbove(image, 0, image.width(), isFaded) > 0;
+        };
+        QCOMPARE(m_window->alternatePitch()->getOctaves(), -1);
+        for (bool up : { false, true, true, true }) {
+            m_window->doStepAlternatePitch(up);
+            QVERIFY2(inView(),
+                     qPrintable(QString("the track is out of view at %1 "
+                                        "octaves")
+                                .arg(m_window->alternatePitch()->getOctaves())));
+        }
+        QCOMPARE(m_window->alternatePitch()->getOctaves(), 2);
+        m_window->doStepAlternatePitch(true);
+        qInfo("at +3 octaves the track is %s", inView() ? "in view" : "out of view");
+        for (int i = 0; i < 5; ++i) m_window->doStepAlternatePitch(false);
+        QCOMPARE(m_window->alternatePitch()->getOctaves(), -3);
+        qInfo("at -3 octaves the track is %s", inView() ? "in view" : "out of view");
+        m_window->doStepAlternatePitch(true);
+        m_window->doStepAlternatePitch(true);
+        QCOMPARE(m_window->alternatePitch()->getOctaves(), -1);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(400);
+        image = grabPane();
+        QVERIFY2(countAbove(image, 0, image.width(), isDark) > 0,
+                 "the track followed during a take is not dark brown");
+        QVERIFY2(countAbove(image, 0, image.width(), isFaded) == 0,
+                 "the track is still faded during a take");
+        saveShot("dark", image);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(countAbove(grabPane(), 0, image.width(), isFaded) > 0);
+    }
+
+    // Checklist: pre-roll less than 3 s from the start of the song: a
+    // shorter countdown, and no attempt to run from before frame 0
+    void preroll_near_the_start_of_the_song() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        m_window->setPlayReferenceWhileRecording(true);
+        m_window->setPreRoll(true);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(frames(1.0));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takePreRoll(), frames(1.0));
+        QStringList counted;
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < 1500) {
+            QVERIFY2(m_window->playbackFrame() >= 0,
+                     qPrintable(QString("the cursor is at frame %1")
+                                .arg(m_window->playbackFrame())));
+            QString text = m_window->statusText();
+            if (text.startsWith(tr("Recording in ")) &&
+                !counted.contains(text)) {
+                counted << text;
+            }
+            QTest::qWait(20);
+        }
+        QCOMPARE(counted, QStringList({ tr("Recording in %1…").arg(1) }));
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(coverage()[0].start, frames(1.0));
+    }
+
+    // Checklist: Constrain Playback to Selection together with a pre-roll.
+    // The device hears its own output here, so the "singer" sings exactly
+    // what is played: a take that is in time holds the reference's high
+    // note where the reference has it
+    void preroll_with_playback_constrained_to_the_selection() {
+        for (bool constrained : { false, true }) {
+            FakeAudioIO::Config config;
+            config.loopback = true;
+            config.recordLatency = 512;
+            config.playbackLatency = 512;
+            config.inputDelay = 1024;
+            makeWindow(config);
+            if (QTest::currentTestFailed()) return;
+            m_window->setPlayReferenceWhileRecording(true);
+            m_window->setPreRoll(true);
+            m_window->setRecordIntoSelection(true);
+            QSettings settings;
+            settings.beginGroup("MainWindow");
+            settings.setValue("prerollseconds", 1.0);
+            settings.endGroup();
+
+            // Low, then high from 2 to 2.75 s, then low again
+            auto reference = tone(lowHz, 2.0);
+            auto high = tone(highHz, 0.75);
+            auto low = tone(lowHz, 1.25);
+            reference.insert(reference.end(), high.begin(), high.end());
+            reference.insert(reference.end(), low.begin(), low.end());
+            openReference(writeWav(reference));
+            if (QTest::currentTestFailed()) return;
+
+            m_window->selectRange(frames(2.0), frames(3.5));
+            QAction *constrain = nullptr;
+            for (QAction *a : m_window->findChildren<QAction *>()) {
+                if (a->text() == tr("Constrain Playback to Selection")) {
+                    constrain = a;
+                }
+            }
+            QVERIFY(constrain);
+            if (constrain->isChecked() != constrained) constrain->trigger();
+            QCOMPARE(constrain->isChecked(), constrained);
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(), 30000);
+
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!m_window->recordTarget()->isRecording(), 8000);
+            QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+            double from = -1.0, to = -1.0;
+            for (const auto &e : sv::ModelById::getAs<sv::SparseTimeValueModel>
+                     (m_window->analyser2()->getLayer(Analyser::PitchTrack)
+                      ->getModel())->getAllEvents()) {
+                if (e.getValue() < std::sqrt(lowHz * highHz)) continue;
+                if (from < 0.0) from = double(e.getFrame()) / rate;
+                to = double(e.getFrame()) / rate;
+            }
+            qInfo("playback %s: the high note is in the take from %.3f to "
+                  "%.3f s", constrained ? "constrained" : "not constrained",
+                  from, to);
+            if (constrained) {
+                QEXPECT_FAIL("", "with playback constrained to the "
+                             "selection the lead-in is not played: playback "
+                             "starts at the selection, and what is sung to it "
+                             "is placed a whole pre-roll too early", Continue);
+            }
+            QVERIFY2(std::fabs(from - 2.0) < 0.05 && std::fabs(to - 2.75) < 0.05,
+                     qPrintable(QString("the high note of the reference, "
+                                        "2.000 to 2.750 s, is in the take "
+                                        "from %1 to %2 s")
+                                .arg(from, 0, 'f', 3).arg(to, 0, 'f', 3)));
+
+            if (constrain->isChecked()) constrain->trigger();
+            m_window->clearSelections();
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(), 30000);
+            m_window->doCloseSession();
+        }
+    }
+
+    // Checklist: switching between takes is fast and analyses nothing
+    void switching_takes_is_quick() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 30.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+        m_window->doNewEmptyTake();
+        m_window->seekTo(frames(2.0));
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        for (int to : { 0, 1, 0, 1 }) {
+            QElapsedTimer timer;
+            timer.start();
+            m_window->doChooseTakeInCombo(to);
+            QCoreApplication::processEvents();
+            grabPane();
+            qint64 ms = timer.elapsed();
+            qInfo("switch to take %d took %lld ms", to + 1, ms);
+            QVERIFY2(ms < 1000,
+                     qPrintable(QString("switching takes took %1 ms").arg(ms)));
+            QCOMPARE(m_window->takes()->getActiveIndex(), to);
+            QVERIFY(!m_window->analysingRange());
+            QVERIFY(!sv::ModelTransformerFactory::getInstance()
+                    ->haveRunningTransformers());
+        }
+    }
+};
+
+#endif

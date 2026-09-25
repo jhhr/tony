@@ -887,6 +887,39 @@ private slots:
         stopTake();
     }
 
+    // A microphone on input 2 of an interface, nothing on input 1: the
+    // dots and the take's pitch come from the mixdown, so they are there
+    void live_dots_from_the_second_input() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 1;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(1000);
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        QVERIFY(model);
+        auto events = model->getAllEvents();
+        QVERIFY2(events.size() > 20,
+                 qPrintable(QString("only %1 live dots after a second of "
+                                    "singing into input 2")
+                            .arg(events.size())));
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(events), highHz)) < 10.0);
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        auto pitch = pitchEvents(m_window->analyser2());
+        QVERIFY2(pitch.size() > 20, "the take of input 2 has no pitch track");
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitch), highHz)) < 10.0);
+    }
+
     void live_dots_removed() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);

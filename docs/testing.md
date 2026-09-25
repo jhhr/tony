@@ -6,9 +6,12 @@ QtTest suites in `main/test/`, in two executables that mirror the two libraries
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
 | `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestSingingAnalysis`, `TestRecordWorkflow` | about 4.5 minutes (measured 2026-09-20), nearly all of it `TestRecordWorkflow`: takes are recorded in real time |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestSingingAnalysis`, `TestRecordWorkflow`, `TestUiChecks` | about 5 minutes (measured 2026-09-25 on Linux), nearly all of it `TestRecordWorkflow` and `TestUiChecks`: takes are recorded in real time |
+| `test-tony-device` | as `test-tony-app`, but with the **real** audio device | `TestRealDevice` | about a minute; run by hand only, see the [manual checklist](manual-checklist.md) |
 
-`meson test` / `build.bat test` runs both plus four svcore suites.
+`meson test` / `build.bat test` runs the first two plus four svcore suites. `test-tony-device`
+is built with them and never run by `meson test`: it needs a microphone that hears the
+speakers.
 
 - The `tony-app` meson test has `timeout: 900`; the suite took about 277 s unloaded when
   that was set. Every workflow test adds real time, so if the suite comes near it, raise it
@@ -58,19 +61,23 @@ helpers must not be slots; connect to lambdas instead. For access to private sta
   whole file, not just around the range (`ranged_leaves_the_rest_alone`): that is what
   caught the merge damaging unchanged audio half a second away.
 
-## What is there to reuse (`TestRecordWorkflow.h`)
+## What is there to reuse (`TestRecordWorkflow.h`, `TestMainWindow.h`)
 
 - `FakeAudioIO` (`FakeAudioIO.h`): a duplex device with a worker thread that runs the
   callback in real time, input first and then output, as PortAudio and JACK do. `Config`
   sets rate, block size, reported latencies, a programmed mono input, its delay, and
   whether the input clock starts at the first audible output sample ("a singer exactly on
-  time"). It captures the output, so tests can assert what reached the speakers.
-- `TestMainWindow`: subclass of `MainWindow` that exposes protected operations as
-  `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on, installs the
-  fake device through `createAudioIO()`, and **answers dialogs through virtual seams**:
-  `confirmRecordingOverTake()`, `confirmDeleteTake()`, `askForTakeName()`, each with a
-  `set...Answer()` and a counter of questions asked. A test cannot answer a real dialog:
-  anything new that asks the user needs such a virtual.
+  time"), `loopback` (the output fed back into the input, as speakers into a microphone),
+  and `inputChannel` (the input on one channel only, as a microphone on input 2). It
+  captures the output, so tests can assert what reached the speakers.
+- `TestMainWindow` (`TestMainWindow.h`, shared by the three suites that drive a window):
+  subclass of `MainWindow` that exposes protected operations as `doRecord()`,
+  `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on, installs the fake device
+  through `createAudioIO()` (or the real one, `setUseRealDevice()`), and **answers dialogs
+  through virtual seams**: `confirmRecordingOverTake()`, `confirmDeleteTake()`,
+  `askForTakeName()`, each with a `set...Answer()` and a counter of questions asked.
+  Anything new that asks the user needs such a virtual. `setRecordOverAskedInDialog()`
+  lets the real dialog through instead, for a test that presses its buttons.
 - Fixture helpers: `makeWindow(config)`, `writeWav()`, `openReference()`, `startTake()` /
   `stopTake()` / `take(ms)`, `verifyPlaySourceClean()`, `layersOnModel()`,
   `paneHasLayer()`, `documentHasLayer()`, `reopenAsSession()` / `reopenSession()`,
@@ -139,7 +146,8 @@ it first, or break the code for a moment (mark the line `MUTATION`, and check
   purpose. "Fixing" one side makes the live dots and the pYIN track disagree.
 
 A bug that is known and not yet fixed is committed as a test with `QEXPECT_FAIL` naming
-it; the marker goes in the commit that fixes it. There are none at present.
+it; the marker goes in the commit that fixes it. There are four at present, all in
+`TestUiChecks`, listed in [open-points.md](open-points.md).
 
 ## Timing and races
 
@@ -167,6 +175,31 @@ it; the marker goes in the commit that fixes it. There are none at present.
   its model was released.
 - After a `.ton` round trip compare frames exactly and values with a tolerance (six
   significant figures in the file).
+
+## The window as it is seen (`TestUiChecks`)
+
+The window is shown (still offscreen), made active so that its shortcuts work, and driven
+with `QTest` key presses, mouse gestures on pane 0 and the dialogs MainWindow shows. What
+it draws is judged by pixels:
+
+- **Read the screen, not `QWidget::grab()`**: `grabPane()` copies pane 0 out of the
+  window's backing store, which holds what the pane's own paint events put there. `grab()`
+  has the pane paint itself once more and can show what the screen does not: it showed
+  live dots that the screen never got.
+- After any playback the pane's cache holds the translucent note boxes painted twice.
+  Compare images only after `grabPaneRedrawn()`, which forces a full redraw (a zoom one
+  step away snaps back to the same level and redraws nothing; it doubles the level).
+- The pane has its vertical scale at the left, about 30 px, over everything; the play
+  pointer is two dark lines around a light one (`pointerX()`), drawn over the band.
+- The take's pitch track is under its notes' translucent purple, so its orange reads as
+  about (246, 126, 114) there: `isSinging()` takes both. Bright orange is the reference's
+  pitch candidates, which a selection makes.
+- Record puts the view back on the take's position: work out x positions again after it.
+- Timing checks in real time go through the pane's own timers (the pointer moves every
+  20 ms): allow a tick.
+
+With `TONY_TEST_SHOT_DIR` set, the suite saves the images it judged, and some of the whole
+window, as `<test>-<what>.png`, for the [manual checklist](manual-checklist.md)'s look.
 
 ## What stays manual
 
