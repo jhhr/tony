@@ -262,21 +262,35 @@ setting changes only through Use this latency.
 
 ## 7. Order of work
 
-Every step ends with both whole suites green; commits only when asked.
+Every step ends with both whole suites green. The work is split into phases for a line
+of agents; their work orders are in
+[calibrate-audio-work-orders.md](calibrate-audio-work-orders.md). Each phase's line is
+marked "Done" when it is committed.
 
-1. **Core:** `LatencyCheck`, `TakeDiff`, `LatencyCalibration` and their tests.
-2. **Runner, dialog and calibration page** (every build), with app tests. **Then you run
-   it on your PC.** Its numbers settle three things before the rest is built: how wrong
-   the driver's figure is, whether the offset holds across stream restarts on MME, and
-   whether your device's rate hits the takes.
-3. **Calibration in use:** `recordingStarted()`, Use this latency, Forget, staleness,
-   app tests.
-4. **Dev-check framework:** build flag, `DevChecks`, `TakeObserver`, report, friend
-   access. First group: items 1, 2, 7, 12, 13, 14.
-5. **Observer group:** items 3, 4, 5, 8, 15, 16.
-6. **Join and long-song group:** items 9 and 10.
-7. **Smoke group:** optional.
-8. **Docs,** in the same commit as the code they describe:
+1. **Core.**
+   - **A1** Test reference and sweep finder: `LatencyCheck` generator and per-event
+     analysis.
+   - **A2** Verdicts and calibration arithmetic: aggregation over events and punch-ins.
+2. **Runner, dialog and calibration page** (every build), with app tests.
+   - **B1** The alignment check runner and its app tests.
+   - **B2** Storing the measured round trip and using it in takes (`LatencyCalibration`,
+     `recordingStarted()`, staleness). This was step 3 below; it moved up because the
+     dialog needs it.
+   - **B3** The Calibrate Audio dialog and menu entry.
+
+   **Then you run it on your PC.** Its numbers settle three things: how wrong the
+   driver's figure is, whether the offset holds across stream restarts on MME, and
+   whether your device's rate hits the takes. Work goes on meanwhile: only the
+   thresholds and the restart-jitter remedy wait on those numbers.
+3. **Calibration in use:** built in B2 (Use this latency and Forget in B3).
+4. **Dev-check framework:**
+   - **C0** `TakeDiff`, pure.
+   - **C1** Build flag, `DevChecks`, `TakeObserver`, report, friend access. First
+     group: items 1, 2, 7, 12, 13, 14.
+5. **C2** Observer group: items 3, 4, 5, 8, 15, 16.
+6. **C3** Join and long-song group: items 9 and 10.
+7. **C4** Smoke group.
+8. **D** Docs, from the code and the phase log:
    - `manual-checklist.md`: an automated item keeps its text and gets "*automated:
      dev check `<name>`*"; a measured item keeps only the question for a person. The
      list becomes what a person must do after a dev run.
@@ -318,3 +332,72 @@ could convert. The button then shows the fix working on each device.
 - **A quick re-measure** after a Bluetooth reconnect, without a test session.
 - **Items 18 and 6**, as app-suite tests: synthetic mouse events, and a fake device that
   fails to open.
+
+## 10. Decisions
+
+| Question | Decision |
+| --- | --- |
+| Where the check runs | In a session of its own, opened from a generated WAV; the user is asked to save first |
+| How the round trip is measured | Through ordinary takes (§2), not a separate audio IO |
+| When a measured figure is used | After **Use this latency**; a dev run uses the new figure for itself only |
+| Dev mode | Any build type that does not start with `release` (`TONY_DEV_CHECKS`) |
+| Form of a dev check | A function returning a plain `CheckResult`, not a QtTest function |
+| Checkpoint after B3 | The user runs it on Windows when they can; C0 onwards does not wait |
+| Commits | The lead commits each phase after review and pushes `feat/calibrateaudiotests` |
+
+## 11. Facts checked in the code
+
+Checked on 2026-09-25, so that phases do not re-derive them.
+
+- **The latency today.** In `MainWindow::recordingStarted()`'s deferred lambda: L =
+  `computeRecordingLatency(getTargetPlayLatency(), getSystemRecordLatency())` + start
+  gap. It applies only with Play Reference While Recording on; otherwise L = 0. The
+  start gap comes from the play-start callback set in `MainWindow`'s constructor:
+  `getFramesReceived() − blockFrames` on the first output block with audio.
+  `refineRecordingLatency()` and `currentRecordingLatency()` swap the estimate for the
+  measurement.
+- **bqaudioio `PortAudioIO`** (upstream, not a fork):
+  - one duplex `Pa_OpenStream`, `suggestedLatency = 0.2`, no host-API stream info;
+  - input goes to the record target **before** output is asked for, in the same
+    callback;
+  - `suspend()`/`resume()` are `Pa_StopStream`/`Pa_StartStream`. `MainWindowBase::stop()`
+    suspends and `record()` resumes, so **every take restarts the stream**;
+  - it exposes no device names and ignores PortAudio's callback time info.
+- **Device rate.**
+  - `AudioCallbackPlaySource::getApplicationSampleRate()` and
+    `AudioCallbackRecordTarget::getApplicationSampleRate()` both return 0, so the device
+    opens at PortAudio's default rate.
+  - `ResamplerWrapper` resamples the play source to it. The record target records at it.
+  - `MainWindow` sets `Preferences::setFixedSampleRate(44100)`.
+  - `TakeAudio::splice()` writes a take's first recording at the recording's rate
+    without converting positions. Later recordings are refused only when their rate
+    differs from the take file's.
+  - PortAudio's MME default rate is the first of {44100, 48000, …} that the device
+    accepts.
+- **Device choice.** `getDeviceIndex()` takes the first PortAudio device with the given
+  name, across host APIs. MME names are cut to 31 characters.
+- **Settings the check must not write.** The toggles `m_recordIntoSelection`
+  (`MainWindow/recordintoselection`), `m_playRefWhileRecording` and `m_preRoll` write
+  QSettings when toggled. `wantedPreRollFrames()` reads `MainWindow/prerollseconds`.
+- **Opening a reference.**
+  - The tests use `openPath(path, MainWindow::ReplaceSession)` after
+    `discardModifications()`.
+  - `checkSaveModified()` is what asks the user to save.
+  - The reference is analysed when `Analyser::getInitialAnalysisCompletion() >= 100` and
+    the layers exist. See `analysed()` in `TestRecordWorkflow.h`.
+- **The take after Stop.**
+  - Its audio is the model `analyser2()->getMainModelId()`, and its file is
+    `m_takes->getAudioPath()`.
+  - Coverage is `m_takes->getCoverage().getRanges()`.
+  - The take is analysed when `analysed(analyser2())` holds.
+- **Levels.** `getOutputLevels()` and `getInputLevels()`, on the play source and record
+  target, return per-channel peaks since the last call.
+- **Fake device.** `FakeAudioIO::Config::loopback` adds the output to the input
+  `inputDelay` frames late; no test uses it yet. The reported latencies are independent
+  of the real delay. `TestMainWindow::createAudioIO()` installs the fake.
+- **Menus.** The Playback menu is built in `MainWindow::setupToolbars()`
+  (`m_playbackMenu`). The audio device submenus are there too.
+- **Build types.** `build.bat` uses `debugoptimized`; `meson.build` defaults to
+  `release`, which the deploy scripts use. `meson.build` already switches on
+  `buildtype.startswith('release')` for `WANT_TIMING` / `NO_TIMING`.
+- **Qt Test** is already in `qt_dep`'s modules, so every target links it.
