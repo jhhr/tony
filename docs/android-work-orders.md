@@ -46,11 +46,31 @@ first.
 - Android-only code sits behind `#ifdef Q_OS_ANDROID` (or in files the Android build alone
   compiles) and must not change the desktop build's behaviour.
 
-**Build and test in this container** (Linux; the lead fills in the exact commands after
-phase A0)
+**Build and test in this container** (Linux)
 
 - Not the Windows commands in AGENTS.md: this is an Ubuntu 24.04 container, 4 cores,
-  15 GB memory, no swap. `<A0 fills in: setup script, build command, test commands>`.
+  15 GB memory, no swap, running as root. Qt 6.11 is conda-forge's, in `/opt/qt6-conda`.
+  In a fresh container run `deploy/linux/container-setup.sh` first (apt, Qt, the library
+  directories, `meson setup build`); it is idempotent. From the repo root:
+
+  ```sh
+  mkdir -p tmp
+  ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app > tmp/build.log 2>&1
+  echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
+  ```
+
+  From `build/` (no environment needed: the tests set the offscreen platform themselves):
+
+  ```sh
+  mkdir -p ../tmp/tl
+  TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core > ../tmp/test.log 2>&1; echo "exit:$?"
+  TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app  > ../tmp/test.log 2>&1; echo "exit:$?"   # 4.5 min
+  TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app undo_two_takes_in_order > ../tmp/test.log 2>&1
+  grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
+  ```
+
+  No `.exe` on Linux; the plugin target is `pyin.so`. Tony needs Qt 6.5 or later at run
+  time (string connects with `sv::` types, see the A0 log entry).
 - Send build output to a log file with the exit status written into it; look at the tail
   or grep it for errors, never read it whole.
 - Tests: read results from the per-suite files in `TONY_TEST_LOG_DIR` (see AGENTS.md).
@@ -101,10 +121,12 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 | No Qt Multimedia | Its input path is not low-latency and reports no latency (port-android.md, Audio) |
 | Features beyond the spec (latency calibration setting, session bundle) are not built unless a phone test shows they are needed | The spec says so |
 
-## 4. State of the code (kept by the lead; as of 2026-09-25, before phase A0)
+## 4. State of the code (kept by the lead; as of 2026-09-25, after phase A0)
 
-- Nothing of the port exists yet. The branch holds `default` plus the research docs.
-- The library directories are not checked out in a fresh container; A0 sets them up.
+- Nothing of the port exists yet. The branch holds `default`, the research docs, and the
+  container setup script `deploy/linux/container-setup.sh`.
+- Both suites pass on Linux (Qt 6.11.2 from conda-forge). `TestTakesFile`'s Windows path
+  assertions run on Windows only.
 
 ## 5. Phases
 
@@ -113,7 +135,7 @@ needs the result of that phone test. A8 is last. (Since 2026-09-25 `download.qt.
 `dl.google.com` are reachable from the container, and GitHub Actions is enabled on
 `jhhr/tony`.)
 
-- A0 — Desktop build and tests in the container.
+- A0 — Desktop build and tests in the container. Done.
 - A1 — Sample rate: a device that is not at 44.1 kHz.
 - A2 — Android toolchain and C libraries.
 - A3 — Tony as an APK (no audio): the test port.
@@ -256,3 +278,28 @@ Template:
     Choices / deviations: ...
     The next phase must know: ...
     Left open: ...
+
+### Phase A0 — 2026-09-25
+Built: `deploy/linux/container-setup.sh` (apt packages, conda-forge `qt6-main` 6.11.2 in
+`/opt/qt6-conda` through micromamba, the libraries at their pins, `meson setup build`;
+`--build` also builds). `main/test/TestTakesFile.h`: its back-slash and case-insensitive
+path assertions now run on Windows only, with Linux counterparts.
+Choices / deviations:
+- Qt 6.11 from conda-forge, not Ubuntu's 6.4. Tony compiles with 6.4, but pYIN results
+  never reach `Analyser`: its `SIGNAL()`/`SLOT()` strings say `ModelId` and `sv_frame_t`,
+  moc records `sv::ModelId`, and only Qt 6.5 and later match the two through their
+  registered metatypes (`methodMatch()` in Qt's `qmetaobject.cpp`). `MainWindow.cpp`'s
+  `doubleClickSelectInvoked(sv_frame_t)` connect is the same. Tony needs Qt >= 6.5 at run
+  time; nothing in `meson.build` says so.
+- Mercurial pins matched to mirror commits by date (reasons in the script): dataquay is
+  `2dbf1be`, not the mirror's head; the other four are their heads. sv-dependency-builds
+  is not cloned (Linux does not use it). Rubber Band is Ubuntu's 3.3.0.
+The next phase must know: only `Qt6*.pc` are on meson's pkg-config path; the RUNPATH is
+`/opt/qt6-conda/lib`, so libasound and libstdc++ come from there at run time. No `.exe`;
+the plugin target is `pyin.so`. Clean build about 5 min at `-j 4`, 0.8 GB per compile job;
+app suite 4.5 min.
+Left open:
+- `svapp/audio/AudioCallbackRecordTarget.cpp:291` connects to `aboutToBeDeleted()`, which
+  no model has: a warning in every recording test, on every platform. Not touched.
+- architecture.md "Signals" says such string connects never match: true for pointers
+  (`Layer *`), but registered types match from Qt 6.5. For A8.
