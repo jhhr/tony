@@ -15,9 +15,10 @@
 #define TEST_LYRICS_LAYER_H
 
 // Tier 3: the lyrics plot style of RegionLayer (svgui fork), which
-// draws the words of the lyrics along the top of pane 0. Where each
-// label goes is worked out by a pure function, tested first; then the
-// layer is painted into images, with no MainWindow.
+// draws the words of the lyrics along the bottom of pane 0. Where each
+// box goes and how big its font is are worked out by pure functions,
+// tested first; then the layer is painted into images, with no
+// MainWindow.
 
 #include "framework/Document.h"
 #include "view/Pane.h"
@@ -30,10 +31,12 @@
 
 #include <QObject>
 #include <QtTest>
+#include <QSignalSpy>
 #include <QImage>
 #include <QPainter>
 #include <QTemporaryDir>
 
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -53,7 +56,7 @@ class TestLyricsLayer : public QObject
 
     static constexpr double kRate = 44100.0;
     static constexpr int kWidth = 800;
-    static constexpr int kHeight = 200;
+    static constexpr int kHeight = 300;
 
     sv::ModelId makeAudioModel() {
         auto model = std::make_shared<sv::WritableWaveFileModel>
@@ -100,6 +103,40 @@ class TestLyricsLayer : public QObject
             if (image.pixel(x, y) != qRgb(255, 255, 255)) return false;
         }
         return true;
+    }
+
+    // Words two seconds apart and a second and a half long, with short
+    // labels: at the tests' zoom each box is 150 pixels of region with
+    // its label well inside it, and nothing is left out
+    void addSpacedWords(int count) {
+        auto model = sv::ModelById::getAs<sv::RegionModel>(m_layer->getModel());
+        QVERIFY(model);
+        for (int i = 0; i < count; ++i) {
+            model->add(sv::Event(sv::sv_frame_t(kRate * 2.0 * i), 0.f,
+                                 sv::sv_frame_t(kRate * 1.5),
+                                 QString("w%1").arg(i)));
+        }
+    }
+
+    sv::Event spacedWord(int i) {
+        return sv::Event(sv::sv_frame_t(kRate * 2.0 * i), 0.f,
+                         sv::sv_frame_t(kRate * 1.5), QString("w%1").arg(i));
+    }
+
+    // The columns in which two images differ, as [first, last], or
+    // (-1, -1) if they are the same
+    static std::pair<int, int> differingColumns(const QImage &a, const QImage &b) {
+        int first = -1, last = -1;
+        for (int x = 0; x < a.width(); ++x) {
+            for (int y = 0; y < a.height(); ++y) {
+                if (a.pixel(x, y) != b.pixel(x, y)) {
+                    if (first < 0) first = x;
+                    last = x;
+                    break;
+                }
+            }
+        }
+        return { first, last };
     }
 
 private slots:
@@ -170,6 +207,41 @@ private slots:
                  std::vector<int>({ 0, 1 }));
     }
 
+    void a_label_reaching_back_over_the_one_before_goes_to_the_next_row() {
+        // A long label centred on a short region can start left of the
+        // label of the region before it
+        Spans spans { { 100, 10 }, { 60, 100 }, { 115, 10 } };
+        QCOMPARE(sv::RegionLayer::assignLabelRows(spans, 2, 4),
+                 std::vector<int>({ 0, 1, 0 }));
+    }
+
+    void a_box_is_its_region_or_its_label_centred_on_the_region() {
+        typedef std::pair<double, double> Span;
+        QCOMPARE(sv::RegionLayer::getLyricsBoxSpan(100, 200, 50), Span(100, 100));
+        QCOMPARE(sv::RegionLayer::getLyricsBoxSpan(100, 200, 100), Span(100, 100));
+        QCOMPARE(sv::RegionLayer::getLyricsBoxSpan(100, 120, 60), Span(80, 60));
+    }
+
+    void the_font_grows_with_the_zoom_from_twice_to_four_times() {
+        // Base 13 pixels in a tall view: 26 to 52, a pixel for every 10
+        // pixels per second in between
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(50, 13, 800), 26);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(300, 13, 800), 30);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(400, 13, 800), 40);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(5000, 13, 800), 52);
+        // Never more than an eighth of the view, nor less than its font
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(5000, 13, 200), 25);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(50, 13, 200), 25);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(50, 13, 40), 13);
+
+        int last = 0;
+        for (double pps = 10; pps < 2000; pps *= 1.3) {
+            int size = sv::RegionLayer::getLyricsFontPixelSize(pps, 13, 600);
+            QVERIFY2(size >= last, "the font got smaller as the view zoomed in");
+            last = size;
+        }
+    }
+
     void no_labels_and_no_rows() {
         QCOMPARE(sv::RegionLayer::assignLabelRows({}, 2, 4), std::vector<int>());
         QCOMPARE(sv::RegionLayer::assignLabelRows({ { 0, 10 } }, 0, 4),
@@ -189,21 +261,129 @@ private slots:
         QCOMPARE(m_layer->getFeatureDescription(m_pane, pos), QString());
     }
 
-    void lyrics_are_drawn_only_along_the_top() {
+    void lyrics_are_drawn_only_along_the_bottom() {
         addWords(20);
         QImage image = render({ QRect(0, 0, kWidth, kHeight) });
 
         bool drawn = false;
-        for (int y = 0; y < kHeight / 4; ++y) {
+        for (int y = kHeight * 3 / 4; y < kHeight; ++y) {
             if (!rowIsWhite(image, y)) drawn = true;
         }
-        QVERIFY2(drawn, "nothing was drawn along the top of the pane");
+        QVERIFY2(drawn, "nothing was drawn along the bottom of the pane");
 
-        for (int y = kHeight / 2; y < kHeight; ++y) {
+        for (int y = 0; y < kHeight / 2; ++y) {
             QVERIFY2(rowIsWhite(image, y),
                      qPrintable(QString("something was drawn at y = %1, "
-                                        "below the band of the lyrics").arg(y)));
+                                        "above the band of the lyrics").arg(y)));
         }
+
+        // The coverage strip's band, the bottom six pixels, is left to it
+        for (int y = kHeight - m_pane->scalePixelSize(6); y < kHeight; ++y) {
+            QVERIFY2(rowIsWhite(image, y),
+                     qPrintable(QString("something was drawn at y = %1, "
+                                        "where the coverage strip goes").arg(y)));
+        }
+    }
+
+    void a_label_is_centred_in_its_box() {
+        addSpacedWords(3);
+        QImage image = render({ QRect(0, 0, kWidth, kHeight) });
+
+        // The dark pixels of the text of the second word, which spans
+        // x = 200 to 350, above the bars
+        int x0 = m_pane->getXForFrame(spacedWord(1).getFrame());
+        int x1 = m_pane->getXForFrame(spacedWord(1).getFrame() +
+                                      spacedWord(1).getDuration());
+        int left = -1, right = -1;
+        for (int x = x0; x <= x1; ++x) {
+            for (int y = kHeight / 2; y < kHeight - 12; ++y) {
+                if (qGray(image.pixel(x, y)) < 100) {
+                    if (left < 0) left = x;
+                    right = x;
+                    break;
+                }
+            }
+        }
+        QVERIFY2(left >= 0, "no text was found in the box");
+        double textMiddle = (left + right) / 2.0;
+        double boxMiddle = (x0 + x1) / 2.0;
+        QVERIFY2(std::fabs(textMiddle - boxMiddle) <= 3.0,
+                 qPrintable(QString("the text is centred on x = %1, the box "
+                                    "on x = %2").arg(textMiddle).arg(boxMiddle)));
+    }
+
+    void the_highlight_follows_the_frame_and_repaints_only_for_a_new_word() {
+        addSpacedWords(4);
+        QSignalSpy repaints(m_layer, &sv::Layer::layerParametersChanged);
+        sv::Event e(0);
+
+        m_layer->setHighlightFrame(sv::sv_frame_t(kRate * 2.1));
+        QCOMPARE(int(repaints.count()), 1);
+        QVERIFY(m_layer->getHighlightedEvent(e));
+        QVERIFY(e == spacedWord(1));
+
+        // Within the same word: nothing to paint again
+        m_layer->setHighlightFrame(sv::sv_frame_t(kRate * 3.0));
+        QCOMPARE(int(repaints.count()), 1);
+
+        // Between words: none
+        m_layer->setHighlightFrame(sv::sv_frame_t(kRate * 3.7));
+        QCOMPARE(int(repaints.count()), 2);
+        QVERIFY(!m_layer->getHighlightedEvent(e));
+        m_layer->setHighlightFrame(-1);
+        QCOMPARE(int(repaints.count()), 2);
+
+        m_layer->setHighlightFrame(sv::sv_frame_t(kRate * 4.0));
+        QCOMPARE(int(repaints.count()), 3);
+        QVERIFY(m_layer->getHighlightedEvent(e));
+        QVERIFY(e == spacedWord(2));
+    }
+
+    void the_highlighted_word_is_drawn_differently_and_nothing_else_is() {
+        addSpacedWords(4);
+        QImage plain = render({ QRect(0, 0, kWidth, kHeight) });
+
+        m_layer->setHighlightFrame(sv::sv_frame_t(kRate * 2.1));
+        QImage highlighted = render({ QRect(0, 0, kWidth, kHeight) });
+
+        auto columns = differingColumns(plain, highlighted);
+        QVERIFY2(columns.first >= 0, "the highlighted word looks the same");
+        int x0 = m_pane->getXForFrame(spacedWord(1).getFrame());
+        int x1 = m_pane->getXForFrame(spacedWord(1).getFrame() +
+                                      spacedWord(1).getDuration());
+        QVERIFY2(columns.first >= x0 && columns.second <= x1,
+                 qPrintable(QString("pixels changed from x = %1 to %2, outside "
+                                    "the word's box at %3 to %4")
+                            .arg(columns.first).arg(columns.second)
+                            .arg(x0).arg(x1)));
+    }
+
+    // The highlight's box colour, and nothing else drawn is like it
+    static int highlightPixels(const QImage &image) {
+        int n = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                QRgb p = image.pixel(x, y);
+                if (qRed(p) > 240 && qGreen(p) > 195 && qGreen(p) < 225 &&
+                    qBlue(p) > 100 && qBlue(p) < 150) ++n;
+            }
+        }
+        return n;
+    }
+
+    void the_highlighted_word_is_shown_even_with_no_room_of_its_own() {
+        // Words this close fill both rows, and the third has no room
+        addWords(3);
+        QImage plain = render({ QRect(0, 0, kWidth, kHeight) });
+        QCOMPARE(highlightPixels(plain), 0);
+
+        m_layer->setHighlightFrame(sv::sv_frame_t(kRate * 0.55));
+        sv::Event e(0);
+        QVERIFY(m_layer->getHighlightedEvent(e));
+        QCOMPARE(e.getLabel(), QString("sanaseppo2"));
+        QImage highlighted = render({ QRect(0, 0, kWidth, kHeight) });
+        QVERIFY2(highlightPixels(highlighted) > 100,
+                 "the word being sung was not drawn: it had no row");
     }
 
     void painting_in_strips_matches_painting_whole() {
