@@ -178,6 +178,13 @@ public:
      * its end if length is negative.  The file is written into
      * directory, under a name that nothing else is using.
      *
+     * The take's audio is at the given rate, the reference's, so that
+     * its frames are the reference's frames.  A recording at any other
+     * rate -- from a device that runs at 48 kHz, as phones do -- is
+     * converted to it before it goes in, and recordingOffset and length
+     * count frames of it as converted.  With a rate of 0 the recording
+     * goes in at its own rate.
+     *
      * On success returns "" and the take's audio is the new file, its
      * coverage takes in what was recorded, and the file before is
      * remembered as superseded.  Otherwise the take is as it was and
@@ -188,7 +195,8 @@ public:
                             sv::sv_frame_t position,
                             sv::sv_frame_t length,
                             QString directory,
-                            Coverage::Range *placed = nullptr);
+                            Coverage::Range *placed = nullptr,
+                            sv::sv_samplerate_t rate = 0);
 
     /**
      * Write the next audio file of the take with the given ranges made

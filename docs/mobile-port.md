@@ -117,16 +117,14 @@ What the code does:
 - `TakeAudio::splice()` does not resample. It refuses only a recording whose rate differs
   from the take so far.
 
-So with a device that is not at 44.1 kHz, take audio would presumably be placed at the
-wrong scale. Nothing verifies this; [takes.md](takes.md#known-limitations) calls a device
-rate different from the reference's unexercised. It may already affect a Windows machine
-whose default output device runs at 48 kHz.
-
-Phones run at 48 kHz natively. **Check this on the desktop with a 48 kHz device before a
-port.** The fixes:
-- resample the recording to the main model's rate before the splice, in `tony_core`,
-  which is testable;
-- or open the device at 44.1 kHz (Oboe can convert, at some cost in latency).
+Checked in phase A1 with `FakeAudioIO` at 48 kHz: take audio, pitch and coverage were
+misplaced and mis-scaled by 48/44.1 (as they were for a desktop device opened at 48 kHz).
+Fixed in `tony_core`, without opening the device at 44.1 kHz:
+`SingingTakes::spliceRecording()` resamples the recording to the reference's rate first
+(`TakeAudio::resample()`), so a take's WAV is always at the reference's rate, and
+`TakeTiming` converts between the device's frames (the latency, the frames received, the
+live tracker's frames) and the reference's. Left: the cursor during a take runs at the
+device's rate (svgui's `ViewManager`, an expected failure in `TestRecordWorkflow`).
 
 ### The pYIN plugin
 

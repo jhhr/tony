@@ -20,6 +20,7 @@
 // read back.
 
 #include "../SingingTakes.h"
+#include "../TakeAudio.h"
 
 #include "data/fileio/FileSource.h"
 #include "data/fileio/WavFileReader.h"
@@ -48,10 +49,10 @@ class TestSingingTakes : public QObject
     int m_fileCounter = 0;
 
     // A recording of the given length, at a level that says which one it is
-    QString writeRecording(frame_t frames, float level) {
+    QString writeRecording(frame_t frames, float level, double rate = kRate) {
         QString path = m_dir.filePath
             (QString("recorded-%1.wav").arg(++m_fileCounter));
-        sv::WavFileWriter writer(path, kRate, 1,
+        sv::WavFileWriter writer(path, rate, 1,
                                  sv::WavFileWriter::WriteToTarget);
         sv::floatvec_t data(frames, level);
         if (!writer.isOK() || !writer.putInterleavedFrames(data) ||
@@ -436,6 +437,60 @@ private slots:
         QVERIFY(!error.isEmpty());
         QCOMPARE(takes.getAudioPath(), path);
         QVERIFY(takes.getCoverage() == before);
+
+        // nor when it has to be converted first
+        error = takes.spliceRecording(m_dir.filePath("not-a-file.wav"), 0, 0,
+                                      -1, takeDirectory(), nullptr, 48000.0);
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(takes.getAudioPath(), path);
+        QVERIFY(takes.getCoverage() == before);
+    }
+
+    // A recording from a device that does not run at the take's rate, the
+    // reference's, goes in at the take's rate: a second of it is a second
+    // of the take, and the offset, the position and the length are all
+    // frames at that rate.  Twice, the second time into a take that is at
+    // the take's rate already
+    void splice_converts_a_recording_at_another_rate() {
+        SingingTakes takes;
+        QString recording = writeRecording(48000, 0.5f, 48000.0);
+        QString second = writeRecording(24000, 0.25f, 48000.0);
+        QVERIFY(!recording.isEmpty() && !second.isEmpty());
+
+        Coverage::Range placed;
+        QCOMPARE(takes.spliceRecording(recording, 4410, 2000, -1,
+                                       takeDirectory(), &placed, kRate),
+                 QString());
+        QCOMPARE(placed, Coverage::Range(2000, 2000 + 44100 - 4410));
+
+        QString path = takes.getAudioPath();
+        QCOMPARE(TakeAudio::sampleRate(path), kRate);
+        QCOMPARE(framesIn(path), placed.end);
+        QVERIFY(std::fabs(sampleAt(path, 20000) - 0.5f) < 1e-3f);
+
+        QCOMPARE(takes.spliceRecording(second, 0, 60000, 11025,
+                                       takeDirectory(), &placed, kRate),
+                 QString());
+        QCOMPARE(placed, Coverage::Range(60000, 71025));
+        QCOMPARE(int(takes.getCoverage().getRanges().size()), 2);
+
+        path = takes.getAudioPath();
+        QCOMPARE(TakeAudio::sampleRate(path), kRate);
+        QCOMPARE(framesIn(path), frame_t(71025));
+        QVERIFY(std::fabs(sampleAt(path, 20000) - 0.5f) < 1e-3f);
+        QVERIFY(std::fabs(sampleAt(path, 65000) - 0.25f) < 1e-3f);
+
+        // The recordings are as they were, and nothing of the conversion
+        // is left beside the take's files
+        QCOMPARE(TakeAudio::sampleRate(recording), 48000.0);
+        QCOMPARE(framesIn(recording), frame_t(48000));
+        QStringList left = QDir(takeDirectory()).entryList
+            (QDir::AllEntries | QDir::NoDotAndDotDot);
+        for (const QString &name : left) {
+            QVERIFY2(name.startsWith("take-") && name.endsWith(".wav"),
+                     qPrintable(QString("\"%1\" was left in the takes folder")
+                                .arg(name)));
+        }
     }
 
     // Erasing from the middle of a recording: the file is as long as it

@@ -18,11 +18,14 @@
 #include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
 
+#include <bqresample/Resampler.h>
+
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -277,4 +280,114 @@ TakeAudio::erase(QString oldPath, const Coverage::Ranges &ranges,
 
     return write(old.get(), old->getSampleRate(), old->getChannelCount(),
                  total, patches, fadeFrames, outPath);
+}
+
+QString
+TakeAudio::resample(QString inPath, sv_samplerate_t rate, QString outPath)
+{
+    QString error = checkOutPath(outPath, inPath);
+    if (error != "") return error;
+
+    if (rate <= 0) {
+        return tr("No sample rate given to convert \"%1\" to").arg(inPath);
+    }
+
+    auto in = openWav(inPath, error);
+    if (!in) return error;
+
+    int channels = in->getChannelCount();
+    sv_frame_t inFrames = in->getFrameCount();
+    double ratio = rate / in->getSampleRate();
+
+    // As long as the original in seconds, to the frame
+    sv_frame_t outFrames = sv_frame_t(std::llround(double(inFrames) * ratio));
+
+    // The quality svcore uses when it opens a file at another rate than
+    // its own, as it does a reference: libsamplerate's medium sinc
+    breakfastquay::Resampler::Parameters params;
+    params.quality = breakfastquay::Resampler::FastestTolerable;
+    params.initialSampleRate = in->getSampleRate();
+    params.maxBufferSize = int(blockFrames);
+
+    // The resampler holds back the last few frames it is given until it
+    // has seen what follows them, so the end of the file comes out only
+    // once some silence has gone in after it.  One block of silence is
+    // far more than it holds back; this many is a resampler that is not
+    // working
+    const int maxSilentBlocks = 4;
+    int silentBlocks = 0;
+
+    int outSpace = int(std::ceil(double(blockFrames) * ratio)) + 16;
+    floatvec_t out(size_t(outSpace) * channels, 0.f);
+
+    {
+        // To a temporary file that is moved into place on close
+        WavFileWriter writer(outPath, rate, channels,
+                             WavFileWriter::WriteToTemporary);
+        if (!writer.isOK()) {
+            error = writer.getError();
+        }
+
+        try {
+            breakfastquay::Resampler resampler(params, channels);
+
+            sv_frame_t readFrom = 0;
+            sv_frame_t written = 0;
+
+            while (written < outFrames && error == "") {
+
+                floatvec_t block;
+                if (readFrom < inFrames) {
+                    sv_frame_t count = std::min(blockFrames, inFrames - readFrom);
+                    block = in->getInterleavedFrames(readFrom, count);
+                    block.resize(size_t(count) * channels, 0.f);
+                    readFrom += count;
+                } else if (++silentBlocks <= maxSilentBlocks) {
+                    block.assign(size_t(blockFrames) * channels, 0.f);
+                } else {
+                    error = tr("The resampler stopped short of the end");
+                    break;
+                }
+
+                int got = resampler.resampleInterleaved
+                    (out.data(), outSpace, block.data(),
+                     int(block.size() / channels), ratio, false);
+
+                sv_frame_t keep = std::min(sv_frame_t(got), outFrames - written);
+                if (keep <= 0) continue;
+
+                floatvec_t part(out.begin(), out.begin() + keep * channels);
+                if (!writer.putInterleavedFrames(part)) {
+                    error = writer.getError();
+                    if (error == "") error = tr("Failed to write audio data");
+                }
+                written += keep;
+            }
+        } catch (const breakfastquay::Resampler::Exception &) {
+            error = tr("The resampler failed");
+        }
+
+        if (error == "" && !writer.close()) {
+            error = writer.getError();
+            if (error == "") error = tr("Failed to finish writing audio file");
+        }
+    }
+
+    // The writer puts its file in place even when it is abandoned
+    if (error != "") {
+        QFile::remove(outPath);
+        return tr("Failed to convert \"%1\" to %2 Hz: %3")
+            .arg(inPath).arg(rate).arg(error);
+    }
+
+    return "";
+}
+
+sv_samplerate_t
+TakeAudio::sampleRate(QString path)
+{
+    QString error;
+    auto reader = openWav(path, error);
+    if (!reader) return 0;
+    return reader->getSampleRate();
 }

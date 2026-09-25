@@ -879,6 +879,243 @@ class TestRecordWorkflow : public QObject
         return signal;
     }
 
+    // --- A device that does not run at the reference's rate ---
+
+    // What phones run at. The reference is a model at 44.1 kHz whatever
+    // its file was, and the device records at its own rate
+    static constexpr int otherDeviceRate = 48000;
+
+    // Sung at the device's rate: lowHz and highHz, as sines. pYIN gets
+    // the take at 44.1 kHz, where these two have whole numbers of samples
+    // per period; tones without (240 and 320 Hz, sines or sawtooths) came
+    // out as subharmonics. Sines, because a sawtooth made at 48 kHz that
+    // is not whole there aliases into partials that are not harmonics,
+    // and the sawtooths whole at both rates (100, 150, 300 Hz) came out
+    // an octave low after a step, or not, as the step fell between frames
+    static std::vector<float> toneAt(double hz, double seconds,
+                                     int sampleRate) {
+        return TestSignals::sine(hz, sampleRate, int(seconds * sampleRate));
+    }
+
+    static std::vector<float> twoTonesAt(double firstHz, double first,
+                                         double thenHz, double then,
+                                         int sampleRate) {
+        auto signal = toneAt(firstHz, first, sampleRate);
+        auto second = toneAt(thenHz, then, sampleRate);
+        signal.insert(signal.end(), second.begin(), second.end());
+        return signal;
+    }
+
+    // Record from P for ms milliseconds. recordedFrames receives the
+    // length of the recording the device made, which must be at its
+    // rate
+    void recordAt(sv::sv_frame_t P, int ms, int deviceRate,
+                  sv::sv_frame_t &recordedFrames) {
+        recordedFrames = -1;
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QString path;
+        {
+            // Not held past this: the recording is to be released, and
+            // its file closed, when the take stops
+            auto recording = sv::ModelById::getAs<sv::WritableWaveFileModel>
+                (m_window->currentRecordingModelId());
+            QVERIFY(recording);
+            path = recording->getLocation();
+        }
+        QTest::qWait(ms);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        sv::WavFileReader reader { sv::FileSource(path) };
+        QVERIFY(reader.isOK());
+        QCOMPARE(int(reader.getSampleRate()), deviceRate);
+        recordedFrames = reader.getFrameCount();
+    }
+
+    // The first and the last frame of [from, to) at which the take's
+    // audio model is louder than a whisper, or -1 for both. The model,
+    // not the file: it is what is played and what pYIN is given, and it
+    // is on the reference's timeline whatever the file is
+    void soundInTake(sv::sv_frame_t from, sv::sv_frame_t to,
+                     sv::sv_frame_t &first, sv::sv_frame_t &last) {
+        first = last = -1;
+        auto wave = takeAudio();
+        if (!wave || to <= from) return;
+        auto data = wave->getData(0, from, to - from);
+        for (size_t i = 0; i < data.size(); ++i) {
+            if (std::fabs(data[i]) > 0.05f) {
+                if (first < 0) first = from + sv::sv_frame_t(i);
+                last = from + sv::sv_frame_t(i);
+            }
+        }
+    }
+
+    // Where the singing of a recording made at deviceRate has to be:
+    // from P, for as long as it was sung, in the take's coverage, audio
+    // and pitch alike. The coverage range holding P is returned in range
+    void verifyRecordingPlaced(sv::sv_frame_t P, sv::sv_frame_t recordedFrames,
+                               int deviceRate, Coverage::Range &range) {
+        const sv::sv_frame_t margin = sv::sv_frame_t(0.1 * rate);
+        const sv::sv_frame_t close = sv::sv_frame_t(0.01 * rate);
+
+        range = Coverage::Range();
+        for (const auto &r : m_window->takes()->getCoverage().getRanges()) {
+            if (r.start <= P && P < r.end) range = r;
+        }
+        QVERIFY2(range.length() > 0,
+                 qPrintable(QString("no coverage holds the position %1")
+                            .arg(P)));
+
+        // As many seconds as the device recorded, at the reference's rate
+        sv::sv_frame_t want = sv::sv_frame_t
+            (std::llround(double(recordedFrames) * rate / deviceRate));
+        QCOMPARE(range.start, P);
+        QVERIFY2(std::llabs(range.length() - want) <= 1,
+                 qPrintable(QString("%1 frames were recorded at %2 Hz, which "
+                                    "is %3 at %4 Hz; the take covers %5")
+                            .arg(recordedFrames).arg(deviceRate).arg(want)
+                            .arg(rate).arg(range.length())));
+
+        // The file is at the reference's rate, so its frames are the
+        // reference's frames
+        QString path = m_window->takes()->getAudioPath();
+        sv::WavFileReader file { sv::FileSource(path) };
+        QVERIFY(file.isOK());
+        QVERIFY2(file.getSampleRate() == rate,
+                 qPrintable(QString("the take's audio file is at %1 Hz, not "
+                                    "the reference's %2")
+                            .arg(file.getSampleRate()).arg(rate)));
+
+        // The sound is where the coverage says it is
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QTRY_VERIFY(wave->isReady());
+        sv::sv_frame_t first = -1, last = -1;
+        soundInTake(std::max(sv::sv_frame_t(0), P - margin),
+                    range.end + margin, first, last);
+        QVERIFY2(std::llabs(first - range.start) <= close &&
+                 std::llabs(last - range.end) <= close,
+                 qPrintable(QString("the take's audio is loud over [%1,%2]; "
+                                    "the recording went into [%3,%4)")
+                            .arg(first).arg(last)
+                            .arg(range.start).arg(range.end)));
+
+        // and so is the pitch, at the pitch that was sung
+        auto events = eventsBetween(pitchEvents(m_window->analyser2()),
+                                    range.start - margin, range.end + margin);
+        QVERIFY(!events.empty());
+        QVERIFY2(std::llabs(events.front().getFrame() - range.start) <= margin &&
+                 std::llabs(events.back().getFrame() - range.end) <= margin,
+                 qPrintable(QString("the take's pitch runs from %1 to %2; the "
+                                    "recording went into [%3,%4)")
+                            .arg(events.front().getFrame())
+                            .arg(events.back().getFrame())
+                            .arg(range.start).arg(range.end)));
+    }
+
+    // A first recording at P1 and a second in the gap after it, from a
+    // device at deviceRate against the reference at 44.1 kHz
+    void verifyTakesPlacedFromDeviceAt(int deviceRate) {
+        const double sungHz = highHz;
+        FakeAudioIO::Config config;
+        config.sampleRate = deviceRate;
+        config.input = toneAt(sungHz, 3.0, deviceRate);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P1 = sv::sv_frame_t(1.0 * rate);
+        const sv::sv_frame_t P2 = sv::sv_frame_t(3.0 * rate);
+        const sv::sv_frame_t margin = sv::sv_frame_t(0.1 * rate);
+
+        // As recordAt() does, with a look at the cursor on the way: while
+        // the take records, it runs from the position at the reference's
+        // rate
+        m_window->seekTo(P1);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QString firstPath;
+        {
+            auto recording = sv::ModelById::getAs<sv::WritableWaveFileModel>
+                (m_window->currentRecordingModelId());
+            QVERIFY(recording);
+            firstPath = recording->getLocation();
+        }
+        QTest::qWait(500);
+        sv::sv_frame_t during = m_window->playbackFrame();
+        sv::sv_frame_t recordedSoFar =
+            m_window->recordTarget()->getRecordDuration();
+        sv::sv_frame_t cursorWant = P1 + sv::sv_frame_t
+            (std::llround(double(recordedSoFar) * rate / deviceRate));
+        if (deviceRate != int(rate)) {
+            QEXPECT_FAIL("", "ViewManager::getPlaybackFrame() adds the "
+                         "recorded duration in the device's frames to the "
+                         "record start frame (svgui fork)", Continue);
+        }
+        QVERIFY2(std::llabs(during - cursorWant) <= 1,
+                 qPrintable(QString("%1 frames at %2 Hz into a take from "
+                                    "frame %3, the cursor is at %4, not %5")
+                            .arg(recordedSoFar).arg(deviceRate).arg(P1)
+                            .arg(during).arg(cursorWant)));
+        QTest::qWait(500);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        sv::sv_frame_t firstFrames = -1;
+        {
+            sv::WavFileReader reader { sv::FileSource(firstPath) };
+            QVERIFY(reader.isOK());
+            QCOMPARE(int(reader.getSampleRate()), deviceRate);
+            firstFrames = reader.getFrameCount();
+        }
+
+        Coverage::Range first;
+        verifyRecordingPlaced(P1, firstFrames, deviceRate, first);
+        if (QTest::currentTestFailed()) return;
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QCOMPARE(wave->getFrameCount(), first.end);
+        QVERIFY2(std::fabs(TestSignals::centsBetween
+                           (medianHz(pitchEvents(m_window->analyser2())),
+                            sungHz)) < 10.0,
+                 qPrintable(QString("the take's median pitch is %1 Hz; it "
+                                    "was sung at %2")
+                            .arg(medianHz(pitchEvents(m_window->analyser2())))
+                            .arg(sungHz)));
+        sv::sv_frame_t loudFirst = -1, loudLast = -1;
+        soundInTake(0, P1 - margin, loudFirst, loudLast);
+        QVERIFY2(loudFirst < 0, "the take's audio is not silent before the "
+                 "position it was recorded at");
+
+        // A second recording, into the gap after the first: the take so
+        // far is at the reference's rate, whatever the recording is at
+        sv::sv_frame_t secondFrames = -1;
+        recordAt(P2, 800, deviceRate, secondFrames);
+        if (QTest::currentTestFailed()) return;
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+        QCOMPARE(ranges[0], first);
+
+        Coverage::Range second;
+        verifyRecordingPlaced(P2, secondFrames, deviceRate, second);
+        if (QTest::currentTestFailed()) return;
+
+        wave = takeAudio();
+        QVERIFY(wave);
+        QTRY_COMPARE(wave->getFrameCount(), second.end);
+
+        soundInTake(first.end + margin, P2 - margin, loudFirst, loudLast);
+        QVERIFY2(loudFirst < 0,
+                 "the gap between the two recordings is not silent");
+        QVERIFY2(eventsBetween(pitchEvents(m_window->analyser2()),
+                               first.end + margin, P2 - margin).empty(),
+                 "the pitch track has something in the gap between the two "
+                 "recordings");
+    }
+
     // Not a slot: QtTest would run it as a test
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -1584,6 +1821,193 @@ private slots:
         QVERIFY2(eventsBetween(events, firstEnd + margin, P - margin).empty(),
                  "the pitch track has something in the gap between the two "
                  "recordings");
+    }
+
+    // A device at 48 kHz, as phones are, against a reference that is a
+    // 44.1 kHz model: the recording is made at the device's rate and the
+    // take is on the reference's timeline. Two recordings, the second in
+    // the gap after the first, must each land where and be as long as
+    // they were sung. The same at 44.1 kHz, where nothing is converted
+    void takes_placed_from_a_device_at_44100() {
+        verifyTakesPlacedFromDeviceAt(44100);
+    }
+
+    void takes_placed_from_a_device_at_48000() {
+        verifyTakesPlacedFromDeviceAt(otherDeviceRate);
+    }
+
+    // The singer of take_latency_removed_by_splice, exactly on time, on a
+    // device at 48 kHz: the round trip and the start gap are counted in
+    // the device's frames, the reference in its own, and the step the
+    // singer sings has to land where the reference steps all the same,
+    // in the live dots and in the pitch track
+    void latency_with_a_device_at_48000() {
+        const int K = 3 * 4096;
+        FakeAudioIO::Config config;
+        config.sampleRate = otherDeviceRate;
+        config.playbackLatency = 2 * 4096;
+        config.recordLatency = 4096;
+        config.input = twoTonesAt(lowHz, 0.75, highHz, 0.75,
+                                  otherDeviceRate);
+        config.inputDelay = K;
+        config.inputFollowsPlayback = true;
+        // The play source hands the device the reference in blocks counted
+        // at the reference's rate, and a block of the device's is 8% more
+        // of them at 48 kHz: big enough a block for that to show in the
+        // start gap
+        config.blockSize = 2048;
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+
+        // The reference steps 0.75 s after the take's position, as the
+        // singer does 0.75 s after hearing it there
+        const sv::sv_frame_t P = sv::sv_frame_t(1.5 * rate);
+        openReference(writeWav(twoNotes(1.5 + 0.75, 0.75)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(2200);
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        QVERIFY(model);
+        // The dots are on the reference's timeline, and at its rate
+        QCOMPARE(model->getSampleRate(), sv::sv_samplerate_t(rate));
+        auto dots = model->getAllEvents();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_window->fake()->getPlayStartFrame() >= 0,
+                 "the reference was never played");
+
+        // The compensation is in the device's frames: the round trip it
+        // reports, and the start gap it knows the real length of. Not to
+        // within a few frames, as at 44.1 kHz: bqaudioio's ResamplerWrapper,
+        // which brings the reference to the device's rate, holds it back by
+        // some tens of frames of its own that nothing reports (about 25 by
+        // the first audible sample, half a millisecond)
+        sv::sv_frame_t gap = m_window->fake()->getFramesBeforePlayStart();
+        sv::sv_frame_t assumedGap = m_window->recordingLatencyFrames() - K;
+        QVERIFY2(std::llabs(assumedGap - gap) <= 64,
+                 qPrintable(QString("the application took the start gap to "
+                                    "be %1 frames; it was %2")
+                            .arg(assumedGap).arg(gap)));
+
+        sv::sv_frame_t refStep = stepFrame(pitchEvents(m_window->analyser()));
+        sv::sv_frame_t dotStep = stepFrame(dots);
+        sv::sv_frame_t sungStep =
+            stepFrame(pitchEvents(m_window->analyser2()));
+        QVERIFY(refStep > P);
+        QVERIFY2(dotStep > 0, "the live dots never reached the second note");
+        QVERIFY2(sungStep > 0, "the take never reached the second note");
+
+        // The dots are coarser than pYIN: allow them a YIN window
+        QVERIFY2(std::llabs(dotStep - refStep) <= 2048,
+                 qPrintable(QString("live step at %1, reference step at %2: "
+                                    "%3 frames apart")
+                            .arg(dotStep).arg(refStep)
+                            .arg(dotStep - refStep)));
+        QVERIFY2(std::llabs(sungStep - refStep) <= 2 * hop,
+                 qPrintable(QString("sung step at %1, reference step at %2: "
+                                    "%3 frames (%4 ms) apart")
+                            .arg(sungStep).arg(refStep)
+                            .arg(sungStep - refStep)
+                            .arg(1000.0 * double(sungStep - refStep) / rate,
+                                 0, 'f', 1)));
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY(!events.empty());
+        QVERIFY(events.front().getFrame() >= P - 4 * hop);
+    }
+
+    // Record into Selection with a pre-roll, on a device at 48 kHz: the
+    // lead-in and the selection are on the reference's timeline and the
+    // frames the device delivers are at its own rate. The take has to
+    // wait for the whole of the selection before it stops itself, and
+    // keep exactly the selection
+    void preroll_and_punch_out_with_a_device_at_48000() {
+        const double leadIn = 0.5;
+        FakeAudioIO::Config config;
+        config.sampleRate = otherDeviceRate;
+        // High during the lead-in, low for a little longer than the
+        // selection, then high again: only the low note belongs in the take
+        config.input = twoTonesAt(highHz, leadIn, lowHz, 0.85,
+                                  otherDeviceRate);
+        auto after = toneAt(highHz, 0.8, otherDeviceRate);
+        config.input.insert(config.input.end(), after.begin(), after.end());
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(false);
+        m_window->setRecordIntoSelection(true);
+        setPreRollSeconds(leadIn);
+        m_window->setPreRoll(true);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(1.0 * rate);
+        const sv::sv_frame_t E = sv::sv_frame_t(1.8 * rate);
+        m_window->selectRange(P, E);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takePosition(), P);
+        QCOMPARE(m_window->takeEnd(), E);
+        QCOMPARE(m_window->takePreRoll(), sv::sv_frame_t(leadIn * rate));
+        QString path;
+        {
+            auto recording = sv::ModelById::getAs<sv::WritableWaveFileModel>
+                (m_window->currentRecordingModelId());
+            QVERIFY(recording);
+            path = recording->getLocation();
+        }
+
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->recordTarget()->isRecording(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        // It stopped once the lead-in, the selection and most of the
+        // margin had been recorded, counted at the device's rate
+        sv::WavFileReader reader { sv::FileSource(path) };
+        QVERIFY(reader.isOK());
+        sv::sv_frame_t needed = sv::sv_frame_t
+            ((leadIn + double(E - P) / rate +
+              0.8 * TakeTiming::autoStopMarginSeconds()) * otherDeviceRate);
+        QVERIFY2(reader.getFrameCount() >= needed,
+                 qPrintable(QString("the take stopped itself after %1 frames "
+                                    "at %2 Hz; the lead-in, the selection "
+                                    "and the margin are %3")
+                            .arg(reader.getFrameCount()).arg(otherDeviceRate)
+                            .arg(needed)));
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0], Coverage::Range(P, E));
+
+        auto wave = takeAudio();
+        QVERIFY(wave);
+        QTRY_VERIFY(wave->isReady());
+        QCOMPARE(wave->getFrameCount(), E);
+        sv::sv_frame_t first = -1, last = -1;
+        soundInTake(0, E + sv::sv_frame_t(0.1 * rate), first, last);
+        const sv::sv_frame_t close = sv::sv_frame_t(0.01 * rate);
+        QVERIFY2(std::llabs(first - P) <= close &&
+                 std::llabs(last - E) <= close,
+                 qPrintable(QString("the take's audio is loud over [%1,%2]; "
+                                    "the selection is [%3,%4)")
+                            .arg(first).arg(last).arg(P).arg(E)));
+
+        // What it kept is the note sung inside the selection, not the one
+        // of the lead-in or the one after its end
+        auto events = pitchEvents(m_window->analyser2());
+        QVERIFY(!events.empty());
+        QVERIFY2(std::fabs(TestSignals::centsBetween
+                           (medianHz(events), lowHz)) < 10.0,
+                 qPrintable(QString("the take's median pitch is %1 Hz; the "
+                                    "selection was sung at %2, the lead-in "
+                                    "and what came after at %3")
+                            .arg(medianHz(events)).arg(lowHz).arg(highHz)));
     }
 
     // Stop no longer analyses the whole of the take's audio: the new

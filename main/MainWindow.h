@@ -821,12 +821,14 @@ protected:
     // what the singer sang would be left unanalysed.
     Coverage::Range m_takeAnalysisRange;
 
-    // Round-trip hardware latency (output + input, in frames at the model
-    // sample rate) stored when a singing-track recording is made with the
-    // "play reference while recording" toggle on.  The recording is read
-    // from this frame on when it is spliced into the take's audio, so that
-    // what the singer sang in answer to the reference at m_takePosition
-    // lands there; and the live dots are placed with it during the take.
+    // Round-trip hardware latency (output + input, in frames of the
+    // recording, at the device's rate) stored when a singing-track
+    // recording is made with the "play reference while recording" toggle
+    // on.  The recording is read from this point on when it is spliced
+    // into the take's audio, so that what the singer sang in answer to
+    // the reference at m_takePosition lands there; and the live dots are
+    // placed with it during the take.  TakeTiming converts it to the
+    // reference's frames.
     // Reset to 0 in record() at the start of every take, standalone ones
     // included, but not by a Stop: the splice needs it after that.
     //
@@ -842,6 +844,12 @@ protected:
     // that came before that block.  -1 until then.
     std::atomic<sv::sv_frame_t> m_recordingStartGapMeasured;
     std::atomic<bool> m_awaitingReferenceStart;
+
+    // The play source counts at the reference's rate, and the device may
+    // run at another: frames of the recording per frame of the play
+    // source, set before the reference is started, for the audio
+    // callback that measures the start gap
+    std::atomic<double> m_recordFramesPerPlayFrame;
 
     void refineRecordingLatency();
 

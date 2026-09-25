@@ -21,8 +21,10 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QTemporaryDir>
 
 #include <algorithm>
+#include <memory>
 
 using namespace sv;
 
@@ -308,7 +310,8 @@ SingingTakes::spliceRecording(QString recordingPath,
                               sv_frame_t position,
                               sv_frame_t length,
                               QString directory,
-                              Coverage::Range *placed)
+                              Coverage::Range *placed,
+                              sv_samplerate_t rate)
 {
     QString outPath = nextAudioPath(directory);
     if (outPath == "") {
@@ -316,10 +319,27 @@ SingingTakes::spliceRecording(QString recordingPath,
                   "in \"%1\"").arg(directory);
     }
 
+    // A recording at another rate than the take's is converted first,
+    // into a folder of its own beside the take's files that goes again,
+    // with what is in it, as soon as the splice has read it
+    QString source = recordingPath;
+    std::unique_ptr<QTemporaryDir> scratch;
+    if (rate > 0 && TakeAudio::sampleRate(recordingPath) != rate) {
+        scratch.reset(new QTemporaryDir
+                      (QDir(directory).filePath("resampling-XXXXXX")));
+        if (!scratch->isValid()) {
+            return tr("Could not make a folder to convert the recording in, "
+                      "in \"%1\"").arg(directory);
+        }
+        source = scratch->filePath("recording.wav");
+        QString error = TakeAudio::resample(recordingPath, rate, source);
+        if (error != "") return error;
+    }
+
     Take &take = takeForRecording();
 
     Coverage::Range range;
-    QString error = TakeAudio::splice(take.audioPath, recordingPath,
+    QString error = TakeAudio::splice(take.audioPath, source,
                                       recordingOffset, position, length,
                                       outPath, &range);
     if (error != "") return error;

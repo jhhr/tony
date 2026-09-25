@@ -199,7 +199,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingLatencyFrames(0),
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
-    m_awaitingReferenceStart(false)
+    m_awaitingReferenceStart(false),
+    m_recordFramesPerPlayFrame(1.0)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -210,8 +211,13 @@ MainWindow::MainWindow(AudioMode audioMode,
             if (!m_recordTarget || !m_recordTarget->isRecording()) return;
             // The device drivers deliver the input of a block before they
             // ask for its output (PortAudioIO, JACKAudioIO), so the count
-            // already includes the input that goes with this first block
-            sv_frame_t gap = m_recordTarget->getFramesReceived() - blockFrames;
+            // already includes the input that goes with this first block.
+            // The block is counted at the play source's rate, the
+            // reference's, and the frames received at the device's
+            sv_frame_t block = sv_frame_t(std::llround
+                                          (blockFrames *
+                                           m_recordFramesPerPlayFrame.load()));
+            sv_frame_t gap = m_recordTarget->getFramesReceived() - block;
             m_recordingStartGapMeasured = (gap > 0 ? gap : 0);
         });
     }
@@ -3604,12 +3610,16 @@ MainWindow::setupRealtimePitchLayer()
         return;
     }
 
-    // Determine sample rate from the audio source model.
+    // The dots go on the main model's timeline, so their model is at its
+    // rate.  The device may record at another (a phone runs at 48 kHz):
+    // the tracker works in the recording's own frames and rate, and
+    // onRealtimePitchDetected() converts where the dot goes
     sv_samplerate_t sr = 44100;
-    if (auto audioModel = ModelById::getAs<WritableWaveFileModel>(audioSourceId)) {
-        sr = audioModel->getSampleRate();
-    } else if (auto wfm = getMainModel()) {
+    if (auto wfm = getMainModel()) {
         sr = wfm->getSampleRate();
+    } else if (auto audioModel =
+               ModelById::getAs<WritableWaveFileModel>(audioSourceId)) {
+        sr = audioModel->getSampleRate();
     }
 
     // Create a SparseTimeValueModel to receive pitch estimates.
@@ -4158,9 +4168,15 @@ MainWindow::recordingStarted()
             // With a pre-roll, playback starts at the beginning of the
             // lead-in rather than at the take's position, and the splice
             // skips the lead-in as well (TakeTiming::spliceOffset()).
-            sv_frame_t playbackStart = currentTakeTiming().playbackStart();
+            TakeTiming timing = currentTakeTiming();
+            sv_frame_t playbackStart = timing.playbackStart();
 
-            sv_frame_t outputLatency = m_playSource->getTargetPlayLatency();
+            // All of it in frames of the recording, at the device's rate.
+            // The play source counts at the reference's rate: bqaudioio's
+            // ResamplerWrapper converts the device's output latency to
+            // that rate when it hands it on
+            sv_frame_t outputLatency = timing.referenceToRecorded
+                (m_playSource->getTargetPlayLatency());
             sv_frame_t inputLatency  = m_recordTarget ? m_recordTarget->getSystemRecordLatency() : 0;
             //
             // The take is already running by now: record() started it, and
@@ -4182,6 +4198,9 @@ MainWindow::recordingStarted()
                  << " total compensation=" << m_recordingLatencyFrames << " frames" << endl;
 
             m_recordingStartGapMeasured = -1;
+            m_recordFramesPerPlayFrame =
+                (timing.rate > 0 && timing.recordRate > 0 ?
+                 double(timing.recordRate) / double(timing.rate) : 1.0);
             m_awaitingReferenceStart = true;
 
             m_viewManager->setPlaybackFrame(playbackStart);
@@ -4222,6 +4241,12 @@ MainWindow::currentTakeTiming() const
     TakeTiming timing;
     auto model = getMainModel();
     timing.rate = model ? model->getSampleRate() : 0;
+    // The device's rate, which the recording is made at; not known until
+    // the recording has been started, and not needed before
+    if (auto recording = ModelById::getAs<WritableWaveFileModel>
+        (m_currentRecordingModelId)) {
+        timing.recordRate = recording->getSampleRate();
+    }
     timing.position = m_takePosition;
     timing.end = m_takeEnd;
     timing.preRoll = m_takePreRoll;
@@ -4272,8 +4297,9 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
         for (const Event &e : m->getAllEvents()) m->remove(e);
     }
 
-    // A negative answer is sound sung during the lead-in of a pre-roll, or
-    // before the reference started at all: no dot for it
+    // The frame is the recording's, at the device's rate, and the answer
+    // the reference's.  A negative answer is sound sung during the lead-in
+    // of a pre-roll, or before the reference started at all: no dot for it
     sv_frame_t intoTake = currentTakeTiming().liveFrameIntoTake(frame);
     if (intoTake < 0) return;
     sv_frame_t dotFrame = m_takePosition + intoTake;
@@ -4403,8 +4429,9 @@ MainWindow::finishSingingTake()
 
     // A take stopped the moment it was started, or one no longer than the
     // latency and the lead-in together, has nothing in it to add.  Nothing
-    // has gone wrong; there is simply nothing to do
-    if (recordingPath != "" && recorded <= offset) {
+    // has gone wrong; there is simply nothing to do.  (The recording is at
+    // the device's rate, the offset at the reference's.)
+    if (recordingPath != "" && timing.recordedToReference(recorded) <= offset) {
         cerr << "MainWindow::finishSingingTake: nothing to use: " << recorded
              << " frames recorded, the first " << offset
              << " of which are the latency and the lead-in" << endl;
@@ -4430,9 +4457,14 @@ MainWindow::finishSingingTake()
             // Everything before the offset is sound from before the singer
             // could have heard the reference at the take's position: the
             // round trip, and the lead-in of a pre-roll before it.  The
-            // length is what a punch-out allows, or all there is
+            // length is what a punch-out allows, or all there is.  A
+            // device that does not run at the reference's rate made the
+            // recording at its own, and it is converted to the
+            // reference's on the way in: the take's frames are the
+            // reference's, as all three figures are
             error = m_takes->spliceRecording(recordingPath, offset, position,
-                                             length, directory, &placed);
+                                             length, directory, &placed,
+                                             timing.rate);
         }
     }
 

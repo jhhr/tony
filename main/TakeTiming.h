@@ -34,14 +34,25 @@
  * Record whatever else happens: pre-roll and punch-out only change
  * which part of the recording is used and when it stops.
  *
+ * The device need not run at the reference's rate (phones run at
+ * 48 kHz, the reference is always a 44.1 kHz model). P, E and R, and
+ * anything placed on the reference's timeline, are frames at rate; L
+ * and anything counted off the record target are frames of the
+ * recording, at recordRate. The recording is converted to the
+ * reference's rate before it is spliced, so the splice counts in the
+ * reference's frames.
+ *
  * Nothing here touches a model, a window or the settings, so all of
  * it is tested without either (TestTakeTiming): MainWindow fills the
  * fields in and does as the answers say.
  */
 struct TakeTiming
 {
-    /// Of the reference and of the recording alike; they must match
+    /// Of the reference, and of the take's audio
     sv::sv_samplerate_t rate;
+
+    /// Of the recording: the device's. 0 means the same as rate
+    sv::sv_samplerate_t recordRate;
 
     /// P: where the material recorded from now on is to land
     sv::sv_frame_t position;
@@ -52,11 +63,19 @@ struct TakeTiming
     /// R: the lead-in played before P, never taking S below frame 0
     sv::sv_frame_t preRoll;
 
-    /// L: what was recorded before the singer could hear the reference at S
+    /// L: what was recorded before the singer could hear the reference
+    /// at S, in frames of the recording
     sv::sv_frame_t latency;
 
     TakeTiming() :
-        rate(0), position(0), end(-1), preRoll(0), latency(0) { }
+        rate(0), recordRate(0), position(0), end(-1), preRoll(0),
+        latency(0) { }
+
+    /// Frames of the recording as frames of the reference's timeline
+    sv::sv_frame_t recordedToReference(sv::sv_frame_t recordedFrames) const;
+
+    /// Frames of the reference's timeline as frames of the recording
+    sv::sv_frame_t referenceToRecorded(sv::sv_frame_t referenceFrames) const;
 
     /**
      * The lead-in there is room for before position: the pre-roll
@@ -81,7 +100,10 @@ struct TakeTiming
     /// The take has an end to stop itself at
     bool havePunchOut() const;
 
-    /// The frame of the recording that the take's new material starts at
+    /**
+     * The frame of the recording that the take's new material starts
+     * at, once the recording is at the reference's rate
+     */
     sv::sv_frame_t spliceOffset() const;
 
     /// How much of the recording to use, or -1 for all there is of it
@@ -99,9 +121,9 @@ struct TakeTiming
 
     /**
      * Where sound found at this frame of the recording belongs,
-     * counted from P.  Negative means it was sung during the lead-in,
-     * before the take's own material begins, and has no place on the
-     * reference's timeline.
+     * counted in the reference's frames from P.  Negative means it was
+     * sung during the lead-in, before the take's own material begins,
+     * and has no place on the reference's timeline.
      */
     sv::sv_frame_t liveFrameIntoTake(sv::sv_frame_t recordedFrame) const;
 

@@ -166,6 +166,63 @@ private slots:
         QCOMPARE(plain.countdownText(0), QString());
     }
 
+    // A device at 48 kHz, as phones are, against a reference at 44.1:
+    // P, E and R are the reference's frames, L and every count off the
+    // record target the recording's, and each answer is in the frames it
+    // is used in
+    void device_at_another_rate() {
+        const double deviceRate = 48000.0;
+        TakeTiming t = take(frame_t(10 * kRate), frame_t(0.5 * kRate),
+                            frame_t(0.1 * deviceRate));
+        t.recordRate = deviceRate;
+
+        QCOMPARE(t.recordedToReference(frame_t(deviceRate)), frame_t(kRate));
+        QCOMPARE(t.referenceToRecorded(frame_t(kRate)), frame_t(deviceRate));
+        QCOMPARE(t.recordedToReference(12345), frame_t(11342));
+
+        // The splice reads the recording once it is at the reference's
+        // rate: the latency is converted, the lead-in is not
+        QCOMPARE(t.spliceOffset(), frame_t(0.1 * kRate) + frame_t(0.5 * kRate));
+        QCOMPARE(t.playbackStart(), frame_t(9.5 * kRate));
+
+        // The record target counts the device's frames: the take waits
+        // for the latency, the lead-in, two seconds of selection and the
+        // margin, all at the device's rate
+        t.end = t.position + frame_t(2 * kRate);
+        QCOMPARE(t.spliceLength(), frame_t(2 * kRate));
+        frame_t want = frame_t(0.1 * deviceRate) + frame_t(0.5 * deviceRate) +
+            frame_t(2 * deviceRate) +
+            frame_t(TakeTiming::autoStopMarginSeconds() * deviceRate);
+        QCOMPARE(t.autoStopFrames(), want);
+        QVERIFY(!t.shouldStopAt(want - 1));
+        QVERIFY(t.shouldStopAt(want));
+
+        // A dot for what the device recorded one second after the lead-in
+        // is one second into the take, at the reference's rate
+        frame_t lead = frame_t(0.1 * deviceRate) + frame_t(0.5 * deviceRate);
+        QCOMPARE(t.liveFrameIntoTake(lead), frame_t(0));
+        QCOMPARE(t.liveFrameIntoTake(lead + frame_t(deviceRate)), frame_t(kRate));
+        QVERIFY(t.liveFrameIntoTake(lead - 100) < 0);
+
+        // The countdown goes by the device's frames too
+        TakeTiming c = take(frame_t(10 * kRate), frame_t(3 * kRate));
+        c.recordRate = deviceRate;
+        QCOMPARE(c.countdownSeconds(0), 3);
+        QCOMPARE(c.countdownSeconds(frame_t(1.5 * deviceRate)), 2);
+        QCOMPARE(c.countdownSeconds(frame_t(3 * deviceRate) - 100), 1);
+        QVERIFY(c.isInLeadIn(frame_t(3 * deviceRate) - 100));
+        QVERIFY(!c.isInLeadIn(frame_t(3 * deviceRate)));
+        QCOMPARE(c.countdownSeconds(frame_t(3 * deviceRate)), 0);
+
+        // At the reference's rate, or with none given, nothing changes
+        TakeTiming same = take(5000, 3000, 1500);
+        same.recordRate = kRate;
+        QCOMPARE(same.recordedToReference(12345), frame_t(12345));
+        QCOMPARE(same.spliceOffset(), frame_t(4500));
+        QCOMPARE(take(5000, 3000, 1500).recordedToReference(12345),
+                 frame_t(12345));
+    }
+
     // Recording into a selection: the one the playhead is in, else the
     // first of them
     void selection_at_the_playhead_is_the_one_recorded_into() {
