@@ -143,6 +143,83 @@ class TestLatencyCheck : public QObject
             .toUtf8();
     }
 
+    typedef std::vector<LatencyCheck::PunchIn> punchins_t;
+
+    // The take as the splice would make it: inside each punch-in's
+    // range, the reference as it arrived that time, this many frames
+    // late (early, if negative); silence outside them. A later punch-in
+    // replaces an earlier one where they overlap
+    static samples_t spliced(const samples_t &reference, double rate,
+                             const punchins_t &punchIns,
+                             const std::vector<frame_t> &shifts) {
+        const frame_t n = frame_t(reference.size());
+        samples_t take(reference.size(), 0.f);
+        for (size_t p = 0; p < punchIns.size(); ++p) {
+            const frame_t from = std::max(frame_t(0),
+                                          framesOf(punchIns[p].start, rate));
+            const frame_t to = std::min(n, framesOf(punchIns[p].end, rate));
+            for (frame_t f = from; f < to; ++f) {
+                const frame_t g = f - shifts[p];
+                take[f] = (g >= 0 && g < n) ? reference[g] : 0.f;
+            }
+        }
+        return take;
+    }
+
+    // Four punch-ins at about 2, 8, 14 and 20 s, as a calibration makes
+    // them. In the calibration layout they judge two events each, and
+    // one in the last: 3.1, 4.7 / 9.1, 11.4 / 15.7, 17.7 / 21.9 s
+    static punchins_t fourPunchIns() {
+        return { { 2.0, 7.0 }, { 8.0, 13.0 }, { 14.0, 19.0 }, { 20.0, 25.0 } };
+    }
+
+    // Room noise at about -65 dBFS RMS, far under the sweeps
+    static samples_t withRoomNoise(const samples_t &x) {
+        return mixed(x, TestSignals::whiteNoise(int(x.size()), 4711, 0.001),
+                     1.0);
+    }
+
+    // Scale one event's sweep, as it lies in a take placed this late
+    static void scaleSweep(samples_t &take, const LatencyCheck::Layout &layout,
+                           int event, frame_t shift, double gain) {
+        const frame_t from = layout.events[event].sweepStart + shift;
+        const frame_t length = framesOf(LatencyCheck::kSweepSeconds, layout.rate);
+        for (frame_t f = from; f < from + length; ++f) {
+            take[f] = float(take[f] * gain);
+        }
+    }
+
+    static LatencyCheck::TakeSummary judge(const LatencyCheck::Layout &layout,
+                                           const samples_t &take, double rate,
+                                           const punchins_t &punchIns) {
+        return LatencyCheck::judgeTake(layout, take.data(),
+                                       frame_t(take.size()), rate, punchIns);
+    }
+
+    static QByteArray describe(const LatencyCheck::TakeSummary &s) {
+        QStringList flags;
+        for (LatencyCheck::Verdict v : s.flags) {
+            flags << LatencyCheck::verdictName(v);
+        }
+        return QString("%1 [%2], found %3 of %4, median %5 ms, spread %6 "
+                       "ms, slope %7 %, residual %8 ms, input peak %9, "
+                       "fading %10 dB, echo %11 at %12 ms %13 dB")
+            .arg(LatencyCheck::verdictName(s.verdict))
+            .arg(flags.join(" "))
+            .arg(s.found)
+            .arg(s.judged)
+            .arg(s.medianOffset * 1000.0)
+            .arg(s.spread * 1000.0)
+            .arg(s.slope * 100.0)
+            .arg(s.slopeResidual * 1000.0)
+            .arg(s.inputPeak)
+            .arg(s.fadingDb)
+            .arg(s.echo.heard ? "heard" : "none")
+            .arg(s.echo.delaySeconds * 1000.0)
+            .arg(s.echo.levelDb)
+            .toUtf8();
+    }
+
 private slots:
     // The same layout and the same samples every time: nothing in the
     // reference depends on a clock or a random source
@@ -558,6 +635,353 @@ private slots:
         QVERIFY(!find(take, kRate, 5.0).found);
         QVERIFY(!find(take, kRate, -1.0).found);
         QVERIFY(!find(samples_t(), kRate, 0.1).found);
+    }
+
+    // Judging a take. Four punch-ins all placed the same, 12345 frames
+    // late: every judged event found at that offset, in the order the
+    // punch-ins were recorded, and nothing else to say
+    void judge_a_steady_take() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const frame_t shift = 12345;
+        const punchins_t punchIns = fourPunchIns();
+        const samples_t take = spliced(LatencyCheck::generate(layout), kRate,
+                                       punchIns, { shift, shift, shift, shift });
+
+        const LatencyCheck::TakeSummary s = judge(layout, take, kRate, punchIns);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Ok, describe(s).constData());
+        QVERIFY2(s.flags.empty(), describe(s).constData());
+        QCOMPARE(s.judged, 7);
+        QCOMPARE(s.found, 7);
+        QVERIFY2(std::fabs(s.medianOffset - shift / kRate) < 1e-9,
+                 describe(s).constData());
+        QVERIFY2(s.spread < 1e-9 && std::fabs(s.slope) < 1e-9 &&
+                 s.slopeResidual < 1e-9, describe(s).constData());
+        QVERIFY2(std::fabs(s.inputPeak - ratioOf(LatencyCheck::kPeakDbfs)) < 1e-5,
+                 describe(s).constData());
+        QVERIFY2(std::fabs(s.fadingDb) < 0.01, describe(s).constData());
+        QVERIFY2(!s.echo.heard, describe(s).constData());
+
+        QCOMPARE(int(s.punchIns.size()), 4);
+        const int judgedIn[] = { 2, 2, 2, 1 };
+        for (int p = 0; p < 4; ++p) {
+            QCOMPARE(s.punchIns[p].range.start, punchIns[p].start);
+            QCOMPARE(s.punchIns[p].judged, judgedIn[p]);
+            QCOMPARE(s.punchIns[p].found, judgedIn[p]);
+            QVERIFY(std::fabs(s.punchIns[p].medianOffset - shift / kRate) < 1e-9);
+            QVERIFY(s.punchIns[p].spread < 1e-9);
+        }
+
+        const int events[] = { 1, 2, 4, 5, 7, 8, 10 };
+        const int in[] = { 0, 0, 1, 1, 2, 2, 3 };
+        QCOMPARE(int(s.events.size()), 7);
+        for (int k = 0; k < 7; ++k) {
+            QCOMPARE(s.events[k].event, events[k]);
+            QCOMPARE(s.events[k].punchIn, in[k]);
+            QCOMPARE(s.events[k].expectedSeconds, expectedAt(layout, events[k]));
+            QCOMPARE(s.events[k].arrival.errorFrames, shift);
+        }
+    }
+
+    // A sweep lost, in room noise. Found out of judged is what counts:
+    // one or two of six lost still measures, three is too many, and
+    // silence is nothing at all. The first sweep lost is in the second
+    // half of the run, and one of three there does not make it Fading
+    void judge_a_take_with_events_missing() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const frame_t shift = 12345;
+        const punchins_t punchIns = { { 2.0, 7.0 }, { 8.0, 13.0 }, { 14.0, 19.0 } };
+        samples_t take = spliced(LatencyCheck::generate(layout), kRate,
+                                 punchIns, { shift, shift, shift });
+
+        // Events 1, 2 / 4, 5 / 7, 8 judged
+        scaleSweep(take, layout, 5, shift, 0.0);
+        LatencyCheck::TakeSummary s =
+            judge(layout, withRoomNoise(take), kRate, punchIns);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Ok, describe(s).constData());
+        QCOMPARE(s.judged, 6);
+        QCOMPARE(s.found, 5);
+        QCOMPARE(s.punchIns[1].found, 1);
+        QVERIFY(!s.events[3].arrival.found);
+        QCOMPARE(s.events[3].event, 5);
+        QVERIFY2(std::abs(s.medianOffset * kRate - shift) < 1.0,
+                 describe(s).constData());
+
+        // Exactly two thirds found
+        scaleSweep(take, layout, 1, shift, 0.0);
+        s = judge(layout, withRoomNoise(take), kRate, punchIns);
+        QCOMPARE(s.found, 4);
+        QVERIFY2(!s.flagged(LatencyCheck::Verdict::NoSignal), describe(s).constData());
+
+        scaleSweep(take, layout, 7, shift, 0.0);
+        s = judge(layout, withRoomNoise(take), kRate, punchIns);
+        QCOMPARE(s.found, 3);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::NoSignal, describe(s).constData());
+
+        s = judge(layout, withRoomNoise(samples_t(take.size(), 0.f)), kRate,
+                  punchIns);
+        QCOMPARE(s.judged, 6);
+        QCOMPARE(s.found, 0);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::NoSignal, describe(s).constData());
+        QCOMPARE(s.medianOffset, 0.0);
+    }
+
+    // Something in the input path taking the sweeps out as the run goes
+    // on: 5 dB quieter at every event, down to -30 dB, all still found
+    void judge_a_fading_take() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const frame_t shift = 12345;
+        const punchins_t punchIns = fourPunchIns();
+        samples_t take = spliced(LatencyCheck::generate(layout), kRate,
+                                 punchIns, { shift, shift, shift, shift });
+        const int events[] = { 1, 2, 4, 5, 7, 8, 10 };
+        for (int k = 0; k < 7; ++k) {
+            scaleSweep(take, layout, events[k], shift, ratioOf(-5.0 * k));
+        }
+
+        const LatencyCheck::TakeSummary s = judge(layout, take, kRate, punchIns);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Fading, describe(s).constData());
+        QCOMPARE(int(s.flags.size()), 1);
+        QCOMPARE(s.found, 7);
+        // -5 dB against -25, the halves' medians
+        QVERIFY2(std::fabs(s.fadingDb - 20.0) < 0.1, describe(s).constData());
+        QVERIFY2(std::fabs(s.medianOffset - shift / kRate) < 1e-9,
+                 describe(s).constData());
+    }
+
+    // Too loud for the input: clipped at full scale. Found where they
+    // are all the same, but the verdict is the level. Just under it
+    // (-1.1 dBFS) is fine
+    void judge_a_clipped_take() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const frame_t shift = 12345;
+        const punchins_t punchIns = fourPunchIns();
+        const samples_t take = spliced(LatencyCheck::generate(layout), kRate,
+                                       punchIns, { shift, shift, shift, shift });
+
+        samples_t loud(take), clipped(take);
+        for (float &v : loud) v *= 3.5f;
+        for (float &v : clipped) v = std::max(-1.f, std::min(1.f, v * 8.f));
+
+        LatencyCheck::TakeSummary s = judge(layout, clipped, kRate, punchIns);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Clipped, describe(s).constData());
+        QCOMPARE(s.inputPeak, 1.0);
+        QCOMPARE(s.found, 7);
+        QVERIFY2(std::abs(s.medianOffset * kRate - shift) < 1.0,
+                 describe(s).constData());
+
+        s = judge(layout, loud, kRate, punchIns);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Ok, describe(s).constData());
+        QVERIFY2(s.inputPeak < ratioOf(-1.0), describe(s).constData());
+    }
+
+    // A device at 48 kHz, its take placed frame for frame on the 44.1
+    // kHz timeline: each punch-in lands early by P (1 - 44100/48000),
+    // P being where it starts, and the take is read at 48 kHz. On a
+    // line, so PositionDependent (and Scattered, since it is). The same
+    // punch-ins at offsets whose line is as steep but leaves 30 ms
+    // about it: Scattered. The punch-ins stay under 10 s, where the
+    // misplacement is still within the finder's reach
+    void judge_position_dependent_against_scattered() {
+        const double deviceRate = 48000.0;
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const samples_t recorded =
+            LatencyCheck::generate(LatencyCheck::calibrationLayout(deviceRate));
+
+        // Events 0, 1 and 3, one each
+        const punchins_t punchIns = { { 0.1, 2.1 }, { 2.2, 4.2 }, { 6.3, 8.3 } };
+        std::vector<frame_t> shifts;
+        for (const LatencyCheck::PunchIn &p : punchIns) {
+            shifts.push_back(-framesOf(p.start * (1.0 - kRate / deviceRate),
+                                       deviceRate));
+        }
+
+        LatencyCheck::TakeSummary s =
+            judge(layout, spliced(recorded, deviceRate, punchIns, shifts),
+                  deviceRate, punchIns);
+        QCOMPARE(s.found, 3);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::PositionDependent,
+                 describe(s).constData());
+        QVERIFY2(s.flagged(LatencyCheck::Verdict::Scattered), describe(s).constData());
+        QVERIFY2(std::fabs(s.slope + (1.0 - kRate / deviceRate)) < 1e-4,
+                 describe(s).constData());
+        QVERIFY2(s.slopeResidual < 0.0001, describe(s).constData());
+
+        // Slope about -0.7 %, residuals +12, -18 and +6 ms
+        const double offsets[] = { 0.0, -0.045, -0.050 };
+        for (int p = 0; p < 3; ++p) shifts[p] = framesOf(offsets[p], deviceRate);
+        s = judge(layout, spliced(recorded, deviceRate, punchIns, shifts),
+                  deviceRate, punchIns);
+        QCOMPARE(s.found, 3);
+        QVERIFY2(std::fabs(s.slope) > LatencyCheck::kPositionSlope,
+                 describe(s).constData());
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Scattered,
+                 describe(s).constData());
+        QVERIFY2(!s.flagged(LatencyCheck::Verdict::PositionDependent),
+                 describe(s).constData());
+    }
+
+    // Two stream starts that placed their punch-ins differently. Two
+    // punch-ins always lie on a line, so however steep (here 20 ms over
+    // 2.1 s), it is never PositionDependent
+    void judge_two_punch_ins_apart() {
+        const LatencyCheck::Layout layout = firstEvents(3);
+        const samples_t reference = LatencyCheck::generate(layout);
+        const punchins_t punchIns = { { 0.1, 2.1 }, { 2.2, 4.2 } };
+        const frame_t shift = framesOf(0.1);
+
+        struct { double apart; LatencyCheck::Verdict verdict; } cases[] = {
+            { 0.020, LatencyCheck::Verdict::Scattered },
+            { 0.010, LatencyCheck::Verdict::Unsteady },
+            { 0.003, LatencyCheck::Verdict::Ok },
+        };
+        for (const auto &c : cases) {
+            const frame_t other = shift + framesOf(c.apart);
+            const LatencyCheck::TakeSummary s =
+                judge(layout, spliced(reference, kRate, punchIns, { shift, other }),
+                      kRate, punchIns);
+            QCOMPARE(s.found, 2);
+            QVERIFY2(s.verdict == c.verdict, describe(s).constData());
+            QCOMPARE(int(s.flags.size()), c.verdict == LatencyCheck::Verdict::Ok ? 0 : 1);
+            QVERIFY2(std::fabs(s.spread - c.apart) < 2.0 / kRate,
+                     describe(s).constData());
+            QVERIFY2(std::fabs(s.medianOffset - (shift + other) / 2.0 / kRate)
+                     < 1e-9, describe(s).constData());
+        }
+    }
+
+    // The take's own input played back out and heard again, 40 ms
+    // later and 12 dB down: named, and the take still measures. At 3
+    // dB down it hides the sweeps from the finder, and is still named.
+    // Noise at 0 dB SNR has second peaks as loud, at no one delay. A
+    // reflection 9 ms late and 5.5 dB stronger leaves a second peak
+    // at 10.1 ms, 23 dB down, after every sweep: too early for an echo
+    void judge_hears_a_monitoring_echo() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const frame_t shift = 12345;
+        const punchins_t punchIns = fourPunchIns();
+        const samples_t take = spliced(LatencyCheck::generate(layout), kRate,
+                                       punchIns, { shift, shift, shift, shift });
+        const frame_t delay = framesOf(0.040);
+
+        LatencyCheck::TakeSummary s =
+            judge(layout, mixed(take, shifted(take, delay), ratioOf(-12.0)),
+                  kRate, punchIns);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Ok, describe(s).constData());
+        QVERIFY2(s.echo.heard, describe(s).constData());
+        QCOMPARE(s.echo.events, 7);
+        QVERIFY2(std::fabs(s.echo.delaySeconds - delay / kRate) < 1e-9,
+                 describe(s).constData());
+        QVERIFY2(std::fabs(s.echo.levelDb + 12.0) < 0.5, describe(s).constData());
+
+        s = judge(layout, mixed(take, shifted(take, delay), ratioOf(-3.0)),
+                  kRate, punchIns);
+        QCOMPARE(s.found, 0);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::NoSignal, describe(s).constData());
+        QVERIFY2(s.echo.heard, describe(s).constData());
+        QVERIFY2(std::fabs(s.echo.levelDb + 3.0) < 0.5, describe(s).constData());
+
+        const double sweepRms = rms(LatencyCheck::sweep(kRate));
+        const samples_t noisy =
+            mixed(take, TestSignals::whiteNoise(int(take.size()), 20260925,
+                                                sweepRms * std::sqrt(3.0)), 1.0);
+        s = judge(layout, noisy, kRate, punchIns);
+        QCOMPARE(s.found, 7);
+        for (const LatencyCheck::EventResult &e : s.events) {
+            QVERIFY(e.arrival.secondLevelDb > -LatencyCheck::kEchoMaxBelowDb);
+        }
+        QVERIFY2(!s.echo.heard, describe(s).constData());
+
+        s = judge(layout, mixed(take, shifted(take, framesOf(0.009)),
+                                ratioOf(5.5)),
+                  kRate, punchIns);
+        QCOMPARE(s.found, 7);
+        QVERIFY2(std::fabs(s.medianOffset - shift / kRate) < 1e-9,
+                 describe(s).constData());
+        for (const LatencyCheck::EventResult &e : s.events) {
+            QVERIFY(e.arrival.secondLevelDb > -LatencyCheck::kEchoMaxBelowDb);
+        }
+        QVERIFY2(!s.echo.heard, describe(s).constData());
+    }
+
+    // What the finder reads for an event has to lie inside the punch-in,
+    // kJudgeMarginSeconds from its ends; otherwise the event is not
+    // judged, since a sweep cut by the splice is no fault of the path.
+    // Where a later punch-in overlaps, the event is judged in that one
+    void judge_only_events_inside_a_punch_in() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const samples_t reference = LatencyCheck::generate(layout);
+        const frame_t shift = framesOf(0.1);
+        const double before =
+            LatencyCheck::kSearchSeconds + LatencyCheck::kJudgeMarginSeconds;
+        const double after = LatencyCheck::kSearchSeconds +
+            LatencyCheck::kSweepSeconds + LatencyCheck::kJudgeMarginSeconds;
+
+        // The sweep at 3.1 s arrives at 3.2 s, where the range ends
+        punchins_t punchIns = { { 2.0, 3.2 } };
+        LatencyCheck::TakeSummary s =
+            judge(layout, spliced(reference, kRate, punchIns, { shift }),
+                  kRate, punchIns);
+        QCOMPARE(s.judged, 0);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::NoSignal, describe(s).constData());
+
+        // Just inside the margin at either end, then just outside it
+        const double t = expectedAt(layout, 4);
+        for (double by : { 0.001, -0.001 }) {
+            const bool inside = by > 0.0;
+            for (const LatencyCheck::PunchIn &p :
+                     { LatencyCheck::PunchIn(t - before - by, t + after + 0.1),
+                       LatencyCheck::PunchIn(t - before - 0.1, t + after + by) }) {
+                punchIns = { p };
+                s = judge(layout, spliced(reference, kRate, punchIns, { shift }),
+                          kRate, punchIns);
+                QCOMPARE(s.judged, inside ? 1 : 0);
+                QCOMPARE(s.found, inside ? 1 : 0);
+            }
+        }
+
+        // 9.1 s in the first punch-in only; 11.4 s in both, so in the
+        // second, which recorded over the first
+        const frame_t later = framesOf(0.2);
+        punchIns = { { 8.0, 13.0 }, { 10.5, 13.0 } };
+        s = judge(layout, spliced(reference, kRate, punchIns, { shift, later }),
+                  kRate, punchIns);
+        QCOMPARE(s.judged, 2);
+        QCOMPARE(s.punchIns[0].judged, 1);
+        QCOMPARE(s.punchIns[1].judged, 1);
+        QCOMPARE(s.events[0].event, 4);
+        QCOMPARE(s.events[1].event, 5);
+        QCOMPARE(s.events[1].punchIn, 1);
+        QCOMPARE(s.events[1].arrival.errorFrames, later);
+    }
+
+    // The calibration's arithmetic. A take that landed late was placed
+    // with too small a round trip, and the new one is larger by the
+    // offset; early, smaller. From takes placed with 0.2 and 0.31 s
+    // through a path whose round trip is 0.25 s
+    void calibration_adds_the_offset() {
+        QVERIFY(std::fabs(LatencyCheck::calibratedRoundTrip(0.2, 0.03) - 0.23)
+                < 1e-12);
+        QVERIFY(std::fabs(LatencyCheck::calibratedRoundTrip(0.2, -0.05) - 0.15)
+                < 1e-12);
+
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const samples_t reference = LatencyCheck::generate(layout);
+        const punchins_t punchIns = { { 2.0, 7.0 } };
+        const double roundTrip = 0.25;
+
+        for (double used : { 0.2, 0.31 }) {
+            const frame_t late = framesOf(roundTrip - used);
+            const LatencyCheck::TakeSummary s =
+                judge(layout, spliced(reference, kRate, punchIns, { late }),
+                      kRate, punchIns);
+            QCOMPARE(s.found, 2);
+            QVERIFY2((s.medianOffset > 0.0) == (used < roundTrip),
+                     describe(s).constData());
+            const double measured =
+                LatencyCheck::calibratedRoundTrip(used, s.medianOffset);
+            QVERIFY2(std::fabs(measured - roundTrip) < 1e-9,
+                     describe(s).constData());
+        }
     }
 };
 

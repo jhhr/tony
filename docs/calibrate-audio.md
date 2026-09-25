@@ -273,6 +273,7 @@ marked "Done" when it is committed.
    - **A1** Test reference and sweep finder: `LatencyCheck` generator and per-event
      analysis. Done.
    - **A2** Verdicts and calibration arithmetic: aggregation over events and punch-ins.
+     Done.
 2. **Runner, dialog and calibration page** (every build), with app tests.
    - **B1** The alignment check runner and its app tests.
    - **B2** Storing the measured round trip and using it in takes (`LatencyCalibration`,

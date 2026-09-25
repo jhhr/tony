@@ -312,9 +312,11 @@ LatencyCheck::findSweep(const float *take, sv_frame_t count,
     // another candidate for where the sweep is
     const int closeBy = int(framesAt(kSecondPeakSeconds, rate));
     double second = 0.0;
+    int secondAt = chosen;
     for (int j = 0; j < lags; ++j) {
-        if (std::abs(j - chosen) > closeBy) {
-            second = std::max(second, envelope[j]);
+        if (std::abs(j - chosen) > closeBy && envelope[j] > second) {
+            second = envelope[j];
+            secondAt = j;
         }
     }
 
@@ -327,9 +329,263 @@ LatencyCheck::findSweep(const float *take, sv_frame_t count,
     arrival.peakOverMedianDb = decibels(envelope[chosen], median);
     arrival.peakOverSecondDb = decibels(envelope[chosen], second);
     arrival.levelDb = decibels(envelope[chosen], energy);
+    arrival.secondDelaySeconds = double(secondAt - chosen) / rate;
+    arrival.secondLevelDb = decibels(second, envelope[chosen]);
     arrival.found =
         arrival.peakOverMedianDb >= kMinPeakOverMedianDb &&
         arrival.peakOverSecondDb >= kMinPeakOverSecondDb;
 
     return arrival;
+}
+
+namespace LatencyCheck {
+namespace {
+
+double
+median(vector<double> v)
+{
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    const size_t n = v.size();
+    return (n % 2) ? v[n/2] : 0.5 * (v[n/2 - 1] + v[n/2]);
+}
+
+double
+spreadOf(const vector<double> &v)
+{
+    if (v.empty()) return 0.0;
+    auto range = std::minmax_element(v.begin(), v.end());
+    return *range.second - *range.first;
+}
+
+// The echo, if more than half of the heard sweeps have a second peak
+// after them at one delay.  When those that agree are more than half
+// of the candidates, the median of the candidates' delays is among
+// theirs, so looking around it finds them
+Echo
+echoOf(const vector<EventResult> &events)
+{
+    Echo echo;
+
+    int heard = 0;
+    vector<const Arrival *> candidates;
+    for (const EventResult &e : events) {
+        const Arrival &a = e.arrival;
+        if (a.peakOverMedianDb < kMinPeakOverMedianDb) continue;
+        ++heard;
+        if (a.secondDelaySeconds >= kEchoMinDelaySeconds &&
+            a.secondLevelDb >= -kEchoMaxBelowDb) {
+            candidates.push_back(&a);
+        }
+    }
+    if (candidates.empty()) return echo;
+
+    vector<double> delays;
+    for (const Arrival *a : candidates) delays.push_back(a->secondDelaySeconds);
+    const double centre = median(delays);
+
+    vector<double> agreeing, levels;
+    for (const Arrival *a : candidates) {
+        if (std::fabs(a->secondDelaySeconds - centre) <= kEchoToleranceSeconds) {
+            agreeing.push_back(a->secondDelaySeconds);
+            levels.push_back(a->secondLevelDb);
+        }
+    }
+
+    const int count = int(agreeing.size());
+    if (count >= kMinEchoEvents && 2 * count > heard) {
+        echo.heard = true;
+        echo.delaySeconds = median(agreeing);
+        echo.levelDb = median(levels);
+        echo.events = count;
+    }
+    return echo;
+}
+
+} // namespace
+} // namespace LatencyCheck
+
+const char *
+LatencyCheck::verdictName(Verdict verdict)
+{
+    switch (verdict) {
+    case Verdict::NoSignal: return "NoSignal";
+    case Verdict::Clipped: return "Clipped";
+    case Verdict::Fading: return "Fading";
+    case Verdict::PositionDependent: return "PositionDependent";
+    case Verdict::Scattered: return "Scattered";
+    case Verdict::Unsteady: return "Unsteady";
+    case Verdict::Ok: return "Ok";
+    }
+    return "Ok";
+}
+
+bool
+LatencyCheck::TakeSummary::flagged(Verdict v) const
+{
+    return std::find(flags.begin(), flags.end(), v) != flags.end();
+}
+
+LatencyCheck::TakeSummary
+LatencyCheck::judgeTake(const Layout &layout,
+                        const float *take, sv_frame_t count,
+                        sv_samplerate_t rate,
+                        const vector<PunchIn> &punchIns)
+{
+    TakeSummary summary;
+
+    const double takeSeconds =
+        (take && count > 0 && rate > 0) ? double(count) / rate : 0.0;
+
+    // All that the finder reads for an event, around its expected time
+    const double before = kSearchSeconds + kJudgeMarginSeconds;
+    const double after = kSearchSeconds + kSweepSeconds + kJudgeMarginSeconds;
+
+    for (int p = 0; p < int(punchIns.size()); ++p) {
+
+        PunchInResult result;
+        result.range = punchIns[p];
+        const double start = punchIns[p].start;
+        const double end = std::min(punchIns[p].end, takeSeconds);
+
+        const sv_frame_t from = std::max(sv_frame_t(0), framesAt(start, rate));
+        const sv_frame_t to = std::min(count, framesAt(end, rate));
+        for (sv_frame_t f = from; f < to; ++f) {
+            summary.inputPeak = std::max(summary.inputPeak,
+                                         double(std::fabs(take[f])));
+        }
+
+        vector<double> offsets;
+        for (int i = 0; i < int(layout.events.size()); ++i) {
+
+            const double expected =
+                double(layout.events[i].sweepStart) / layout.rate;
+            const double first = expected - before;
+            const double last = expected + after;
+            if (first < start || last > end) continue;
+
+            // A later punch-in over any of it replaced what this one
+            // recorded there
+            bool replaced = false;
+            for (int q = p + 1; q < int(punchIns.size()); ++q) {
+                if (first < punchIns[q].end && last > punchIns[q].start) {
+                    replaced = true;
+                }
+            }
+            if (replaced) continue;
+
+            EventResult e;
+            e.event = i;
+            e.punchIn = p;
+            e.expectedSeconds = expected;
+            e.arrival = findSweep(take, count, rate, expected);
+
+            ++result.judged;
+            if (e.arrival.found) {
+                ++result.found;
+                offsets.push_back(e.arrival.errorSeconds);
+            }
+            summary.events.push_back(e);
+        }
+
+        result.medianOffset = median(offsets);
+        result.spread = spreadOf(offsets);
+        summary.judged += result.judged;
+        summary.found += result.found;
+        summary.punchIns.push_back(result);
+    }
+
+    // Across punch-ins: each one that found anything counts once, at
+    // its median, since what moves from one to the next is the stream
+    // start, which every punch-in makes once
+    vector<double> positions, medians;
+    double within = 0.0;
+    for (const PunchInResult &r : summary.punchIns) {
+        if (r.found == 0) continue;
+        positions.push_back(r.range.start);
+        medians.push_back(r.medianOffset);
+        within = std::max(within, r.spread);
+    }
+    summary.medianOffset = median(medians);
+    summary.spread = spreadOf(medians);
+
+    // Least squares.  A device at another rate, placed frame for frame,
+    // misplaces a punch-in in proportion to where it starts
+    summary.slopeResidual = summary.spread;
+    if (positions.size() >= 2) {
+        double mx = 0.0, my = 0.0;
+        for (size_t k = 0; k < positions.size(); ++k) {
+            mx += positions[k];
+            my += medians[k];
+        }
+        mx /= double(positions.size());
+        my /= double(positions.size());
+        double sxx = 0.0, sxy = 0.0;
+        for (size_t k = 0; k < positions.size(); ++k) {
+            sxx += (positions[k] - mx) * (positions[k] - mx);
+            sxy += (positions[k] - mx) * (medians[k] - my);
+        }
+        if (sxx > 0.0) {
+            summary.slope = sxy / sxx;
+            vector<double> residuals;
+            for (size_t k = 0; k < positions.size(); ++k) {
+                residuals.push_back(medians[k] -
+                                    (my + summary.slope * (positions[k] - mx)));
+            }
+            summary.slopeResidual = spreadOf(residuals);
+        }
+    }
+
+    // The level rather than a confidence: over the median of a window
+    // of near silence a confidence is anything up to the 200 dB clamp,
+    // so its trend in a clean take is noise, while the level is what
+    // an echo canceller, noise suppressor or gain control changes.
+    // Events not found count too, at the level of whatever the finder
+    // took instead, which is lower when the sweep has gone
+    const int n = int(summary.events.size());
+    if (n >= kMinFadingEvents) {
+        vector<double> early, late;
+        for (int k = 0; k < n / 2; ++k) {
+            early.push_back(summary.events[k].arrival.levelDb);
+        }
+        for (int k = n - n / 2; k < n; ++k) {
+            late.push_back(summary.events[k].arrival.levelDb);
+        }
+        summary.fadingDb = median(early) - median(late);
+    }
+
+    summary.echo = echoOf(summary.events);
+
+    const double spread = std::max(summary.spread, within);
+
+    if (summary.found == 0 ||
+        double(summary.found) / double(summary.judged) < kMinFoundShare) {
+        summary.flags.push_back(Verdict::NoSignal);
+    }
+    if (summary.inputPeak >= ratioOf(kClippedDbfs)) {
+        summary.flags.push_back(Verdict::Clipped);
+    }
+    if (summary.fadingDb >= kFadingDb) {
+        summary.flags.push_back(Verdict::Fading);
+    }
+    if (int(positions.size()) >= kMinPunchInsForSlope &&
+        std::fabs(summary.slope) > kPositionSlope &&
+        std::max(summary.slopeResidual, within) <= kSteadySeconds) {
+        summary.flags.push_back(Verdict::PositionDependent);
+    }
+    if (spread > kScatteredSeconds) {
+        summary.flags.push_back(Verdict::Scattered);
+    } else if (spread > kSteadySeconds) {
+        summary.flags.push_back(Verdict::Unsteady);
+    }
+
+    summary.verdict = summary.flags.empty() ? Verdict::Ok : summary.flags.front();
+    return summary;
+}
+
+double
+LatencyCheck::calibratedRoundTrip(double usedRoundTripSeconds,
+                                  double medianOffsetSeconds)
+{
+    return usedRoundTripSeconds + medianOffsetSeconds;
 }

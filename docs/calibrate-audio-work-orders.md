@@ -281,3 +281,17 @@ The next phase must know:
 - Measured: noise alone 6–12 dB over the median (threshold 15); SNR 0 / −10 dB: 38 / 28 dB over the median, 26 / 16 dB over the second. In digital silence the median is ~0, so over-the-median reads up to the 200 dB clamp.
 - About 20 ms per call. The second peak's position is computed but not returned; second arrivals (A2) need it.
 Left open: every threshold untuned; nothing reads `inputPeak` yet.
+
+### Phase A2 — 2026-09-25
+Built: in `main/LatencyCheck.{h,cpp}`: `Arrival::secondDelaySeconds`, `secondLevelDb`; `judgeTake(layout, take, count, rate, punchIns)` → `TakeSummary {verdict, flags, punchIns[], events[], judged, found, medianOffset, spread, slope, slopeResidual, inputPeak, fadingDb, echo}`; `PunchIn {start, end}` in timeline seconds; `Verdict`, declared in precedence order (NoSignal, Clipped, Fading, PositionDependent, Scattered, Unsteady, Ok); `verdictName()`; `calibratedRoundTrip(used, offset)` = used + offset. 9 tests in `TestLatencyCheck` itself (reusing its helpers); the class now takes 2.9 s.
+Choices / deviations:
+- Judged: the finder's window, plus a sweep's length past it, inside the range with 50 ms to spare (the splice crossfades 5 ms). An event under a later, overlapping punch-in is judged in that one only. Ranges stop at the take's end.
+- Across = median of the punch-ins' medians (each stream start counts once); spread = their max − min. Unsteady/Scattered take the larger of that and any spread within one punch-in. PositionDependent: 3 punch-ins at least (a line through two always fits), |slope| > 0.5 %, and what the least-squares line leaves ≤ 5 ms. NoSignal also when nothing is found, or nothing judged.
+- Fading reads `levelDb`, not a confidence: over the median of near silence a confidence runs up to the 200 dB clamp. Median of the first half of the judged events (as recorded) minus that of the second ≥ 10 dB; needs 6 events.
+- Echo is judged over events *heard* (≥ 15 dB over the median), not found: an echo within 6 dB leaves nothing found. Added `kEchoMinDelaySeconds` = 20 ms: a reflection 9 ms after the direct sound and 5.5 dB stronger leaves the tail of its peak at 10.1 ms, 9–23 dB down, after every sweep, and was reported as an echo. Also ≤ 30 dB down, within 3 ms of the median delay, in more than half of the heard events and 3 at least.
+- Clipped: the largest sample inside the ranges ≥ −0.2 dBFS.
+The next phase must know:
+- **At 48 kHz, §2's punch-ins at 14 and 20 s land 1.14 and 1.63 s early, beyond the finder's 0.8 s reach.** Measured: the finder takes the neighbouring sweeps, fully confident (+662, +575 ms), and the verdict is Scattered. PositionDependent needs punch-ins that start before about 9.8 s, so §6's "a 48 kHz fake reports PositionDependent" fails with §2's punch-ins. The rates themselves can name the rate.
+- §2's punch-ins as [2,7], [8,13], [14,19], [20,25] s judge 7 events (2, 2, 2, 1). A punch-in shorter than 1.95 s judges none.
+- An echo under 20 ms (an interface's direct monitor) is not seen.
+Left open: every threshold untuned. The verdict thresholds came from the lead's brief; spec §5 has none of them.
