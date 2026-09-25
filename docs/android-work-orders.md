@@ -57,10 +57,10 @@ phase A0)
   While working run **only your tests** by name; run **both whole suites once** at the
   end, and again only if something failed. The app suite runs in real time (minutes):
   give it a 10-minute tool timeout.
-- Network: GitHub (git and release downloads), the Ubuntu archive, PyPI and conda-forge
-  are reachable. `download.qt.io`, `dl.google.com`, `hg.sr.ht` and `breakfastquay.com`
-  are blocked by the environment's policy: do not look for mirrors of them; report if you
-  need them.
+- Network: GitHub (git and release downloads), the Ubuntu archive, PyPI, conda-forge,
+  `download.qt.io` and `dl.google.com` are reachable. `breakfastquay.com` and
+  `ppa.launchpadcontent.net` are blocked by the environment's policy, and `hg.sr.ht`
+  answers 502: do not look for mirrors of blocked hosts; report if you need them.
 - Every behaviour gets a test that can fail. Show it for the two or three that matter
   most by breaking the code for a moment. Undo the break **by hand**: never
   `git checkout`/`git restore` a file to revert an experiment.
@@ -108,9 +108,10 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 
 ## 5. Phases
 
-Order: A0, A1; then A2 and A3 **if the Android toolchain is reachable** (the lead says
-so in the prompt), otherwise A4 and A5 first. A6 needs the result of the user's phone test
-of A3. A8 is last.
+Order: A0, A1, A2, A3, then A4 and A5 while the user tries the APK on the phone. A6
+needs the result of that phone test. A8 is last. (Since 2026-09-25 `download.qt.io` and
+`dl.google.com` are reachable from the container, and GitHub Actions is enabled on
+`jhhr/tony`.)
 
 - A0 — Desktop build and tests in the container.
 - A1 — Sample rate: a device that is not at 44.1 kHz.
@@ -169,7 +170,7 @@ on disk", "Known limitations"; [testing.md](testing.md) "What is there to reuse"
 
 ### A2 — Android toolchain and C libraries
 
-Only when the lead says the toolchain is reachable. Read: [port-android.md](port-android.md)
+Read: [port-android.md](port-android.md)
 "Qt for Android", "Build and packaging"; [mobile-port.md](mobile-port.md) "Build and
 tests".
 
@@ -180,7 +181,8 @@ tests".
   opus, opusfile, serd and sord, libmad, libid3tag (with the NDK's zlib). Pin versions.
 - Leave out JACK, PulseAudio, ALSA, PortAudio, oggz and fishsound; note any other library
   that turns out to be needed.
-- A CI workflow `.github/workflows/android.yml` only if the lead says Actions are enabled.
+- The toolchain is installed into the container (outside the repo, e.g. under `/opt`), so
+  that A3 can iterate locally. The CI workflow comes in A3, once there is an APK to build.
 
 ### A3 — Tony as an APK, without audio: the test port
 
@@ -197,6 +199,9 @@ Read: [port-android.md](port-android.md) all of "Platform facts" and "Test port"
 - pYIN found on the phone: `libpyin.so` naming plus legacy packaging, or linking it in.
   The log must show "Setting VAMP_PATH to ...".
 - The desktop build and suites unchanged and green.
+- A CI workflow `.github/workflows/android.yml` (Linux runner, triggered by pushes to
+  `feat/tonyandroid` and by hand) that builds the APK the same way and uploads it as an
+  artifact. The lead pushes and reads the run; write it so it can only be judged there.
 - Result: an APK the user can sideload; the lead hands it over.
 
 ### A4 — Touch gestures on the panes
