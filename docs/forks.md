@@ -73,16 +73,28 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `RegionLayer::PlotStrip` plot style: the coverage strip. Saved through the existing
   `plotStyle` attribute.
 - `RegionLayer::PlotLyrics` plot style, after `PlotStrip` so saved numbers keep their
-  meaning: the lyrics. Each region's label along the top of the view over a bar as long as
-  the region, in two rows, the first word of a line (where the value changes) in bold; no
-  vertical scale, no feature description, not editable. The static, pure
-  `assignLabelRows()` places the labels (Tony's app suite tests it): a label that fits in
-  no row is left out. Where a label goes depends on the labels before it, so the layout is
-  made for the **whole model** at once and cached per zoom level and font; a strip newly
-  scrolled into sight then agrees with what is already on show. That is what lets the
-  layer stay **scrollable**: `View::getNonScrollableFrontLayers()` treats every layer in
-  front of a non-scrollable one as non-scrollable too, so the pitch tracks above the
-  lyrics would repaint on every cursor update.
+  meaning: the lyrics. Each region's label is centred in a light box, dark text whatever
+  the view's colours, in two rows along the bottom of the view just above `PlotStrip`'s
+  8 px (row 0 lowest), with a bar in the base colour under each region. A box spans the
+  region, or the label centred on it where the label is longer (`getLyricsBoxSpan()`). The
+  first word of a line (where the value changes) is bold. The font
+  (`getLyricsFontPixelSize()`) is twice the view's at the least, grows with the zoom up to
+  four times, and is never more than an eighth of the view's height. No vertical scale, no
+  feature description, not editable. The static, pure `assignLabelRows()` places the boxes
+  (Tony's app suite tests it): one that fits in no row is left out.
+  `setHighlightFrame()` draws the region at that frame in amber (the latest to start, where
+  regions overlap) and emits `layerParametersChanged()` only when that region changes: the
+  highlight is painted into the view's cache, so each new word repaints the view, a few
+  times a second at most, and only views listen to that signal, so nothing is marked
+  modified. `getHighlightedEvent()` says which region it is. A highlighted word that was
+  left out is drawn in row 0 over the others for as long as it is highlighted: at the
+  usual zoom the larger font leaves many words out, and the one being sung is the one the
+  singer must be able to read. Where a label goes depends on the labels before it, so the
+  layout is made for the **whole model** at once and cached per zoom level and font; a
+  strip newly scrolled into sight then agrees with what is already on show. That is what
+  lets the layer stay **scrollable**: `View::getNonScrollableFrontLayers()` treats every
+  layer in front of a non-scrollable one as non-scrollable too, so the pitch tracks above
+  the lyrics would repaint on every cursor update.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
 - `Pane::setWorkModel()` / `getWorkModel()`: which model's extents are blocked off at the

@@ -48,12 +48,14 @@ orange pitch track to compare with it.
    between them needs no re-analysis. The audio of a session's takes is kept in
    a folder named after the session beside it, so the two can be moved together
  * timed lyrics: File -> Import Lyrics... reads an LRC file, timed by line or
-   by word, and shows the words along the top of the pane, each over a bar for
-   as long as it is sung. They are saved with the session; View -> Show Lyrics
-   hides them and File -> Remove Lyrics takes them out. The reference must be
-   the recording the lyrics were timed to (a Moises stem and its original mix
-   share a timeline); to change a word or its time, edit the file and import it
-   again
+   by word, and shows the words in boxes along the bottom of the pane, at the
+   time and for as long as each is sung. The word at the playback position is
+   highlighted, while playing, while recording and wherever you click, and the
+   waveform is faded while the words are on show so that they can be read over
+   it. They are saved with the session; View -> Show Lyrics hides them and
+   File -> Remove Lyrics takes them out. The reference must be the recording
+   the lyrics were timed to (a Moises stem and its original mix share a
+   timeline); to change a word or its time, edit the file and import it again
  * LRC files can be exported from Moises with the Moises-Lyric-Exporter browser
    extension. Set its offset to 0 (otherwise every line is 0.2 s early, and
    Tony cannot tell) and its gap threshold as low as it goes (so that it marks

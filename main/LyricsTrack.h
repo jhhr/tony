@@ -31,8 +31,9 @@ class RegionLayer;
 
 /**
  * The timed lyrics of the session: a RegionLayer in pane 0 with one
- * region per word (lyricsToEvents()), drawn as words along the top of
- * the pane by the lyrics plot style of the svgui fork.
+ * region per word (lyricsToEvents()), drawn as words in boxes along the
+ * bottom of the pane by the lyrics plot style of the svgui fork, with
+ * the word at the playback position highlighted.
  *
  * The lyrics belong to the song, not to a take: one set per session,
  * which only an import replaces.  The layer and its model are ordinary
@@ -85,6 +86,14 @@ public:
      */
     void setVisible(bool visible);
     bool isVisible() const;
+
+    /**
+     * The playback position, or the recording position during a take:
+     * the word there is the one highlighted.  The layer repaints only
+     * when that is another word, so this can be called for every frame
+     * the view manager reports.  Nothing is saved or marked modified.
+     */
+    void setPlaybackFrame(sv::sv_frame_t frame);
 
     sv::RegionLayer *getLayer() const { return m_layer; }
 

@@ -107,33 +107,52 @@ Launch with `.\build.bat run`.
 
 ## Lyrics
 
-37. **Legibility**: the words are readable over the reference and singing pitch tracks,
-    the alternate pitch track and the live dots, and the pitch shows through between them.
-    Grey bars: right colour?
-38. **Band height and font** at the zoom used while singing: can the words be read while
-    singing, and does the band hide too much of the top of the pitch range?
+37. **Legibility**: the words, dark on light boxes along the bottom of the pane, are
+    readable over the waveform, the pitch tracks, the alternate pitch track and the live
+    dots low in the range. The waveform is pale grey (225, 225, 225) while the lyrics are
+    on show: faint enough for the words, still enough to see where the singing is? Grey
+    bars under the boxes: right colour?
+38. **Rows and font** at the zoom used while singing: can the words be read while
+    singing, and do the two rows hide too much of the bottom of the pitch range? The font
+    grows as you zoom in (twice the usual size up to four times, never more than an eighth
+    of the pane's height): right size at each zoom, words centred in their boxes?
 39. **Density**: zoom out until words drop out (they are left out, never drawn over each
-    other) and back in (they return). At the usual zoom on a fast song, how many drop out:
-    are two rows enough?
+    other, except the highlighted one) and back in (they return). At the usual zoom the
+    larger font leaves many words out: how many on a fast song, and are two rows enough?
 40. **Bold line starts**: do they read as the start of a phrase, or as noise?
-41. **The left edge**: a word in the first ~30 px of the view (at 0 s, with the view at the
-    start) is under the pane's vertical scale. How much does that matter in use?
+41. **The left edge**: a word in the first ~30 px of the view is under the pane's vertical
+    scale, at the bottom left (scroll so that a word is at the left edge). How much does
+    that matter in use?
 42. **Inferred ends**: the exporter writes no end times. With word timing the last word of
     a line ends at the next line but at most 2 s after it starts, unless a `♪` line marks
     the end; with line timing a line lasts until the next one, and the last line 5 s. Do
-    those bars mislead? The start times are exact.
+    those boxes and bars mislead, and does the last word of a line stay highlighted too
+    long? The start times are exact.
 43. **Hover readout**: with the lyrics shown, hovering over the pitch tracks gives the same
     readout and the same vertical scale as without them, also after turning the alternate
     pitch track off and after deleting a take.
 44. **A real Moises export** of one of your songs (exporter offset 0, gap threshold low),
     imported onto the Moises stem or the original mix: the words line up with the vocal, by
-    eye and while playing. All early or late by the same amount means the reference is not
-    the recording Moises timed; an `[offset:]` line in the file moves them.
+    eye and while playing, and the highlight moves with the voice. All early or late by the
+    same amount means the reference is not the recording Moises timed; an `[offset:]` line
+    in the file moves them.
 45. **Finnish text**: ä and ö come out right in the pane, and again after save and reopen.
 46. **Show Lyrics and Remove Lyrics**: hiding keeps the words for later, Remove takes them
     out, a second import replaces the first; each makes Close ask whether to save. The
-    status bar after an import counts words and lines and names anything skipped.
-47. **Session**: save and reopen: the same words, hidden or shown as saved; playback still
-    ends at the end of the song, even with words past it.
+    waveform is pale while the words are on show and grey again when they are hidden or
+    removed. The status bar after an import counts words and lines and names anything
+    skipped.
+47. **Session**: save and reopen: the same words, hidden or shown as saved, and the
+    waveform pale or grey to match; playback still ends at the end of the song, even with
+    words past it.
 48. **During a take**: the words stay on show and readable while recording, with the
-    countdown and the live dots; Import Lyrics is greyed out while recording.
+    countdown and the live dots, and the take's waveform is pale as well; Import Lyrics is
+    greyed out while recording.
+49. **The highlight while playing**: the word being sung turns amber as the reference
+    reaches it and light again when it ends, in step with the voice, without flicker or
+    visible lag. With playback stopped, a click or seek into a word highlights it at once,
+    and one into a gap highlights nothing. Is amber readable, and distinct enough?
+50. **The highlight while recording**: with a pre-roll, the highlight runs with the
+    reference through the lead-in, while the countdown is on the status bar, and on
+    through the take from its position; after Stop it is back on the word at the take's
+    position. The same with Play Reference While Recording off.

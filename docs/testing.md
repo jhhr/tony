@@ -52,9 +52,10 @@ Windows path would start an escape in the C string.
   `in_folder`, which test Windows paths (`C:\...`, case-insensitive). App, all
   `TestRecordWorkflow`: `stale_pitch_event_ignored`, whose string-based `invokeMethod`
   with an `sv::` type Qt 6.4 cannot match; and `take_analysis_covers_the_range_it_lost`,
-  `range_analysis_torn_down_while_running`, `save_during_ranged_analysis` and
-  `undo_during_analysis_then_redo`, where the analysis finishes before the race they need
-  can be set up. Which of those four fail changes from run to run.
+  `range_analysis_torn_down_while_running`, `save_during_ranged_analysis`,
+  `undo_during_analysis_then_redo` and `analyse_now_reanalyses_the_take`, where the
+  analysis finishes before the race they need can be set up. Which of those five fail
+  changes from run to run.
 
 ## Design principles
 

@@ -364,13 +364,20 @@ protected:
     // is a take and none yet, take it away when the take goes
     void syncCoverageStrip();
 
-    // The timed lyrics of the session, drawn along the top of pane 0 and
-    // stored in the session with the layer that draws them.  They belong
-    // to the song, not to a take.  Display only
+    // The timed lyrics of the session, drawn along the bottom of pane 0
+    // and stored in the session with the layer that draws them.  They
+    // belong to the song, not to a take.  Display only
     LyricsTrack   *m_lyrics;
     QAction       *m_importLyricsAction;
     QAction       *m_removeLyricsAction;
     QAction       *m_showLyrics;
+
+    // Fade the waveforms of both analysers while the lyrics are on show
+    // over them, and not otherwise.  Called after anything that shows or
+    // hides the lyrics, and after anything that makes an analyser: a new
+    // one starts unfaded, and a session's lyrics are found only after
+    // the reference's analyser has taken its waveform over
+    void updateWaveformFade();
 
     // Put the lyrics of this LRC file on the reference's timeline, in
     // place of any there are.  Not undoable, as loading background music

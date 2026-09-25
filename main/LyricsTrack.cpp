@@ -156,15 +156,15 @@ LyricsTrack::configureLayer()
 
     m_layer->setObjectName(layerName());
 
-    // Words along the top of the pane: a plot style the svgui fork has
-    // for this.  It has no vertical scale and takes no edits.
+    // Words along the bottom of the pane: a plot style the svgui fork
+    // has for this.  It has no vertical scale and takes no edits.
     // EqualSpaced as well, so that nothing in the pane can align its
     // scale to this layer
     m_layer->setVerticalScale(RegionLayer::EqualSpaced);
     m_layer->setPlotStyle(RegionLayer::PlotLyrics);
 
-    // The bar under each word; the words themselves are in the view's
-    // own colours.  The layer's default would be black
+    // The bar under each word; the words themselves are dark on light
+    // boxes whatever the colours.  The layer's default would be black
     m_layer->setBaseColour
         (ColourDatabase::getInstance()->getColourIndex(tr("Grey")));
 
@@ -206,6 +206,14 @@ bool
 LyricsTrack::isVisible() const
 {
     return m_layer && m_pane && !m_layer->isLayerDormant(m_pane);
+}
+
+void
+LyricsTrack::setPlaybackFrame(sv_frame_t frame)
+{
+    // Hidden or not: shown again, the lyrics have the right word lit
+    // already, even with playback stopped
+    if (m_layer) m_layer->setHighlightFrame(frame);
 }
 
 void

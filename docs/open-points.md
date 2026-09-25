@@ -29,9 +29,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   all off by the same amount because the reference is not the recording they were timed
   to. Import and Remove are not undoable, and a new import replaces the lyrics without
   asking.
-- **No highlight of the word being sung**: the playback cursor crosses the words. A
-  highlight would tie the lyrics layer's painting to the play position, which defeats the
-  view's paint cache.
 - **LRC only**: no SRT, TTML or Moises JSON. The exporter's TTML carries real word (and
   syllable) end times where its LRC has none, so it is the natural second format if the
   inferred ends turn out misleading; another format is another function beside
@@ -53,11 +50,20 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - `Coverage::regionLabel()` gives every region a blank label, for a stock `RegionLayer`
   that printed the value otherwise. With `PlotStrip` it is no longer needed.
 - **A word in the first ~30 px of the view is hidden** under the pane's vertical scale,
-  which the pane draws over the left edge for its top layer. Seen with a word at 0 s and
-  the view at the start.
+  which the pane draws over the left edge for its top layer: at the bottom left now, as it
+  was at the top. Seen by rendering the window with the view scrolled so that a word sat
+  at the left edge: only its last letters showed. With the view at the start, that zoom
+  (about 86 px/s) showed 1.6 s before 0 s, so a word at 0 s was clear of the scale, but
+  the half of its box before 0 s was under the pale wash the pane draws before the start
+  of the reference.
 - **The lyrics' layout is a guess at what reads well**: two rows (a word with no room is
-  left out), the bold line starts, and the 2 s / 5 s caps on inferred ends are all
-  constants to be judged by eye ([manual checklist](manual-checklist.md)).
+  left out), the bold line starts, the font size, and the 2 s / 5 s caps on inferred ends
+  are all constants to be judged by eye ([manual checklist](manual-checklist.md)).
+- **At the usual zoom many words have no room**: with the font twice the view's at the
+  least, most labels are wider than the time their word takes on screen, so the boxes
+  overlap their neighbours and two rows do not hold them all (seen at 100 px/s). Only the
+  word being sung is always drawn, over the others if need be. Zooming in, a smaller font
+  or a third row would each help.
 - **Right after `closeSession()`, Show Lyrics and the alternate pitch actions keep their
   enabled and checked states** until the next reference or session opens: nothing there
   calls `updateLayerStatuses()`. Show Lyrics then does nothing when chosen.

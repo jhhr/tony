@@ -944,6 +944,61 @@ class TestRecordWorkflow : public QObject
                  qPrintable(when + ": the lyrics are the pane's top layer"));
         QVERIFY2(m_window->playSource()->getModels().count(model) == 0,
                  qPrintable(when + ": the lyrics are in the play source"));
+
+        // and the waveforms under them faded, the take's as well: a new
+        // take, a switch and a session load each make the take's analyser
+        // and its waveform again
+        QString colour = waveformColour(m_window->analyser());
+        QVERIFY2(colour == "Pale Grey",
+                 qPrintable(when + ": the reference's waveform is " + colour));
+        Analyser *a2 = m_window->analyser2();
+        if (a2 && a2->getLayer(Analyser::Audio)) {
+            colour = waveformColour(a2);
+            QVERIFY2(colour == "Pale Grey",
+                     qPrintable(when + ": the take's waveform is " + colour));
+        }
+    }
+
+    // The name of the colour of an analyser's waveform, "" if it has none
+    static QString waveformColour(Analyser *a) {
+        int colour = colourOf(a ? a->getLayer(Analyser::Audio) : nullptr);
+        if (colour < 0) return {};
+        return sv::ColourDatabase::getInstance()->getColourName(colour);
+    }
+
+    // The word the lyrics layer has highlighted, "" for none
+    QString highlightedWord() {
+        sv::RegionLayer *layer = m_window->lyrics()->getLayer();
+        sv::Event e(0);
+        if (!layer || !layer->getHighlightedEvent(e)) return {};
+        return e.getLabel();
+    }
+
+    // Every key of the settings, with its value, in the form the test
+    // messages show
+    static QMap<QString, QString> allSettings() {
+        QSettings settings;
+        QMap<QString, QString> all;
+        for (const QString &key : settings.allKeys()) {
+            all[key] = settings.value(key).toString();
+        }
+        return all;
+    }
+
+    static QStringList settingsChanged(const QMap<QString, QString> &before,
+                                       const QMap<QString, QString> &after) {
+        QStringList changed;
+        for (auto i = after.begin(); i != after.end(); ++i) {
+            if (!before.contains(i.key())) {
+                changed << i.key() + " added: " + i.value();
+            } else if (before[i.key()] != i.value()) {
+                changed << i.key() + ": " + before[i.key()] + " -> " + i.value();
+            }
+        }
+        for (auto i = before.begin(); i != before.end(); ++i) {
+            if (!after.contains(i.key())) changed << i.key() + " removed";
+        }
+        return changed;
     }
 
     static QString lyricsFixture(const char *name) {
@@ -973,6 +1028,12 @@ class TestRecordWorkflow : public QObject
             return {};
         }
         return path;
+    }
+
+    // Two words and a gap, then one more: every word with its end given
+    static QByteArray gappedLyrics() {
+        return "[00:00.20]<00:00.20>Yksi <00:00.60>kaksi <00:00.90>\n"
+               "[00:01.40]<00:01.40>kolme <00:01.80>\n";
     }
 
     // The pre-roll's length has no UI: it is read from the settings when
@@ -5545,7 +5606,7 @@ private slots:
     }
 
     // Timed lyrics: an LRC file imported onto the reference's timeline,
-    // drawn along the top of pane 0 by LyricsTrack's layer
+    // drawn along the bottom of pane 0 by LyricsTrack's layer
 
     void lyrics_import_shows_words() {
         makeWindow(FakeAudioIO::Config());
@@ -6172,6 +6233,218 @@ private slots:
         openReference(plain);
         if (QTest::currentTestFailed()) return;
         noLyrics("a session without lyrics was given the last one's");
+    }
+
+    // The word at the playback position is highlighted with playback
+    // stopped as well: at once when the lyrics are imported with the
+    // cursor in a word, and wherever a seek puts the cursor
+    void lyrics_highlight_follows_seek() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(sv::sv_frame_t(0.7 * rate));
+        QVERIFY(m_window->doImportLyricsFrom(writeLrc(gappedLyrics())));
+        QCOMPARE(highlightedWord(), QString("kaksi"));
+
+        // Before the first word, in each word, and in the gaps after them
+        const struct { double seconds; const char *word; } seeks[] = {
+            { 0.30, "Yksi" }, { 1.10, "" }, { 1.50, "kolme" },
+            { 0.10, "" }, { 0.80, "kaksi" }, { 1.90, "" },
+        };
+        for (const auto &s : seeks) {
+            m_window->seekTo(sv::sv_frame_t(s.seconds * rate));
+            QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString(s.word), 1000);
+        }
+
+        // A highlight is not a change to the session
+        m_window->discardModifications();
+        m_window->seekTo(sv::sv_frame_t(0.3 * rate));
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString("Yksi"), 1000);
+        QVERIFY(!m_window->isDocumentModified());
+    }
+
+    // While the reference plays, the highlight moves on from word to word
+    void lyrics_highlight_follows_playback() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (writeLrc("[00:00.00]<00:00.00>Yksi <00:00.25>kaksi "
+                          "<00:00.50>kolme <00:00.75>neljä <00:01.00>viisi "
+                          "<00:01.25>kuusi <00:01.50>\n")));
+        QCOMPARE(m_window->playbackFrame(), sv::sv_frame_t(0));
+        QCOMPARE(highlightedWord(), QString("Yksi"));
+
+        m_window->doPlay();
+        QTRY_VERIFY_WITH_TIMEOUT(highlightedWord() == "neljä", 2000);
+        m_window->doPlay();
+        QVERIFY2(m_window->fake()->getPlayStartFrame() >= 0,
+                 "nothing was played");
+    }
+
+    // During a take the highlight follows the cursor, which runs with the
+    // reference: through the lead-in of a pre-roll, while the status bar
+    // counts down, and from the take's position on the reference's
+    // timeline, not the recording's own.  The take's waveform is faded
+    // under the lyrics like the reference's
+    void lyrics_highlight_and_fade_in_a_take() {
+        const double leadIn = 0.6;
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        setPreRollSeconds(leadIn);
+        m_window->setPreRoll(true);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // A word in the lead-in, a gap at the take's position, and two
+        // words after it
+        QVERIFY(m_window->doImportLyricsFrom
+                (writeLrc("[00:01.50]<00:01.50>Alku <00:01.90>\n"
+                          "[00:02.10]<00:02.10>kaksi <00:02.40>kolme "
+                          "<00:03.00>\n")));
+        const sv::sv_frame_t P = sv::sv_frame_t(2.0 * rate);
+        m_window->seekTo(P);
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString(), 1000);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takePreRoll(), sv::sv_frame_t(leadIn * rate));
+        QTRY_VERIFY_WITH_TIMEOUT(highlightedWord() == "Alku", 1000);
+        QVERIFY2(m_window->statusText().startsWith("Recording in "),
+                 qPrintable(QString("the word in the lead-in is lit, but the "
+                                    "status bar says \"%1\" rather than "
+                                    "counting down")
+                            .arg(m_window->statusText())));
+        QTRY_VERIFY_WITH_TIMEOUT(highlightedWord() == "kolme", 1500);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        // Back at the take's position, in the gap
+        QCOMPARE(m_window->playbackFrame(), P);
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString(), 1000);
+
+        // The take's analyser was made when the take stopped, with a
+        // waveform of its own, and that is faded too
+        Analyser *a2 = m_window->analyser2();
+        QVERIFY(a2 && a2->getLayer(Analyser::Audio));
+        QCOMPARE(waveformColour(a2), QString("Pale Grey"));
+        QCOMPARE(waveformColour(m_window->analyser()), QString("Pale Grey"));
+    }
+
+    // The waveform is faded while the lyrics are on show over it, and
+    // only then.  It is no setting of the user's: nothing goes into the
+    // settings, as Analyser::setVisible() and setAudible() would put it,
+    // no command is made, and the fade marks nothing modified
+    void lyrics_fade_the_waveform() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QCOMPARE(waveformColour(a), QString("Grey"));
+
+        // Values the waveform does not have, which a write of its state to
+        // the settings would put right
+        QSettings settings;
+        settings.beginGroup("Analyser");
+        settings.setValue(QString("visible-%1").arg(int(Analyser::Audio)),
+                          !a->isVisible(Analyser::Audio));
+        settings.setValue(QString("audible-%1").arg(int(Analyser::Audio)),
+                          !a->isAudible(Analyser::Audio));
+        settings.endGroup();
+        settings.sync();
+        auto before = allSettings();
+        auto *history = sv::CommandHistory::getInstance();
+        QSignalSpy commands(history, qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        QCOMPARE(waveformColour(a), QString("Pale Grey"));
+
+        QAction *show = m_window->showLyricsAction();
+        show->trigger();
+        QVERIFY(!m_window->lyrics()->isVisible());
+        QCOMPARE(waveformColour(a), QString("Grey"));
+        show->trigger();
+        QVERIFY(m_window->lyrics()->isVisible());
+        QCOMPARE(waveformColour(a), QString("Pale Grey"));
+
+        m_window->removeLyricsAction()->trigger();
+        QVERIFY(!m_window->lyrics()->isShown());
+        QCOMPARE(waveformColour(a), QString("Grey"));
+
+        QCOMPARE(int(commands.count()), 0);
+        QStringList changed = settingsChanged(before, allSettings());
+        QVERIFY2(changed.isEmpty(),
+                 qPrintable("changed in the settings: " + changed.join(", ")));
+
+        // The import, Show Lyrics and Remove Lyrics change the session;
+        // the fade on its own does not
+        m_window->discardModifications();
+        a->setWaveformFaded(true);
+        QCOMPARE(waveformColour(a), QString("Pale Grey"));
+        a->setWaveformFaded(false);
+        QCOMPARE(waveformColour(a), QString("Grey"));
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(int(commands.count()), 0);
+    }
+
+    // The session saves the waveform's colour with its layer, faded or
+    // not.  Opened, it is faded under lyrics on show and grey otherwise,
+    // whatever it was saved as, and the word at the cursor is lit at once
+    void lyrics_fade_survives_a_session() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // Saved faded with no lyrics, as a session whose lyrics have gone
+        // since would be
+        m_window->analyser()->setWaveformFaded(true);
+        QString fadedWithout = m_dir.filePath("faded-without-lyrics.ton");
+        QVERIFY(m_window->saveSessionFile(fadedWithout));
+        m_window->analyser()->setWaveformFaded(false);
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        m_window->seekTo(sv::sv_frame_t(0.5 * rate));
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString("nollaa"), 1000);
+        QString shown = m_dir.filePath("lyrics-shown-faded.ton");
+        QVERIFY(m_window->saveSessionFile(shown));
+        m_window->showLyricsAction()->trigger();
+        QCOMPARE(waveformColour(m_window->analyser()), QString("Grey"));
+        QString hidden = m_dir.filePath("lyrics-hidden-grey.ton");
+        QVERIFY(m_window->saveSessionFile(hidden));
+
+        reopenSession(shown);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->lyrics()->isVisible());
+        QCOMPARE(waveformColour(m_window->analyser()), QString("Pale Grey"));
+        sv::RegionLayer *layer = m_window->lyrics()->getLayer();
+        QCOMPARE(layer->getHighlightFrame(), m_window->playbackFrame());
+
+        reopenSession(hidden);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->lyrics()->isShown());
+        QVERIFY(!m_window->lyrics()->isVisible());
+        QCOMPARE(waveformColour(m_window->analyser()), QString("Grey"));
+
+        // Opened after one with lyrics on show, and saved faded itself.
+        // The close in between takes the fade away: the analyser of the
+        // reference stays for the next file
+        reopenSession(shown);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(waveformColour(m_window->analyser()), QString("Pale Grey"));
+        QVERIFY(m_window->analyser()->isWaveformFaded());
+        m_window->doCloseSession();
+        QVERIFY2(!m_window->analyser()->isWaveformFaded(),
+                 "the fade outlived the session");
+        openReference(fadedWithout);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->lyrics()->isShown());
+        QCOMPARE(waveformColour(m_window->analyser()), QString("Grey"));
     }
 
     // Closing while pYIN is still running on the take (review finding

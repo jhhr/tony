@@ -15,8 +15,8 @@ Upstream Tony analyses the pitch of one recording. This fork makes it a singing 
    the rest, erase, undo, and keep several takes. See [takes.md](takes.md).
 5. Around that: play the reference while recording, latency compensation, pre-roll,
    record into selection, an octave-shifted "alternate" pitch track to follow, timed
-   lyrics along the top of the pane, and a background music track that is played but
-   never analysed.
+   lyrics along the bottom of the pane with the word being sung highlighted, and a
+   background music track that is played but never analysed.
 
 The user-facing description is in the [README](../README.md).
 
@@ -67,7 +67,8 @@ The reference is the pane's **work model** (`Pane::setWorkModel()`, svgui fork, 
 take's audio file, or of the recording being written.
 
 Colours: reference pitch black / notes bright blue; singing and live dots orange / notes
-bright purple; alternate pitch faded brown, dark brown while a take is recorded.
+bright purple; alternate pitch faded brown, dark brown while a take is recorded; both
+waveforms grey, pale grey while lyrics are on show over them.
 
 ## Rules of the SV libraries
 
@@ -208,8 +209,9 @@ is the only reference to the model until `m_analyser2` has a layer of its own. I
 in pane 0 on the reference's timeline, a region per word (or per line, for a line with no
 word times): frame = start, duration = end - start (at least one frame), label = the word,
 value = the line's index, which is what the bold line starts go by. It is drawn by the
-svgui fork's `PlotLyrics` style ([forks.md](forks.md)), because a session restores only
-layers `LayerFactory` can make. Found again after a session load by its untranslated object
+svgui fork's `PlotLyrics` style ([forks.md](forks.md)), in boxes along the bottom of the
+pane just above the coverage strip, because a session restores only layers
+`LayerFactory` can make. Found again after a session load by its untranslated object
 name `"Lyrics"`, in `analyseNewMainModel()` after the alternate pitch track. Its model is
 taken out of the play source after an import and again after a load: a word past the end
 of the reference would hold playback open. It is **never the pane's top layer**, because
@@ -225,3 +227,26 @@ Music: the simpler option, and the file is still there to import again. Show Lyr
 visibility, which the session saves, not a QSettings key. The parser strips control
 characters (and U+FFFE, U+FFFF, which the UTF-8 decoder lets through) from every label:
 XML 1.0 cannot hold them, and one in a label would make the `.ton` unreadable.
+
+The word being sung is highlighted. `MainWindow::playbackFrameChanged()` passes every
+frame the view manager reports to `LyricsTrack::setPlaybackFrame()`, which passes it to
+the layer's `setHighlightFrame()`: while playing, while recording (when the frame runs with
+the reference from where the take starts), and on a seek with playback stopped, since
+`ViewManager::setPlaybackFrame()` emits whenever the frame changes. It does so **before**
+`showTakeCountdown()` can return, or the highlight would stand still through a pre-roll's
+lead-in while the reference plays. An import and an adopt pass the current frame at once.
+The layer repaints only when the word changes; the highlight is not saved and makes no
+command.
+
+While the lyrics are shown and visible, both analysers' waveforms are drawn "Pale Grey"
+instead of "Grey" so that the words can be read over them: `Analyser::setWaveformFaded()`,
+applied to both by `MainWindow::updateWaveformFade()`. The colour is set straight on the
+layer, **never through `setVisible()` or anything else that writes QSettings**, and marks
+nothing modified. The analyser remembers the fade for a waveform it makes or takes over,
+but a new analyser starts without it, and a session saves the colour with the reference's
+waveform layer. So `updateWaveformFade()` runs after an import, a remove and Show Lyrics;
+after `setupSingingTrackAnalyser()`, which every recording, take switch, Load Singing
+Track and session load goes through with a new waveform; in `analyseNewMainModel()`
+whether or not lyrics were adopted, because the analyser took the saved layer over before
+the lyrics were looked for; and in `closeSession()`, because `m_analyser` lives on for the
+next file.

@@ -247,6 +247,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     cdb->setUseDarkBackground(cdb->addColour(Qt::green, tr("Bright Green")), true);
     cdb->setUseDarkBackground(cdb->addColour(QColor(225, 74, 255), tr("Bright Purple")), true);
     cdb->setUseDarkBackground(cdb->addColour(QColor(255, 188, 80), tr("Bright Orange")), true);
+    // The waveforms under the lyrics (Analyser::setWaveformFaded()).
+    // Last, so that the colours before it keep their indices
+    cdb->addColour(QColor(225, 225, 225), tr("Pale Grey"));
 
     Preferences::getInstance()->setResampleOnLoad(true);
     Preferences::getInstance()->setFixedSampleRate(44100);
@@ -2591,6 +2594,9 @@ MainWindow::closeSession()
     m_alternatePitch->hide();
     m_coverageStrip->hide();
     m_lyrics->hide();
+    // The fade goes with the lyrics.  m_analyser stays for the next file,
+    // and would make that one's waveform faded as well
+    updateWaveformFade();
     m_referencePitchHiddenForTake = false;
     m_singingPitchHiddenForTake = false;
     m_singingNotesHiddenForTake = false;
@@ -3454,6 +3460,11 @@ MainWindow::importLyricsFrom(QString path)
         m_playSource->removeModel(m_lyrics->getModelId());
     }
 
+    // The word at the cursor, without waiting for playback to move it;
+    // and the waveforms fade under the words
+    m_lyrics->setPlaybackFrame(m_viewManager->getPlaybackFrame());
+    updateWaveformFade();
+
     // The layer arrived without a command, as it must, and an import is
     // not undoable; but the session has changed
     documentModified();
@@ -3486,6 +3497,7 @@ MainWindow::removeLyrics()
 {
     if (!m_lyrics->isShown()) return;
     m_lyrics->hide();
+    updateWaveformFade();
     // As for the import: no command, but the session has changed
     documentModified();
     updateMenuStates();
@@ -3502,7 +3514,20 @@ MainWindow::showLyricsToggled()
         m_lyrics->setVisible(!m_lyrics->isVisible());
         documentModified();
     }
+    updateWaveformFade();
     updateLayerStatuses();
+}
+
+void
+MainWindow::updateWaveformFade()
+{
+    // The words are drawn over the bottom of the pane, where the
+    // waveforms are, and have to be read over them.  Not with
+    // Analyser::setVisible() or anything else that writes a setting:
+    // this is the state of the session, which saves the colour
+    bool faded = m_lyrics && m_lyrics->isShown() && m_lyrics->isVisible();
+    if (m_analyser) m_analyser->setWaveformFaded(faded);
+    if (m_analyser2) m_analyser2->setWaveformFaded(faded);
 }
 
 void
@@ -3566,6 +3591,10 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
         audio->setSavedInSession(false);
     }
+
+    // A new analyser, with a new waveform, under the lyrics as much as
+    // the one it replaces: a take switch and every recording come here
+    updateWaveformFade();
 
     // m_analyser2->newFileLoaded() has now created its own WaveformLayer
     // referencing singingModelId.  This means it is safe to delete the orphan
@@ -4302,6 +4331,11 @@ MainWindow::recordDurationChanged(sv_frame_t frame, sv_samplerate_t rate)
 void
 MainWindow::playbackFrameChanged(sv_frame_t frame)
 {
+    // The word being sung, before the countdown can return: the reference
+    // plays during a lead-in, and the words go with it.  This comes while
+    // playing, while recording, and for a seek with playback stopped
+    if (m_lyrics) m_lyrics->setPlaybackFrame(frame);
+
     if (showTakeCountdown()) return;
     MainWindowBase::playbackFrameChanged(frame);
 }
@@ -7600,9 +7634,18 @@ MainWindow::analyseNewMainModel()
         if (m_playSource && !m_lyrics->getModelId().isNone()) {
             m_playSource->removeModel(m_lyrics->getModelId());
         }
+        // The word at the cursor, without waiting for playback to move it
+        m_lyrics->setPlaybackFrame(m_viewManager->getPlaybackFrame());
         // Remove Lyrics; Show Lyrics is set by updateLayerStatuses() below
         updateMenuStates();
     }
+
+    // Whether there were lyrics or not.  The waveform's colour is saved
+    // with its layer, and the analyser, which took the layer over before
+    // the lyrics were looked for, gave it the fade it knew of then:
+    // faded if lyrics were found on show, and otherwise grey, even in a
+    // session saved faded whose lyrics have gone since
+    updateWaveformFade();
 
     if (!m_withSpectrogram) {
         m_analyser->setVisible(Analyser::Spectrogram, false);
