@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: none.
+Done: A1 (`944df7c`).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
@@ -179,14 +179,36 @@ Done: none.
   the thresholds of spec §5 as named constants.
 - The calibration arithmetic as a pure function: new round trip = used round trip +
   median offset, in seconds. A take that lands late was spliced from too early a frame.
+- **Refined by the lead after A1:**
+  - **Entry point for B1.** One function takes a layout, the take's samples and rate,
+    and the punch-ins. Each punch-in is its timeline range in seconds, in the order
+    recorded. The function returns a summary with the verdict, all flags that applied,
+    per-punch-in figures, and per-event results.
+  - **Which events are judged.** An event is *judged* in a punch-in when its sweep and
+    the finder's window sit inside the range with a margin, a named constant. The splice
+    cuts content at the range ends, and a sweep cut in half is not a failure of the
+    path. Count judged and found separately; NoSignal is about found out of judged.
+  - **Second arrivals.** `findSweep()` computes the second peak but does not return
+    its position; add it, and its level against the chosen one, to `Arrival`. Monitoring
+    echo is a second arrival at a consistent extra delay (a few ms of spread) across
+    most found events, not more than some named dB below the direct sound.
+  - **Verdict order.** When several apply, pick one and document it, with all flags kept.
+    Suggested: NoSignal, Clipped, Fading, PositionDependent, Scattered, Unsteady, Ok.
+  - **PositionDependent against Scattered.** Fit offset over punch-in position.
+    PositionDependent is a slope above 0.5 % whose fit leaves little residual; large
+    residuals are Scattered.
 - **Tests:**
   - one event missing, the rest found;
   - fading;
   - clipped;
-  - resampled by 48000/44100 → PositionDependent;
+  - misplacement that grows with position (the 48000/44100 case) → PositionDependent;
   - two punch-ins 20 ms apart → Scattered or Unsteady by threshold;
   - monitoring echo detected;
+  - an event cut by a range end is not judged;
   - the arithmetic with both signs. **Show that the sign test fails** when flipped.
+  - A1 found that a take of 48 kHz frames read as 44.1 kHz finds nothing, because the
+    sweeps are stretched. Build the rate case as punch-ins displaced by
+    P·(1 − 44100/48000), not as a stretch.
 
 ### B1 — The alignment check runner (spec §2, §5 "App, every build", §6 app suite)
 
