@@ -132,8 +132,8 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 
 Order: A0, A1, A2, A3, then A4 and A5 while the user tries the APK on the phone. A6
 needs the result of that phone test. A8 is last. (Since 2026-09-25 `download.qt.io` and
-`dl.google.com` are reachable from the container, and GitHub Actions is enabled on
-`jhhr/tony`.)
+`dl.google.com` are reachable from the container. GitHub workflows are turned off: all
+builds happen in the container.)
 
 - A0 — Desktop build and tests in the container. Done.
 - A1 — Sample rate: a device that is not at 44.1 kHz.
@@ -204,7 +204,7 @@ tests".
 - Leave out JACK, PulseAudio, ALSA, PortAudio, oggz and fishsound; note any other library
   that turns out to be needed.
 - The toolchain is installed into the container (outside the repo, e.g. under `/opt`), so
-  that A3 can iterate locally. The CI workflow comes in A3, once there is an APK to build.
+  that A3 can iterate locally.
 
 ### A3 — Tony as an APK, without audio: the test port
 
@@ -221,9 +221,8 @@ Read: [port-android.md](port-android.md) all of "Platform facts" and "Test port"
 - pYIN found on the phone: `libpyin.so` naming plus legacy packaging, or linking it in.
   The log must show "Setting VAMP_PATH to ...".
 - The desktop build and suites unchanged and green.
-- A CI workflow `.github/workflows/android.yml` (Linux runner, triggered by pushes to
-  `feat/tonyandroid` and by hand) that builds the APK the same way and uploads it as an
-  artifact. The lead pushes and reads the run; write it so it can only be judged there.
+- No CI workflow: the user has turned the repository's workflows off. The build is a
+  script that runs in the container.
 - Result: an APK the user can sideload; the lead hands it over.
 
 ### A4 — Touch gestures on the panes
