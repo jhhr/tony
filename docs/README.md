@@ -11,7 +11,7 @@ methods, and they do not tell the story of fixed bugs.
 
 | Page | What is in it |
 | --- | --- |
-| [building.md](building.md) | The MinGW build, and every way the environment has gone wrong |
+| [building.md](building.md) | The MinGW build, and every way the environment has gone wrong; the Linux build of a cloud session |
 | [testing.md](testing.md) | The two test executables, the fakes and helpers, how tests turned out to be worthless, races |
 | [architecture.md](architecture.md) | What the fork adds, `tony_core` / `tony_app`, who owns what, and the rules for layers, models, commands, playback and session files |
 | [recording.md](recording.md) | Record to Stop, step by step and why in that order; latency; pre-roll; record into selection; the live tracker |

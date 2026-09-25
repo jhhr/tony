@@ -23,7 +23,9 @@ code.
 
 ## Build and test
 
-From **Git Bash** (the usual agent shell). `build.bat` does not run from sh.
+From **Git Bash** (the usual agent shell) on the Windows machine. `build.bat` does not run
+from sh. In a Linux cloud session, set up and build as in
+[docs/building.md](docs/building.md#building-on-linux) instead, into `build_linux/`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
