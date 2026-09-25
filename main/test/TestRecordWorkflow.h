@@ -901,11 +901,49 @@ class TestRecordWorkflow : public QObject
         return n;
     }
 
+    // Found by name, as a session load finds it, and not from LyricsTrack:
+    // the point is often whether that still has the layer the pane shows
+    sv::Layer *lyricsLayerInPane0() {
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        if (!pane) return nullptr;
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            if (pane->getLayer(i)->objectName() == "Lyrics") {
+                return pane->getLayer(i);
+            }
+        }
+        return nullptr;
+    }
+
     sv::EventVector lyricsEvents() {
         sv::RegionLayer *layer = m_window->lyrics()->getLayer();
         if (!layer) return {};
         auto model = sv::ModelById::getAs<sv::RegionModel>(layer->getModel());
         return model ? model->getAllEvents() : sv::EventVector();
+    }
+
+    // The lyrics are the very layer and model they were, with the same
+    // words, on show, under the top layer and out of the play source.  The
+    // model id is what proves the layer is the same one: a model id is
+    // never used twice, unlike the address of a layer
+    void verifyLyricsUntouched(sv::Layer *layer, sv::ModelId model,
+                               const sv::EventVector &events, QString when) {
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        QVERIFY(pane);
+        QVERIFY2(lyricsLayersInDocument() == 1 && lyricsLayersInPane0() == 1,
+                 qPrintable(when + ": not one lyrics layer"));
+        sv::Layer *found = lyricsLayerInPane0();
+        QVERIFY2(found && found == layer && found->getModel() == model,
+                 qPrintable(when + ": the lyrics layer was replaced"));
+        QVERIFY2(m_window->lyrics()->getLayer() == found,
+                 qPrintable(when + ": LyricsTrack has let go of the layer"));
+        QVERIFY2(lyricsEvents() == events,
+                 qPrintable(when + ": the words have changed"));
+        QVERIFY2(!found->isLayerDormant(pane) && m_window->lyrics()->isVisible(),
+                 qPrintable(when + ": the lyrics are hidden"));
+        QVERIFY2(pane->getTopLayer() != found,
+                 qPrintable(when + ": the lyrics are the pane's top layer"));
+        QVERIFY2(m_window->playSource()->getModels().count(model) == 0,
+                 qPrintable(when + ": the lyrics are in the play source"));
     }
 
     static QString lyricsFixture(const char *name) {
@@ -5609,6 +5647,27 @@ private slots:
         QVERIFY2(m_window->statusText().contains
                  ("1 word starts after the end of the reference."),
                  qPrintable(m_window->statusText()));
+
+        // The same once the session is opened again: the load puts the
+        // model of every layer it adds to a view into the play source
+        QString session = m_dir.filePath("lyrics-past-the-end.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->lyrics()->isShown());
+        model = m_window->lyrics()->getModelId();
+        QVERIFY(!model.isNone());
+        sv::sv_frame_t lyricsEnd = sv::ModelById::get(model)->getEndFrame();
+        playSource = m_window->playSource();
+        QVERIFY2(playSource->getModels().count(model) == 0,
+                 "the play source holds the lyrics of the session");
+        QVERIFY2(playSource->getPlayEndFrame() < lyricsEnd,
+                 qPrintable(QString("playback ends at frame %1, with the "
+                                    "lyrics, which end at %2")
+                            .arg(playSource->getPlayEndFrame())
+                            .arg(lyricsEnd)));
+        verifyPlaySourceClean();
     }
 
     void lyrics_reimport_replaces() {
@@ -5837,6 +5896,250 @@ private slots:
         stopTake();
         if (QTest::currentTestFailed()) return;
         QTRY_VERIFY_WITH_TIMEOUT(import->isEnabled(), 2000);
+    }
+
+    // Saved with the session and found again by name when it is opened,
+    // as it was: hidden if it was hidden
+    void lyrics_session_round_trip() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::EventVector before = lyricsEvents();
+        QCOMPARE(int(before.size()), 13);
+        m_window->showLyricsAction()->trigger();
+        QVERIFY(!lyrics->isVisible());
+
+        QString session = m_dir.filePath("lyrics-hidden.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        // One layer, and LyricsTrack has it
+        QVERIFY2(lyrics->isShown(), "the lyrics of the session were not adopted");
+        QCOMPARE(lyricsLayersInDocument(), 1);
+        QCOMPARE(lyricsLayersInPane0(), 1);
+        sv::RegionLayer *layer = lyrics->getLayer();
+        QCOMPARE(static_cast<sv::Layer *>(layer), lyricsLayerInPane0());
+
+        // Every word at its frame and for as long, and its label letter for
+        // letter: the file is UTF-8, and a label is escaped in it
+        sv::EventVector after = lyricsEvents();
+        verifyEventsSurvived(before, after, "the lyrics");
+        if (QTest::currentTestFailed()) return;
+        QStringList labels;
+        for (size_t i = 0; i < after.size(); ++i) {
+            QCOMPARE(after[i].getLabel(), before[i].getLabel());
+            labels << after[i].getLabel();
+        }
+        QVERIFY2(labels.contains(QString("Tämä")) &&
+                 labels.contains(QString("hämärä")) &&
+                 labels.contains(QString("Yö")), qPrintable(labels.join(" ")));
+
+        // Still hidden, and the menu says so
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        QVERIFY(layer->isLayerDormant(pane));
+        QVERIFY(!lyrics->isVisible());
+        QVERIFY(m_window->showLyricsAction()->isEnabled());
+        QVERIFY(!m_window->showLyricsAction()->isChecked());
+        QVERIFY(m_window->removeLyricsAction()->isEnabled());
+
+        // Called what the file's [ti:] tag says, and drawn as before
+        QCOMPARE(layer->getLayerPresentationName(),
+                 QString("Kesäyön testilaulu"));
+        QCOMPARE(int(layer->getPlotStyle()), int(sv::RegionLayer::PlotLyrics));
+        QCOMPARE(colourOf(layer), colourNamed("Grey"));
+        QVERIFY2(pane->getTopLayer() != layer,
+                 "the lyrics are the pane's top layer");
+
+        // Opening a session is not a change to it
+        QVERIFY(!m_window->isDocumentModified());
+
+        // Shown again, saved and opened again: shown
+        m_window->showLyricsAction()->trigger();
+        QVERIFY(lyrics->isVisible());
+        session = m_dir.filePath("lyrics-shown.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(lyrics->isShown());
+        QCOMPARE(lyricsLayersInDocument(), 1);
+        pane = m_window->paneStack()->getPane(0);
+        QVERIFY(!lyrics->getLayer()->isLayerDormant(pane));
+        QVERIFY(lyrics->isVisible());
+        QVERIFY(m_window->showLyricsAction()->isChecked());
+        verifyEventsSurvived(before, lyricsEvents(), "the lyrics, saved twice");
+    }
+
+    // A session can have the lyrics on top of pane 0, if the layer that
+    // was above them went before it was saved.  They do not stay on top
+    // once it is opened
+    void lyrics_not_top_after_reopen() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        sv::Layer *layer = m_window->lyrics()->getLayer();
+        TakeLayers::raise(pane, layer);
+        QVERIFY(pane->getTopLayer() == layer);
+        int count = pane->getLayerCount();
+        QString below = pane->getLayer(count - 2)->objectName();
+        QVERIFY(below != "");
+
+        QString session = m_dir.filePath("lyrics-on-top.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        // The layer that was just under them is over them, and nothing
+        // else has moved
+        pane = m_window->paneStack()->getPane(0);
+        layer = m_window->lyrics()->getLayer();
+        QVERIFY(layer);
+        QCOMPARE(pane->getLayerCount(), count);
+        QVERIFY2(pane->getTopLayer() != layer,
+                 "the lyrics are the pane's top layer");
+        QCOMPARE(pane->getTopLayer()->objectName(), below);
+        QVERIFY(pane->getLayer(count - 2) == layer);
+    }
+
+    // The lyrics belong to the song, not to a take: nothing a take does
+    // touches them, and the singer reads them while recording
+    void lyrics_survive_takes() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::Layer *layer = lyricsLayerInPane0();
+        QVERIFY(layer);
+        sv::ModelId model = m_window->lyrics()->getModelId();
+        sv::EventVector events = lyricsEvents();
+        QVERIFY(!events.empty());
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        verifyLyricsUntouched(layer, model, events, "at the start of the take");
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(600);
+        verifyLyricsUntouched(layer, model, events, "while recording");
+        if (QTest::currentTestFailed()) return;
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->takes()->haveTake());
+        verifyLyricsUntouched(layer, model, events, "after the take");
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        verifyLyricsUntouched(layer, model, events, "after the undo");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        verifyLyricsUntouched(layer, model, events, "after the redo");
+        if (QTest::currentTestFailed()) return;
+
+        // The first take's layers are put away for the new one, and it has
+        // its audio swapped in under them on the way back
+        m_window->doNewEmptyTake();
+        QCOMPARE(m_window->takes()->getActiveIndex(), 1);
+        verifyLyricsUntouched(layer, model, events, "in a new take");
+        if (QTest::currentTestFailed()) return;
+        m_window->doChooseTakeInCombo(0);
+        QCOMPARE(m_window->takes()->getActiveIndex(), 0);
+        verifyLyricsUntouched(layer, model, events, "back in the first take");
+        if (QTest::currentTestFailed()) return;
+        verifyPlaySourceClean();
+
+        // A session with takes is restored after its lyrics are found,
+        // and that leaves them alone as well
+        QString session = m_dir.filePath("lyrics-takes.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takes()->getTakeCount(), 2);
+        QCOMPARE(m_window->takes()->getActiveIndex(), 0);
+        sv::EventVector reopened = lyricsEvents();
+        verifyEventsSurvived(events, reopened, "the lyrics");
+        if (QTest::currentTestFailed()) return;
+        verifyLyricsUntouched(lyricsLayerInPane0(),
+                              m_window->lyrics()->getModelId(), reopened,
+                              "after the session was opened");
+        if (QTest::currentTestFailed()) return;
+        verifyPlaySourceClean();
+    }
+
+    // Load Singing Track opens its file with openPath(), prunes the pane
+    // that makes and clears the history: none of it is the lyrics' business
+    void lyrics_survive_load_singing_track() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::Layer *layer = lyricsLayerInPane0();
+        sv::ModelId model = m_window->lyrics()->getModelId();
+        sv::EventVector events = lyricsEvents();
+
+        m_window->loadSingingTrack(writeWav(tone(highHz, 1.0)));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        verifyLyricsUntouched(layer, model, events, "after Load Singing Track");
+        if (QTest::currentTestFailed()) return;
+        verifyPlaySourceClean();
+    }
+
+    // The lyrics go with their session, and no other session is given them
+    void lyrics_gone_with_session() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QString plain = m_dir.filePath("no-lyrics.ton");
+        QVERIFY(m_window->saveSessionFile(plain));
+
+        LyricsTrack *lyrics = m_window->lyrics();
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::ModelId model = lyrics->getModelId();
+        QString withLyrics = m_dir.filePath("with-lyrics.ton");
+        QVERIFY(m_window->saveSessionFile(withLyrics));
+
+        m_window->doCloseSession();
+        QVERIFY(!lyrics->isShown());
+        QVERIFY(!lyrics->getLayer());
+        QVERIFY2(!sv::ModelById::get(model),
+                 "the lyrics model outlived its session");
+
+        auto noLyrics = [&](const char *what) {
+            QVERIFY2(!lyrics->isShown(), what);
+            QVERIFY2(lyricsLayersInDocument() == 0, what);
+            QVERIFY2(!m_window->removeLyricsAction()->isEnabled(), what);
+            QVERIFY2(!m_window->showLyricsAction()->isEnabled(), what);
+            QVERIFY2(!m_window->showLyricsAction()->isChecked(), what);
+            QVERIFY2(m_window->importLyricsAction()->isEnabled(), what);
+        };
+
+        openReference(writeWav(tone(highHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        noLyrics("a new reference was given the lyrics");
+        if (QTest::currentTestFailed()) return;
+
+        // A session without lyrics, opened after one with them
+        openReference(withLyrics);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(lyrics->isShown());
+        openReference(plain);
+        if (QTest::currentTestFailed()) return;
+        noLyrics("a session without lyrics was given the last one's");
     }
 
     // Closing while pYIN is still running on the take (review finding

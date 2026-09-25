@@ -7591,6 +7591,19 @@ MainWindow::analyseNewMainModel()
         syncAlternatePitchTrack();
     }
 
+    // Lyrics saved with the session are there too.  The load put their
+    // model into the play source when it added the layer to the view, as
+    // it does for every layer, and words past the end of the reference
+    // would hold playback open: out again, as after an import
+    if (pane && m_lyrics->adopt(m_document, pane)) {
+        cerr << "analyseNewMainModel: found the lyrics of the session" << endl;
+        if (m_playSource && !m_lyrics->getModelId().isNone()) {
+            m_playSource->removeModel(m_lyrics->getModelId());
+        }
+        // Remove Lyrics; Show Lyrics is set by updateLayerStatuses() below
+        updateMenuStates();
+    }
+
     if (!m_withSpectrogram) {
         m_analyser->setVisible(Analyser::Spectrogram, false);
     }

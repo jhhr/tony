@@ -108,6 +108,33 @@ LyricsTrack::show(Document *document, Pane *pane, const EventVector &events,
     return true;
 }
 
+bool
+LyricsTrack::adopt(Document *document, Pane *pane)
+{
+    if (m_layer) return true;
+    if (!document || !pane) return false;
+
+    for (int i = 0; i < pane->getLayerCount(); ++i) {
+        auto layer = qobject_cast<RegionLayer *>(pane->getLayer(i));
+        if (!layer || layer->objectName() != layerName()) continue;
+        if (!ModelById::isa<RegionModel>(layer->getModel())) continue;
+        takeLayer(document, pane, layer);
+
+        // The session puts the layers back in the order they were saved
+        // in, and the lyrics end up on top if the layer that was above
+        // them went before the save.  Not to stay there, for the reason
+        // show() leaves the top layer where it is
+        int count = pane->getLayerCount();
+        if (count > 1 && pane->getTopLayer() == layer) {
+            TakeLayers::raise(pane, pane->getLayer(count - 2));
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 void
 LyricsTrack::takeLayer(Document *document, Pane *pane, RegionLayer *layer)
 {

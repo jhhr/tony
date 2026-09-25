@@ -65,6 +65,14 @@ public:
     bool show(sv::Document *document, sv::Pane *pane,
               const sv::EventVector &events, QString presentationName);
 
+    /**
+     * Take over a layer that show() made in an earlier run, and that a
+     * session load has put back into the pane, with the visibility and
+     * the presentation name it was saved with.  Returns false if there
+     * is none.
+     */
+    bool adopt(sv::Document *document, sv::Pane *pane);
+
     /// Delete the layer and its model from the document
     void hide();
 
