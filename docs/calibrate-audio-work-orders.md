@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
@@ -212,7 +212,66 @@ Done: A1 (`944df7c`).
 
 ### B1 — The alignment check runner (spec §2, §5 "App, every build", §6 app suite)
 
-To be refined by the lead after A2.
+Read also: `docs/recording.md` whole (154 lines), `docs/architecture.md` sections on
+layers, models and commands (search the headings), `docs/testing.md` "What there is to
+reuse". In `MainWindow.cpp`, read by range: `record()`, the deferred lambda in
+`recordingStarted()`, `pollTakeProgress()`, `finishSingingTake()` and
+`wantedPreRollFrames()`.
+
+- **Pure helper first**, in `LatencyCheck`, with a core test:
+  - `punchInsFor(layout, count, eventsEach)` returns `count` consecutive punch-in ranges
+    in seconds. Each holds `eventsEach` events that `judgeTake()` will judge, using its
+    margins.
+  - The calibration uses 4 × 3 on the calibration layout. Tests use a short layout of
+    2 × 2 (≈ 8 s) to keep real time down.
+- **New `main/AudioCheckRunner.{h,cpp}`** in `tony_app_files`. A QObject owned and wired
+  by `MainWindow`. It is driven by signals and a polling timer, like
+  `pollTakeProgress()`, **not by nested event loops**: it runs in every build, and the
+  user can close the window at any moment.
+- **Steps:**
+  1. Write the reference WAV to the app data directory, overwriting the old one. Mono,
+     44.1 kHz.
+  2. `checkSaveModified()`, then `openPath(path, ReplaceSession)`. Wait for the
+     reference's analysis, as `openReference()` in the tests does.
+  3. For each punch-in: select its range and call `record()`; the take stops itself.
+     Wait for the take's analysis before the next punch-in. It is not strictly needed,
+     but it keeps pYIN's CPU load out of the next take's timing.
+  4. Read the take's audio: the model `analyser2()->getMainModelId()`, mixed to mono,
+     at its own rate. Call `judgeTake()`.
+- **Record into Selection, Play Reference While Recording and a 1 s pre-roll** apply to
+  the check's own takes through an override in `MainWindow`. `record()`,
+  `recordingStarted()` and `wantedPreRollFrames()` consult it. **Never through
+  `setChecked()`**: those actions write QSettings.
+- **What each take used.** Keep, per take, the round trip it used: today
+  `computeRecordingLatency(out, in)`, which B2 will change. Also keep the reported
+  output and input latency, and the **recording's sample rate**.
+- **The result** carries:
+  - the `TakeSummary`;
+  - the round trip used, and the reported pair;
+  - the recording's rate and the reference's;
+  - a **rate-mismatch flag**, set when the two rates differ, whatever the sweeps say
+    (A2's finding: a 48 kHz take runs off the finder's reach);
+  - the calibrated round trip from `calibratedRoundTrip()`, meaningful only on Ok or
+    Unsteady.
+
+  Emitted as a signal when done. Failures (no device, recording refused, the session
+  closed mid-run) end the run with a reason.
+- **Cancel** stops a take in progress through the normal Stop path and clears the
+  override. `closeSession()` and `~MainWindow()` cancel a running check.
+- **Not in this phase:** storing or using the result (B2), any dialog or menu entry (B3).
+- **App tests.** Choose between a new class and adding to `TestRecordWorkflow`; say
+  which. `TestMainWindow` and the fixtures live in `TestRecordWorkflow.h`. Use
+  `FakeAudioIO` `loopback = true` and the short layout.
+  - Wrong reported latencies (e.g. 2·4096 and 4096), `inputDelay` = 3·4096 + 123. The
+    median offset equals the difference, in seconds at 44.1 kHz, to within a few
+    frames. The verdict is Ok. The calibrated round trip equals `inputDelay`.
+  - Fake at 48 kHz: the rate mismatch is flagged and both rates are given. Assert only
+    what the runner reports, and that nothing crashes. What Tony does with 48 kHz takes
+    is a separate, known bug.
+  - After a check, the three toggles and their QSettings values are as before.
+  - Cancel during a take leaves no recording in progress and the override cleared.
+  - **Show failure** for the first test with the override's Play Reference half
+    removed: nothing is heard, so NoSignal.
 
 ### B2 — Measured round trip in use (spec §5 `LatencyCalibration`, "MainWindow")
 

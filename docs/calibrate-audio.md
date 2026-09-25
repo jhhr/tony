@@ -40,7 +40,9 @@ with less noise.
 2. **Test session.** Tony writes a generated test reference and opens it the way
    File ▸ Open does. You are asked to save your work first. The run never touches your
    song's takes or undo history.
-3. **Calibration, about 30 s.** Four punch-ins at about 2, 8, 14 and 20 s, using the
+3. **Calibration, about 30 s.** Four punch-ins, each spanning three of the reference's
+   sweeps with the room the finder needs around them. The ranges come from the layout,
+   not from fixed times: a 5 s punch-in judges only one or two sweeps. They use the
    ordinary take path with Play Reference While Recording on. Every punch-in restarts the
    stream, as a real take does.
 4. **Result page:**
@@ -247,7 +249,10 @@ setting changes only through Use this latency.
   - **Calibration.** Wrong reported latencies are measured right. With the stored
     figure, `latency_end_to_end`'s recipe lines up; without it, the same test fails. A
     stale key falls back to the reported sum. The user's three toggles and their
-    settings are untouched. A 48 kHz fake reports PositionDependent and names the rate.
+    settings are untouched. A 48 kHz fake is reported as a rate mismatch, naming
+    both rates. This comes from comparing the recording's rate with the reference's,
+    not from the sweeps: from about 10 s into the reference, a 48 kHz take lands further
+    off than the finder searches, and the sweeps then read as Scattered (found in A2).
   - **Every dev check at least twice.** Once passing on a calibrated fake, and once
     **failing** under an injected fault:
     - an uncalibrated offset, for items 1, 2, 7 and 13;
