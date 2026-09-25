@@ -5789,6 +5789,38 @@ private slots:
         QCOMPARE(s1, r1);
     }
 
+    // The layer over the lyrics can go while they stay: the alternate
+    // pitch track when it is turned off, a take's layers when the take
+    // is deleted.  The lyrics must not be left on top then either
+    void lyrics_stay_under_top_when_the_layer_above_goes() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->doToggleAlternatePitch();
+        QVERIFY(m_window->alternatePitch()->isShown());
+        sv::Pane *pane = m_window->paneStack()->getPane(0);
+        QVERIFY(pane->getTopLayer() == m_window->alternatePitch()->getLayer());
+        sv::Layer *under = pane->getLayer(pane->getLayerCount() - 2);
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::Layer *layer = m_window->lyrics()->getLayer();
+        QVERIFY(pane->getLayer(pane->getLayerCount() - 2) == layer);
+
+        // The alternate track's layer is deleted, and the lyrics were
+        // just under it
+        m_window->doToggleAlternatePitch();
+        QVERIFY(!m_window->alternatePitch()->isShown());
+        QTRY_VERIFY2(pane->getTopLayer() != layer,
+                     "the lyrics were left the pane's top layer");
+        QVERIFY2(pane->getTopLayer() == under,
+                 "the layer that was under the lyrics is not on top");
+        QVERIFY(pane->getLayer(pane->getLayerCount() - 2) == layer);
+        QVERIFY(m_window->lyrics()->isShown());
+        QVERIFY(m_window->lyrics()->isVisible());
+    }
+
     // One dialog each, and nothing changes: not even lyrics that are there
     void lyrics_import_failure() {
         makeWindow(FakeAudioIO::Config());

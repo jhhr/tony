@@ -107,6 +107,10 @@ private:
 
     void takeLayer(sv::Document *, sv::Pane *, sv::RegionLayer *);
     void configureLayer();
+
+    // If the lyrics are the pane's top layer, put the one under them on
+    // top: see show()
+    void keepUnderTop();
 };
 
 #endif

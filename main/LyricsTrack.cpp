@@ -24,6 +24,9 @@
 #include "data/model/RegionModel.h"
 #include "base/PlayParameters.h"
 
+#include <QPointer>
+#include <QTimer>
+
 #include <iostream>
 
 using namespace sv;
@@ -124,10 +127,7 @@ LyricsTrack::adopt(Document *document, Pane *pane)
         // in, and the lyrics end up on top if the layer that was above
         // them went before the save.  Not to stay there, for the reason
         // show() leaves the top layer where it is
-        int count = pane->getLayerCount();
-        if (count > 1 && pane->getTopLayer() == layer) {
-            TakeLayers::raise(pane, pane->getLayer(count - 2));
-        }
+        keepUnderTop();
 
         return true;
     }
@@ -209,13 +209,33 @@ LyricsTrack::isVisible() const
 }
 
 void
+LyricsTrack::keepUnderTop()
+{
+    if (!m_layer || !m_pane) return;
+    int count = m_pane->getLayerCount();
+    if (count > 1 && m_pane->getTopLayer() == m_layer) {
+        TakeLayers::raise(m_pane, m_pane->getLayer(count - 2));
+    }
+}
+
+void
 LyricsTrack::layerAboutToBeDeleted(Layer *layer)
 {
     // Someone else's doing, the document being closed for instance
     if (layer && layer == m_layer) {
         m_layer = nullptr;
         hide();
+        return;
     }
+
+    // Another layer going can leave the lyrics on top of the pane: the
+    // alternate pitch track turned off, a take deleted.  It is still in
+    // the pane now, so this looks again once it has gone.  A layer and a
+    // pane that have gone by then are not ours to look at
+    QPointer<Pane> pane(m_pane);
+    QTimer::singleShot(0, this, [this, pane]() {
+        if (pane && pane == m_pane) keepUnderTop();
+    });
 }
 
 ModelId
