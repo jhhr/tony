@@ -162,7 +162,7 @@ builds happen in the container.)
 - A7 — Sessions in place on the phone, and fixes from the first phone test. Done.
 - A7b — Fixes from the second phone test: menus, the picker, Downloads. Done.
 - A4b — Vertical zoom and scroll by touch. Done.
-- A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session.
+- A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -699,4 +699,29 @@ Choices / deviations:
   across never moves it.
 Tests seen failing: across rule removed; zoom about the middle; no limits; spectrogram unsaved.
 Left open: not on a phone. A drag up may also scroll the pane stack, if it can scroll.
+
+### Phase A7c — 2026-09-26
+Built: `main/AndroidMediaReadStream` (tony_core, Android only, `-lmediandk`): a bqaudiostream reader
+over AMediaExtractor/AMediaCodec for m4a mp4 aac 3gp amr flac ogg oga webm mka mkv. Nothing else
+claims those on Android (libsndfile.a has no FLAC or OGG format; oggz/fishsound are out); wav, mp3
+and opus stay with sndfile, mad, opusfile (two readers of one tag: the first registered wins, in
+link order). First audio track, in order, no seek; channels and rate of the decoder's output at
+its first audio; `pcm-encoding` (16-bit if absent). Logged: per file MIME, codec, rate, channels,
+encoding, duration, delay/padding; at the end frames decoded and compressed frames; each refusal
+("this phone has no decoder for AAC (audio/mp4a-latm)"). `main/DecodedPcm` (core,
+`TestDecodedPcm`): five PCM encodings to float, channels folded, reads of any size. `MainWindow`:
+`sessionIsIncomplete()` (the document's flag, from SVFileReader), `maySaveUnasked()` (the suspend
+save's test), `askToSaveIncompleteSession()` before Save with a file, Save As (before the picker)
+and Save in Audio Path; a save clears the flag. build-tony.sh allows libmediandk.so.
+Choices / deviations:
+- Encoder delay/padding kept: the decoder gets 0 for both (AOSP trims them otherwise, from
+  memory; its sources were unreachable). The user's .ton has Media Foundation's decode as 9352192
+  = 9133 x 1024 frames, whole AAC frames: trimming would move the reference 2112 frames (48 ms)
+  against the saved pitch. The phone's log gives its count to compare. 16-bit output, as MF's.
+- A file that fails is tried twice (by extension, then by every reader): logged twice.
+Found: svapp gives an incomplete session no file (`m_sessionFile` ""), so A7's suspend save
+already passed it by. With the reference missing, Save As waits for an analysis that never comes
+("Waiting for analysis" until Cancel): not fixed; `waitForInitialAnalysis()` could pass then.
+Tests seen failing: DecodedPcm compaction; `maySaveUnasked()`'s guard; Save As's question.
+Left open: the decoder not run on a phone. SDK sources 36 installed in /opt/android/sdk.
 
