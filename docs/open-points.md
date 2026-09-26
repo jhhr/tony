@@ -10,10 +10,11 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   Is 3 s right, and should there be a control?
 - **No overwrite question when recording into a selection**: the selection is taken as the
   consent. Right in use?
-- **Constrain Playback to Selection + pre-roll**: the play source constrains playback to
-  the selection, the lead-in is outside it, so it is cut short. Nothing keeps the two apart.
 - **Take operations clear the undo history with no prompt** (all but Rename).
-- None of the [manual checklist](manual-checklist.md) has been run.
+- **The alternate pitch track at ±3 octaves** of a 220 Hz reference (28 Hz, 1.8 kHz) is
+  outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
+- Of the [manual checklist](manual-checklist.md), the device check has been run only in
+  the cloud (no sound card, and the fake device); nothing yet on real hardware.
 
 ## Not built
 
@@ -26,6 +27,16 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - Recording that starts before frame 0 of the reference.
 
 ## Weak spots
+
+- **Loop Playback is left on during a take**, unlike Constrain Playback to Selection: a
+  take that runs past the end of the reference would hear it start again while the take
+  places what is sung after the end. Not tried.
+- After playback the pane's own cache of what it drew holds the translucent note boxes
+  painted twice over themselves, darker, until the next zoom or scroll. Seen with the
+  offscreen platform, through the window's backing store; whether it shows on a real screen
+  is not known. `TestUiChecks::grabPaneRedrawn()` works around it.
+- With no audio device at all, "Couldn't open audio device" is shown again for every file
+  opened (`MainWindowBase::createAudioIO()` tries each time).
 
 - **If pYIN fails part-way, the live dots wait for ever**: they are removed on
   `initialAnalysisCompleted`, which then never comes.
@@ -42,5 +53,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   that printed the value otherwise. With `PlotStrip` it is no longer needed.
 - Untested by any suite: removal of dots placed before the latency was measured; the
   deferred and error paths of the dot teardown; `ContinuousSynth` deletion in the svapp
-  fork; the 30 s give-up of `waitForRangedAnalysis()`; `commitData()` relocating takes;
-  the two other ways `MainWindowBase::record()` can fail.
+  fork; the 30 s give-up of `waitForRangedAnalysis()`; `commitData()` relocating takes on
+  Windows (the test runs elsewhere only); the two other ways `MainWindowBase::record()` can
+  fail.

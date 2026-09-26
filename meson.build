@@ -1112,6 +1112,7 @@ tony_core_files = [
   'main/Coverage.cpp',
   'main/LatencyCalibration.cpp',
   'main/LatencyCheck.cpp',
+  'main/ModelChangeThrottle.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
   'main/TakeAudio.cpp',
@@ -1394,6 +1395,7 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestLatencyCheck.h',
   'main/test/TestLatencyCalibration.h',
   'main/test/TestTakeDiff.h',
+  'main/test/TestModelChangeThrottle.h',
 ])
 
 tony_core_test_exe = executable(
@@ -1423,8 +1425,10 @@ tony_core_test_exe = executable(
 
 tony_app_test_moc_headers = [
   'main/test/TestSingingDocument.h',
+  'main/test/TestViewCache.h',
   'main/test/TestSingingAnalysis.h',
   'main/test/TestRecordWorkflow.h',
+  'main/test/TestUiChecks.h',
   'main/test/TestAudioCheck.h',
 ]
 
@@ -1443,6 +1447,37 @@ tony_app_test_exe = executable(
   'test-tony-app',
   tony_app_test_moc_files,
   'main/test/tony-app-test.cpp',
+  dependencies: [
+    tony_app_dep,
+    tony_core_dep,
+    svcore_dep,
+    qt_dep,
+    feature_dependencies,
+    os_dep,
+    dl_dep,
+  ],
+  cpp_args: [
+    feature_defines,
+    general_defines,
+  ],
+  link_args: [
+    feature_additional_libs,
+    general_link_args,
+  ],
+  win_subsystem: 'console'
+)
+
+# The checks that need a real audio device, with its microphone hearing
+# its speakers. Built with the rest, run only by hand: not a meson test
+tony_device_test_moc_files = qt.preprocess(
+  moc_headers: [
+  'main/test/TestRealDevice.h',
+])
+
+tony_device_test_exe = executable(
+  'test-tony-device',
+  tony_device_test_moc_files,
+  'main/test/tony-device-check.cpp',
   dependencies: [
     tony_app_dep,
     tony_core_dep,

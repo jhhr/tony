@@ -26,6 +26,7 @@
 #include "TakeTiming.h"
 #include "LatencyUtils.h"
 #include "LatencyCalibration.h"
+#include "ModelChangeThrottle.h"
 
 #include <vector>
 #include <string>
@@ -355,6 +356,10 @@ protected:
 
     // Model backing the realtime layer (owned by the document).
     sv::ModelId           m_realtimePitchModelId;
+
+    // Tells the pane of the dots added to that model, which tells nobody
+    // itself (see setupRealtimePitchLayer())
+    ModelChangeThrottle   m_realtimeDotsNotifier;
 
     sv::Overview  *m_overview;
 
@@ -815,6 +820,13 @@ protected:
     bool m_singingAudioMutedForTake;
     bool m_singingAudioAfterTake;
     void restoreSingingAudioAfterTake();
+
+    // Playback constrained to the selection is lifted while the reference
+    // plays for a take, and put back when the take is over: true while it
+    // is lifted
+    bool m_playSelectionLiftedForTake;
+    void liftPlaySelectionForTake();
+    void restorePlaySelectionAfterTake();
 
     // The main model last handed to m_analyser by analyseNewMainModel().
     // audioFileLoaded() is emitted for additional models too (a singing

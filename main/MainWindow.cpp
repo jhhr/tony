@@ -78,6 +78,7 @@
 
 #include "widgets/RangeInputDialog.h"
 #include "widgets/ActivityLog.h"
+#include "widgets/InteractiveFileFinder.h"
 
 // For version information
 #include "vamp/vamp.h"
@@ -138,6 +139,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_analyser2(nullptr),
     m_realtimePitchTracker(nullptr),
     m_realtimePitchLayer(nullptr),
+    m_realtimeDotsNotifier(40),
     m_overview(0),
     m_showSingingPitch(nullptr),
     m_showSingingNotes(nullptr),
@@ -198,6 +200,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingAsSingingTrack(false),
     m_singingAudioMutedForTake(false),
     m_singingAudioAfterTake(true),
+    m_playSelectionLiftedForTake(false),
     m_paneCountBeforeRecording(0),
     m_currentRecordingModelId(),
     m_recordingLayer(nullptr),
@@ -2277,6 +2280,10 @@ MainWindow::updateMenuStates()
     emit canEraseSinging(haveCoverage && !inTake && haveSelection &&
                          !analysingRange);
 
+    // Nor can playback be constrained to the selection during a take:
+    // see liftPlaySelectionForTake()
+    if (inTake) emit canPlaySelection(false);
+
     // The takes of the session: switching and making one need a session
     // and nothing running, and the rest need a take to act on as well
     bool canChange = takeOperationsAllowed();
@@ -2652,6 +2659,7 @@ MainWindow::closeSession()
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
     m_singingAudioMutedForTake = false;
+    restorePlaySelectionAfterTake();
     m_analysedMainModelId = {};
 
     // Nothing is left waiting for a merge, and the history that holds the
@@ -3386,6 +3394,17 @@ MainWindow::syncCoverageStrip()
 
     m_coverageStrip->setCoverage(m_takes->getCoverage());
 
+    // The band runs along the bottom of the pane, over the take's
+    // waveform, so it has to be above that layer. The swap makes the
+    // waveform layer again, on top of everything (as does activating a
+    // take), so this is looked at on every call and not only when the
+    // strip is first shown
+    Layer *strip = m_coverageStrip->getLayer();
+    int layers = pane->getLayerCount();
+    if (strip && layers > 0 && pane->getLayer(layers - 1) != strip) {
+        TakeLayers::raise(pane, strip);
+    }
+
     if (!wasShown) {
         // The new layer is on top, where a tool would look for the layer
         // to act on, so the tracks that can be edited go back there, as
@@ -3588,6 +3607,29 @@ MainWindow::restoreSingingAudioAfterTake()
 }
 
 void
+MainWindow::liftPlaySelectionForTake()
+{
+    // Playback constrained to the selection starts in the selection, not
+    // at the lead-in of a pre-roll or at a playhead outside it, and stops
+    // or loops at its end while the recording runs on. What was sung would
+    // then not be where the take puts it: the take counts the reference
+    // as playing on from playbackStart() without a break. Through the
+    // view manager, which writes no settings; the button follows it, and
+    // is greyed out meanwhile (updateMenuStates())
+    if (!m_viewManager->getPlaySelectionMode()) return;
+    m_viewManager->setPlaySelectionMode(false);
+    m_playSelectionLiftedForTake = true;
+}
+
+void
+MainWindow::restorePlaySelectionAfterTake()
+{
+    if (!m_playSelectionLiftedForTake) return;
+    m_playSelectionLiftedForTake = false;
+    m_viewManager->setPlaySelectionMode(true);
+}
+
+void
 MainWindow::teardownSingingTrackAnalyser()
 {
     // m_singingAudioMutedForTake is deliberately not cleared here: the
@@ -3719,6 +3761,11 @@ MainWindow::setupRealtimePitchLayer()
     // Its resolution is the YIN hop size: one estimate per hop.
     // Unit "Hz" is required so TimeValueLayer::shouldAutoAlign() defers to
     // the pane's log-frequency coordinate system (same as the pYIN pitch track).
+    //
+    // notifyOnAdd false: a notice for each of the ~170 dots a second
+    // would be a redraw for each. The model then tells nobody of a dot,
+    // though, so m_realtimeDotsNotifier tells the pane of what was added,
+    // 25 times a second
     auto pitchModel = std::make_shared<SparseTimeValueModel>
         (sr, RealtimePitchTracker::kHopSize, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
@@ -3745,8 +3792,14 @@ MainWindow::setupRealtimePitchLayer()
     // Associate our pre-filled SparseTimeValueModel with the layer.
     // The model was already registered via addNonDerivedModel above.
     m_document->setModel(m_realtimePitchLayer, m_realtimePitchModelId);
+    m_realtimeDotsNotifier.setModel(m_realtimePitchModelId);
     m_realtimePitchLayer->setVerticalScale(TimeValueLayer::AutoAlignScale);
     m_realtimePitchLayer->setPlotStyle(TimeValueLayer::PlotPoints);
+
+    // Out of the pane's cache: told of a change to the model of a layer
+    // in it, the pane draws every layer in it again -- the reference's
+    // pitch track, notes and waveform, 25 times a second
+    m_realtimePitchLayer->setCachedInView(false);
 
     // Singing/recording track uses the "Orange" colour so it is visually
     // distinct from the reference track (black) and notes (blue).
@@ -3783,6 +3836,7 @@ void
 MainWindow::teardownRealtimePitchLayer()
 {
     stopRealtimePitchTracker();
+    m_realtimeDotsNotifier.setModel({});
 
     if (m_realtimeLayerTeardownConnection) {
         disconnect(m_realtimeLayerTeardownConnection);
@@ -4378,6 +4432,7 @@ MainWindow::recordingStarted()
             m_recordingStartGapMeasured = -1;
             m_awaitingReferenceStart = true;
 
+            liftPlaySelectionForTake();
             m_viewManager->setPlaybackFrame(playbackStart);
             m_playSource->play(playbackStart);
         }
@@ -4604,6 +4659,8 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
 
     if (m) {
         m->add(Event(dotFrame, float(hz), tr("")));
+        m_realtimeDotsNotifier.changed
+            (dotFrame, dotFrame + RealtimePitchTracker::kHopSize);
     }
 
     // Convert Hz to MIDI note number and cents deviation.
@@ -4677,6 +4734,7 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
         if (m_audioIO) m_audioIO->suspend();
         else if (m_playTarget) m_playTarget->suspend();
     }
+    restorePlaySelectionAfterTake();
 
     updateLayerStatuses();
     updateMenuStates();
@@ -6386,14 +6444,20 @@ MainWindow::commitData(bool mayAskUser)
             if (!QFileInfo(svDir).isDir()) return false;
         }
         
-        // This name doesn't have to be unguessable
+        // This name doesn't have to be unguessable. Its extension is the
+        // one this application opens as a session -- .ton, not Sonic
+        // Visualiser's .sv, which Tony would try to open as audio
+        QString extension = InteractiveFileFinder::getInstance()
+            ->getApplicationSessionExtension();
 #ifndef _WIN32
-        QString fname = QString("tmp-%1-%2.sv")
+        QString fname = QString("tmp-%1-%2.%3")
             .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"))
-            .arg(QProcess().processId());
+            .arg(QProcess().processId())
+            .arg(extension);
 #else
-        QString fname = QString("tmp-%1.sv")
-            .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"));
+        QString fname = QString("tmp-%1.%2")
+            .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"))
+            .arg(extension);
 #endif
         QString fpath = QDir(svDir).filePath(fname);
         if (saveSessionFile(fpath)) {
@@ -7024,11 +7088,7 @@ MainWindow::octaveShift(bool up)
 void
 MainWindow::togglePitchCandidates()
 {
-    CommandHistory::getInstance()->startCompoundOperation(tr("Toggle Pitch Candidates"), true);
-
     m_analyser->showPitchCandidates(!m_analyser->arePitchCandidatesShown());
-
-    CommandHistory::getInstance()->endCompoundOperation();
 
     updateMenuStates();
 }

@@ -18,14 +18,21 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 The forks are free to change when Tony needs it; prefer a small, general addition to the
 library over a workaround in `main/`.
 
-1. Edit and commit inside the library's directory (it is its own git repository, on the
-   fork branch). Commit messages there follow that repository's style: `area: what`.
+1. Edit and commit inside the library's directory (it is its own git repository). The
+   fork's branch follows Tony's: for work committed straight to Tony's `default`, the fork
+   branch of the table; for work on a Tony feature branch, a fork branch of the **same
+   name**, on top of what it already holds (or started from the fork branch of the table),
+   which reaches the fork branch when the Tony branch is merged. Commit messages there
+   follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
    upstream sonic-visualiser — do not push there.
 3. Put the new commit hash in `repoint-lock.json` as that library's `pin`, and commit that
    in Tony together with the code that needs it.
 4. A sub-agent that was told to work only in `main/` does not edit a fork: it reports
    exactly which change it needs, and the lead session makes it.
+
+When switching Tony branches, check out the fork branches that go with it: a fork left on
+another branch builds something the lock file does not say.
 
 **repoint does not run on the development machine** (it needs an SML compiler and none is
 installed). The checkouts are managed with plain git, and `repoint-project.json` /
@@ -74,6 +81,10 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `plotStyle` attribute.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
+- `FlexiNoteLayer::getAssociatedPitchModel()`, which the note tools set a note's pitch
+  from, takes the pitch track with the same source model as the notes, and the first in
+  the view only when there is none. With the reference first in the pane, an edited
+  take's note otherwise took the reference's pitch.
 - `Pane::setWorkModel()` / `getWorkModel()`: which model's extents are blocked off at the
   ends of the pane (a pale wash and a line), and whose duration, title and alignment are
   reported. The scan that chooses one now skips layers dormant in that pane. Tony's pane
@@ -82,6 +93,12 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   progress, whose end crawls along behind the playback cursor. `MainWindow` names the
   reference instead.
 - `Layer::setSavedInSession(false)`: `View::toXml()` leaves the layer out.
+- `Layer::setCachedInView(false)`: `View` draws the layer, and every layer in front of it,
+  at every paint instead of keeping it in its cache, and a change to its model leaves the
+  cache alone. For the live dots ([recording.md](recording.md)).
+- `View::paintEvent()` on a cache hit no longer has the cached layers draw into its buffer,
+  where the cache then covered them. Upstream has done that since 2018, so the cache saved
+  nothing and every paint, down to the play pointer's few pixels, drew every layer.
 
 ## Known defects in the forks, not fixed
 

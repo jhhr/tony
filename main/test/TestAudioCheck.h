@@ -25,16 +25,37 @@
 // block the test for ever, so it is dismissed, and the test fails in
 // cleanup().
 
-#include "TestRecordWorkflow.h"
+#include "TestSignals.h"
+#include "TestMainWindow.h"
 
 #include "../AudioCheckRunner.h"
 #include "../CalibrateAudioDialog.h"
 #include "../LatencyCheck.h"
 
-#include "base/PlayParameterRepository.h"
+#include "version.h"
 
+#include "layer/Layer.h"
+#include "data/fileio/WavFileWriter.h"
+#include "base/PlayParameters.h"
+#include "base/PlayParameterRepository.h"
+#include "base/RecordDirectory.h"
+#include "transform/ModelTransformerFactory.h"
+#include "widgets/InteractiveFileFinder.h"
+
+#include <QObject>
+#include <QtTest>
+#include <QAbstractButton>
+#include <QApplication>
 #include <QMenu>
+#include <QMessageBox>
+#include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTimer>
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 class TestAudioCheck : public QObject
 {

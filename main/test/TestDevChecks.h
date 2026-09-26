@@ -28,14 +28,32 @@
 // scratch folders go to directories of the tests' own, so that a
 // failing run's report never lands among the suites' results.
 
-#include "TestRecordWorkflow.h"
+#include "TestMainWindow.h"
 
 #include "../AudioCheckRunner.h"
 #include "../CalibrateAudioDialog.h"
 #include "../LatencyCheck.h"
+#include "../TakesFile.h"
 #include "../dev/DevChecks.h"
 
+#include "version.h"
+
+#include "base/RecordDirectory.h"
+#include "transform/ModelTransformerFactory.h"
+#include "widgets/InteractiveFileFinder.h"
+
+#include <QObject>
+#include <QtTest>
+#include <QAbstractButton>
+#include <QApplication>
+#include <QMessageBox>
+#include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTimer>
+
+#include <cmath>
+#include <vector>
 
 class TestDevChecks : public QObject
 {

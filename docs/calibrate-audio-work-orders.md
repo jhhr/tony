@@ -725,3 +725,21 @@ The next phase must know:
 - `latencyInUse()`'s reported pair differs before any file is open: store test fingerprints after opening one.
 - The watchdog answers "Session modified" with No; `QStandardPaths::setTestModeEnabled()` keeps references out of the test app's data directory.
 Left open: the app suite now takes about 7m40s; the dev checks add about 66 s, over spec §6's minute.
+
+### Merge of default — 2026-09-26
+Merged `origin/default` at `92b8b5f` (15 commits); svgui at its new pin `a34646a`.
+Conflicts:
+- `TestRecordWorkflow.h`: `TestMainWindow` lives in default's `TestMainWindow.h` now. This branch's 17 accessors were merged into it three-way against the base's class (no overlap with default's `setUseRealDevice()` and the rest), and `dev/DevChecks.h` went with them, under `#ifdef TONY_DEV_CHECKS`.
+- `TestSingingAnalysis.h`: both `waitForRange()` fixes are the same code; default's comment kept.
+- `MainWindow.h` (includes), `meson.build`, `tony-core-test.cpp`, `tony-app-test.cpp`: both sides kept. `TestUiChecks` runs right after `TestRecordWorkflow`, as on default, then `TestAudioCheck` and `TestDevChecks`.
+Beyond the conflicts:
+- `TestAudioCheck.h` and `TestDevChecks.h` include `TestMainWindow.h` and what they use, not `TestRecordWorkflow.h`.
+- `tony-app-test.cpp` draws text without sub-pixel anti-aliasing. Ubuntu's fontconfig asks for it (`10-sub-pixel-rgb.conf`) and Qt 6.4 follows it: the orange fringes of the waveform scale's labels at the pane's left edge were taken for the first live dot, and `TestUiChecks::live_dots_under_the_cursor` failed. Default ran on conda-forge's Qt 6.11, whose text was grey.
+- `test-tony-device`'s moc needs no `dev_moc_args`: `TestMainWindow` has no `Q_OBJECT`, and `TestRealDevice.h` no `#ifdef`.
+Checked: no string connect naming `ModelId` or `sv_frame_t` is left, and all of `e2cf7c0` survived. `liftPlaySelectionForTake()` (default) is called in the `recordingStarted()` lambda after the round trip, so a check's takes lift the constraint too. `closeSession()` tells the runner and the dev checks first, then restores the constraint.
+For D:
+- `testing.md` still calls `TestMainWindow` shared by three suites, and lists neither `TestAudioCheck` nor `TestDevChecks`.
+- `building.md`'s "Qt 6.11, not Ubuntu's 6.4" is no longer needed for the connects.
+- `README.md` says the manual checklist is "none of it tried yet"; `open-points.md` says the device check has been run in the cloud.
+Seen, not fixed: every take logs "No such signal sv::WritableWaveFileModel::aboutToBeDeleted()" from `svapp/audio/AudioCallbackRecordTarget.cpp:291`. The signal does not exist, so the warning is old and appears on any Qt.
+App suite: 549 s, of which `TestUiChecks` takes 82 s.

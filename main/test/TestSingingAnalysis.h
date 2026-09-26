@@ -217,10 +217,9 @@ class TestSingingAnalysis : public QObject
         QVERIFY(noteEvents(analyser).empty());
     }
 
-    // Wait for a ranged analysis to be merged.  initialAnalysisCompleted()
-    // also comes from layerCompletionChanged() whenever the layers reach
-    // 100%, which can be before the merge, so the signal alone does not
-    // say the range is done: wait for the analyser to say so as well
+    // Wait for a ranged analysis to be merged. The completion signal
+    // alone does not say so: the whole-file analysis before it can still
+    // be delivering its own, late, when the range starts
     void waitForRange(Analyser &analyser, QSignalSpy &done) {
         QVERIFY2(done.count() > 0 || done.wait(30000),
                  "the ranged analysis did not complete within 30 seconds");

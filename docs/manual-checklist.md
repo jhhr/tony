@@ -1,106 +1,86 @@
 # Manual checklist: what no automated test can tell
 
-The automated suites run against a fake audio device and an offscreen window. Everything
-below needs a real device, real ears or real eyes. **As of 2026-09-20 none of it has been
-tried by hand.** When an item has been checked, note the date and the result next to it;
-when a change touches an area, the items of that area are what to ask the user to try.
+The suites run against a fake audio device and an offscreen window. Most of what used to
+be on this page is now checked automatically:
 
-Launch with `.\build.bat run`.
+- **`TestUiChecks`** (in `test-tony-app`) shows the real window, drives it with key
+  presses, mouse gestures and its own dialogs, and judges pane 0 by the pixels on the
+  screen. Each of its tests begins with a comment `// Checklist:` quoting the item it
+  replaced; `grep -n "Checklist:" main/test/*.h` lists them. With `TONY_TEST_SHOT_DIR` set
+  it saves what it looked at as PNG files.
+- **`test-tony-device`** checks the real device: section 1.
 
-## Latency and live feedback
+What is left needs a real device, real ears, or a decision. When an item has been checked,
+note the date and the result next to it; when a change touches an area, the items of that
+area are what to ask the user to try. Launch with `.\build.bat run`.
 
-1. **Latency on this machine.** Play Reference While Recording on, headphones, clap along
-   with a reference with a clear onset. Afterwards the take lines up with the reference by
-   eye and by ear; still does after save and reopen.
-2. **Several phrases in one take.** Record two or three phrases at different positions:
-   every one sits in time, not just the first (each recording measures its start gap).
-3. **Live dots** appear under the playback cursor, not behind it; stay after Stop until the
-   orange pitch track replaces them; the status bar stops changing when the take stops.
-   Recording over singing that is there: that take's own pitch track and notes are out of
-   sight for the take, so only the dots and the track being followed are on the pane, and
-   they are back when the take stops.
-4. **Nothing of the take in the speakers while recording**: with speakers on, neither your
-   voice nor a synth tone comes back. Play Singing Audio keeps its state through the take.
-5. **Stereo interface with the mic on input 2**: dots appear.
-6. **No input device / device in use**: Record does nothing harmful, and the next file
-   opened is analysed as usual.
+## 1. The device check
 
-## Recording from a position
+Once per machine, and again for each output device sung with (Bluetooth headphones have a
+latency of their own). It covers: latency on this machine; several recordings in one take,
+each in time; nothing of the take coming back out of the speakers; how long Stop takes on a
+four-minute song; live dots from whichever input the microphone is on; and a device that
+records nothing.
 
-7. Seek into the song, Record, sing, Stop: the singing is where it was sung and the part
-   before it is untouched. Record again inside it: the overwrite question comes; No records
-   nothing. "Don't ask again" with Yes holds across sessions.
-8. During a take at P > 0 the cursor starts at P, the pane follows it, and cursor,
-   reference and dots are in the same place.
-9. **How long Stop takes on a 4-minute song**: a moment for the file copy, then new pitch
-   only where the singing was. A pause like a whole-song analysis means the ranged path
-   did not happen.
-10. **The joins**: no click at the edges of a new range; the pitch track runs through the
-    join without a hole, a doubled dot or one note showing as two. Pitch and notes outside
-    the recorded range (± about 0.25 s) must not flicker or move at all.
+It plays a four-minute reference of a tone and clicks, records it through the air at two
+places into one take, and measures where the clicks landed in the take.
 
-## Pre-roll and Record into Selection
+1. In Tony, choose the devices under **Playback > Audio Output Device** and **Audio Input
+   Device** (or leave the system default). The check reads that choice, and nothing else,
+   from Tony's settings.
+2. Speakers at a moderate volume and the microphone where it hears them; with headphones,
+   hold an ear cup against the microphone. A quiet room. It takes about a minute.
+3. From Git Bash:
 
-11. **Is 3 s right, is the countdown readable while singing?** (QSettings
-    `MainWindow/prerollseconds`; there is deliberately no UI yet.)
-12. Sing through the lead-in: nothing of it is heard back, and nothing before P changed.
-13. Pre-roll less than 3 s from the start of the song: shorter countdown, no attempt to
-    run from before frame 0.
-14. Record into Selection stops by itself about 0.25 s after the end has been sung; what is
-    added is exactly the selection; no overwrite question.
-15. **Both together — the practice loop this is all for**: select, Record, hear the
-    lead-in, sing, and be back with nothing to press; Play hears it. Is anything else
-    needed to make repeating that pleasant?
-16. Constrain Playback to Selection together with a pre-roll: the lead-in is probably cut
-    short. Should the two be kept apart?
+   ```sh
+   export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
+   ninja -j 3 -C build_mingw test-tony-device.exe > tmp/build.log 2>&1; echo "exit:$?" >> tmp/build.log
+   cd build_mingw && mkdir -p ../tmp/tl
+   TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-device.exe > ../tmp/test.log 2>&1; echo "exit:$?"
+   grep -a "^FAIL\|^   Loc\|^QINFO\|^Totals" ../tmp/tl/TestRealDevice.txt
+   ```
 
-## Coverage strip and erase
+4. Read the `QINFO` lines, one per recording: `clicks +x ms from the reference` (within
+   ±10 ms passes; the sign says late or early), `match` (below 0.1 the microphone did not
+   hear the speakers), `stop took`, `live dots`, and `channels (dB)`, which shows which
+   input the microphone is on. With a stereo interface, run it with the microphone on
+   input 2: the dots must still be there.
 
-17. The band is readable over waveform and dots at every zoom: height, colour, gaps.
-18. It cannot be touched: clicking and dragging on it with either tool creates, moves or
-    selects nothing and does not change the pane's scale.
-19. Select Recording at Playhead then Erase: audio silent, bar gone, pitch and notes gone,
-    no analysis afterwards. Erasing the middle of a long note leaves two.
-20. Erase and Select Recording are greyed out with no take, no selection, while recording,
-    and for the second or two of analysis after Stop — and come back by themselves.
+`TONY_DEVICE_CHECK_FAKE=n` runs it with no hardware, on the fake device with its output fed
+back into its input `n` frames later than it reports: for checking the check.
 
-## Undo
+Cloud run, 2026-09-25 (Linux, no sound card): with no device at all Record does no harm and
+the next file is analysed (the "Couldn't open audio device" warning comes back once per file
+opened); with a device that opens but delivers nothing the take is dropped quietly, no
+harm. On the fake: +0.0 ms at both places with `n = 0`, and +50.0 ms, failing, with
+`n = 2205`. **Not yet run on real hardware.**
 
-21. Three recordings, Ctrl+Z three times: each takes back exactly one (audio, coverage,
-    band, pitch together). The menu says "Record Singing" / "Erase Singing", never anything
-    about a layer or pane.
-22. Ctrl+Z immediately after Stop, before the pitch appears: nothing of that analysis
-    lands later; redo analyses again.
-23. Undo of the very first recording leaves no singing track at all, and Record still
-    works.
+## 2. Still by hand
 
-## Takes
+1. **A device in use**: another program holding the microphone exclusively. Record does
+   nothing harmful, and the next file opened is analysed as usual.
+2. **The practice loop**, the one this is all for: select, Record, hear the lead-in, sing,
+   and be back with nothing to press; Play hears it, and it sits in time by ear. Is
+   anything else needed to make repeating that pleasant?
+3. **Is a 3 s pre-roll right, and is the countdown readable while singing?** (QSettings
+   `MainWindow/prerollseconds`; there is deliberately no UI yet.)
+4. **Looks**, from the screenshots (`TONY_TEST_SHOT_DIR=../tmp/shots` on a run of
+   `test-tony-app`) and in the app: the band along the bottom over waveform and dots; the
+   faded and dark brown of the alternate pitch track and the `8vb` / `8va` buttons (in the
+   `alternate_pitch_track_colours-window` shot).
+   Cloud review, 2026-09-25: the band is a clear orange strip over the grey waveform at
+   every zoom; faded brown reads as secondary to the black reference; during a take the
+   reference pitch is hidden, so dark brown only has to stand out from the dots, which it
+   does. Even 1920 px wide, the bottom toolbar overflows: what comes after Pre-roll, the
+   octave buttons included, is behind its » menu. Fonts there are Linux ones; how wide the
+   toolbars are on Windows is for the Windows screenshots.
+5. **Take operations clear the undo history with no prompt** (all but Rename): acceptable
+   in use?
+6. **Log out with unsaved takes** on Windows: its test does not run there, because
+   `commitData()` writes into the real profile. Afterwards `~/.sv1/tmp-*.ton` is on the
+   Recent Files list, opens, and its takes play.
+7. **Live dots on this machine**: during a take the dots keep up with the cursor and grow
+   smoothly, and neither they nor the cursor stutter, in a maximised window.
 
-24. New Empty Take, record, switch back and forth: fast, no analysis, each take with its
-    own audio, pitch, notes and band. The inactive take is silent, and playback stops at
-    the end of the take on show even when another is longer.
-25. Duplicate, record into the copy: the original is untouched.
-26. Delete asks first and never deletes an audio file. Rename keeps the undo history —
-    every other take operation clears it without a prompt: acceptable in use?
-27. Combo and Takes menu are greyed out during a take.
-28. Analyse Now on a take re-analyses all of its coverage in place.
-
-## Sessions and files
-
-29. Before the first save, take files go to the record directory; after it, to
-    `<session>.takes/`. Closing leaves each take's file, files any saved session named,
-    and nothing else Tony wrote. `recorded-*.wav` are never deleted.
-30. Move `.ton` and folder together: everything plays. Move the `.ton` alone: exactly one
-    warning naming the folder, takes shown without sound, no "locate it?" question.
-31. Save As copies the takes; the old `.ton` still opens and plays.
-32. A `.ton` from before the takes work opens with the reference only and no dialog.
-33. Open a `.ton`, Load Singing Track or Load Background Music, then Record: no crash, time
-    ruler still there. Closing afterwards asks whether to save.
-34. Stop a take and close the window at once: no crash.
-35. Log out with unsaved takes: what `commitData` writes into `~/.sv1` is playable.
-
-## Looks
-
-36. Alternate pitch track: faded brown is readable but secondary; dark brown during a take
-    is distinct from black; `8vb` / `8va` buttons look acceptable; the track stays in view
-    after an octave step.
+The questions the automated checks raised, and the facts they established for the
+decisions above, are in [open-points.md](open-points.md).
