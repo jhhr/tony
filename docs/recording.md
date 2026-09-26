@@ -225,6 +225,25 @@ their calls from a press.
 sleep 5 ms when there is not a full window yet. `kHopSize` is also the resolution of the dot model, whose
 unit must be `"Hz"` for the layer to align to the pane's log-frequency scale.
 
+**A level floor** (`kMinLevel`, −60 dBFS): a window whose first half is quieter gives no
+dot, and YIN is not run on it. YIN is blind to level, and finds a pitch now and then in
+a room's steady noise: the user's PC fans, at −66.5 dBFS with lines at 306 and 334 Hz,
+gave a dot or two in the silence of almost every take, 25 dB below the quietest window
+of a tone their microphone heard ([audio-drivers.md](audio-drivers.md), §7). The level
+is:
+
+- **the first half's**, because YIN's difference function compares the first half with the
+  window further on, so the pitch it finds is the first half's. Measured on the whole
+  window, one whose second half reaches into a sound passes, with the pitch of the quiet
+  before it: on the fake, dots of its hum just before every sweep;
+- **the channels' average**, not the mixdown's sum: a microphone on both inputs would read
+  6 dB louder than on one. A microphone on one input of two reads 6 dB below its own
+  level.
+
+A microphone whose noise is louder than −60 dBFS still gives such dots; one measured by
+Calibrate Audio could set the floor instead ([calibrate-audio.md](calibrate-audio.md),
+§10).
+
 **Getting the dots to the pane.** The tracker finds about 170 estimates a second. Handed
 to the GUI thread one at a time (a queued call each), a GUI thread that needs longer for one
 than the tracker takes to find the next (5.8 ms) falls behind for good, and the dots trail
@@ -250,4 +269,5 @@ Correct as they are, though they look wrong:
 
 - The `1/frameSize` scale in the FFT difference function: bqfft's inverse is unscaled.
   It matches pyin's `fastDifference`, which `test-tony-core` links as the reference.
-- The mixdown is a sum, not an average: YIN's normalised difference is scale-free.
+- The mixdown is a sum, not an average: YIN's normalised difference is scale-free. Only
+  the level floor divides it by the channels.

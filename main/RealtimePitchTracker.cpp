@@ -36,6 +36,7 @@ RealtimePitchTracker::RealtimePitchTracker(ModelId audioSourceId,
       m_minFreq(60.0),
       m_maxFreq(1000.0),
       m_threshold(0.15),
+      m_minLevel(kMinLevel),
       m_framesAnalysed(0)
 {
 }
@@ -90,6 +91,7 @@ RealtimePitchTracker::run()
         }
 
         double sr = audioModel->getSampleRate();
+        int channels = audioModel->getChannelCount();
 
         if (!fft) {
             fft = new FFT(kWindowSize);
@@ -111,10 +113,13 @@ RealtimePitchTracker::run()
 
             vector<float> raw(rawFv.begin(), rawFv.end());
 
-            vector<double> diff;
-            yinDifferenceFFT(raw, diff, fft);
-            yinCMND(diff);
-            double lagSamples = yinFindPitch(diff, minLag, maxLag, m_threshold);
+            double lagSamples = -1.0;
+            if (level(raw.data(), kWindowSize / 2, channels) >= m_minLevel) {
+                vector<double> diff;
+                yinDifferenceFFT(raw, diff, fft);
+                yinCMND(diff);
+                lagSamples = yinFindPitch(diff, minLag, maxLag, m_threshold);
+            }
 
             if (lagSamples > 0.0) {
                 double hz = sr / lagSamples;
@@ -139,6 +144,20 @@ RealtimePitchTracker::run()
 
     delete fft;
     cerr << "RealtimePitchTracker: background thread stopped" << endl;
+}
+
+double
+RealtimePitchTracker::level(const float *mixdown, int count, int channels)
+{
+    if (!mixdown || count < 1 || channels < 1) return -200.0;
+    double sum = 0.0;
+    for (int i = 0; i < count; ++i) {
+        double x = double(mixdown[i]) / channels;
+        sum += x * x;
+    }
+    double rms = std::sqrt(sum / double(count));
+    if (rms <= 0.0) return -200.0;
+    return std::max(-200.0, 20.0 * std::log10(rms));
 }
 
 // ---------------------------------------------------------------------------

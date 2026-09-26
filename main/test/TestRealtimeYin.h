@@ -250,6 +250,28 @@ private slots:
         QVERIFY(std::abs(TestSignals::centsBetween(detected, 220.0)) < 10.0);
     }
 
+    void window_level() {
+        // A sine's RMS is its peak less 3 dB
+        const double peak = std::pow(10.0, -40.0 / 20.0);
+        const double rms = -40.0 - 10.0 * std::log10(2.0);
+        std::vector<float> one = TestSignals::sine(220.0, 44100.0, kWindow, peak);
+        double level = RealtimePitchTracker::level(one.data(), kWindow, 1);
+        QVERIFY2(std::abs(level - rms) < 0.1,
+                 qPrintable(QString("%1 dBFS").arg(level)));
+
+        // Two inputs carrying it mix down to their sum, twice as large:
+        // the level is still each input's
+        std::vector<float> both(one);
+        for (float &v : both) v *= 2.f;
+        level = RealtimePitchTracker::level(both.data(), kWindow, 2);
+        QVERIFY2(std::abs(level - rms) < 0.1,
+                 qPrintable(QString("%1 dBFS").arg(level)));
+
+        const std::vector<float> zeros(kWindow, 0.f);
+        QCOMPARE(RealtimePitchTracker::level(zeros.data(), kWindow, 1),
+                 -200.0);
+    }
+
     void diff_matches_pyin_data() {
         QTest::addColumn<bool>("useNoise");
         QTest::newRow("noise") << true;

@@ -420,8 +420,14 @@ adding to them:
   reference and nothing else, silent wherever the reference is, so a take played back out
   shows in no silent gap, and items 4 and 12 cannot fail. `loopbackInARoom()` adds a
   programmed input of white noise at −60 dBFS, as a room gives a microphone: too quiet for
-  the sweep finder, and no pitch for the live tracker or pYIN. The passing run and the
-  lead-in's fault and stall runs use it.
+  the sweep finder, and no pitch for the live tracker or pYIN. And all along a steady
+  306 Hz at −66 dBFS (`humHz`, `humGain`), as the fans of the user's room: YIN finds a
+  pitch in it, the live tracker's level floor none. Where the white noise plays, in the
+  first 10 s after each resume, it hides the hum from YIN; kept running, the later takes
+  have the hum alone, and `dev_checks_pass_with_the_stream_kept_running` fails item 3 on
+  it without the floor, or with the floor measured over the whole window. The passing
+  runs, at 44.1 kHz, 48 kHz, kept running and on the phone, and the lead-in's fault and
+  stall runs use it.
 - **Holding the GUI thread up on purpose** (`stallTheReRecording()`,
   `dev_checks_lead_in_through_a_stall`): a busy-wait in the slot of a 5 ms timer, due by
   where the reference is being handed out (playback start plus the frames received), not by

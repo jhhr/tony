@@ -262,7 +262,9 @@ user sent, show what the report could not:
   and 334 Hz some 30 dB over the rest; the mains' 50 Hz line is 8 dB below them. Fans,
   most likely, not hum. Now and then YIN takes a window of it for a pitch, just under its
   threshold (0.12 to 0.148 against 0.15): one or two dots in almost every recording, all
-  between −64.5 and −67.5 dBFS, where no dot on a tone read below −42 dBFS.
+  between −64.5 and −67.5 dBFS, where no dot on a tone read below −42 dBFS. The live
+  tracker has had a level floor of −60 dBFS since
+  ([recording.md](recording.md#the-live-tracker)).
 
 ## 8. Open points
 

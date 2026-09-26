@@ -94,6 +94,34 @@ public:
     void setThreshold(double t) { m_threshold = t; }
     double getThreshold() const { return m_threshold; }
 
+    /**
+     * The level a window must reach to be given a pitch, in dBFS: the
+     * level() of its first half, which YIN's difference function compares
+     * with the window further on, so that the pitch it finds is the first
+     * half's. The whole window's would let a window through whose second
+     * half reaches into a sound, with the pitch of the quiet before it.
+     *
+     * YIN is blind to level: it finds a pitch now and then in a quiet
+     * steady sound, as it did in the fans a user's microphone heard at
+     * -66.5 dBFS between the sounds, 25 dB below the quietest window of
+     * a tone it heard (docs/audio-drivers.md, §7). pYIN, as Tony runs
+     * it, penalises such soft pitches too.
+     */
+    static constexpr double kMinLevel = -60.0;
+
+    /** The level floor in dBFS. Default: kMinLevel. */
+    void setMinLevel(double dbfs) { m_minLevel = dbfs; }
+    double getMinLevel() const { return m_minLevel; }
+
+    /**
+     * The level of \a count frames of the mixdown of \a channels
+     * channels, in dBFS: the RMS of their average. The mixdown is their
+     * sum, so a microphone on two inputs would read 6 dB louder than on
+     * one; the average reads what each input has (and a microphone on
+     * one input of two 6 dB below it). Silence reads -200.
+     */
+    static double level(const float *mixdown, int count, int channels);
+
     /** A voiced pitch estimate. */
     struct Estimate {
         sv::sv_frame_t frame;   ///< centre frame of the analysis window
@@ -125,6 +153,7 @@ private:
     double          m_minFreq;
     double          m_maxFreq;
     double          m_threshold;
+    double          m_minLevel;
 
     std::mutex      m_estimatesMutex;
     Estimates       m_estimates;

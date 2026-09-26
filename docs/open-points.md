@@ -163,10 +163,10 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   shown before the round trip is known.
 - Live dots trail the cursor by about the round trip (and 40 ms more on the fake): the
   cursor runs with what has been recorded.
-- **Live dots have no level floor**: YIN reports a pitch from a quiet steady sound as
-  readily as from singing. The user's run of 2026-09-27 had four dots in silence, at about
-  300 Hz, and item 3 failed on them: the room's steady noise, at about −66.5 dBFS, 25 dB
-  below the quietest dot on a tone ([audio-drivers.md](audio-drivers.md), §7).
+- **The live dots' level floor is fixed at −60 dBFS**, which keeps out the room noise
+  that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS, 25 dB below the quietest
+  dot on a tone). A microphone noisier than −60 dBFS still gives dots in silence
+  ([recording.md](recording.md#the-live-tracker)).
 - Items 3 and 5 judge the fresh punch-ins only. Item 14 cannot see an overwrite question,
   which `record()` would ask before the observer starts.
 - Not in the dev run, of what the retired `test-tony-device` did: a take with no lead-in
