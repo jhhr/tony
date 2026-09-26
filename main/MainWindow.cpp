@@ -159,6 +159,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_exportLyricsAction(nullptr),
     m_removeLyricsAction(nullptr),
     m_showLyrics(nullptr),
+    m_lyricsEditor(nullptr),
+    m_editLyricsAction(nullptr),
     m_takesMenu(nullptr),
     m_takeCombo(nullptr),
     m_newTakeAction(nullptr),
@@ -407,6 +409,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
     m_lyrics = new LyricsTrack(this);
+    m_lyricsEditor = new LyricsEditor(m_lyrics, this);
+    connect(m_lyricsEditor, &LyricsEditor::contextHelpChanged,
+            this, &MainWindow::contextHelpChanged);
 
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
@@ -501,6 +506,9 @@ MainWindow::~MainWindow()
     m_alternatePitch = nullptr;
     delete m_coverageStrip;
     m_coverageStrip = nullptr;
+    // Before the lyrics track, which it finds the lyrics through
+    delete m_lyricsEditor;
+    m_lyricsEditor = nullptr;
     delete m_lyrics;
     m_lyrics = nullptr;
     delete m_analyser;
@@ -921,6 +929,19 @@ MainWindow::setupEditMenu()
     m_eraseSingingAction->setEnabled(false);
     menu->addAction(m_eraseSingingAction);
     m_rightButtonMenu->addAction(m_eraseSingingAction);
+
+    menu->addSeparator();
+
+    // A mode, not a tool: the lyrics are never the pane's top layer, which
+    // is what the tools act on.  Enabled and checked in updateMenuStates().
+    // No shortcut: it is not switched on and off in the middle of things
+    m_editLyricsAction = new QAction(tr("Edit L&yrics"), this);
+    m_editLyricsAction->setCheckable(true);
+    m_editLyricsAction->setStatusTip(tr("Drag the start or end of a word of the lyrics, along the bottom of the pane, to move it"));
+    m_editLyricsAction->setEnabled(false);
+    connect(m_editLyricsAction, &QAction::triggered,
+            this, &MainWindow::editLyricsToggled);
+    menu->addAction(m_editLyricsAction);
 }
 
 void
@@ -2262,6 +2283,22 @@ MainWindow::updateMenuStates()
         m_removeLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
     }
 
+    // Edit mode goes off here whenever it is no longer to be had: Remove
+    // Lyrics, Show Lyrics, the base class's record() once the take has
+    // started, and closeSession() (by documentRestored()) all come
+    // through here.  None of those is an undo or a redo, which come
+    // through here as well, and during which the drag that this finishes
+    // could not push its command
+    bool lyricsEditable = lyricsEditAllowed();
+    if (!lyricsEditable && m_lyricsEditor && m_lyricsEditor->isEnabled()) {
+        setLyricsEditing(false);
+    }
+    if (m_editLyricsAction) {
+        m_editLyricsAction->setEnabled(lyricsEditable);
+        m_editLyricsAction->setChecked
+            (m_lyricsEditor && m_lyricsEditor->isEnabled());
+    }
+
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
         m_showCandidatesAction->setStatusTip(tr("Remove the display of alternate pitch candidates for the selected region"));
@@ -3457,6 +3494,10 @@ MainWindow::importLyricsFrom(QString path)
                                         return e.getFrame() >= end;
                                     }));
 
+    // New words are not what edit mode was switched on for, and the ones
+    // there are go now: a drag of one of them ends first
+    setLyricsEditing(false);
+
     QString name = (lyrics.title != "" ? lyrics.title : tr("Lyrics"));
     if (!m_lyrics->show(m_document, pane, events, name)) {
         // Only if the layer could not be made
@@ -3606,6 +3647,36 @@ MainWindow::showLyricsToggled()
     }
     updateWaveformFade();
     updateLayerStatuses();
+
+    // Edit Lyrics goes with the words out of sight
+    updateMenuStates();
+}
+
+bool
+MainWindow::lyricsEditAllowed() const
+{
+    if (!m_lyrics || !m_lyrics->isShown() || !m_lyrics->isVisible()) {
+        return false;
+    }
+    if (m_recordTarget && m_recordTarget->isRecording()) return false;
+    return true;
+}
+
+void
+MainWindow::setLyricsEditing(bool on)
+{
+    if (!m_lyricsEditor) return;
+    m_lyricsEditor->setEnabled(on && lyricsEditAllowed());
+    if (m_editLyricsAction) {
+        m_editLyricsAction->setChecked(m_lyricsEditor->isEnabled());
+    }
+}
+
+void
+MainWindow::editLyricsToggled()
+{
+    if (!m_editLyricsAction) return;
+    setLyricsEditing(m_editLyricsAction->isChecked());
 }
 
 void

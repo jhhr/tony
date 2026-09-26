@@ -1110,6 +1110,7 @@ tony_app_files = [
   'main/AlternatePitchTrack.cpp',
   'main/CoverageStrip.cpp',
   'main/LyricsTrack.cpp',
+  'main/LyricsEditor.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
@@ -1131,6 +1132,7 @@ tony_app_moc_files = qt.preprocess(
   'main/AlternatePitchTrack.h',
   'main/CoverageStrip.h',
   'main/LyricsTrack.h',
+  'main/LyricsEditor.h',
 ])
 
 qt_resource_files = qt.preprocess(

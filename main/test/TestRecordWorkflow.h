@@ -29,6 +29,7 @@
 #include "../Analyser.h"
 #include "../CoverageStrip.h"
 #include "../Lyrics.h"
+#include "../LyricsEditor.h"
 #include "../LyricsTrack.h"
 #include "../LyricsTtml.h"
 #include "../SingingTakes.h"
@@ -228,6 +229,10 @@ public:
     QAction *exportLyricsAction() { return m_exportLyricsAction; }
     QAction *removeLyricsAction() { return m_removeLyricsAction; }
     QAction *showLyricsAction() { return m_showLyrics; }
+
+    // Edit > Edit Lyrics, and the editor it switches on
+    QAction *editLyricsAction() { return m_editLyricsAction; }
+    LyricsEditor *lyricsEditor() { return m_lyricsEditor; }
 
     // The file Import Lyrics asks for, answered from here: "" is Cancel
     void setLyricsFileAnswer(QString path) { m_lyricsFileAnswer = path; }
@@ -990,6 +995,150 @@ class TestRecordWorkflow : public QObject
         if (!layer || !layer->getHighlightedEvent(e)) return {};
         return e.getLabel();
     }
+
+    // --- Editing the lyrics with the mouse in pane 0 ---
+
+    sv::Pane *pane0() { return m_window->paneStack()->getPane(0); }
+
+    // The lyrics' box row in pane 0, the pane painted first: the layer
+    // knows where the row is only once it has painted it there
+    QRect lyricsBoxRow() {
+        sv::Pane *pane = pane0();
+        sv::RegionLayer *layer = m_window->lyrics()->getLayer();
+        if (!pane || !layer) return {};
+        pane->grab();
+        return layer->getLyricsBoxRow(pane);
+    }
+
+    // The word with this text as the model holds it now; frame -1 if
+    // there is none
+    sv::Event lyricsWord(QString text) {
+        for (const sv::Event &e : lyricsEvents()) {
+            if (e.getLabel() == text) return e;
+        }
+        return sv::Event(-1);
+    }
+
+    static sv::sv_frame_t endOf(const sv::Event &e) {
+        return e.getFrame() + e.getDuration();
+    }
+
+    // The column of pane 0 that a frame falls in: a word's box runs from
+    // the column of its start to the one before the column of its end
+    int columnOf(sv::sv_frame_t frame) { return pane0()->getXForFrame(frame); }
+
+    // A mouse event as Qt gives it to the pane: to its event filters
+    // first, then to the pane.  Not QTest::mouseMove, which does not
+    // carry the buttons held
+    void sendMouse(QEvent::Type type, QPoint pos, Qt::MouseButton button,
+                   Qt::MouseButtons buttons) {
+        sv::Pane *pane = pane0();
+        QVERIFY(pane);
+        QMouseEvent event(type, QPointF(pos), QPointF(pane->mapToGlobal(pos)),
+                          button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(pane, &event);
+    }
+
+    void hoverAt(QPoint pos) {
+        sendMouse(QEvent::MouseMove, pos, Qt::NoButton, Qt::NoButton);
+    }
+    void pressAt(QPoint pos) {
+        sendMouse(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton);
+    }
+    void moveHeldTo(QPoint pos) {
+        sendMouse(QEvent::MouseMove, pos, Qt::NoButton, Qt::LeftButton);
+    }
+    void releaseAt(QPoint pos) {
+        sendMouse(QEvent::MouseButtonRelease, pos, Qt::LeftButton, Qt::NoButton);
+    }
+
+    // Press at one point, move to the other a few pixels at a time with
+    // the button held, and let go there
+    void dragFromTo(QPoint from, QPoint to) {
+        pressAt(from);
+        int steps = std::max(1, std::abs(to.x() - from.x()) / 3);
+        for (int i = 1; i <= steps; ++i) {
+            moveHeldTo(QPoint(from.x() + (to.x() - from.x()) * i / steps,
+                              from.y() + (to.y() - from.y()) * i / steps));
+        }
+        releaseAt(to);
+    }
+
+    // A reference with the gapped lyrics on it, painted.  Yksi and kaksi
+    // share an edge at 0.6 s; kolme comes after a gap.  The row's middle
+    // is where the tests point, at the columns the words are in.
+    //
+    // The window is never shown, and its layout gives pane 0 what a
+    // 640x480 window leaves over, a few pixels high, or never lays a new
+    // pane out at all.  A size of its own, then, and a zoom at which the
+    // whole reference is in view and a word is about a hundred pixels
+    // wide
+    QRect m_row;
+    void showEditableLyrics() {
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->doImportLyricsFrom(writeLrc(gappedLyrics())));
+
+        sv::Pane *pane = pane0();
+        pane->setFixedSize(1000, 120);
+        pane->setZoomLevel(sv::ZoomLevel(sv::ZoomLevel::FramesPerPixel, 128));
+        pane->setCentreFrame(sv::sv_frame_t(rate * 1.0));
+        m_row = lyricsBoxRow();
+        QVERIFY2(!m_row.isEmpty(), "the lyrics were not painted");
+        QVERIFY2(m_row.top() > 12 && m_row.bottom() < pane->height(),
+                 qPrintable(QString("the box row is at %1 to %2 of %3")
+                            .arg(m_row.top()).arg(m_row.bottom())
+                            .arg(pane->height())));
+
+        // All in view, and wide enough for the grab not to reach across
+        // a word
+        int x0 = columnOf(lyricsWord("Yksi").getFrame());
+        int x1 = columnOf(endOf(lyricsWord("kolme")));
+        QVERIFY2(x0 > 100 && x1 < pane->width() - 100,
+                 qPrintable(QString("the words are at %1 to %2")
+                            .arg(x0).arg(x1)));
+        int width = columnOf(endOf(lyricsWord("kaksi"))) -
+            columnOf(lyricsWord("kaksi").getFrame());
+        QVERIFY2(width >= 80, qPrintable(QString("kaksi is %1 pixels wide")
+                                        .arg(width)));
+
+        m_window->discardModifications();
+    }
+
+    // Edit > Edit Lyrics, as the user switches it on
+    void switchLyricsEditingOn() {
+        QAction *edit = m_window->editLyricsAction();
+        QVERIFY(edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+        edit->trigger();
+        QVERIFY(edit->isChecked());
+        QVERIFY(m_window->lyricsEditor()->isEnabled());
+    }
+
+    void lyricsEditFixture(FakeAudioIO::Config config = FakeAudioIO::Config()) {
+        makeWindow(config);
+        showEditableLyrics();
+        if (QTest::currentTestFailed()) return;
+        switchLyricsEditingOn();
+    }
+
+    // A drag from the shared edge, which with edit mode off is the pane's
+    // own: it moves the view, and no word
+    void dragIsThePanes(const sv::EventVector &before) {
+        int edge = columnOf(lyricsWord("kaksi").getFrame());
+        dragFromTo(inRow(edge), inRow(edge + 30));
+        QCOMPARE(lyricsEvents(), before);
+        QVERIFY2(columnOf(lyricsWord("kaksi").getFrame()) != edge,
+                 "the pane did not get the drag");
+    }
+
+    // How far the pane's frames move for a move of the pointer from one
+    // column to another
+    sv::sv_frame_t framesBetween(int x0, int x1) {
+        return pane0()->getFrameForX(x1) - pane0()->getFrameForX(x0);
+    }
+
+    QPoint inRow(int x) { return QPoint(x, m_row.center().y()); }
 
     // Every key of the settings, with its value, in the form the test
     // messages show
@@ -6675,6 +6824,557 @@ private slots:
         if (QTest::currentTestFailed()) return;
         QVERIFY(!m_window->lyrics()->isShown());
         QCOMPARE(waveformColour(m_window->analyser()), QString("Grey"));
+    }
+
+    // Without Edit Lyrics the mouse is the pane's everywhere: drags from
+    // either side of the shared edge move no word
+    void lyrics_edit_off_leaves_words_alone() {
+        makeWindow(FakeAudioIO::Config());
+        showEditableLyrics();
+        if (QTest::currentTestFailed()) return;
+        sv::EventVector before = lyricsEvents();
+
+        QAction *edit = m_window->editLyricsAction();
+        QVERIFY(edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+
+        // The pane's navigate drags, which move the view
+        int edge = columnOf(lyricsWord("kaksi").getFrame());
+        dragFromTo(inRow(edge - 1), inRow(edge - 30));
+        QVERIFY2(columnOf(lyricsWord("kaksi").getFrame()) != edge,
+                 "the pane did not get the drag");
+        edge = columnOf(lyricsWord("kaksi").getFrame());
+        dragFromTo(inRow(edge), inRow(edge + 30));
+        QCOMPARE(lyricsEvents(), before);
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // Yksi's end and kaksi's start are one edge on screen.  The column
+    // left of it is Yksi's, the one right of it kaksi's, and the side the
+    // pointer is on picks the one word that moves (decision 3)
+    void lyrics_edit_shared_edge_each_side() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Event yksi = lyricsWord("Yksi");
+        sv::Event kaksi = lyricsWord("kaksi");
+        QCOMPARE(endOf(yksi), kaksi.getFrame());
+        int edge = columnOf(kaksi.getFrame());
+
+        dragFromTo(inRow(edge - 1), inRow(edge - 21));
+        sv::Event moved = lyricsWord("Yksi");
+        QCOMPARE(endOf(moved), endOf(yksi) + framesBetween(edge - 1, edge - 21));
+        QCOMPARE(moved.getFrame(), yksi.getFrame());
+        QCOMPARE(moved.getValue(), yksi.getValue());
+        QCOMPARE(moved.getLabel(), yksi.getLabel());
+        QCOMPARE(lyricsWord("kaksi"), kaksi);
+        QCOMPARE(int(lyricsEvents().size()), 3);
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsWord("Yksi"), yksi);
+
+        dragFromTo(inRow(edge), inRow(edge + 20));
+        moved = lyricsWord("kaksi");
+        QCOMPARE(moved.getFrame(), kaksi.getFrame() + framesBetween(edge, edge + 20));
+        QCOMPARE(endOf(moved), endOf(kaksi));
+        QCOMPARE(moved.getValue(), kaksi.getValue());
+        QCOMPARE(lyricsWord("Yksi"), yksi);
+        QCOMPARE(int(lyricsEvents().size()), 3);
+        QCOMPARE(undoOnce(), QString("Move Word Start"));
+        QCOMPARE(lyricsWord("kaksi"), kaksi);
+    }
+
+    // An edge stops at the neighbouring word and 20 ms from the word's
+    // other edge, however far the pointer goes (decision 6)
+    void lyrics_edit_clamps() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Event yksi = lyricsWord("Yksi");
+        sv::Event kaksi = lyricsWord("kaksi");
+        sv::Event kolme = lyricsWord("kolme");
+        sv::EventVector before = lyricsEvents();
+
+        // kaksi's end, over the gap and past the whole of kolme
+        int kaksiEnd = columnOf(endOf(kaksi)) - 1;
+        dragFromTo(inRow(kaksiEnd), inRow(columnOf(endOf(kolme)) + 30));
+        QCOMPARE(endOf(lyricsWord("kaksi")), kolme.getFrame());
+        QCOMPARE(lyricsWord("kolme"), kolme);
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+
+        // kolme's start, back over the gap and past Yksi
+        int kolmeStart = columnOf(kolme.getFrame());
+        dragFromTo(inRow(kolmeStart), inRow(columnOf(yksi.getFrame()) - 30));
+        QCOMPARE(lyricsWord("kolme").getFrame(), endOf(kaksi));
+        QCOMPARE(endOf(lyricsWord("kolme")), endOf(kolme));
+        QCOMPARE(lyricsWord("kaksi"), kaksi);
+        QCOMPARE(undoOnce(), QString("Move Word Start"));
+
+        // Yksi's end, back past its own start: 20 ms after it
+        int yksiEnd = columnOf(endOf(yksi)) - 1;
+        dragFromTo(inRow(yksiEnd), inRow(columnOf(yksi.getFrame()) - 30));
+        QCOMPARE(endOf(lyricsWord("Yksi")),
+                 yksi.getFrame() + LyricsEdit::minWordFrames(rate));
+        QCOMPARE(lyricsWord("Yksi").getFrame(), yksi.getFrame());
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+
+        // kaksi's start, on past its own end
+        int kaksiStart = columnOf(kaksi.getFrame());
+        dragFromTo(inRow(kaksiStart), inRow(columnOf(endOf(kaksi)) + 30));
+        QCOMPARE(lyricsWord("kaksi").getFrame(),
+                 endOf(kaksi) - LyricsEdit::minWordFrames(rate));
+        QCOMPARE(undoOnce(), QString("Move Word Start"));
+
+        // Nothing after the last word: kolme's end goes where it is taken
+        int kolmeEnd = columnOf(endOf(kolme)) - 1;
+        dragFromTo(inRow(kolmeEnd), inRow(kolmeEnd + 40));
+        QCOMPARE(endOf(lyricsWord("kolme")),
+                 endOf(kolme) + framesBetween(kolmeEnd, kolmeEnd + 40));
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+
+        // and a drag past the neighbour and back leaves the edge where the
+        // pointer is: the limit is not where the drag got to
+        pressAt(inRow(kaksiEnd));
+        moveHeldTo(inRow(columnOf(endOf(kolme)) + 30));
+        QCOMPARE(endOf(lyricsWord("kaksi")), kolme.getFrame());
+        moveHeldTo(inRow(kaksiEnd + 20));
+        releaseAt(inRow(kaksiEnd + 20));
+        QCOMPARE(endOf(lyricsWord("kaksi")),
+                 endOf(kaksi) + framesBetween(kaksiEnd, kaksiEnd + 20));
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // A drag edits the words as it goes and is one step on the history
+    // when let go (decision 12); a click, or a drag back to where it
+    // began, is none
+    void lyrics_edit_one_step_per_drag() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        auto *history = sv::CommandHistory::getInstance();
+        QSignalSpy commands(history, qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        sv::Event kaksi = lyricsWord("kaksi");
+        int end = columnOf(endOf(kaksi)) - 1;
+
+        pressAt(inRow(end));
+        QVERIFY(editor->isDragging());
+        releaseAt(inRow(end));
+        QVERIFY(!editor->isDragging());
+
+        pressAt(inRow(end));
+        for (int x = end; x <= end + 40; x += 4) moveHeldTo(inRow(x));
+        QVERIFY(endOf(lyricsWord("kaksi")) > endOf(kaksi));
+        for (int x = end + 40; x >= end; x -= 4) moveHeldTo(inRow(x));
+        releaseAt(inRow(end));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(int(commands.count()), 0);
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(undoOnce(), QString());
+
+        // Many moves, each one seen in the model at once, and nothing on
+        // the history until the button is let go
+        pressAt(inRow(end));
+        for (int x = end + 2; x <= end + 60; x += 2) {
+            moveHeldTo(inRow(x));
+            QCOMPARE(endOf(lyricsWord("kaksi")),
+                     endOf(kaksi) + framesBetween(end, x));
+        }
+        QCOMPARE(int(commands.count()), 0);
+        releaseAt(inRow(end + 60));
+        QCOMPARE(int(commands.count()), 1);
+        QVERIFY(m_window->isDocumentModified());
+        sv::EventVector afterFirst = lyricsEvents();
+
+        int yksiStart = columnOf(lyricsWord("Yksi").getFrame());
+        dragFromTo(inRow(yksiStart), inRow(yksiStart + 30));
+        QCOMPARE(int(commands.count()), 2);
+        sv::EventVector afterSecond = lyricsEvents();
+        QVERIFY(afterSecond != afterFirst);
+
+        QCOMPARE(undoOnce(), QString("Move Word Start"));
+        QCOMPARE(lyricsEvents(), afterFirst);
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+        QCOMPARE(redoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsEvents(), afterFirst);
+        QCOMPARE(redoOnce(), QString("Move Word Start"));
+        QCOMPARE(lyricsEvents(), afterSecond);
+        QCOMPARE(redoOnce(), QString());
+
+        // Still the lyrics' own model, out of the play source
+        QVERIFY(m_window->playSource()->getModels().count
+                (m_window->lyrics()->getModelId()) == 0);
+        verifyPlaySourceClean();
+    }
+
+    // An edit is a change to the session, and the session keeps it
+    void lyrics_edit_saved_with_the_session() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::EventVector before = lyricsEvents();
+
+        int end = columnOf(endOf(lyricsWord("kaksi"))) - 1;
+        dragFromTo(inRow(end), inRow(end + 50));
+        int start = columnOf(lyricsWord("kolme").getFrame());
+        dragFromTo(inRow(start), inRow(start + 25));
+        QVERIFY(m_window->isDocumentModified());
+        sv::EventVector edited = lyricsEvents();
+        QVERIFY(edited != before);
+
+        QString session = m_dir.filePath("lyrics-edited.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->lyrics()->isShown());
+        verifyEventsSurvived(edited, lyricsEvents(), "the edited lyrics");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(lyricsWord("kaksi").getLabel(), QString("kaksi"));
+
+        // Edit mode is not part of the session
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        QVERIFY(m_window->editLyricsAction()->isEnabled());
+        QVERIFY(!m_window->editLyricsAction()->isChecked());
+        QVERIFY(m_window->playSource()->getModels().count
+                (m_window->lyrics()->getModelId()) == 0);
+        verifyPlaySourceClean();
+    }
+
+    // The word at the cursor is found again as its edge moves, while the
+    // button is held as well
+    void lyrics_edit_highlight_follows() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Event kaksi = lyricsWord("kaksi");
+        sv::Event kolme = lyricsWord("kolme");
+        sv::sv_frame_t gap = (endOf(kaksi) + kolme.getFrame()) / 2;
+        m_window->seekTo(gap);
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString(), 1000);
+
+        int end = columnOf(endOf(kaksi)) - 1;
+        int past = columnOf(gap) + 10;
+        pressAt(inRow(end));
+        moveHeldTo(inRow(past));
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString("kaksi"), 1000);
+        releaseAt(inRow(past));
+        QCOMPARE(highlightedWord(), QString("kaksi"));
+
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString(), 1000);
+
+        int start = columnOf(kolme.getFrame());
+        dragFromTo(inRow(start), inRow(columnOf(gap) - 10));
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString("kolme"), 1000);
+    }
+
+    // Nothing to edit: the action is there, disabled, and its trigger
+    // does nothing
+    void lyrics_edit_needs_lyrics() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *edit = m_window->editLyricsAction();
+        QVERIFY(!edit->isEnabled());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+        edit->trigger();
+        QVERIFY(!edit->isChecked());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+
+        QVERIFY(m_window->doImportLyricsFrom(writeLrc(gappedLyrics())));
+        QVERIFY(edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+    }
+
+    // Turned off, and not to be had, with the lyrics hidden; shown again,
+    // it is to be had but stays off, and the mouse is the pane's
+    void lyrics_edit_off_when_hidden() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QAction *edit = m_window->editLyricsAction();
+        QAction *show = m_window->showLyricsAction();
+        sv::EventVector before = lyricsEvents();
+
+        show->trigger();
+        QVERIFY(!m_window->lyrics()->isVisible());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        QVERIFY(!edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+
+        show->trigger();
+        QVERIFY(m_window->lyrics()->isVisible());
+        QVERIFY(edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        dragIsThePanes(before);
+    }
+
+    void lyrics_edit_off_on_remove() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QAction *edit = m_window->editLyricsAction();
+
+        m_window->removeLyricsAction()->trigger();
+        QVERIFY(!m_window->lyrics()->isShown());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        QVERIFY(!edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+    }
+
+    // New lyrics are not what edit mode was switched on for
+    void lyrics_edit_off_on_import() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QAction *edit = m_window->editLyricsAction();
+
+        QVERIFY(m_window->doImportLyricsFrom(writeLrc(gappedLyrics())));
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        QVERIFY(edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+        m_row = lyricsBoxRow();
+        dragIsThePanes(lyricsEvents());
+    }
+
+    // Off with the session, and off in the next one until switched on,
+    // which then edits in the new pane 0
+    void lyrics_edit_off_on_close() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QAction *edit = m_window->editLyricsAction();
+
+        m_window->doCloseSession();
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        QVERIFY(!edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+
+        showEditableLyrics();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        QVERIFY(!edit->isChecked());
+        sv::EventVector before = lyricsEvents();
+        dragIsThePanes(before);
+        if (QTest::currentTestFailed()) return;
+
+        switchLyricsEditingOn();
+        int edge = columnOf(lyricsWord("kaksi").getFrame());
+        dragFromTo(inRow(edge), inRow(edge + 30));
+        QCOMPARE(lyricsWord("kaksi").getFrame(),
+                 before[1].getFrame() + framesBetween(edge, edge + 30));
+    }
+
+    // Off while a take is recorded, when the singer is reading the words.
+    // A drag going on when the take starts is finished first, and so is
+    // on the history before the take
+    void lyrics_edit_off_while_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        lyricsEditFixture(config);
+        if (QTest::currentTestFailed()) return;
+        QAction *edit = m_window->editLyricsAction();
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+
+        int end = columnOf(endOf(lyricsWord("kaksi"))) - 1;
+        pressAt(inRow(end));
+        moveHeldTo(inRow(end + 30));
+        sv::EventVector dragged = lyricsEvents();
+        QVERIFY(dragged != before);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!editor->isEnabled());
+        QVERIFY(!editor->isDragging());
+        QVERIFY(!edit->isEnabled());
+        QVERIFY(!edit->isChecked());
+
+        // The rest of that drag moves nothing
+        moveHeldTo(inRow(end + 60));
+        releaseAt(inRow(end + 60));
+        QCOMPARE(lyricsEvents(), dragged);
+
+        QTest::qWait(300);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(edit->isEnabled(), 2000);
+        QVERIFY(!edit->isChecked());
+        QVERIFY(!editor->isEnabled());
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsEvents(), before);
+    }
+
+    // Edit mode switched off in the middle of a drag: the drag ends as a
+    // release would end it, and the rest of it is not an edit
+    void lyrics_edit_off_in_the_middle_of_a_drag() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+
+        int end = columnOf(endOf(lyricsWord("kaksi"))) - 1;
+        pressAt(inRow(end));
+        moveHeldTo(inRow(end + 30));
+        sv::EventVector dragged = lyricsEvents();
+        QVERIFY(dragged != before);
+
+        m_window->editLyricsAction()->trigger();
+        QVERIFY(!editor->isEnabled());
+        QVERIFY(!editor->isDragging());
+        QVERIFY(!m_window->editLyricsAction()->isChecked());
+        QVERIFY(m_window->isDocumentModified());
+
+        moveHeldTo(inRow(end + 60));
+        releaseAt(inRow(end + 60));
+        QCOMPARE(lyricsEvents(), dragged);
+
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // The words change under a drag: removed, or an undo (Ctrl+Z with the
+    // button held) takes away the word being dragged.  The drag ends, the
+    // model is left as that made it, and nothing goes on the history
+    void lyrics_edit_words_change_under_a_drag() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+        sv::Event yksi = lyricsWord("Yksi");
+
+        // An earlier drag of Yksi's end, undone after a press on that end
+        int end = columnOf(endOf(yksi)) - 1;
+        dragFromTo(inRow(end), inRow(end - 20));
+        sv::EventVector moved = lyricsEvents();
+        end = columnOf(endOf(lyricsWord("Yksi"))) - 1;
+        pressAt(inRow(end));
+        QVERIFY(editor->isDragging());
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsEvents(), before);
+        moveHeldTo(inRow(end - 10));
+        releaseAt(inRow(end - 10));
+        QVERIFY(!editor->isDragging());
+        QCOMPARE(lyricsEvents(), before);
+
+        // Nothing was pushed over the undone drag, which can be redone
+        QCOMPARE(redoOnce(), QString("Move Word End"));
+        QCOMPARE(lyricsEvents(), moved);
+        QCOMPARE(redoOnce(), QString());
+
+        // Removed in the middle of a drag
+        int start = columnOf(lyricsWord("kolme").getFrame());
+        pressAt(inRow(start));
+        moveHeldTo(inRow(start + 20));
+        m_window->removeLyricsAction()->trigger();
+        QVERIFY(!editor->isDragging());
+        QVERIFY(!editor->isEnabled());
+        moveHeldTo(inRow(start + 40));
+        releaseAt(inRow(start + 40));
+
+        // On top of the history is still the redone drag of Yksi, whose
+        // model has gone with the lyrics (and which does nothing now), not
+        // a Move Word Start
+        QCOMPARE(undoOnce(), QString("Move Word End"));
+        QVERIFY(!m_window->lyrics()->isShown());
+        verifyPlaySourceClean();
+    }
+
+    // The resize cursor over an edge, from either side of a shared one,
+    // and the pane's own back wherever else the pointer goes; the status
+    // bar says what the mouse does in the row
+    void lyrics_edit_cursor_and_help() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Pane *pane = pane0();
+        Qt::CursorShape own = pane->cursor().shape();
+        QVERIFY(own != Qt::SizeHorCursor);
+        int edge = columnOf(lyricsWord("kaksi").getFrame());
+        QPoint above(edge + 40, m_row.top() - 8);
+
+        hoverAt(inRow(edge - 1));
+        QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
+        QCOMPARE(m_window->statusText(),
+                 QString("Drag to move the end of \"Yksi\""));
+        hoverAt(inRow(edge + 2));
+        QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
+        QCOMPARE(m_window->statusText(),
+                 QString("Drag to move the start of \"kaksi\""));
+
+        hoverAt(inRow(edge + 40));
+        QCOMPARE(pane->cursor().shape(), own);
+        QCOMPARE(m_window->statusText(),
+                 QString("Drag a word's start or end to move it"));
+
+        hoverAt(inRow(edge));
+        QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
+        hoverAt(above);
+        QCOMPARE(pane->cursor().shape(), own);
+        QVERIFY2(!m_window->statusText().startsWith("Drag"),
+                 qPrintable(m_window->statusText()));
+
+        // Kept through a drag that leaves the row, and given back after
+        pressAt(inRow(edge));
+        moveHeldTo(above);
+        QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
+        releaseAt(above);
+        QCOMPARE(pane->cursor().shape(), own);
+        QCOMPARE(undoOnce(), QString("Move Word Start"));
+
+        // Given back when edit mode goes off over an edge, with the help
+        hoverAt(inRow(edge));
+        QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
+        m_window->editLyricsAction()->trigger();
+        QCOMPARE(pane->cursor().shape(), own);
+        QVERIFY2(!m_window->statusText().startsWith("Drag"),
+                 qPrintable(m_window->statusText()));
+        hoverAt(inRow(edge - 1));
+        QCOMPARE(pane->cursor().shape(), own);
+    }
+
+    // Everything the editor does not act on is the pane's: a click in a
+    // word moves the playback cursor as before, a click on an edge does
+    // not.  A double-click on an edge is a press there
+    void lyrics_edit_clicks_elsewhere_are_the_panes() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Event kolme = lyricsWord("kolme");
+        int edge = columnOf(kolme.getFrame());
+        int inside = edge + 50;
+        sv::sv_frame_t insideFrame = pane0()->getFrameForX(inside);
+        sv::sv_frame_t start = m_window->playbackFrame();
+        QVERIFY(std::abs(start - insideFrame) > 10000);
+
+        // The pane moves the cursor a double-click interval after a
+        // click, unless a second press comes first and takes its place:
+        // so the edge's click has its time to show it did nothing
+        pressAt(inRow(edge));
+        releaseAt(inRow(edge));
+        QTest::qWait(QApplication::doubleClickInterval() + 200);
+        QCOMPARE(m_window->playbackFrame(), start);
+
+        pressAt(inRow(inside));
+        releaseAt(inRow(inside));
+        QTRY_VERIFY_WITH_TIMEOUT
+            (std::abs(m_window->playbackFrame() - insideFrame) < 1000, 3000);
+        QCOMPARE(lyricsWord("kolme"), kolme);
+        QCOMPARE(undoOnce(), QString());
+
+        pressAt(inRow(edge));
+        releaseAt(inRow(edge));
+        sendMouse(QEvent::MouseButtonDblClick, inRow(edge),
+                  Qt::LeftButton, Qt::LeftButton);
+        moveHeldTo(inRow(edge + 20));
+        releaseAt(inRow(edge + 20));
+        QCOMPARE(lyricsWord("kolme").getFrame(),
+                 kolme.getFrame() + framesBetween(edge, edge + 20));
+        QCOMPARE(undoOnce(), QString("Move Word Start"));
+        QCOMPARE(undoOnce(), QString());
     }
 
     // Closing while pYIN is still running on the take (review finding

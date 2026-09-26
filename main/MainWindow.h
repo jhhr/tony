@@ -22,6 +22,7 @@
 #include "AlternatePitchTrack.h"
 #include "CoverageStrip.h"
 #include "LyricsTrack.h"
+#include "LyricsEditor.h"
 #include "SingingTakes.h"
 #include "TakeCommands.h"
 #include "TakeTiming.h"
@@ -184,6 +185,7 @@ protected slots:
     virtual void exportLyrics();
     virtual void removeLyrics();
     virtual void showLyricsToggled();
+    virtual void editLyricsToggled();
 
     virtual void editDisplayExtents();
 
@@ -373,6 +375,23 @@ protected:
     QAction       *m_exportLyricsAction;
     QAction       *m_removeLyricsAction;
     QAction       *m_showLyrics;
+
+    // Edit > Edit Lyrics: the mouse moves the words' starts and ends in
+    // the lyrics' box row while it is on.  Off, and not to be had,
+    // without lyrics on show or while a take is being recorded, which
+    // updateMenuStates() sees to; and off after an import, which
+    // importLyricsFrom() sees to
+    LyricsEditor  *m_lyricsEditor;
+    QAction       *m_editLyricsAction;
+
+    // The lyrics are there to be edited: shown, visible, and no take
+    // being recorded (the singer is reading them)
+    bool lyricsEditAllowed() const;
+
+    // Edit mode on, if lyricsEditAllowed(), or off, and the action to
+    // match.  Off finishes a drag in progress, pushing its command, so
+    // this must not be reached from an undo or a redo
+    void setLyricsEditing(bool on);
 
     // Fade the waveforms of both analysers while the lyrics are on show
     // over them, and not otherwise.  Called after anything that shows or

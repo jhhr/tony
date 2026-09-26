@@ -43,7 +43,8 @@ class RegionLayer;
  * The layer is display only.  It is never the pane's top layer, because
  * the pane takes the hover readout and the vertical scale from that one
  * and this style has neither; it cannot be played (a RegionModel has no
- * play parameters), and it takes no edits.
+ * play parameters), and it takes no edits itself: LyricsEditor edits
+ * its words.
  *
  * It looks like the coverage strip's class and is used the same way:
  * MainWindow only wires it.
@@ -96,6 +97,9 @@ public:
     void setPlaybackFrame(sv::sv_frame_t frame);
 
     sv::RegionLayer *getLayer() const { return m_layer; }
+
+    /// The pane the layer is in, null when there are no lyrics
+    sv::Pane *getPane() const { return m_layer ? m_pane : nullptr; }
 
     /// The model the words are in
     sv::ModelId getModelId() const;
