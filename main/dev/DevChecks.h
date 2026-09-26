@@ -153,15 +153,9 @@ public:
     /// may land, either way
     static constexpr double kPlacementSeconds = 0.002;
 
-    /// Item 3: more live dots than this in every punch-in
+    /// Item 3: more live dots than this in every punch-in, each where
+    /// TakeDiff::placeLiveDot() allows
     static constexpr int kMinDots = 10;
-
-    /// Item 3: a dot is on one of the reference's sounds when it lies
-    /// from the sound's start to half the live tracker's window past
-    /// its end, give or take this many of its hops (liveDotsCheck()),
-    /// and on a tone, within this many cents of its pitch
-    static constexpr int kDotHops = 1;
-    static constexpr double kDotCents = 50.0;
 
     /// Item 5: an input carries the mic when its peak is no more than
     /// this far below the loudest input's

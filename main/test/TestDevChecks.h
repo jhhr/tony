@@ -69,6 +69,9 @@ class TestDevChecks : public QObject
 
     static constexpr double rate = 44100.0;
 
+    // A device at another rate, as WASAPI's mixer often runs
+    static constexpr double otherRate = 48000.0;
+
     // What the device reports, and what the round trip really is: as
     // TestAudioCheck's, 123 frames (2.8 ms) more than reported
     static constexpr int reportedOut = 2 * 4096;
@@ -220,8 +223,8 @@ class TestDevChecks : public QObject
         return ok ? ms : std::nan("");
     }
 
-    // Item 3's "279: 274 on the tones, 5 on the sweeps, 0 elsewhere" as
-    // 279; -1 for anything else
+    // Item 3's "279: 262 on the tones, 12 at onsets, 5 on the sweeps, 0
+    // elsewhere" as 279; -1 for anything else
     static int dotCount(QString text) {
         bool ok = false;
         int n = text.section(':', 0, 0).toInt(&ok);
@@ -757,6 +760,54 @@ private slots:
         QVERIFY(!m_window->isDocumentModified());
         QVERIFY(!m_window->audioCheckTakes());
         QVERIFY(m_window->recordAction()->isEnabled());
+    }
+
+    // A whole run on a device at 48 kHz against references at 44.1, as
+    // WASAPI's runs were: the takes are recorded at the device's rate
+    // and converted as they are spliced, and each check counts every
+    // figure at its own rate. The fake's delay counts its own frames, so
+    // the true round trip is roundTrip frames at 48 kHz; bqaudioio's
+    // ResamplerWrapper holds the output back about 1.1 ms more, which
+    // nothing reports, and the sweeps land that late, within item 1's
+    // 2 ms. Every item passes. Item 14 finds each take stopping about as
+    // far past its selection as at 44.1 kHz, where it reads 0.25 to 0.35
+    // s: with the round trip in the device's frames added to the lead-in
+    // and the selection in the reference's, it read 0.34 s more, and
+    // failed, as it did on the user's runs
+    void dev_checks_pass_at_48000() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.sampleRate = int(otherRate);
+        makeWindow(config);
+
+        runDevChecks(roundTrip / otherRate);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_checks.size()), 5);
+        for (const AudioCheckResult &r : m_checks) {
+            QCOMPARE(r.recordingRate, otherRate);
+            QCOMPARE(r.referenceRate, rate);
+        }
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            // Item 5 is measured only: the loopback is on both inputs
+            const CheckResult::Verdict expected = (c.item == 5 ?
+                CheckResult::Verdict::Measured : CheckResult::Verdict::Pass);
+            QVERIFY2(c.verdict == expected, describe(c.item));
+        }
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+
+        const CheckResult *stops = check(14);
+        QVERIFY(stops);
+        for (QString range : { QString("19.20 to 21.20 s"),
+                               QString("1.00 to 4.20 s") }) {
+            const QString words = number(*stops, "stopped, " + range);
+            bool ok = false;
+            const double past = words.section(' ', 0, 0).toDouble(&ok);
+            QVERIFY2(ok && past >= 0.2 && past <= 0.45,
+                     qPrintable(range + ": " + words));
+        }
     }
 
     // The same with a round trip 20 ms too long: every take is spliced

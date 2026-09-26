@@ -1284,28 +1284,17 @@ DevChecks::liveDotsCheck(QString reason) const
     // Every dot where the take's pitch track will have the sound it
     // came from: on one of the reference's tones, and at its pitch.  The
     // loopback records the reference, so that is where the singing is.
-    //
-    // A dot is drawn at the middle of the tracker's window, but YIN
-    // hears mostly the window's first half, so a dot comes up to half a
-    // window after the sound that made it, and not before it: on the
-    // loopback fake a tone's dots begin about 540 frames into it and
-    // end up to 440 past it.  So a sound's dots lie from its start to
-    // half a window past its end, give or take kDotHops.  The end of
-    // each sweep, near 8 kHz, makes a dot or two at a subharmonic just
-    // under the tracker's 1 kHz ceiling: dots of the sweeps are counted
-    // apart, and their pitch means nothing
+    // Where a sound's dots may lie, and which of them are counted apart
+    // and not judged (on the sweeps, and at the start of a tone or of
+    // the punch-in), TakeDiff::placeLiveDot() says
     const sv_samplerate_t rate = m_fresh.referenceRate;
     const LatencyCheck::Layout &layout = m_layout;
-    const double before =
-        double(kDotHops * RealtimePitchTracker::kHopSize) / rate;
-    const double after = before +
-        double(RealtimePitchTracker::kWindowSize / 2) / rate;
-    const double sweepSeconds =
-        double(LatencyCheck::sweep(layout.rate).size()) / layout.rate;
+    const TakeDiff::DotReach reach = TakeDiff::dotReach(layout.rate);
     const LatencyCheck::TakeSummary &s = m_fresh.summary;
 
     QStringList problems;
     vector<double> behind;
+    int atOnsets = 0;
     for (int i = 0; i < int(s.punchIns.size()); ++i) {
         const LatencyCheck::PunchInResult &p = s.punchIns[i];
         const Watched *w = freshWatched(i);
@@ -1316,6 +1305,7 @@ DevChecks::liveDotsCheck(QString reason) const
 
         const vector<TakeObserver::Dot> &dots = w->seen.dots;
         int onSweeps = 0;
+        int onsets = 0;
         int off = 0;
         QString firstOff;
         for (const TakeObserver::Dot &d : dots) {
@@ -1324,34 +1314,28 @@ DevChecks::liveDotsCheck(QString reason) const
             behind.push_back(double(d.playbackFrame - d.frame) / rate);
 
             const double t = double(d.frame) / rate;
-            bool on = false;
-            bool sweep = false;
-            QString why = tr("on no tone");
-            for (const LatencyCheck::Event &e : layout.events) {
-                const double sweepAt = double(e.sweepStart) / layout.rate;
-                if (t >= sweepAt - before &&
-                    t <= sweepAt + sweepSeconds + after) {
-                    sweep = true;
-                    break;
-                }
-                const double from = double(e.toneStart) / layout.rate;
-                const double to =
-                    double(e.toneStart + e.toneLength) / layout.rate;
-                if (t < from - before || t > to + after) continue;
-                const double cents =
-                    1200.0 * std::log2(double(d.hz) / e.toneHz);
-                on = (std::fabs(cents) <= kDotCents);
-                why = tr("%1 cents from the tone of %2 Hz")
-                    .arg(cents, 0, 'f', 0).arg(e.toneHz);
-                break;
+            const TakeDiff::LiveDot dot =
+                TakeDiff::placeLiveDot(layout, p.range.start, t, d.hz);
+            if (dot.place == TakeDiff::DotPlace::OnPitch) continue;
+            if (dot.place == TakeDiff::DotPlace::OnSweep) {
+                ++onSweeps;
+                continue;
             }
-            if (sweep) ++onSweeps;
-            if (on || sweep) continue;
+            if (dot.place == TakeDiff::DotPlace::AtOnset) {
+                ++onsets;
+                continue;
+            }
             if (off++ == 0) {
+                const QString why =
+                    dot.place == TakeDiff::DotPlace::OffPitch ?
+                    tr("%1 cents from the tone of %2 Hz")
+                    .arg(dot.cents, 0, 'f', 0).arg(dot.toneHz) :
+                    tr("on no tone");
                 firstOff = tr("the first at %1 s, %2 Hz, %3")
                     .arg(t, 0, 'f', 3).arg(d.hz, 0, 'f', 1).arg(why);
             }
         }
+        atOnsets += onsets;
 
         if (int(dots.size()) <= kMinDots) {
             problems << tr("punch-in %1 drew %2 live dots").arg(i + 1)
@@ -1366,9 +1350,11 @@ DevChecks::liveDotsCheck(QString reason) const
             ({ tr("dots, punch-in %1 (%2 to %3 s)").arg(i + 1)
                .arg(secondsText(p.range.start))
                .arg(secondsText(p.range.end)),
-               tr("%1: %2 on the tones, %3 on the sweeps, %4 elsewhere")
-               .arg(dots.size()).arg(int(dots.size()) - onSweeps - off)
-               .arg(onSweeps).arg(off) });
+               tr("%1: %2 on the tones, %3 at onsets, %4 on the sweeps, %5 "
+                  "elsewhere")
+               .arg(dots.size())
+               .arg(int(dots.size()) - onSweeps - onsets - off)
+               .arg(onsets).arg(onSweeps).arg(off) });
     }
     if (s.punchIns.empty()) problems << tr("no punch-in was judged");
 
@@ -1388,11 +1374,18 @@ DevChecks::liveDotsCheck(QString reason) const
                        "one of the reference's sounds (from %2 before it "
                        "to %3 after it), and those on its tones within %4 "
                        "cents of their pitch.")
-            .arg(kMinDots).arg(unsignedMs(before)).arg(unsignedMs(after))
-            .arg(kDotCents);
+            .arg(kMinDots).arg(unsignedMs(reach.before))
+            .arg(unsignedMs(reach.after)).arg(TakeDiff::kDotCents);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+    }
+    // A window that straddles a start wanders off pitch through a real
+    // speaker and mic, so what the dots there did is only told
+    if (atOnsets > 0) {
+        c.message += tr(" %1 dots within %2 after the start of a tone or "
+                        "of a punch-in were not judged.")
+            .arg(atOnsets).arg(unsignedMs(reach.onset));
     }
     return c;
 }
@@ -2402,20 +2395,23 @@ DevChecks::stopsItselfCheck(QString reason) const
         // the end (TakeTiming::shouldStopAt()), and is then stopped by
         // the take timer's next look, with the block coming in as it
         // looks.  Not worked out with TakeTiming, whose margin is part of
-        // what is checked
+        // what is checked.  In seconds: the raw recording, the round trip
+        // and the start gap count frames of the recording, at the
+        // device's rate; the lead-in and the selection count the
+        // reference's
         if (!w) {
             problems << tr("the take at %1 was not watched").arg(range);
         } else if (stage->recorded < 0) {
             problems << tr("the take at %1: %2").arg(range)
                 .arg(stage->recordedError);
-        } else if (t.recordingRate <= 0) {
+        } else if (t.recordingRate <= 0 || rate <= 0) {
             problems << tr("the take at %1: its rate is not known")
                 .arg(range);
         } else {
-            const sv_frame_t needed =
-                t.roundTrip + t.startGap + stage->preRoll + (end - start);
-            const double past =
-                double(stage->recorded - needed) / t.recordingRate;
+            const double needed =
+                t.recordingSeconds(t.roundTrip + t.startGap) +
+                double(stage->preRoll + (end - start)) / rate;
+            const double past = t.recordingSeconds(stage->recorded) - needed;
             const double allowed = kStopMarginSeconds + poll + gapLooks
                 (m_layout, w->seen, t, rate,
                  std::numeric_limits<double>::max()).margin;

@@ -299,7 +299,7 @@ rewrote it; the report and [manual-checklist.md](manual-checklist.md) §1 use th
 | --- | --- | --- | --- |
 | 1 | `latency_on_this_machine` | every punch-in of every stage placed within ±2 ms; after the reopen, the take's file judged again over the dev take's punch-ins gives the same offsets to the frame, and the pitch and notes the session restored are the same events (values as the file rounds them) | offsets of each punch-in, the largest, the round trip used, the same after reopening |
 | 2 | `several_phrases_in_one_take` | at least two punch-ins; each wholly in the take's coverage, its median offset within ±2 ms, its own start gap measured | each punch-in's median offset and start gap |
-| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Dots on the sweeps (a subharmonic of their top) are counted apart | dots per punch-in, on tones, on sweeps, elsewhere; how far behind the cursor they appeared, median and spread |
+| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Counted apart and not judged: dots on the sweeps (a subharmonic of their top), and dots within one window of the tracker (46 ms) after a tone's start or the punch-in's, whose window straddles that start: on the fake they are on pitch, but through a real speaker, room and microphone they wander 50 to 75 cents (`TakeDiff::placeLiveDot()`) | dots per punch-in, on tones, at onsets, on sweeps, elsewhere, and the message says how many were at onsets; how far behind the cursor they appeared, median and spread |
 | 4 | `nothing_of_the_take_in_the_speakers` | no echo in any stage; an output level of exactly 0 at every look that lies wholly in one of the reference's silent gaps; Play Singing Audio the same after each take as before, and the take heard or not as it says | the second arrival; the largest output level in the gaps, and over how many looks; the largest output level; the margin of a look |
 | 5 | `mic_on_input_2` | stage 2: judged only when the microphone is on input 2 alone (an input within 20 dB of the loudest carries it), and then passes when every punch-in drew more than 10 dots; otherwise Measured, "not applicable here"; a Fail when no input recorded anything | each input's peak in each punch-in; which inputs carry the microphone |
 | 7 | `record_from_a_position` | stage 3: placed within ±2 ms; outside the selection the take's audio the same bit for bit, and its pitch and notes beyond ±0.25 s unchanged | the range, offsets, audio, pitch and notes outside |
@@ -311,7 +311,10 @@ rewrote it; the report and [manual-checklist.md](manual-checklist.md) §1 use th
 
 Item 10 does not judge placement: items 1 and 2 do. Item 14 works out what the take needed
 from the round trip, start gap, lead-in and range itself, not with `TakeTiming`, whose
-margin is part of what it checks.
+margin is part of what it checks; each in seconds at its own rate, since the raw
+recording, the round trip and the start gap count the device's frames and the lead-in and
+range the reference's. Added up as frames, they read a take on a 48 kHz device about 8 % of
+its lead-in and range too long, 0.34 and 0.36 s for stages 4 and 3, and fail it.
 
 **How items 4 and 12 read the output.** A look's output level is the loudest sample handed
 to the device since the look before. It is placed on the reference's timeline from the
@@ -531,7 +534,10 @@ it (the join is a dip, below).
   as the Preferences give it, staleness either side of the tolerance, the round trip in use
   and its frames at the recording's rate. `TestTakeDiff`: each comparison passing and
   failing on purpose, and the real `splice()` and `erase()` through files, whose fades lie
-  inside the range. `TestAudioDriverSettings`: the drivers, the default and the latency
+  inside the range; item 3's places for a live dot, with dots 67 cents sharp at the times
+  of the user's runs (7.516 to 7.528 s, the tone of 245 Hz from 7.5 s; 16.803 to 16.822 s,
+  the punch-in from 16.8 s) not judged, and off pitch one window later, and the reach of a
+  sound. `TestAudioDriverSettings`: the drivers, the default and the latency
   kept per driver ([audio-drivers.md](audio-drivers.md), §6).
 - **The round trip in the take path** (`TestRecordWorkflow`, `latency_*`): a stored figure
   lines a take up where the reported pair does not, a stale one is ignored, and the
@@ -554,7 +560,8 @@ it (the join is a dip, below).
   reference, about 13 s each.
 - **`TestDevChecks`** (`test-tony-dev`, development builds only): whole dev runs on the
   loopback fake. Passing, with the fake's true round trip and a long song of 60 s (240 s
-  would add most of a minute to every passing run). Failing: the round trip 20 ms off
+  would add most of a minute to every passing run); and the same on a 48 kHz fake, every
+  item passing and item 14 reading about as at 44.1 kHz. Failing: the round trip 20 ms off
   (items 1, 2, 7 and 13; item 10 still passes, both punch-ins moved alike); an echo tap,
   with the microphone on input 2 (item 4 fails, item 5 judged on input 2); the take made
   audible during the re-record's lead-in (items 4 and 12, also through a stall); a stall
@@ -562,7 +569,7 @@ it (the join is a dip, below).
   Also cancel, a closed session, the dev checks deleted during a run, the scratch folders,
   the report's header with the driver and the latency asked for, and the dialog carrying
   on into them. Parts that no fault run makes fail (among them item 3's dots on the tones,
-  item 9, and item 10's step) were seen failing with the code broken for a moment. About 4
+  item 9, and item 10's step) were seen failing with the code broken for a moment. About 5
   minutes.
 
 How the tests are built, and what to watch for: [testing.md](testing.md), "The audio check
@@ -577,7 +584,10 @@ and the dev checks".
 - item 9: a 60 s song analysed in 2.9 to 3.0 s, its punch-ins merged in 0.59 to 0.70 s (20
   to 24 %); a 240 s song in 10.4 s, its punch-ins in 0.63 and 0.75 s (6 to 7 %);
 - item 10: the step reads −8.3 dB, the dip; the largest pitch gap is one hop;
-- item 12: 57 looks in the lead-in's gaps; item 14: 0.30 to 0.35 s past the selection's end.
+- item 3: 12 to 15 of each punch-in's 280 to 306 dots at onsets;
+- item 12: 57 looks in the lead-in's gaps; item 14: 0.25 to 0.35 s past the selection's end;
+- at 48 kHz, every sweep at +1.0 to +1.1 ms, the resampler's hold-back, which the round trip
+  given leaves out; item 14: 0.28 and 0.32 s.
 
 ## 12. Decisions
 
