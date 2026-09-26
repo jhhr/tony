@@ -11,9 +11,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **No overwrite question when recording into a selection**: the selection is taken as the
   consent. Right in use?
 - **Take operations clear the undo history with no prompt** (all but Rename).
-- **The Edit tool edits the take's note at the time it is used, wherever in the pane**,
-  the band of the coverage strip included. The strip itself takes no edits. Should the band
-  keep the tools off the notes?
 - **The alternate pitch track at ±3 octaves** of a 220 Hz reference (28 Hz, 1.8 kHz) is
   outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
 - Of the [manual checklist](manual-checklist.md), the device check has been run only in

@@ -194,6 +194,11 @@ it draws is judged by pixels:
   about (246, 126, 114) there: `isSinging()` takes both. Bright orange is the reference's
   pitch candidates, which a selection makes.
 - Record puts the view back on the take's position: work out x positions again after it.
+- A drag of a note re-analyses the pitch under it. The candidates arrive when that
+  transform finishes, and one of them may go into the pitch track, so judge only once
+  `haveRunningTransformers()` is false. The drag may leave more than one entry in the undo
+  history, and undoing them leaves the candidates in the pane: they are the analyser's own
+  layers, gone at the next re-analysis.
 - Timing checks in real time go through the pane's own timers (the pointer moves every
   20 ms): allow a tick.
 

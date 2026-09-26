@@ -184,6 +184,10 @@ swap, never before: the swap restores the pane's state as it found it, and makes
 waveform layer again, on top, where it covers the band; `syncCoverageStrip()` raises the
 strip above it every time. It also removes the strip's model from the play source.
 
+The strip takes no mouse input of its own. The Edit tool acts on the take's note at the
+time under the pointer, at any height in the pane, and that includes the band: decided so,
+rather than keeping the tools off the notes there (`strip_ignores_the_mouse`).
+
 ## Files on disk
 
 `SingingTakes` tracks three sets: **superseded** paths (kept until the session closes, for

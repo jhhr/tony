@@ -68,6 +68,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <vector>
 
 class TestUiChecks : public QObject
@@ -323,6 +324,17 @@ class TestUiChecks : public QObject
         QCoreApplication::processEvents();
     }
 
+    // A drag across pane 0 with the left button, in ten steps
+    void drag(QPoint from, QPoint to) {
+        sv::Pane *pane = pane0();
+        QTest::mousePress(pane, Qt::LeftButton, Qt::NoModifier, from);
+        for (int i = 1; i <= 10; ++i) {
+            QTest::mouseMove(pane, from + (to - from) * i / 10);
+            QTest::qWait(10);
+        }
+        QTest::mouseRelease(pane, Qt::LeftButton, Qt::NoModifier, to);
+    }
+
     Coverage::Ranges coverage() {
         return m_window->takes()->getCoverage().getRanges();
     }
@@ -338,6 +350,9 @@ class TestUiChecks : public QObject
         sv::ZoomLevel zoom;
         sv::MultiSelection::SelectionList selections;
         QString undo;
+        // Those of the layers that are pitch candidates of a
+        // re-analysis. Not compared: layers has them
+        std::set<QString> candidates;
 
         bool operator==(const PaneState &s) const {
             return events == s.events && extents == s.extents &&
@@ -353,6 +368,9 @@ class TestUiChecks : public QObject
             sv::Layer *layer = pane->getLayer(i);
             QString key = QString("%1 %2").arg(i).arg(layer->objectName());
             s.layers.push_back(key);
+            if (layer->getLayerPresentationName() == "candidate") {
+                s.candidates.insert(key);
+            }
             sv::ModelId id = layer->getModel();
             if (auto m = sv::ModelById::getAs<sv::SparseTimeValueModel>(id)) {
                 s.events[key] = m->getAllEvents();
@@ -706,9 +724,12 @@ private slots:
     // Checklist: the coverage strip cannot be touched. Clicking, double-
     // clicking and dragging on it with either tool creates, moves, selects
     // and edits nothing of its own and does not change the pane's scale.
-    // The Edit tool acts on the take's note at the time it is used,
-    // wherever in the pane that is -- the band too -- so an edit of that
-    // note is what it may do, and one undo takes that back exactly
+    // The Edit tool acts on the take's note at the time in the song under
+    // the pointer, at any height in the pane -- the band too, and that is
+    // meant -- so an edit of that note is what it may do. A drag moves
+    // the note and re-analyses the pitch under it, which may leave more
+    // than one entry in the undo history; undoing them takes it all back
+    // exactly, but for the pitch candidates, which are the analyser's
     void strip_ignores_the_mouse() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 6.0);
@@ -740,17 +761,6 @@ private slots:
                  "the strip is not where the gestures are going to be made");
         saveShot("strip", image);
 
-        auto drag = [&](int from, int to) {
-            QTest::mousePress(pane, Qt::LeftButton, Qt::NoModifier,
-                              QPoint(from, y));
-            for (int i = 1; i <= 10; ++i) {
-                QTest::mouseMove(pane, QPoint(from + (to - from) * i / 10, y));
-                QTest::qWait(10);
-            }
-            QTest::mouseRelease(pane, Qt::LeftButton, Qt::NoModifier,
-                                QPoint(to, y));
-        };
-
         struct Gesture { QString name; std::function<void()> act; };
         std::vector<Gesture> gestures {
             { "a click in the band", [&]() {
@@ -762,24 +772,56 @@ private slots:
             { "a click at its end", [&]() {
                 QTest::mouseClick(pane, Qt::LeftButton, Qt::NoModifier,
                                   QPoint(atEnd, y)); } },
-            { "a drag along it", [&]() { drag(inBand, atEnd); } },
-            { "a drag off its end", [&]() { drag(atEnd, beyond); } },
-            { "a drag onto it", [&]() { drag(beyond, inBand); } },
+            { "a drag along it", [&]() {
+                drag(QPoint(inBand, y), QPoint(atEnd, y)); } },
+            { "a drag off its end", [&]() {
+                drag(QPoint(atEnd, y), QPoint(beyond, y)); } },
+            { "a drag onto it", [&]() {
+                drag(QPoint(beyond, y), QPoint(inBand, y)); } },
         };
 
-        // Everything but the take's notes and the undo history
-        auto apartFromNotes = [&](PaneState s) {
-            for (auto i = s.events.begin(); i != s.events.end(); ) {
-                if (i->first.endsWith(TakeLayers::nameFor
-                                      (m_window->takes()->getActiveName(),
-                                       TakeLayers::Notes))) {
-                    i = s.events.erase(i);
+        // A drag of the take's note also re-analyses the pitch under it.
+        // That puts pitch candidates into the pane, which stay until the
+        // next re-analysis whatever is undone: they are the analyser's
+        // own layers. Everything but them, the other layers numbered as
+        // if they were not there
+        auto withoutCandidates = [&](const PaneState &s) {
+            PaneState r;
+            int n = 0;
+            for (const QString &key : s.layers) {
+                if (s.candidates.count(key)) continue;
+                QString renumbered =
+                    QString("%1 %2").arg(n++).arg(key.section(' ', 1));
+                r.layers.push_back(renumbered);
+                auto e = s.events.find(key);
+                if (e != s.events.end()) r.events[renumbered] = e->second;
+                auto x = s.extents.find(key);
+                if (x != s.extents.end()) r.extents[renumbered] = x->second;
+            }
+            r.zoom = s.zoom;
+            r.selections = s.selections;
+            r.undo = s.undo;
+            return r;
+        };
+
+        // ... and but what an edit of the take's note may change: the
+        // note, the undo history, and the take's pitch track, into which
+        // the drag may put one of the candidates
+        auto apartFromNoteEdit = [&](const PaneState &s) {
+            QString take = m_window->takes()->getActiveName();
+            QStringList edited {
+                TakeLayers::nameFor(take, TakeLayers::Notes),
+                TakeLayers::nameFor(take, TakeLayers::Pitch) };
+            PaneState r = withoutCandidates(s);
+            for (auto i = r.events.begin(); i != r.events.end(); ) {
+                if (edited.contains(i->first.section(' ', 1))) {
+                    i = r.events.erase(i);
                 } else {
                     ++i;
                 }
             }
-            s.undo = "";
-            return s;
+            r.undo = "";
+            return r;
         };
 
         int noteEdits = 0;
@@ -790,6 +832,11 @@ private slots:
                 const PaneState before = paneState();
                 g.act();
                 QTest::qWait(300); // outlast the double-click interval
+                // and any re-analysis the gesture started: its candidates
+                // arrive when it finishes (Analyser::layersCreated())
+                QTRY_VERIFY_WITH_TIMEOUT
+                    (!sv::ModelTransformerFactory::getInstance()
+                     ->haveRunningTransformers(), 30000);
                 // The navigate tool scrolls when dragged, as anywhere
                 pane->setCentreFrame(centre);
                 PaneState after = paneState();
@@ -801,20 +848,25 @@ private slots:
                                         .arg(describe(before, after))));
                     continue;
                 }
-                QVERIFY2(apartFromNotes(after) == apartFromNotes(before),
+                QVERIFY2(apartFromNoteEdit(after) == apartFromNoteEdit(before),
                          qPrintable(QString("with the edit tool, %1 changed "
                                             "%2")
                                     .arg(g.name)
-                                    .arg(describe(before, after))));
+                                    .arg(describe(apartFromNoteEdit(before),
+                                                  apartFromNoteEdit(after)))));
                 if (after.undo != before.undo) {
                     ++noteEdits;
-                    press(QKeySequence(tr("Ctrl+Z")));
+                    for (int i = 0; i < 20 && undoText() != before.undo; ++i) {
+                        press(QKeySequence(tr("Ctrl+Z")));
+                    }
                     PaneState undone = paneState();
-                    QVERIFY2(undone == before,
+                    QVERIFY2(withoutCandidates(undone) ==
+                             withoutCandidates(before),
                              qPrintable(QString("undoing what %1 did with "
                                                 "the edit tool left %2")
                                         .arg(g.name)
-                                        .arg(describe(before, undone))));
+                                        .arg(describe(withoutCandidates(before),
+                                                      withoutCandidates(undone)))));
                 }
             }
         }
