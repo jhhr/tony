@@ -78,6 +78,9 @@ harm. On the fake: +0.0 ms at both places with `n = 0`, and +50.0 ms, failing, w
    in use?
 6. **Log out with unsaved takes** on Windows: its test does not run there, because
    `commitData()` writes into the real profile. See open points for the file it writes.
+7. **Live dots on this machine**: during a take the dots keep up with the cursor and grow
+   smoothly, and neither they nor the cursor stutter, in a maximised window. Each batch of
+   dots, 25 a second, has the whole pane drawn again; see open points.
 
 The defects the automated checks found, and the facts they established for the decisions
 above, are in [open-points.md](open-points.md).

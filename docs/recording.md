@@ -147,6 +147,15 @@ dot model outlives the take.
 there is not a full window yet. `kHopSize` is also the resolution of the dot model, whose
 unit must be `"Hz"` for the layer to align to the pane's log-frequency scale.
 
+**Telling the pane of the dots.** A pane told of a change to one of its layers' models
+draws every layer again. A notice for each dot, about 170 a second, took the GUI thread
+from 29 % to nearly 80 % of a core (cloud machine, 1920 px window). So the dot model is
+made with `notifyOnAdd` false, and then it tells nobody of a dot at all: the dots were
+drawn only when one widened the model's pitch range, and stalled within half a second on a
+steady note. `onRealtimePitchDetected()` hands each dot's frames to
+`m_realtimeDotsNotifier` (`ModelChangeThrottle`, `tony_core`), which tells the pane at
+once and then at most every 40 ms (about 54 % of a core in the same test).
+
 Correct as they are, though they look wrong:
 
 - The `1/frameSize` scale in the FFT difference function: bqfft's inverse is unscaled.

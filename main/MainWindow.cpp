@@ -132,6 +132,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_analyser2(nullptr),
     m_realtimePitchTracker(nullptr),
     m_realtimePitchLayer(nullptr),
+    m_realtimeDotsNotifier(40),
     m_overview(0),
     m_showSingingPitch(nullptr),
     m_showSingingNotes(nullptr),
@@ -3616,6 +3617,12 @@ MainWindow::setupRealtimePitchLayer()
     // Its resolution is the YIN hop size: one estimate per hop.
     // Unit "Hz" is required so TimeValueLayer::shouldAutoAlign() defers to
     // the pane's log-frequency coordinate system (same as the pYIN pitch track).
+    //
+    // notifyOnAdd false: a pane told of a change to one of its layers'
+    // models draws all of them again, and a notice for each of the ~170
+    // dots a second kept the GUI thread busy most of the time. The model
+    // then tells nobody of a dot, though, so m_realtimeDotsNotifier tells
+    // the pane of what was added, 25 times a second
     auto pitchModel = std::make_shared<SparseTimeValueModel>
         (sr, RealtimePitchTracker::kHopSize, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
@@ -3642,6 +3649,7 @@ MainWindow::setupRealtimePitchLayer()
     // Associate our pre-filled SparseTimeValueModel with the layer.
     // The model was already registered via addNonDerivedModel above.
     m_document->setModel(m_realtimePitchLayer, m_realtimePitchModelId);
+    m_realtimeDotsNotifier.setModel(m_realtimePitchModelId);
     m_realtimePitchLayer->setVerticalScale(TimeValueLayer::AutoAlignScale);
     m_realtimePitchLayer->setPlotStyle(TimeValueLayer::PlotPoints);
 
@@ -3680,6 +3688,7 @@ void
 MainWindow::teardownRealtimePitchLayer()
 {
     stopRealtimePitchTracker();
+    m_realtimeDotsNotifier.setModel({});
 
     if (m_realtimeLayerTeardownConnection) {
         disconnect(m_realtimeLayerTeardownConnection);
@@ -4280,6 +4289,8 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
 
     if (m) {
         m->add(Event(dotFrame, float(hz), tr("")));
+        m_realtimeDotsNotifier.changed
+            (dotFrame, dotFrame + RealtimePitchTracker::kHopSize);
     }
 
     // Convert Hz to MIDI note number and cents deviation.

@@ -24,6 +24,7 @@
 #include "SingingTakes.h"
 #include "TakeCommands.h"
 #include "TakeTiming.h"
+#include "ModelChangeThrottle.h"
 
 #include <vector>
 #include <string>
@@ -310,6 +311,10 @@ protected:
 
     // Model backing the realtime layer (owned by the document).
     sv::ModelId           m_realtimePitchModelId;
+
+    // Tells the pane of the dots added to that model, which tells nobody
+    // itself (see setupRealtimePitchLayer())
+    ModelChangeThrottle   m_realtimeDotsNotifier;
 
     sv::Overview  *m_overview;
 

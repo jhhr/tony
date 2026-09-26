@@ -178,9 +178,13 @@ class TestUiChecks : public QObject
     // Pane 0 as it is on the screen just now: the window's backing store,
     // which holds what the pane's own paint events put there. Not
     // QWidget::grab(), which has the pane paint itself once more for the
-    // occasion and so can show what the screen does not
+    // occasion and so can show what the screen does not. The pane is
+    // painted first, as it would be at the next update: a pane that has
+    // just turned a page is still the old page on the screen until then,
+    // while every position asked of it is on the new one
     QImage grabPane() {
         QCoreApplication::processEvents();
+        pane0()->repaint();
         QPixmap window = m_window->screen()->grabWindow(m_window->winId());
         QRect rect(pane0()->mapTo(m_window, QPoint(0, 0)), pane0()->size());
         return window.copy(rect).toImage()
@@ -604,10 +608,6 @@ private slots:
                  "whether the pane follows it was not seen");
         saveWindowShot("during");
         qInfo("%s", qPrintable(worst));
-        QEXPECT_FAIL("", "the live dot model is made with notifyOnAdd false, "
-                     "so a dot added to it tells the pane nothing: dots are "
-                     "drawn only when one widens the model's range or the "
-                     "pane redraws for another reason", Continue);
         QVERIFY2(worstLag <= lag, qPrintable(worst));
 
         // The dots stay until the take's pitch track is there, which is

@@ -39,16 +39,14 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 ## Weak spots
 
+- **The live dots cost a redraw of the whole pane 25 times a second** during a take
+  (`ModelChangeThrottle`): on the cloud machine, a 1920 px window, the GUI thread went from
+  29 % to about 54 % of a core. A HiDPI screen makes each redraw dearer. A way in svgui to
+  keep a layer out of a view's cache would make it nearly free ([forks.md](forks.md)).
+
 Defects the checks of `TestUiChecks` found, each committed as a test expected to fail
 (`QEXPECT_FAIL` names the cause):
 
-- **Live dots stop being drawn during a take.** The dot model is made with `notifyOnAdd`
-  false, so a dot added tells the pane nothing; dots are drawn only when one widens the
-  model's pitch range or the pane redraws for another reason (a page turn, a zoom). On a
-  steady note they stall within half a second (`live_dots_under_the_cursor`). Making the
-  model with `notifyOnAdd` true fixes it, as tried: the pane then repaints for every dot,
-  about 170 times a second, coalesced by Qt; whether that is cheap enough on the
-  development machine has not been measured.
 - **The band of the coverage strip is hidden after the second recording.** The audio swap
   makes the take's waveform layer again, on top, and `syncCoverageStrip()` raises nothing
   once the strip is shown (`strip_on_top_after_another_recording`).

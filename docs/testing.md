@@ -5,7 +5,7 @@ QtTest suites in `main/test/`, in two executables that mirror the two libraries
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestModelChangeThrottle` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestSingingAnalysis`, `TestRecordWorkflow`, `TestUiChecks` | about 5 minutes (measured 2026-09-25 on Linux), nearly all of it `TestRecordWorkflow` and `TestUiChecks`: takes are recorded in real time |
 | `test-tony-device` | as `test-tony-app`, but with the **real** audio device | `TestRealDevice` | about a minute; run by hand only, see the [manual checklist](manual-checklist.md) |
 
@@ -146,7 +146,7 @@ it first, or break the code for a moment (mark the line `MUTATION`, and check
   purpose. "Fixing" one side makes the live dots and the pYIN track disagree.
 
 A bug that is known and not yet fixed is committed as a test with `QEXPECT_FAIL` naming
-it; the marker goes in the commit that fixes it. There are four at present, all in
+it; the marker goes in the commit that fixes it. There are three at present, all in
 `TestUiChecks`, listed in [open-points.md](open-points.md).
 
 ## Timing and races
@@ -182,10 +182,10 @@ The window is shown (still offscreen), made active so that its shortcuts work, a
 with `QTest` key presses, mouse gestures on pane 0 and the dialogs MainWindow shows. What
 it draws is judged by pixels:
 
-- **Read the screen, not `QWidget::grab()`**: `grabPane()` copies pane 0 out of the
-  window's backing store, which holds what the pane's own paint events put there. `grab()`
-  has the pane paint itself once more and can show what the screen does not: it showed
-  live dots that the screen never got.
+- **Read the screen**: `grabPane()` has pane 0 paint itself, as its next update would, and
+  copies it out of the window's backing store. Without the paint, a pane that has just
+  turned a page is still the old page in the backing store while every position asked of
+  it is on the new one: a play pointer 500 px from where it was looked for.
 - After any playback the pane's cache holds the translucent note boxes painted twice.
   Compare images only after `grabPaneRedrawn()`, which forces a full redraw (a zoom one
   step away snaps back to the same level and redraws nothing; it doubles the level).
