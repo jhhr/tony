@@ -1703,7 +1703,8 @@ MainWindow::nameDefaultAudioDriver()
     if (AudioDriverSettings::nameDefaultDriver
         (settings, audioImplementationNames())) {
         cerr << "MainWindow::nameDefaultAudioDriver: no audio driver was "
-             << "named; naming " << AudioDriverSettings::kDefaultDriver
+             << "named; naming "
+             << AudioDriverSettings::currentImplementation(settings)
              << endl;
     }
 }

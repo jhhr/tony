@@ -61,6 +61,21 @@ setCurrentImplementation(QSettings &settings, QString implementation)
 }
 
 QString
+defaultDriver(const QStringList &implementations)
+{
+    for (QString driver : { QString("wasapi"), QString("mme") }) {
+        if (implementations.contains(driver)) return driver;
+    }
+    return {};
+}
+
+double
+defaultLatency(QString implementation)
+{
+    return implementation == "wasapi" ? kWasapiDefaultLatency : kDefaultLatency;
+}
+
+QString
 latencySettingKey(QString implementation)
 {
     return "audio-latency-" + implementation;
@@ -77,7 +92,7 @@ latency(QSettings &settings, QString implementation)
     double seconds = settings.value(latencySettingKey(implementation), "")
         .toString().toDouble(&ok);
     settings.endGroup();
-    if (!ok || !(seconds > 0.0)) return kDefaultLatency;
+    if (!ok || !(seconds > 0.0)) return defaultLatency(implementation);
     return seconds;
 }
 
@@ -102,11 +117,12 @@ bool
 nameDefaultDriver(QSettings &settings, const QStringList &implementations)
 {
     if (currentImplementation(settings) != "") return false;
-    if (!implementations.contains(kDefaultDriver)) return false;
+    const QString driver = defaultDriver(implementations);
+    if (driver == "") return false;
 
     settings.beginGroup(preferencesGroup);
-    settings.setValue(targetKey, QString(kDefaultDriver));
-    const QString suffix = QString("-") + kDefaultDriver;
+    settings.setValue(targetKey, driver);
+    const QString suffix = "-" + driver;
     for (QString key : { QString("audio-playback-device"),
                          QString("audio-record-device") }) {
         if (settings.contains(key) && !settings.contains(key + suffix)) {

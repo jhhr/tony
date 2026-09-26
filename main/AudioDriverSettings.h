@@ -35,13 +35,22 @@ class QSettings;
  */
 namespace AudioDriverSettings
 {
-    /// The driver named when none is, where it is built in: the one every
-    /// stream went through before there was a choice
-    constexpr const char *kDefaultDriver = "mme";
-
     /// What a driver asks for when no latency has been chosen for it:
     /// what every stream asked for before there was a choice
     constexpr double kDefaultLatency = 0.2;
+
+    /// What WASAPI asks for when none has been chosen: the user's runs
+    /// placed takes as well at 20 ms as at 200 ms on MME, with a third
+    /// of the round trip, and 10 ms gained little more
+    constexpr double kWasapiDefaultLatency = 0.02;
+
+    /// The driver named when none is: WASAPI where it is built in, else
+    /// MME, which every stream went through before there was a choice;
+    /// "" where neither is
+    QString defaultDriver(const QStringList &implementations);
+
+    /// What a driver asks for when no latency has been chosen for it
+    double defaultLatency(QString implementation);
 
     /// Those of the implementations given that are drivers, in the order
     /// they are offered in
@@ -62,8 +71,8 @@ namespace AudioDriverSettings
     /// "Preferences"
     QString latencySettingKey(QString implementation);
 
-    /// The latency chosen for an implementation, in seconds, or
-    /// kDefaultLatency where none has been (or none is named)
+    /// The latency chosen for an implementation, in seconds, or its
+    /// defaultLatency() where none has been (or none is named)
     double latency(QSettings &settings, QString implementation);
 
     void setLatency(QSettings &settings, QString implementation,
@@ -73,10 +82,10 @@ namespace AudioDriverSettings
     bool sameLatency(double a, double b);
 
     /**
-     * Where no implementation is named and kDefaultDriver is among the
-     * ones given, name it, and give it the devices chosen before there
-     * were drivers (the keys without a suffix) where none are chosen for
-     * it.  Once it is named this does nothing again.  True if it named
+     * Where no implementation is named and there is a defaultDriver()
+     * among the ones given, name it, and give it the devices chosen
+     * before there were drivers (the keys without a suffix) where none
+     * are chosen for it.  Once it is named this does nothing again.  True if it named
      * the driver.
      */
     bool nameDefaultDriver(QSettings &settings,

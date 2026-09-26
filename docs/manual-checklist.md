@@ -89,8 +89,8 @@ apart only in its number "second punch-in against the first": the join is a 10 m
 hides a jump. That is the true reading, not a fault of the check: WASAPI is there to be
 measured against it, below.
 
-**On each driver (Windows).** The driver project waits for these runs to decide the
-default ([audio-drivers.md](audio-drivers.md), §7). The same setup each time, wired
+**On each driver (Windows).** Run on 2026-09-26; their results, and the default they
+decided, are in [audio-drivers.md](audio-drivers.md), §7. The same setup each time, wired
 headphones with one earcup against the microphone:
 
 1. **MME at 200 ms**: what Tony has always asked for.
@@ -103,7 +103,7 @@ page's text, and copy `DevChecks.txt` to a name that says which run it was
 (`DevChecks-wasapi-20.txt`, say): the next run writes over it. Send back the three pairs,
 and whether anything crackled or dropped out during a run. Press **Use this latency** on
 the driver and latency you will sing with: the figure is kept for that driver only.
-Not yet done.
+Done once, before the stream was kept running between takes; again after it.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and
@@ -126,11 +126,11 @@ Only on Windows, where the menus are shown. The design is in
 [audio-drivers.md](audio-drivers.md).
 
 1. **The first start** with a build that has them: **Playback > Audio Driver** lists MME,
-   DirectSound and WASAPI with MME ticked, and **Audio Latency** lists 10 to 200 ms with
-   200 ms ticked. **Audio Output Device** and **Audio Input Device** tick the devices
-   chosen before. One shown as "(not connected)" is a name MME does not have (MME cuts
-   names to 31 characters): MME's default device is used instead, until the device is
-   chosen again from the list. The line under Calibrate Audio reads "Latency: driver's
+   DirectSound and WASAPI with WASAPI ticked, and **Audio Latency** lists 10 to 200 ms with
+   20 ms ticked. (A driver chosen before, in an earlier build, stays ticked instead.)
+   **Audio Output Device** and **Audio Input Device** tick the devices chosen before. One
+   shown as "(not connected)" is a name the driver does not have: its default device is
+   used instead, until the device is chosen again from the list. The line under Calibrate Audio reads "Latency: driver's
    figure, …": a round trip measured before is not carried over, so calibrate again.
 2. **WASAPI lists its own devices.** Choose WASAPI while the reference plays: playback
    stops. The device menus now list WASAPI's names, whole, with (System Default) ticked.

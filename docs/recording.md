@@ -156,11 +156,11 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
   ([calibrate-audio.md](calibrate-audio.md), §5), when the reported pair moves with the
   buffers.
 - **The driver** (Playback > Audio Driver: MME, DirectSound, WASAPI, shown where more than
-  one is built in, which is on Windows) is `Preferences/audio-target`. Where none is named
-  and MME is built in, `MainWindow::createAudioIO()` names MME before the first device is
-  opened, and the Playback menu before it shows the device menus, carrying the devices
-  chosen before over to MME's keys: bqaudioio lists no devices for no driver when it has
-  several. Choosing a driver or a latency is shut during a take and while a check runs
+  one is built in, which is on Windows) is `Preferences/audio-target`. Where none is named,
+  `MainWindow::createAudioIO()` names WASAPI (MME where there is no WASAPI) before the
+  first device is opened, and the Playback menu before it shows the device menus, carrying
+  the devices chosen before over to its keys: bqaudioio lists no devices for no driver when
+  it has several. Choosing a driver or a latency is shut during a take and while a check runs
   ([audio-drivers.md](audio-drivers.md)).
 
 ## Pre-roll and Record into Selection

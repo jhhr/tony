@@ -18,13 +18,12 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   and Edit Lyrics living in the Edit menu.
 - **The alternate pitch track at ±3 octaves** of a 220 Hz reference (28 Hz, 1.8 kHz) is
   outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
-- **The default audio driver**: MME, until Calibrate Audio and a dev run on WASAPI show it
-  better ([audio-drivers.md](audio-drivers.md), §7).
 - Of the [manual checklist](manual-checklist.md), the device check (Calibrate Audio with
   the dev checks) has been run on real hardware only in part: Calibrate Audio, and a dev
-  run of an early build with items 1 and 2 only (the user's PC, MME, 2026-09-26). The whole
-  dev run not yet, nor anything on WASAPI or DirectSound, nor the driver menus (section
-  2). Of section 3, only the looks, from cloud screenshots (2026-09-25). None of the lyrics
+  run of an early build with items 1 and 2 only (the user's PC, MME, 2026-09-26); then
+  Calibrate Audio and a whole dev run on MME at 200 ms and on WASAPI at 20 and 10 ms
+  (2026-09-26, [audio-drivers.md](audio-drivers.md), §7). Not DirectSound, nor the driver
+  menus themselves (section 2). Of section 3, only the looks, from cloud screenshots (2026-09-25). None of the lyrics
   items.
 - **The dev checks' "not judged" reads Pass.** Items 4 and 12 pass when no look at the
   output lay in a silent gap, with a message that says so, and the report's Totals then
@@ -37,9 +36,9 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 ## Not built
 
 - **Beyond the three drivers** ([audio-drivers.md](audio-drivers.md), §8): WASAPI's
-  exclusive mode and WDM-KS, lower still but taking the device from every other program;
-  keeping the stream running between takes (an svapp change), if WASAPI's restarts turn
-  out as unsteady as MME's.
+  exclusive mode and WDM-KS, lower still but taking the device from every other program.
+  Next: keeping the stream running between takes (an svapp change), as WASAPI's restarts
+  turned out as unsteady as MME's.
 - Showing two takes at once, or any comparison of takes other than switching.
 - Singing track gain and pan are not saved in the session.
 - Background music is not saved in the session; it is reloaded by hand.
@@ -146,8 +145,8 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
 - **Restart jitter on MME.** Every take restarts the stream, and on the user's PC the
   offset between input and output moved by about 13 ms from one start to the next. No one
   round trip then places every take: the dev checks' items 1 and 2, and 7 and 13 whenever
-  their punch-in lands more than 2 ms off, fail on MME today. WASAPI is there to be
-  measured against it ([audio-drivers.md](audio-drivers.md), §7).
+  their punch-in lands more than 2 ms off, fail on MME today, and on WASAPI as much
+  ([audio-drivers.md](audio-drivers.md), §7): next, keeping the stream running.
 - **A round trip is kept per driver, not per latency**: after a latency change the kept
   figure is used unless the latencies the device reports moved by more than 1 ms. And
   before a device's first take, the menu line, Forget Measured Latency and the dialog

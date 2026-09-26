@@ -554,7 +554,7 @@ it (the join is a dip, below).
   trip and pre-roll; keeping the session; replacing a check's own session without asking,
   and asking before the user's; Record ignored; the menu and the dialog, the dialog naming
   the driver. The driver and latency menus are tested here too, as they open the device
-  again: a driver chosen, MME named by default, the latency and the round trip kept per
+  again: a driver chosen, WASAPI (or MME) named by default, the latency and the round trip kept per
   driver, both greyed out during a take and a check ([audio-drivers.md](audio-drivers.md),
   §6). Its runs are two punch-ins of two sweeps on the first 11 s of the calibration
   reference, about 13 s each.
@@ -601,7 +601,7 @@ and the dev checks".
 | How runs are driven | Polling timers and signals, never a nested event loop |
 | `test-tony-device` (from `default`) | Its checks moved into the dev run, and it is retired |
 | Where the dev checks' tests run | `test-tony-dev`, a third executable in development builds, run when a change touches what the checks drive (`AGENTS.md`) |
-| Restart jitter on MME (about 13 ms) | Not tuned away: WASAPI was put next to MME to be measured against it ([audio-drivers.md](audio-drivers.md)); MME stays the default until a run shows another driver better |
+| Restart jitter on MME (about 13 ms) | Not tuned away: WASAPI, measured against it, restarts as unsteadily, and is the default for its lower round trip; next, the stream kept running between takes ([audio-drivers.md](audio-drivers.md), §7) |
 | The notes merge at a join inside a held note | Fixed on this branch: one note across the join ([takes.md](takes.md)) |
 
 ## 13. Facts checked in the code
@@ -668,4 +668,8 @@ So that later work does not derive them again.
   two sweeps of each punch-in agree to 0.2–0.3 ms, but punch-in 1 landed at +0.6 ms and
   punch-in 2 at −12.9 ms; the measured start gap was 0 frames both times. So the finder is
   precise, and what moves is the stream's offset between input and output at each restart.
-- The whole dev run: not yet.
+- **2026-09-26**, whole dev runs on MME at 200 ms and on WASAPI at 20 and 10 ms, each
+  after Calibrate Audio: the figures are in [audio-drivers.md](audio-drivers.md), §7.
+  Items 4, 9, 10 and 12 passed on all three; 1, 2, 7 and 13 failed on the restart jitter
+  on all three; 3 failed on dots at a sound's onset, and 14 on WASAPI on its own misreading
+  of a 48 kHz take, both since fixed in the checks.

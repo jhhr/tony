@@ -3,8 +3,10 @@
 On Windows, **Playback > Audio Driver** chooses which of Windows' audio APIs Tony plays and
 records through (MME, DirectSound or WASAPI), and **Playback > Audio Latency** how much
 latency it asks that driver for (10 to 200 ms). Each driver keeps its own devices, its own
-latency and its own measured round trip. MME, which every stream went through before there
-was a choice, is the default until measurements on the user's PC show another better.
+latency and its own measured round trip. WASAPI at 20 ms is the default where it is built
+in, and MME, which every stream went through before there was a choice, elsewhere: the
+user's runs (§7) gave WASAPI a third of MME's round trip, with takes placed no less
+steadily.
 
 This page is the design as built: why, the decisions, the facts it rests on, the design in
 Tony, the tests, what the measurements on the user's PC are to settle, and what is open.
@@ -37,7 +39,8 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
 
 - **Audio Driver**, in the Playback menu before the two device submenus: MME, DirectSound,
   WASAPI, in that order, the one in use ticked. **Audio Latency** next to it: 10, 20, 50,
-  100 and 200 ms, the one chosen for that driver ticked, 200 ms where none has been. Both
+  100 and 200 ms, the one chosen for that driver ticked; where none has been, 20 ms on
+  WASAPI and 200 ms on the others. Both
   are shown only where two drivers or more are built in, which is on Windows; on Linux and
   Android nothing changed.
 - **Choosing a driver** stops playback and opens the device again through it, with the
@@ -47,9 +50,10 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
   playback and opens the device again. Choosing what is ticked does nothing.
 - Both are **greyed out during a take and while a check runs**: either would open the
   device again under the take.
-- **The first start with the menus** names MME and carries the devices chosen before over
-  to it. A device name MME does not list (a long one, which only WASAPI or WDM-KS had)
-  shows as "(not connected)", ticked, and MME's own default device opens instead.
+- **The first start with the menus** names WASAPI (MME where there is no WASAPI) and
+  carries the devices chosen before over to it. A device name it does not list shows as
+  "(not connected)", ticked, and its own default device opens instead. A driver already
+  named, by the user or by an earlier build, is left as it is.
 - **A round trip measured before the menus** was kept under no driver, and is not carried
   over as the devices are: the Playback menu's latency line reads "driver's figure" until
   Calibrate Audio is run, and its figure kept, on each driver used.
@@ -62,14 +66,14 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
 | Decision | By, when | Why |
 | --- | --- | --- |
 | Work on `feat/wasapi`, branched from `feat/tonyandroid` after the calibrate-audio merge, merged back when done | user, 2026-09-26 | Another session works on `feat/tonyandroid` |
-| **MME stays the default** until Calibrate Audio and a dev run on the user's PC show WASAPI better | user, 2026-09-26 | Not to change what works before it is measured |
+| **WASAPI at 20 ms is the default** where it is built in, MME elsewhere; a driver already named stays | user, 2026-09-26, from the runs of §7 | A third of MME's round trip and the dots half as far behind the cursor, takes as steady; 10 ms gained 7 ms more with half the buffer. Until measured, MME had stayed the default |
 | The driver changes are in the fork `jhhr/bqaudioio`; Tony pins it | user, 2026-09-26 | bqaudioio chooses the host API, the stream's rate and its latency; upstream is on sourcehut |
 | **A driver is a bqaudioio implementation**: `mme`, `directsound`, `wasapi`, each PortAudio restricted to that host API; `port` stays as it was (all host APIs) and is not offered | lead | Tony's device menus, the saved devices, svapp's `createAudioIO()` and the stored round trip (`LatencyCalibration::Key::implementation`) were already per implementation: no svapp change |
 | WASAPI in **shared** mode, with `paWinWasapiAutoConvert` on both sides | lead | The input's and the output's mixers can run at different rates, and the stream opens at the output's; shared mode leaves other programs' sound alone |
 | A device at 48 kHz needs nothing more for placement | `feat/tonyandroid` | The recording is resampled to the reference's rate before the splice, and `TakeTiming` converts device frames; Calibrate Audio judges such a device like any other ([calibrate-audio.md](calibrate-audio.md), §1) |
-| The latency chosen per driver from 10, 20, 50, 100 and 200 ms; 200 when unset | lead, 2026-09-26 | 200 ms is what every stream asked for before; a choice lets the measurements compare |
+| The latency chosen per driver from 10, 20, 50, 100 and 200 ms; when unset, 20 on WASAPI and 200 on the others | lead, 2026-09-26; WASAPI's from the runs of §7 | 200 ms is what every stream asked for before; a choice lets the measurements compare |
 | The menus only with two drivers or more | lead | One driver is no choice; elsewhere the device menus are all there is |
-| MME named where no driver is, before the first device opens and before the Playback menu shows the device menus, not at start-up | lead | With four PortAudio implementations the device menus have no driver to list the devices of; the first device opens lazily, with the first file or take |
+| The default named where no driver is, before the first device opens and before the Playback menu shows the device menus, not at start-up | lead | With four PortAudio implementations the device menus have no driver to list the devices of; the first device opens lazily, with the first file or take |
 
 ## 4. Facts checked
 
@@ -152,33 +156,39 @@ menus, the default and the reports. The fork's Windows part is compiled by the
 cross-compile only: nothing of it has run on Windows yet, and no figure has been measured
 through DirectSound or WASAPI.
 
-**To do: the user's runs on Windows** (W5), wired headphones with one earcup against the
-microphone, as in [manual-checklist.md](manual-checklist.md), section 1:
+**The user's runs, 2026-09-26** (Windows; wired headphones with one earcup against the
+microphone; (System Default) devices; on each, Calibrate Audio and Use this latency, then
+a whole dev run):
 
-1. The menus themselves (section 2 of the checklist).
-2. Calibrate Audio, then a whole dev run, on **MME at 200 ms**: the same setting as the
-   earlier runs, now with every item.
-3. The same on **WASAPI at 20 ms**, with WASAPI's own devices chosen.
-4. The same on **WASAPI at 10 ms**.
+| | MME, 200 ms | WASAPI, 20 ms | WASAPI, 10 ms |
+| --- | --- | --- | --- |
+| Latencies reported, out / in | 200.6 / 28.7 ms | 40.0 / 30.0 ms | 32.0 / 22.0 ms |
+| Round trip measured | 297.7 ms | 98.7 ms | 91.3 ms |
+| The dev run's punch-ins, lowest to highest offset | −7.8 to +7.8 ms | +3.0 to +19.4 ms | −4.4 to +9.6 ms |
+| Start gap, per take | 0 | 0, 10 or 20 ms | 10 or 20 ms |
+| Live dots behind the cursor, median | 361 ms | 171 ms | 167 ms |
+| Totals | 5 passed, 5 failed, 1 measured | 4, 6, 1 | 4, 6, 1 |
 
-For each: the result page's text and that run's `DevChecks.txt`, copied aside before the
-next run writes over it; and whether anything crackled or dropped out. DirectSound is
-offered but is not among these runs.
+What they showed:
 
-What they settle:
+- **WASAPI's round trip is a third of MME's**, and the dots trail the cursor half as far.
+  10 ms gains 7 ms over 20 ms.
+- **Takes are no steadier.** On every driver each take lands up to about 8 ms either way,
+  15 ms from lowest to highest, while one take's sweeps agree within 0.3 ms: the stream's
+  restart at every take moves input against output, whatever the driver. Items 1, 2, 7
+  and 13 fail on it on all three.
+- WASAPI's start gap comes in whole periods of its engine, 10 ms.
+- Two failures were the checks' own, since fixed: item 14 misread a 48 kHz take's overrun
+  (it reads about 0.3 s, as on MME), and item 3 judged dots in a sound's first window,
+  which through a real room are off pitch on every driver
+  ([calibrate-audio.md](calibrate-audio.md), §8).
+- Whether 10 ms crackled was not reported.
 
-- **Steadiness:** whether WASAPI's offset moves less from one take to the next than MME's
-  13 ms: Calibrate Audio's verdict (Ok or Unsteady), and items 1 and 2 within ±2 ms.
-- **The round trip** at each latency, measured against the driver's figure.
-- **Whether 10 ms holds** without dropouts, or 20 ms is needed.
-- **The rate** WASAPI records at, which is its mixer's, and that takes still line up.
-
-Then the user decides the default. If WASAPI's restarts are as unsteady as MME's, the next
-step is keeping the stream running between takes (§8).
+**Decided** (the user, 2026-09-26): WASAPI at 20 ms is the default; next, the stream is
+kept running between takes (§8), and a dev run on WASAPI at 20 ms follows.
 
 ## 8. Open points
 
-- **The default driver**: MME until the runs of §7.
 - **A round trip is kept per driver, not per latency.** After a latency change the kept
   figure is used unless the latencies the device reports moved by more than 1 ms (then it
   is stale, and the menu line says so): calibrate again after changing the latency.
@@ -189,7 +199,10 @@ step is keeping the stream running between takes (§8).
   before the first take, from svapp ([calibrate-audio.md](calibrate-audio.md), §5).
 - WDM-KS (in PortAudio's build too) and WASAPI's exclusive mode would be lower still, but
   take the device from every other program; not built.
-- Keeping the stream running between takes would take the restart out of the take path
-  altogether (an svapp change); only if WASAPI's restarts are as unsteady as MME's.
+- **Next: keeping the stream running between takes** (the user's decision, 2026-09-26),
+  which takes the restart out of the take path: an svapp change, then a dev run.
+- On the loopback fake at 48 kHz, two runs in four read an output peak near 0 dBFS in the
+  first block after a stream started, where the reference peaks at −12 dBFS; never at
+  44.1 kHz. It may be an audible click at a take's start on a 48 kHz device.
 - Tony does not ask WASAPI for raw capture, so Windows' enhancements apply on every
   driver ([calibrate-audio.md](calibrate-audio.md), §10).

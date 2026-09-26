@@ -59,30 +59,40 @@ private slots:
                  QStringList({ "wasapi" }));
     }
 
-    // MME is named where nothing is, or "auto", and the devices chosen
-    // before there were drivers become MME's, where MME has none of its
-    // own. Then, or where anything else is named, nothing happens
+    // WASAPI is named where nothing is, or "auto", and the devices
+    // chosen before there were drivers become WASAPI's, where it has
+    // none of its own; MME where there is no WASAPI. Then, or where
+    // anything else is named, nothing happens
     void default_driver_named_once() {
         QSettings settings(m_path, QSettings::IniFormat);
         const QStringList windows = { "port", "mme", "directsound", "wasapi" };
 
+        QCOMPARE(AudioDriverSettings::defaultDriver(windows),
+                 QString("wasapi"));
+        QCOMPARE(AudioDriverSettings::defaultDriver
+                 ({ "port", "mme", "directsound" }), QString("mme"));
+        QCOMPARE(AudioDriverSettings::defaultDriver({ "pulse", "port" }),
+                 QString());
+
         settings.setValue("Preferences/audio-playback-device", "Speakers");
         settings.setValue("Preferences/audio-record-device", "Mic");
-        settings.setValue("Preferences/audio-record-device-mme", "Mic (MME)");
+        settings.setValue("Preferences/audio-record-device-wasapi",
+                          "Mic (WASAPI)");
         QVERIFY(AudioDriverSettings::nameDefaultDriver(settings, windows));
         QCOMPARE(settings.value("Preferences/audio-target").toString(),
-                 QString("mme"));
+                 QString("wasapi"));
         QCOMPARE(AudioDriverSettings::currentImplementation(settings),
-                 QString("mme"));
-        QCOMPARE(settings.value("Preferences/audio-playback-device-mme")
+                 QString("wasapi"));
+        QCOMPARE(settings.value("Preferences/audio-playback-device-wasapi")
                  .toString(), QString("Speakers"));
-        QCOMPARE(settings.value("Preferences/audio-record-device-mme")
-                 .toString(), QString("Mic (MME)"));
+        QCOMPARE(settings.value("Preferences/audio-record-device-wasapi")
+                 .toString(), QString("Mic (WASAPI)"));
+        QVERIFY(!settings.contains("Preferences/audio-playback-device-mme"));
 
         // Named now: another device without a suffix is not carried over
         settings.setValue("Preferences/audio-playback-device", "Headphones");
         QVERIFY(!AudioDriverSettings::nameDefaultDriver(settings, windows));
-        QCOMPARE(settings.value("Preferences/audio-playback-device-mme")
+        QCOMPARE(settings.value("Preferences/audio-playback-device-wasapi")
                  .toString(), QString("Speakers"));
 
         settings.setValue("Preferences/audio-target", "auto");
@@ -90,12 +100,23 @@ private slots:
                  QString());
         QVERIFY(AudioDriverSettings::nameDefaultDriver(settings, windows));
         QCOMPARE(AudioDriverSettings::currentImplementation(settings),
-                 QString("mme"));
+                 QString("wasapi"));
 
-        settings.setValue("Preferences/audio-target", "wasapi");
+        // One chosen is left alone, MME included
+        settings.setValue("Preferences/audio-target", "mme");
         QVERIFY(!AudioDriverSettings::nameDefaultDriver(settings, windows));
         QCOMPARE(AudioDriverSettings::currentImplementation(settings),
-                 QString("wasapi"));
+                 QString("mme"));
+
+        // Without WASAPI, MME
+        settings.remove("Preferences");
+        settings.setValue("Preferences/audio-playback-device", "Speakers");
+        QVERIFY(AudioDriverSettings::nameDefaultDriver
+                (settings, { "port", "mme", "directsound" }));
+        QCOMPARE(AudioDriverSettings::currentImplementation(settings),
+                 QString("mme"));
+        QCOMPARE(settings.value("Preferences/audio-playback-device-mme")
+                 .toString(), QString("Speakers"));
 
         // Without MME built in, nothing is named, and no device key made
         settings.remove("Preferences");
@@ -117,15 +138,17 @@ private slots:
         QCOMPARE(AudioDriverSettings::kDefaultLatency, 0.2);
 
         QSettings settings(m_path, QSettings::IniFormat);
-        QCOMPARE(AudioDriverSettings::latency(settings, "wasapi"), 0.2);
-        AudioDriverSettings::setLatency(settings, "wasapi", 0.02);
+        // WASAPI's own where none is chosen; the others ask for 200 ms
+        QCOMPARE(AudioDriverSettings::latency(settings, "wasapi"), 0.02);
+        QCOMPARE(AudioDriverSettings::latency(settings, "mme"), 0.2);
+        AudioDriverSettings::setLatency(settings, "wasapi", 0.05);
         AudioDriverSettings::setLatency(settings, "mme", 0.1);
         settings.sync();
 
         QSettings again(m_path, QSettings::IniFormat);
         QCOMPARE(again.value("Preferences/audio-latency-wasapi").toString()
-                 .toDouble(), 0.02);
-        QCOMPARE(AudioDriverSettings::latency(again, "wasapi"), 0.02);
+                 .toDouble(), 0.05);
+        QCOMPARE(AudioDriverSettings::latency(again, "wasapi"), 0.05);
         QCOMPARE(AudioDriverSettings::latency(again, "mme"), 0.1);
         QCOMPARE(AudioDriverSettings::latency(again, "directsound"), 0.2);
         QCOMPARE(AudioDriverSettings::latency(again, ""), 0.2);
@@ -134,6 +157,8 @@ private slots:
         QCOMPARE(AudioDriverSettings::latency(again, "mme"), 0.2);
         again.setValue("Preferences/audio-latency-mme", "0");
         QCOMPARE(AudioDriverSettings::latency(again, "mme"), 0.2);
+        again.setValue("Preferences/audio-latency-wasapi", "nonsense");
+        QCOMPARE(AudioDriverSettings::latency(again, "wasapi"), 0.02);
 
         QVERIFY(AudioDriverSettings::sameLatency(0.02, 0.0201));
         QVERIFY(!AudioDriverSettings::sameLatency(0.02, 0.01));
