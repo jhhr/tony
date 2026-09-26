@@ -5,8 +5,8 @@ QtTest suites in `main/test/`, in two executables that mirror the two libraries
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestModelChangeThrottle` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestRecordWorkflow`, `TestUiChecks` | about 5 minutes (measured 2026-09-25 on Linux), nearly all of it `TestRecordWorkflow` and `TestUiChecks`: takes are recorded in real time |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestModelChangeThrottle`, `TestRunSuite` | seconds |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestRecordWorkflow`, `TestUiChecks` | about 6 minutes in one process, under a minute in eight (measured 2026-09-26 on Linux), nearly all of it `TestRecordWorkflow` and `TestUiChecks`: takes are recorded in real time |
 | `test-tony-device` | as `test-tony-app`, but with the **real** audio device | `TestRealDevice` | about a minute; run by hand only, see the [manual checklist](manual-checklist.md) |
 
 `meson test` / `build.bat test` runs the first two plus four svcore suites. `test-tony-device`
@@ -46,6 +46,17 @@ helpers must not be slots; connect to lambdas instead. For access to private sta
   the exit status of a run with names is always 1. Only a run with no names has a
   meaningful exit status.
 - `QT_QPA_PLATFORM=offscreen` is set by `main()` when not given.
+- **Shards.** With `TONY_TEST_SHARD=i/n` each suite runs only every n-th of its test
+  functions, from the i-th, in declaration order, and a suite with none in the shard does
+  not run. The app suite nearly only waits on `FakeAudioIO`'s real-time clock, so n
+  processes at once take about 1/n of the time: on four cores the load stayed under 2 with
+  eight, and reached 3.5 with twelve. `deploy/linux/run-tests.sh` starts them and adds up
+  their results; each process needs XDG directories of its own, because the suites'
+  QSettings are per user and would be shared. On Windows QSettings is the registry, so the
+  script is for Linux. Do not combine shards with test names on the command line.
+- A sharded run is a whole run of the suites, but the tests that share a process are other
+  ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
+  run the one-process run as well.
 
 ## Design principles
 

@@ -1358,6 +1358,7 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestTakesFile.h',
   'main/test/TestTakeTiming.h',
   'main/test/TestModelChangeThrottle.h',
+  'main/test/TestRunSuite.h',
 ])
 
 tony_core_test_exe = executable(
