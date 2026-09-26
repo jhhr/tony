@@ -277,5 +277,11 @@ Things to know, none of which stops the feature being used. See also
   user gets a dialog naming the file.
 - Playing a wave model with a **positive** start frame plays up to a block early and
   without an edge fade. This design avoids it: a take's file always starts at frame 0.
-- A recording device whose sample rate differs from the reference's is unexercised;
-  `TakeAudio` refuses the splice.
+- A recording device whose sample rate differs from the reference's: a take's first
+  recording is written at the device's rate and placed frame for frame, so at 48 kHz it
+  lands early by 8 % of its position; a later recording at another rate than the take
+  file's is refused. Calibrate Audio names the mismatch; the fix is planned
+  ([calibrate-audio.md](calibrate-audio.md), §10).
+- Two recordings that meet at a frame J each fade over 5 ms against what the take held
+  there, not into each other: where that was silence, the join is a 10 ms dip. The dev
+  checks' join check reads it as no step, and a pitch gap of about one hop.

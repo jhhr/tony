@@ -13,7 +13,8 @@ Upstream Tony analyses the pitch of one recording. This fork makes it a singing 
 3. **pYIN analysis of what was just recorded** replaces the dots when the take stops.
 4. **Partial recordings and takes**: record from the playhead into part of the song, keep
    the rest, erase, undo, and keep several takes. See [takes.md](takes.md).
-5. Around that: play the reference while recording, latency compensation, pre-roll,
+5. Around that: play the reference while recording, latency compensation (with a round
+   trip Calibrate Audio can measure), pre-roll,
    record into selection, an octave-shifted "alternate" pitch track to follow, and a
    background music track that is played but never analysed.
 
@@ -30,8 +31,13 @@ only what they need:
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `ModelChangeThrottle`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `LatencyUtils.h` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `TakeCommands`, `TakeLayers`, `PaneUtils` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `ModelChangeThrottle`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `TakeDiff` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+
+Development builds are every build type but `release`: they define `TONY_DEV_CHECKS` and
+compile `main/dev/`, and everything that uses it elsewhere is inside `#ifdef
+TONY_DEV_CHECKS`, so that a release build compiles with no `main/dev/` file
+([calibrate-audio.md](calibrate-audio.md), §6).
 
 When adding a file: put it in the right `*_files` list, and in the matching `*_moc_files`
 list **only if** it has `Q_OBJECT`. Logic that can be written as pure functions or a plain
@@ -59,6 +65,15 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   `WritableWaveFileModel` and emits `pitchDetected(frame, hz)`. It never touches the pitch
   model; `MainWindow::onRealtimePitchDetected()` writes it on the GUI thread (queued
   connection). Stop the tracker **before** releasing the model it reads.
+- **Calibrate Audio** ([calibrate-audio.md](calibrate-audio.md), §9): `MainWindow` owns
+  the `AudioCheckRunner` and, in development builds, the `DevChecks` (both made with the
+  window), and the `CalibrateAudioDialog` (made the first time it is asked for).
+  `DevChecks` drives the runner and owns a `TakeObserver`. The runner, the dev checks and
+  the observer are `friend`s of `MainWindow`, as they drive the take path and read the
+  take's state; the development ones only under `#ifdef TONY_DEV_CHECKS`. `~MainWindow`
+  deletes the dialog, then the dev checks, then the runner, before anything they read;
+  `closeSession()` tells the runner, then the dev checks. They are driven by timers and
+  signals, never a nested event loop: the window can be closed during a run.
 
 The reference is the pane's **work model** (`Pane::setWorkModel()`, svgui fork, set in
 `analyseNewMainModel()`). Without that the pane greys itself out from the end of the
@@ -129,6 +144,11 @@ leaves whoever keeps a pointer to it holding a layer that the redo stack owns an
   and `Analyser::setVisible()` **write QSettings keys that both analysers share**; use them
   only for the user's own toggles, never for temporary states such as "during a take".
   For temporary hiding use `showLayer(pane, false)`.
+- The toolbar's level controls (`LevelPanToolButton`) answer a gain between their notches
+  by moving to the nearest notch and emitting it, and the window then sets that gain
+  through `Analyser::setGain()` and `setAudible()`, writing the shared settings. A play gain
+  set directly on the reference (as the audio check's is) needs the control moved first,
+  under a `QSignalBlocker`, before `updateLayerStatuses()` shows it.
 
 ### Selection and tools
 

@@ -18,6 +18,7 @@ code.
 | [docs/architecture.md](docs/architecture.md) | touching layers, models, the document, commands, playback or the session file |
 | [docs/recording.md](docs/recording.md) | touching `record()`, the Stop path, latency, pre-roll, the live tracker |
 | [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore |
+| [docs/calibrate-audio.md](docs/calibrate-audio.md) | touching Calibrate Audio (`AudioCheckRunner`, `CalibrateAudioDialog`), the dev checks (`main/dev/`) or the measured latency (`LatencyCheck`, `LatencyCalibration`) |
 | [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/` |
 | [docs/open-points.md](docs/open-points.md), [docs/manual-checklist.md](docs/manual-checklist.md) | choosing what to do next, or saying what the user should try by hand |
 
@@ -42,7 +43,7 @@ Run tests from `build_mingw/` with the same environment:
 ```sh
 mkdir -p ../tmp/tl
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "exit:$?"
-TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~5 min, real time
+TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~9 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ```
@@ -52,11 +53,12 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   that lack it fail, so the exit status is only meaningful for a run with no names.
 - Run named tests while working; run **both whole suites** before calling anything done.
 - `test-tony-dev.exe` (development builds only) holds the development checks' suite,
-  about a minute and more of real-time takes. Run it as well, whole, when a change touches
+  about four minutes of real-time takes. Run it as well, whole, when a change touches
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
-- Give the app suite a tool timeout of 10 minutes.
+- Give the app suite a tool timeout of 10 minutes, or run it in the background: it comes
+  close to that.
 
 ## Rules for working here
 

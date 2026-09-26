@@ -68,26 +68,35 @@ echo "exit:$?" >> tmp/build.log
 
 ## On Linux (a cloud session)
 
-Not how the project is developed, but it builds and both suites run; this is how it was done
-on 2026-09-25 (Ubuntu 24.04, no sound card):
+Not how the project is developed, but it builds and the suites run; this is how it was done
+on 2026-09-25 and 2026-09-26 (Ubuntu 24.04, no sound card):
 
 - Packages: the `apt-get install` list of `.github/workflows/linux.yml` (`smlnj` and
   `mercurial` are not needed, and `libboost-dev` does for `libboost-all-dev`), plus
   `librubberband-dev`, `libjack-jackd2-dev`, `libasound2-dev`, `libopusenc-dev`, `meson`.
-- **Qt 6.11 from conda-forge, not Ubuntu's 6.4.** Under 6.4 the string-based connects of
-  `Analyser` with `sv::` types do not resolve ("No such slot
-  Analyser::layerCompletionChanged(ModelId)"), so pYIN's completion never arrives and every
-  analysing test times out. download.qt.io's mirrors are blocked by the session's proxy;
-  conda-forge is not:
+- **Qt: Ubuntu's 6.4 does** (the `qt6-*` packages of that list), now that no string-based
+  connect names `ModelId` or `sv_frame_t`. Qt 6.4 does not match such a string with
+  moc's `sv::` names, and the connection fails at run time with "No such slot" (for
+  `Analyser::layerCompletionChanged(ModelId)` pYIN's completion never arrived and every
+  analysing test timed out); the user's Qt 6.11 matches it, so a string connect can pass
+  on Windows and fail here. Use member-pointer connects, and grep a test log for "No such
+  slot". Code built here can use no Qt API newer than 6.4. The app and dev test mains draw
+  text without sub-pixel anti-aliasing, which Ubuntu's fontconfig asks Qt 6.4 for
+  ([testing.md](testing.md)).
+- To build against the user's Qt version instead: download.qt.io's mirrors are blocked by
+  the session's proxy; conda-forge is not:
   `micromamba create -p /opt/qt611 -c conda-forge qt6-main=6.11.1`, then a directory with
   links to only its `Qt6*.pc` files, so that nothing else of conda's is picked up:
   `PKG_CONFIG_PATH=<that directory> meson setup build_qt611`, and
-  `LD_LIBRARY_PATH=/opt/qt611/lib` to run.
+  `LD_LIBRARY_PATH=/opt/qt611/lib` to run (2026-09-25).
+- Build the targets without `.exe`, and `pyin.so` with them: `ninja -C build_linux tony
+  test-tony-core test-tony-app test-tony-dev pyin.so`. Without the plugin every app test
+  that waits for an analysis hangs ([testing.md](testing.md)).
 - The libraries by `git clone` at the pins of `repoint-lock.json`. sourcehut (the `hg`
   ones) was unreachable; their GitHub mirrors (`github.com/breakfastquay/...`) are at the
   same tips.
-- `-j 4` on four cores; the whole build takes about 20 minutes. Run the app suite with
-  nothing else building: it records in real time.
+- `-j 4` on four cores; the whole build takes about 20 minutes. Run the app and dev suites
+  one at a time with nothing else building: they record in real time.
 - Four tests of `TestTakesFile` fail on Linux and nowhere else: they are about Windows
   paths (backslashes, drive letters, case).
 
@@ -99,8 +108,15 @@ on 2026-09-25 (Ubuntu 24.04, no sound card):
   include directories for `opus`, `sord-0`, `serd-0`.
 - `-DHAVE_MEDIAFOUNDATION` with `-lmfplat -lmfreadwrite -lmfuuid -lpropsys`; needs the
   `bqaudiostream` fork.
-- `tony_core` / `tony_app` static libraries and the two test executables; see
+- `tony_core` / `tony_app` static libraries and the test executables; see
   [architecture.md](architecture.md) for what goes where. A new source file goes into
   `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
   only if it declares `Q_OBJECT`.
-- Windows headers define `near` and `far` as macros. Do not use them as identifiers.
+- Any build type but `release` (`build.bat`'s is `debugoptimized`) is a development build:
+  `-DTONY_DEV_CHECKS` for the compiler and for moc, `main/dev/` compiled into `tony_app`,
+  and `test-tony-dev` built. `meson.build`'s default and the CI workflows use `release`,
+  which has none of it. After a change to how the dev checks are wired in, set up a
+  `release` build directory and build it: it must compile with no `main/dev/` file
+  ([calibrate-audio.md](calibrate-audio.md), §6).
+- Windows headers define macros named `near` and `far` (empty), `min`, `max`, `ERROR`, `IN`
+  and `OUT`. Do not use them as identifiers: a build on Linux does not catch it.

@@ -12,11 +12,11 @@ methods, and they do not tell the story of fixed bugs.
 | Page | What is in it |
 | --- | --- |
 | [building.md](building.md) | The MinGW build, and every way the environment has gone wrong |
-| [testing.md](testing.md) | The two test executables, the fakes and helpers, how tests turned out to be worthless, races |
+| [testing.md](testing.md) | The test executables (core, app, and the dev checks'), the fakes and helpers, how tests turned out to be worthless, races |
 | [architecture.md](architecture.md) | What the fork adds, `tony_core` / `tony_app`, who owns what, and the rules for layers, models, commands, playback and session files |
 | [recording.md](recording.md) | Record to Stop, step by step and why in that order; latency; pre-roll; record into selection; the live tracker |
 | [takes.md](takes.md) | Takes: decisions, the audio swap, ranged analysis and merge, undo, the coverage strip, files and sessions, limitations |
 | [forks.md](forks.md) | The `jhhr/*` library forks: how to change one, what each adds, known defects |
 | [open-points.md](open-points.md) | Decisions waiting for the user, things not built, weak spots |
-| [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes — little of it tried yet |
-| [calibrate-audio.md](calibrate-audio.md) | Plan, not built: a Calibrate Audio button that measures the round trip through a speaker-to-mic loopback, and dev checks that automate most of the manual checklist |
+| [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes, starting with the device check (Calibrate Audio with the dev checks). Tried so far: Calibrate Audio and part of a dev run on the user's PC, and the looks from cloud screenshots; the rest not yet |
+| [calibrate-audio.md](calibrate-audio.md) | Calibrate Audio, which measures the round trip through an earcup held to the mic, and the dev checks that settle the checklist's device items: what they do, what each verdict and check means, which numbers to send back, design, tests, decisions, open points, the user's runs |

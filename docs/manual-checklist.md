@@ -40,9 +40,9 @@ file, and compares the take before and after each punch-in.
 4. **Playback > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
    is by default), then **Start**. A few minutes; leave the window alone meanwhile (Cancel
    stops the run). The dev checks run only after a calibration that can be used (verdict
-   Ok or Unsteady). No signal, or a fading one, means the microphone did not hear the
-   sweeps, or Windows' audio enhancements took them out. The stored latency changes only
-   through **Use this latency**.
+   Ok or Unsteady, recorded at the reference's rate, 44.1 kHz). No signal, or a fading one,
+   means the microphone did not hear the sweeps, or Windows' audio enhancements took them
+   out. The stored latency changes only through **Use this latency**.
 5. The report is on the dialog's result page and in `DevChecks.txt` in Tony's application
    data folder (`%APPDATA%\sonic-visualiser\Tony` on Windows). The test session is saved
    beside it in a `dev-checks-<n>` folder and left open, to be looked at and played.
@@ -80,11 +80,11 @@ latencies the device reports, and the round trip used. Then, item by item:
 **What fails on MME today, and why.** Every take restarts the audio stream, and on MME the
 offset between input and output moves by about 13 ms from one restart to the next, while
 the sweeps within one take agree to 0.3 ms; the start gap does not see it. No one round
-trip then places every take within ±2 ms: expect items 1 and 2 to fail, items 7 and 13
-whenever their punch-in lands more than 2 ms off, and item 10 at the join (the step and the
-pitch) when its two punch-ins land apart. That is the true reading, not a fault of the
-check: the remedy is a lower-latency driver, the next project
-([calibrate-audio.md](calibrate-audio.md), §8).
+trip then places every take within ±2 ms: expect items 1 and 2 to fail, and items 7 and 13
+whenever their punch-in lands more than 2 ms off. Item 10 shows two punch-ins that landed
+apart only in its number "second punch-in against the first": the join is a 10 ms dip, which
+hides a jump. That is the true reading, not a fault of the check: the remedy is a
+lower-latency driver, the next project ([calibrate-audio.md](calibrate-audio.md), §10).
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and
