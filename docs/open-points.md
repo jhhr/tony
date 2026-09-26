@@ -44,15 +44,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   29 % to about 54 % of a core. A HiDPI screen makes each redraw dearer. A way in svgui to
   keep a layer out of a view's cache would make it nearly free ([forks.md](forks.md)).
 
-Defects the checks of `TestUiChecks` found, each committed as a test expected to fail
-(`QEXPECT_FAIL` names the cause):
-
-- **`commitData()` writes `~/.sv1/tmp-*.sv`**, Sonic Visualiser's extension; Tony opens
-  only `.ton` as a session, so what it saved at logout does not open from Recent Files
-  (`commit_data_writes_a_playable_session`; renamed to `.ton` it opens and plays).
-
-Seen and not pinned by a test:
-
 - After playback the pane's own cache of what it drew holds the translucent note boxes
   painted twice over themselves, darker, until the next zoom or scroll. Seen with the
   offscreen platform, through the window's backing store; whether it shows on a real screen

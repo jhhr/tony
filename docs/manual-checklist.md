@@ -77,7 +77,8 @@ harm. On the fake: +0.0 ms at both places with `n = 0`, and +50.0 ms, failing, w
 5. **Take operations clear the undo history with no prompt** (all but Rename): acceptable
    in use?
 6. **Log out with unsaved takes** on Windows: its test does not run there, because
-   `commitData()` writes into the real profile. See open points for the file it writes.
+   `commitData()` writes into the real profile. Afterwards `~/.sv1/tmp-*.ton` is on the
+   Recent Files list, opens, and its takes play.
 7. **Live dots on this machine**: during a take the dots keep up with the cursor and grow
    smoothly, and neither they nor the cursor stutter, in a maximised window. Each batch of
    dots, 25 a second, has the whole pane drawn again; see open points.

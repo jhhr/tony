@@ -72,6 +72,7 @@
 
 #include "widgets/RangeInputDialog.h"
 #include "widgets/ActivityLog.h"
+#include "widgets/InteractiveFileFinder.h"
 
 // For version information
 #include "vamp/vamp.h"
@@ -6083,14 +6084,20 @@ MainWindow::commitData(bool mayAskUser)
             if (!QFileInfo(svDir).isDir()) return false;
         }
         
-        // This name doesn't have to be unguessable
+        // This name doesn't have to be unguessable. Its extension is the
+        // one this application opens as a session -- .ton, not Sonic
+        // Visualiser's .sv, which Tony would try to open as audio
+        QString extension = InteractiveFileFinder::getInstance()
+            ->getApplicationSessionExtension();
 #ifndef _WIN32
-        QString fname = QString("tmp-%1-%2.sv")
+        QString fname = QString("tmp-%1-%2.%3")
             .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"))
-            .arg(QProcess().processId());
+            .arg(QProcess().processId())
+            .arg(extension);
 #else
-        QString fname = QString("tmp-%1.sv")
-            .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"));
+        QString fname = QString("tmp-%1.%2")
+            .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"))
+            .arg(extension);
 #endif
         QString fpath = QDir(svDir).filePath(fname);
         if (saveSessionFile(fpath)) {

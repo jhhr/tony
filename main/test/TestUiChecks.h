@@ -1333,22 +1333,12 @@ private slots:
             .entryList({ "tmp-*" }, QDir::Files);
         QCOMPARE(written.size(), 1);
         QString path = fakeHome + "/.sv1/" + written[0];
+        QVERIFY2(path.endsWith(".ton"),
+                 qPrintable("the session is written as " + path));
 
         // It goes on the Recent Files list, which opens it with openPath()
         m_window->doCloseSession();
-        MainWindow::FileOpenStatus opened =
-            m_window->openPath(path, MainWindow::ReplaceSession);
-        QEXPECT_FAIL("", "commitData() names the file tmp-*.sv, Sonic "
-                     "Visualiser's session extension; Tony opens only .ton "
-                     "as a session", Continue);
-        QCOMPARE(opened, MainWindow::FileOpenSucceeded);
-
-        // What is in it, under the name Tony would open
-        m_window->doCloseSession();
-        QString ton = QFileInfo(path).path() + "/" +
-            QFileInfo(path).completeBaseName() + ".ton";
-        QVERIFY(QFile::rename(path, ton));
-        QCOMPARE(m_window->openPath(ton, MainWindow::ReplaceSession),
+        QCOMPARE(m_window->openPath(path, MainWindow::ReplaceSession),
                  MainWindow::FileOpenSucceeded);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
         QVERIFY2(m_window->takes()->haveTake(),
