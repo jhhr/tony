@@ -20,3 +20,4 @@ methods, and they do not tell the story of fixed bugs.
 | [open-points.md](open-points.md) | Decisions waiting for the user, things not built, weak spots |
 | [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes, starting with the device check (Calibrate Audio with the dev checks). Tried so far: Calibrate Audio and part of a dev run on the user's PC, and the looks from cloud screenshots; the rest not yet |
 | [calibrate-audio.md](calibrate-audio.md) | Calibrate Audio, which measures the round trip through an earcup held to the mic, and the dev checks that settle the checklist's device items: what they do, what each verdict and check means, which numbers to send back, design, tests, decisions, open points, the user's runs |
+| [windows-shards.md](windows-shards.md) | Plan, built and proven on Linux, left to try on Windows: sharded test runs from Git Bash on Windows, each shard kept apart by an application name of its own |
