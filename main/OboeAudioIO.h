@@ -14,6 +14,7 @@
 #ifndef TONY_OBOE_AUDIO_IO_H
 #define TONY_OBOE_AUDIO_IO_H
 
+#include "AudioRoute.h"
 #include "StreamLatency.h"
 
 #include <bqaudioio/SystemAudioIO.h>
@@ -54,12 +55,18 @@ class AudioStream;
  * by what the device did last. Timestamps are read on the calling
  * thread, never in the callback.
  *
+ * The route, the devices Android opened (the speaker and the phone's
+ * microphone, a headset, Bluetooth) and how their streams were opened,
+ * is looked up once, when they are, and logged: a round trip measured
+ * through them is kept for that route (LatencyCalibration).
+ *
  * A stream that fails (a device disconnected: headphones plugged in
  * or out) is stopped by Oboe; hasFailed() then says so, and the owner
  * must delete this and open another. Every method but the callback's
  * is for the GUI thread, which is the only one that logs, to stderr.
  */
-class OboeAudioIO : public breakfastquay::SystemAudioIO
+class OboeAudioIO : public breakfastquay::SystemAudioIO,
+                    public AudioRouteReporter
 {
 public:
     /**
@@ -87,6 +94,11 @@ public:
 
     /// Whether a stream has failed, so that this must be replaced
     bool hasFailed() const;
+
+    /// The devices the streams were opened on, as Android's AudioManager
+    /// names them, and how the streams were opened (the audio API, MMAP,
+    /// sharing and performance mode, burst, buffer, input preset)
+    AudioRoute::Route getAudioRoute() const override { return m_route; }
 
 private:
     class Engine;
@@ -117,6 +129,7 @@ private:
     bool m_startFailed;
     StreamLatency::Estimate m_latency;
     int m_outputXRuns;
+    AudioRoute::Route m_route;
 
     // The callback: the input first, then the output
     friend class Engine;
@@ -128,6 +141,7 @@ private:
     bool measureLatency(StreamLatency::Estimate &latency) const;
     void report(StreamLatency::Estimate latency, bool withInput);
     void logStream(std::string name, oboe::AudioStream *stream) const;
+    void findRoute();
 
     OboeAudioIO(const OboeAudioIO &) = delete;
     OboeAudioIO &operator=(const OboeAudioIO &) = delete;

@@ -55,6 +55,13 @@ public:
 
     FakeAudioIO *fake() { return dynamic_cast<FakeAudioIO *>(m_audioIO); }
 
+    // The route the fake reports from the next time it is opened, and the
+    // device opened again, as a phone's is when its route changes
+    void setFakeRoute(const AudioRoute::Route &route) {
+        m_fakeConfig.route = route;
+    }
+    void doRecreateAudioIO() { recreateAudioIO(); }
+
     void doRecord() { record(); }
     void doPlay() { play(); } // and again to stop
     void doAnalyseNow() { analyseNow(); }

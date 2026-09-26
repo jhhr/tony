@@ -16,7 +16,11 @@
 
 #include "MainWindow.h"
 
+#include <QClipboard>
+#include <QCoreApplication>
 #include <QDate>
+#include <QDateTime>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLocale>
@@ -29,6 +33,10 @@
 
 #ifdef TONY_DEV_CHECKS
 #include <QCheckBox>
+#endif
+
+#ifdef Q_OS_ANDROID
+#include <QPointer>
 #endif
 
 #include <algorithm>
@@ -160,8 +168,14 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     m_startButton = new QPushButton(tr("Start"));
     m_cancelButton = new QPushButton(tr("Cancel"));
     m_closeButton = new QPushButton(tr("Close"));
+    m_copyButton = new QPushButton(tr("Copy"));
     buttons->addWidget(m_useButton);
     buttons->addStretch(1);
+    buttons->addWidget(m_copyButton);
+#ifdef Q_OS_ANDROID
+    m_saveButton = new QPushButton(tr("Save Report..."));
+    buttons->addWidget(m_saveButton);
+#endif
     buttons->addWidget(m_againButton);
     buttons->addWidget(m_startButton);
     buttons->addWidget(m_cancelButton);
@@ -178,6 +192,12 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
             this, &CalibrateAudioDialog::useLatency);
     connect(m_closeButton, &QPushButton::clicked,
             this, &CalibrateAudioDialog::reject);
+    connect(m_copyButton, &QPushButton::clicked,
+            this, &CalibrateAudioDialog::copyReport);
+#ifdef Q_OS_ANDROID
+    connect(m_saveButton, &QPushButton::clicked,
+            this, &CalibrateAudioDialog::saveReport);
+#endif
 
     // Direct: the runner's signals carry types with no metatype
     connect(m_runner, &AudioCheckRunner::progress,
@@ -363,6 +383,20 @@ CalibrateAudioDialog::startCheck()
 {
     if (m_running) return;
 
+#ifdef Q_OS_ANDROID
+    // The takes need the microphone, which Android asks the user for, and
+    // answers later: the check starts then, if this is still on show.
+    // A take started without it would ask, and start once it is given,
+    // long after the check had given up (AudioCheckRunner)
+    if (!m_window->microphoneAllowed()) {
+        QPointer<CalibrateAudioDialog> dialog(this);
+        m_window->askForMicrophone([dialog]() {
+            if (dialog && dialog->isVisible()) dialog->startCheck();
+        });
+        return;
+    }
+#endif
+
     m_result = AudioCheckResult();
     m_latencyKept = false;
     m_expectedSeconds = expectedSeconds(m_plan);
@@ -429,6 +463,36 @@ CalibrateAudioDialog::useLatency()
     m_resultText->setText(resultHtml());
     showPage(Page::Result);
 }
+
+QString
+CalibrateAudioDialog::reportText() const
+{
+    QTextDocument document;
+    document.setHtml(resultHtml());
+    return tr("%1, Calibrate Audio, %2")
+        .arg(QCoreApplication::applicationName(),
+             QDateTime::currentDateTime().toString(Qt::ISODate)) +
+        "\n\n" + document.toPlainText() + "\n";
+}
+
+void
+CalibrateAudioDialog::copyReport()
+{
+    QGuiApplication::clipboard()->setText(reportText());
+    m_copyButton->setText(tr("Copied"));
+}
+
+#ifdef Q_OS_ANDROID
+void
+CalibrateAudioDialog::saveReport()
+{
+    m_window->saveTextThroughPicker
+        (this, reportText().toUtf8(), tr("Save the report"),
+         QString("tony-calibration-%1.txt")
+         .arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss")),
+         tr("report"));
+}
+#endif
 
 void
 CalibrateAudioDialog::showResult(const AudioCheckResult &result)
@@ -536,6 +600,11 @@ CalibrateAudioDialog::showPage(Page page)
     m_cancelButton->setVisible(page == Page::Progress);
     m_againButton->setVisible(page == Page::Result);
     m_closeButton->setVisible(page != Page::Progress);
+    m_copyButton->setVisible(page == Page::Result);
+    m_copyButton->setText(tr("Copy"));
+#ifdef Q_OS_ANDROID
+    m_saveButton->setVisible(page == Page::Result);
+#endif
     m_useButton->setVisible(page == Page::Result &&
                             m_result.calibrationUsable());
     m_useButton->setEnabled(!m_latencyKept);
@@ -547,30 +616,78 @@ CalibrateAudioDialog::showPage(Page page)
 QString
 CalibrateAudioDialog::instructionsHtml() const
 {
-    QSettings settings;
-    const LatencyCalibration::Key devices =
-        LatencyCalibration::currentKey(settings, 0);
+    // The devices the Preferences name, or on a phone the route it has
+    // open: the phone chooses it, and a figure is kept for each route
+    const LatencyCalibration::Key devices = m_window->latencyKey(0);
+    const AudioRoute::Route route = m_window->audioRoute();
+#ifdef Q_OS_ANDROID
+    // Before a file is opened no device is, and the route is not known
+    const bool phone = true;
+#else
+    const bool phone = (route.driver != "");
+#endif
 
     // In fives of seconds: the analyses' share is a guess
     const int seconds = 5 * int(std::ceil(expectedSeconds(m_plan) / 5.0));
 
     QString html;
-    html += paragraph
-        (tr("Tony plays short chirps and records them, to measure how late "
-            "recordings arrive through your devices. What it measures is "
-            "used to place your takes on the reference."));
-    html += paragraph(bold(tr("Before you start:")));
-    html += "<ul><li>" +
-        tr("Hold one earcup of your headphones against the microphone, "
-           "%1: the chirps are sharp.").arg(bold(tr("off your ears"))) +
-        "</li><li>" +
-        tr("Set a moderate volume, and keep the room quiet.") +
-        "</li></ul>";
+    if (!phone) {
+        html += paragraph
+            (tr("Tony plays short chirps and records them, to measure how "
+                "late recordings arrive through your devices. What it "
+                "measures is used to place your takes on the reference."));
+        html += paragraph(bold(tr("Before you start:")));
+        html += "<ul><li>" +
+            tr("Hold one earcup of your headphones against the microphone, "
+               "%1: the chirps are sharp.").arg(bold(tr("off your ears"))) +
+            "</li><li>" +
+            tr("Set a moderate volume, and keep the room quiet.") +
+            "</li></ul>";
+    } else {
+        html += paragraph
+            (tr("Tony plays short chirps and records them, to measure how "
+                "late recordings arrive through the phone's output and "
+                "input below. What it measures is used to place your takes "
+                "on the reference, whenever the phone has these two."));
+        html += paragraph(bold(tr("Before you start:")));
+        html += "<ul><li>" +
+            tr("Plug in what you will sing with first: each output and "
+               "input is calibrated on its own, and a Bluetooth headset "
+               "is much later than the phone's speaker.") +
+            "</li><li>" +
+            tr("With wired headphones, hold one earcup against the phone's "
+               "microphone (usually at its bottom edge), %1: the chirps "
+               "are sharp.").arg(bold(tr("off your ears"))) +
+            "</li><li>" +
+            tr("With nothing plugged in, the phone's own speaker and "
+               "microphone make the loop: lay it down in a quiet room.") +
+            "</li><li>" +
+            tr("A headset with a microphone of its own records from that "
+               "microphone: hold the earcup against it.") +
+            "</li><li>" +
+            tr("Set a moderate volume, and keep the room quiet.") +
+            "</li></ul>";
+    }
+    // Open for playback only, a phone says which input it records from
+    // only when it records: the one calibrated with this output before,
+    // if there is one, else the phone's choice.  With no device open, it
+    // says nothing yet
+    QString output = deviceName(devices.playbackDevice);
+    QString input = deviceName(devices.recordDevice);
+    if (phone && route.driver == "") {
+        output = tr("the phone chooses when the check starts");
+        input = output;
+    } else if (phone && !route.hasInput) {
+        input = (devices.recordDevice != "" ?
+                 tr("%1, as when it was calibrated; the phone chooses when "
+                    "recording starts").arg(devices.recordDevice) :
+                 tr("the phone chooses when recording starts"));
+    }
     html += "<table cellspacing=\"4\">";
     html += "<tr><td>" + tr("Output:") + "</td><td>" +
-        deviceName(devices.playbackDevice).toHtmlEscaped() + "</td></tr>";
+        output.toHtmlEscaped() + "</td></tr>";
     html += "<tr><td>" + tr("Input:") + "</td><td>" +
-        deviceName(devices.recordDevice).toHtmlEscaped() + "</td></tr>";
+        input.toHtmlEscaped() + "</td></tr>";
     html += "<tr><td>" + tr("Latency in use:") + "</td><td>" +
         describeLatency(m_window->latencyInUse()).toHtmlEscaped() +
         "</td></tr>";
@@ -605,6 +722,9 @@ CalibrateAudioDialog::calibrationHtml() const
 
     const LatencyCheck::TakeSummary &s = r.summary;
     const double driver = r.reportedOutputLatency + r.reportedInputLatency;
+
+    // Recorded through a route a phone reported: its advice is a phone's
+    const bool phone = (r.route.driver != "");
     const QString measured = milliseconds(r.calibratedRoundTrip);
     const QString timing = milliseconds(timingSpread(s));
 
@@ -622,6 +742,20 @@ CalibrateAudioDialog::calibrationHtml() const
         html += paragraph(bold(tr("Tony could not hear the test sounds: "
                                   "it found %1 of %2.")
                                .arg(s.found).arg(s.judged)));
+        if (phone) {
+            html += "<ul><li>" +
+                tr("Turn the volume up, and hold the earcup right against "
+                   "the phone's microphone, or with nothing plugged in, "
+                   "lay the phone down in a quiet room.") + "</li><li>" +
+                tr("Check that %1 may use the microphone (the phone's "
+                   "Settings, Apps, %1, Permissions).")
+                .arg(QCoreApplication::applicationName()) + "</li><li>" +
+                tr("The phone may be cancelling echo or suppressing noise "
+                   "on the microphone, which takes out what it plays "
+                   "itself, although Tony asks for the microphone "
+                   "unprocessed.") + "</li></ul>";
+            break;
+        }
         html += "<ul><li>" +
             tr("Turn the volume up, and hold the earcup right against "
                "the microphone.") + "</li><li>" +
@@ -646,6 +780,14 @@ CalibrateAudioDialog::calibrationHtml() const
                                   "check went on, by %1 dB.")
                                .arg(QLocale().toString
                                     (s.fadingDb, 'f', 0))));
+        if (phone) {
+            html += paragraph
+                (tr("Something on the phone is filtering the microphone, "
+                    "such as echo cancellation or noise suppression, "
+                    "although Tony asks for the microphone unprocessed. "
+                    "Check again; if it fades again, send the report."));
+            break;
+        }
         html += paragraph
             (tr("Something is filtering the microphone, such as echo "
                 "cancellation or audio enhancements. In Windows, turn "
@@ -749,8 +891,13 @@ CalibrateAudioDialog::calibrationHtml() const
                 tr("none heard"));
     html += row(tr("Devices:"),
                 tr("output %1; input %2")
-                .arg(deviceName(r.key.playbackDevice))
-                .arg(deviceName(r.key.recordDevice)));
+                .arg(deviceName(r.key.playbackDevice),
+                     deviceName(r.key.recordDevice)));
+    // What a figure kept for the route is checked against
+    if (phone) {
+        html += row(tr("Streams:"), tr("output %1; input %2")
+                    .arg(r.route.outputStreams, r.route.inputStreams));
+    }
     html += "</table>";
     return html;
 }

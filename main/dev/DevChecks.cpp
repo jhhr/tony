@@ -490,10 +490,8 @@ DevChecks::start(const Options &options)
     m_sessionPath = QDir(scratch).filePath(kSessionFileName);
     m_saved = false;
     m_startedAt = QDateTime::currentDateTime();
-    {
-        QSettings settings;
-        m_devices = LatencyCalibration::currentKey(settings, 0);
-    }
+    // As the Preferences name them, or the route a phone has open
+    m_devices = m_window->latencyKey(0);
 
     m_layout = LatencyCheck::devLayout();
     m_observedPunchIn = 0;

@@ -1186,6 +1186,7 @@ tony_entry_files = [
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
   'main/AndroidFiles.cpp',
+  'main/AudioRoute.cpp',
   'main/Coverage.cpp',
   'main/DecodedPcm.cpp',
   'main/LogFile.cpp',

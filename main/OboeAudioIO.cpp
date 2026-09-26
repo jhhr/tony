@@ -21,6 +21,10 @@
 
 #include <oboe/Oboe.h>
 
+#include <QJniEnvironment>
+#include <QJniObject>
+#include <QtCore/qcoreapplication_platform.h>
+
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -55,6 +59,84 @@ monotonicNanos()
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return int64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec;
+}
+
+// How a stream was opened, as the log has it and as a measured round
+// trip's fingerprint keeps it: everything its latency depends on
+std::string
+describeStream(oboe::AudioStream *stream)
+{
+    // Only an AAudio stream can be asked about MMAP
+    bool mmap = (stream->getAudioApi() == oboe::AudioApi::AAudio &&
+                 oboe::OboeExtensions::isMMapUsed(stream));
+    std::ostringstream os;
+    os << oboe::convertToText(stream->getAudioApi())
+       << (mmap ? " (MMAP)" : "")
+       << ", " << stream->getSampleRate() << " Hz, "
+       << stream->getChannelCount() << " channel(s), "
+       << oboe::convertToText(stream->getFormat()) << ", "
+       << oboe::convertToText(stream->getPerformanceMode()) << ", "
+       << oboe::convertToText(stream->getSharingMode())
+       << ", burst " << stream->getFramesPerBurst()
+       << ", buffer " << stream->getBufferSizeInFrames()
+       << " of " << stream->getBufferCapacityInFrames() << " frames";
+    if (stream->getDirection() == oboe::Direction::Input) {
+        os << ", preset " << oboe::convertToText(stream->getInputPreset());
+    }
+    return os.str();
+}
+
+// The device AAudio opened a stream on, as Android's AudioManager lists
+// it. Only the id if it is not listed, or the stream cannot say
+// (OpenSL ES: 0). On the GUI thread, as QJniObject clears and logs any
+// exception a call throws
+AudioRoute::Device
+lookUpDevice(int id, bool input)
+{
+    AudioRoute::Device device;
+    device.id = id;
+    if (id <= 0) return device;
+
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid()) return device;
+    QJniObject manager = context.callObjectMethod
+        ("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;",
+         QJniObject::fromString("audio").object<jstring>());
+    if (!manager.isValid()) return device;
+
+    // AudioManager.GET_DEVICES_INPUTS and GET_DEVICES_OUTPUTS
+    QJniObject devices = manager.callObjectMethod
+        ("getDevices", "(I)[Landroid/media/AudioDeviceInfo;",
+         jint(input ? 1 : 2));
+    if (!devices.isValid()) return device;
+
+    QJniEnvironment env;
+    jobjectArray array = devices.object<jobjectArray>();
+    const jsize count = env->GetArrayLength(array);
+    for (jsize i = 0; i < count; ++i) {
+        QJniObject info = QJniObject::fromLocalRef
+            (env->GetObjectArrayElement(array, i));
+        if (!info.isValid()) continue;
+        if (info.callMethod<jint>("getId", "()I") != id) continue;
+        device.type = info.callMethod<jint>("getType", "()I");
+        QJniObject name = info.callObjectMethod
+            ("getProductName", "()Ljava/lang/CharSequence;");
+        if (name.isValid()) {
+            device.productName = name.callObjectMethod
+                ("toString", "()Ljava/lang/String;").toString();
+        }
+        break;
+    }
+    return device;
+}
+
+std::string
+describeDevice(const AudioRoute::Device &device)
+{
+    std::ostringstream os;
+    os << AudioRoute::deviceName(device).toStdString()
+       << ", device " << device.id << ", type " << device.type;
+    return os.str();
 }
 
 std::string
@@ -284,6 +366,7 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
 
     logStream("output", m_output.get());
     if (m_input) logStream("input", m_input.get());
+    findRoute();
 
     // Run the streams until they can say what their latency is, so that
     // the first take is compensated by a measurement too, and leave
@@ -552,22 +635,33 @@ OboeAudioIO::report(StreamLatency::Estimate latency, bool withInput)
 void
 OboeAudioIO::logStream(std::string name, oboe::AudioStream *stream) const
 {
-    // Only an AAudio stream can be asked about MMAP
-    bool mmap = (stream->getAudioApi() == oboe::AudioApi::AAudio &&
-                 oboe::OboeExtensions::isMMapUsed(stream));
-    cerr << "OboeAudioIO: " << name << ": "
-         << oboe::convertToText(stream->getAudioApi())
-         << (mmap ? " (MMAP)" : "")
-         << ", " << stream->getSampleRate() << " Hz, "
-         << stream->getChannelCount() << " channel(s), "
-         << oboe::convertToText(stream->getFormat()) << ", "
-         << oboe::convertToText(stream->getPerformanceMode()) << ", "
-         << oboe::convertToText(stream->getSharingMode())
-         << ", burst " << stream->getFramesPerBurst()
-         << ", buffer " << stream->getBufferSizeInFrames()
-         << " of " << stream->getBufferCapacityInFrames() << " frames";
-    if (stream->getDirection() == oboe::Direction::Input) {
-        cerr << ", preset " << oboe::convertToText(stream->getInputPreset());
+    cerr << "OboeAudioIO: " << name << ": " << describeStream(stream) << endl;
+}
+
+void
+OboeAudioIO::findRoute()
+{
+    // The devices AAudio chose: for an unspecified device, those of the
+    // route Android has now, which is what a measured round trip belongs
+    // to. Their ids change when a device is plugged in again, so the
+    // route is named by their types and product names
+    m_route = AudioRoute::Route();
+    m_route.driver = "oboe";
+    m_route.rate = m_rate;
+    m_route.output = lookUpDevice(m_output->getDeviceId(), false);
+    m_route.outputStreams = QString::fromStdString
+        (describeStream(m_output.get()));
+    if (m_input) {
+        m_route.hasInput = true;
+        m_route.input = lookUpDevice(m_input->getDeviceId(), true);
+        m_route.inputStreams = QString::fromStdString
+            (describeStream(m_input.get()));
+    }
+    cerr << "OboeAudioIO: route: output " << describeDevice(m_route.output);
+    if (m_input) {
+        cerr << "; input " << describeDevice(m_route.input);
+    } else {
+        cerr << "; no input";
     }
     cerr << endl;
 }

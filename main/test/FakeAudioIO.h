@@ -23,6 +23,8 @@
 // application computes a known compensation, and the input can be
 // made to arrive late by exactly that much.
 
+#include "../AudioRoute.h"
+
 #include <bqaudioio/SystemAudioIO.h>
 #include <bqaudioio/ApplicationPlaybackSource.h>
 #include <bqaudioio/ApplicationRecordTarget.h>
@@ -36,7 +38,8 @@
 #include <thread>
 #include <vector>
 
-class FakeAudioIO : public breakfastquay::SystemAudioIO
+class FakeAudioIO : public breakfastquay::SystemAudioIO,
+                    public AudioRouteReporter
 {
 public:
     struct Config {
@@ -48,6 +51,16 @@ public:
         // input really has is inputDelay
         int recordLatency = 0;
         int playbackLatency = 0;
+
+        // Added to the reported record latency at every resume after the
+        // first: a device that measures its latencies at each start, as
+        // Oboe does from its timestamps, reports others every time. The
+        // input's real delay stays inputDelay
+        int recordLatencyStep = 0;
+
+        // The route reported to the application, as OboeAudioIO reports
+        // the one Android opened; with no driver, none, as PortAudioIO
+        AudioRoute::Route route;
 
         // Mono input, delivered once and followed by silence. The
         // input clock restarts whenever the device is resumed
@@ -119,6 +132,7 @@ public:
         m_target->setSystemRecordSampleRate(m_config.sampleRate);
         m_target->setSystemRecordChannelCount(m_config.channels);
         m_target->setSystemRecordLatency(m_config.recordLatency);
+        m_reportedRecordLatency = m_config.recordLatency;
 
         m_thread = std::thread([this]() { run(); });
     }
@@ -137,6 +151,8 @@ public:
 
     void suppressRecordSide(bool) override { }
 
+    AudioRoute::Route getAudioRoute() const override { return m_config.route; }
+
     // No callback is running, or will start, once this returns
     void suspend() override {
         std::lock_guard<std::mutex> guard(m_mutex);
@@ -152,6 +168,11 @@ public:
         m_sinceResume = 0;
         m_framesBeforePlayStart = -1;
         ++m_resumeCount;
+        // No callback runs while suspended, and none has started yet
+        if (m_config.recordLatencyStep != 0 && m_resumeCount > 1) {
+            m_reportedRecordLatency += m_config.recordLatencyStep;
+            m_target->setSystemRecordLatency(m_reportedRecordLatency);
+        }
     }
 
     bool isSuspended() const {
@@ -201,6 +222,7 @@ private:
     long m_sinceResume;
     long m_framesBeforePlayStart;
     int m_resumeCount;
+    int m_reportedRecordLatency = 0;
     std::vector<float> m_captured;
 
     void run() {

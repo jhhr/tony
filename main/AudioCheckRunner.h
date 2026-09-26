@@ -65,11 +65,17 @@ struct AudioCheckResult
     double calibratedRoundTrip;
 
     /// What the figure is kept under (MainWindow::storeMeasuredLatency()):
-    /// the devices as the Preferences named them when the run started,
-    /// and the rate the takes were recorded at.  Not the devices named
+    /// the devices as the Preferences named them when the run started
+    /// (MainWindow::latencyKey()), or the route the first take was
+    /// recorded through, and the rate the takes were recorded at.  Not the devices named
     /// when the figure is kept: the result is on show for as long as the
     /// user likes, and another device may have been chosen by then
     LatencyCalibration::Key key;
+
+    /// The route the first punch-in was recorded through, for a device
+    /// that reports one (TakeLatency::route): the key names it, and its
+    /// streams are the figure's fingerprint.  Its driver is "" otherwise
+    AudioRoute::Route route;
 
     /// Whether calibratedRoundTrip means anything: the run was judged
     /// Ok or Unsteady

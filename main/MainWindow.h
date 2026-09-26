@@ -33,6 +33,7 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <functional>
 
 #include "data/model/SparseTimeValueModel.h"
 
@@ -132,9 +133,37 @@ public:
     // before the take starts: the device's rate is known only once it
     // has recorded, so until a take has been recorded on these devices
     // this assumes the session's rate, the only one a usable check
-    // stores a figure at.  The reported pair is 0 until the device is
-    // open
+    // stores a figure at (a device that reports its route says its rate
+    // once it is open).  The reported pair is 0 until the device is open
     LatencyCalibration::InUse latencyInUse() const;
+
+    // The devices a measured round trip is kept for, at the given rate:
+    // the route the open device reports, if it reports one (OboeAudioIO
+    // on a phone), else the devices the Preferences name.  A device open
+    // for playback only names the input a figure is kept with for its
+    // output, if only one is (LatencyCalibration::onlyRecordDevice())
+    LatencyCalibration::Key latencyKey(sv::sv_samplerate_t rate) const;
+
+    // The route the open device reports; its driver is "" if it reports
+    // none, or there is no device open
+    AudioRoute::Route audioRoute() const;
+
+#ifdef Q_OS_ANDROID
+    // The microphone is asked for when it is first needed: Record starts
+    // the take once it is given, Calibrate Audio the check.  granted is
+    // called then, and not if it is refused, which is said in a box
+    bool microphoneAllowed() const;
+    void askForMicrophone(std::function<void()> granted);
+
+    // Text saved through the save picker, as Help > Save Log... and
+    // Calibrate Audio's Save Report... do: a new document the picker
+    // makes, written and closed through its provider, with what went
+    // wrong, and what the provider says it holds, said over parent.
+    // what names the text in the messages ("log")
+    void saveTextThroughPicker(QWidget *parent, const QByteArray &text,
+                               QString title, QString suggestedName,
+                               QString what);
+#endif
 
 signals:
     void canExportPitchTrack(bool);
@@ -1097,15 +1126,21 @@ protected:
     // file is read at before there is one
     sv::sv_samplerate_t sessionRate() const;
 
-    // The rate the next take is expected to record at: the last one's,
-    // or before there is one, the session's
+    // The rate the next take is expected to record at: the rate of a
+    // device that reports its route; else the last take's, or before
+    // there is one, the session's
     sv::sv_samplerate_t expectedRecordingRate() const;
 
+    // The route of the open device, if it is an AudioRouteReporter and
+    // reports one; false, with route cleared, if not
+    bool deviceRoute(AudioRoute::Route &route) const;
+
     // The round trip for a take recorded at the given rate, in seconds,
-    // and where it came from: a stored figure for these devices and this
-    // rate, unless the latencies the device reports have changed since
-    // it was measured; otherwise the reported pair, each converted from
-    // the frames it counts
+    // and where it came from: a stored figure for these devices (or this
+    // route: latencyKey()) and this rate, unless the latencies the device
+    // reports, or for a route how it opened its streams, have changed
+    // since it was measured; otherwise the reported pair, each converted
+    // from the frames it counts
     LatencyCalibration::InUse roundTripAt(sv::sv_samplerate_t recordingRate) const;
 
     void refineRecordingLatency();
@@ -1203,10 +1238,6 @@ protected:
     // Android backend. Its input only once the microphone may be used
     void createAudioIO() override;
 
-    // The microphone is asked for when Record is first pressed, and the
-    // take is started once it is given
-    bool microphoneAllowed() const;
-    void askForMicrophone();
 
     // A device that goes away (headphones in or out) leaves the device
     // failed: looked for on a timer, and the device opened afresh

@@ -202,6 +202,18 @@ changed and the round trip with them, and takes go back to the reported pair unt
 check is run again. A stale figure is not deleted: it applies again if the driver goes back
 to its old buffers.
 
+**On Android** there are no device settings: `OboeAudioIO` opens whatever route the phone
+has, and reports it (`AudioRoute`: each device's type and product name from
+`AudioManager`, and how each stream was opened). The key is then `oboe` and the two
+devices' type and product name, not their ids, which a headset changes each time it is
+plugged in; so the speaker, a wired headset and a Bluetooth one each keep a figure. Before
+the first take only the output is open, and the key takes the one input stored for it, if
+there is exactly one. Oboe's latencies come from timestamps and move by several ms between
+starts, so on a route a figure is stale when a stream it describes was **opened
+otherwise** (API, MMAP, sharing and performance mode, burst, buffer, capacity, input
+preset), not when the reported pair moves. For the same reason the check counts each
+punch-in as placed with the first one's round trip (`LatencyCheck::PunchIn::placedWith`).
+
 At every take, `MainWindow::roundTripAt()` gives the stored figure for the devices and the
 recording's rate if there is one and it is not stale, else the reported sum, each reported
 latency converted to seconds at the rate it is counted in. Then it is turned into frames of

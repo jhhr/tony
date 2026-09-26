@@ -446,6 +446,17 @@ private slots:
         }
         QVERIFY(haveSwitch);
 
+        // Playback > Calibrate Audio among them, on show: the device menus
+        // are hidden, not the check
+        QAction *calibrate = nullptr;
+        for (QAction *action: menus) {
+            for (QAction *item: action->menu()->actions()) {
+                if (item->text() == "&Calibrate Audio...") calibrate = item;
+            }
+        }
+        QVERIFY(calibrate);
+        QVERIFY(calibrate->isVisible());
+
         // A tap opens it (and a timer closes it again)
         bool checked = false, shown = false;
         QTimer timer;

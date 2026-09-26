@@ -1067,6 +1067,54 @@ private slots:
         QVERIFY(LatencyCheck::punchInsFor(layout, 0, 2).empty());
     }
 
+    // Punch-ins placed with different round trips, as on a phone, whose
+    // reported latencies move from one stream start to the next (Oboe
+    // measures them each time), through a path whose round trip stays
+    // 0.12 s. Each lands late by what its round trip fell short: 20, 12,
+    // 17 and 9 ms. Counted as if placed with the first one's, they agree:
+    // Ok, and the round trip calibrated from the first one's is the
+    // path's. Not told how they were placed, the placing looks like the
+    // device moving: 11 ms apart, Unsteady, and 5.5 ms short
+    void judge_punch_ins_placed_differently() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const samples_t reference = LatencyCheck::generate(layout);
+        const double roundTrip = 0.120;
+        const double used[] = { 0.100, 0.108, 0.103, 0.111 };
+
+        punchins_t punchIns = fourPunchIns();
+        std::vector<frame_t> shifts;
+        for (int p = 0; p < 4; ++p) {
+            shifts.push_back(framesOf(roundTrip - used[p]));
+        }
+        const samples_t take = spliced(reference, kRate, punchIns, shifts);
+
+        LatencyCheck::TakeSummary s = judge(layout, take, kRate, punchIns);
+        QCOMPARE(s.found, 7);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Unsteady,
+                 describe(s).constData());
+        QVERIFY2(std::fabs(LatencyCheck::calibratedRoundTrip
+                           (used[0], s.medianOffset) - roundTrip) > 0.005,
+                 describe(s).constData());
+
+        for (int p = 0; p < 4; ++p) punchIns[p].placedWith = used[p];
+        s = judge(layout, take, kRate, punchIns);
+        QCOMPARE(s.found, 7);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Ok, describe(s).constData());
+        QVERIFY2(s.spread < 1.5 / kRate && s.slopeResidual < 1.5 / kRate,
+                 describe(s).constData());
+        QVERIFY2(std::fabs(LatencyCheck::calibratedRoundTrip
+                           (used[0], s.medianOffset) - roundTrip) < 1.0 / kRate,
+                 describe(s).constData());
+
+        // Where each landed is kept as it was
+        for (int p = 0; p < 4; ++p) {
+            QVERIFY2(std::fabs(s.punchIns[p].medianOffset -
+                               shifts[p] / kRate) < 1e-9,
+                     describe(s).constData());
+            QCOMPARE(s.punchIns[p].range.placedWith, used[p]);
+        }
+    }
+
     // The calibration's arithmetic. A take that landed late was placed
     // with too small a round trip, and the new one is larger by the
     // offset; early, smaller. From takes placed with 0.2 and 0.31 s

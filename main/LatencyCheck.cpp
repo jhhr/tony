@@ -499,13 +499,17 @@ LatencyCheck::judgeTake(const Layout &layout,
 
     // Across punch-ins: each one that found anything counts once, at
     // its median, since what moves from one to the next is the stream
-    // start, which every punch-in makes once
+    // start, which every punch-in makes once.  A punch-in placed with a
+    // longer round trip than the first lands that much earlier, which is
+    // no movement of the device's
+    const double firstPlaced =
+        punchIns.empty() ? 0.0 : punchIns.front().placedWith;
     vector<double> positions, medians;
     double within = 0.0;
     for (const PunchInResult &r : summary.punchIns) {
         if (r.found == 0) continue;
         positions.push_back(r.range.start);
-        medians.push_back(r.medianOffset);
+        medians.push_back(r.medianOffset + (r.range.placedWith - firstPlaced));
         within = std::max(within, r.spread);
     }
     summary.medianOffset = median(medians);

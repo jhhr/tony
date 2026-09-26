@@ -79,6 +79,10 @@ public:
     /// Whether Use this latency is offered, and not yet pressed
     bool canUseLatency() const;
 
+    /// The result as plain text, under a line saying when: what Copy
+    /// puts on the clipboard and Save Report... saves
+    QString reportText() const;
+
     /// What a check started here records: the calibration
     /// (AudioCheckRunner::calibrationPlan()) unless set otherwise, as
     /// the tests set a shorter one
@@ -119,6 +123,16 @@ public slots:
     /// Keep the round trip the check measured, for the devices it ran on
     void useLatency();
 
+    /// The result page's Copy: reportText() on the clipboard, which on a
+    /// phone is how selected text would be copied, and cannot
+    void copyReport();
+
+#ifdef Q_OS_ANDROID
+    /// The result page's Save Report...: reportText() through the save
+    /// picker, as Help > Save Log... saves the log
+    void saveReport();
+#endif
+
     /// The result page for this result
     void showResult(const AudioCheckResult &result);
 
@@ -154,6 +168,10 @@ private:
     QPushButton *m_useButton;
     QPushButton *m_againButton;
     QPushButton *m_closeButton;
+    QPushButton *m_copyButton;
+#ifdef Q_OS_ANDROID
+    QPushButton *m_saveButton;
+#endif
 
     void runnerProgress(const AudioCheckRunner::Progress &progress);
     void runnerFinished(const AudioCheckResult &result);

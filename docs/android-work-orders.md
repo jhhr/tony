@@ -183,7 +183,8 @@ builds happen in the container.)
 - A4c — Vertical zoom keeps the pitch in view. Done.
 - (Lead, 2026-09-26: lyrics at 65 % on Android, svgui `setLyricsTextScale()`; `feat/wasapi`
   merged in for Calibrate Audio at 48 kHz.)
-- A12 — Calibrate Audio on the phone.
+- A12 — Calibrate Audio on the phone. Done (the dialog's size and layout left to A12c, by the
+  lead's change of scope).
 - A12b — The dev run on the phone.
 - A8 — Documentation pass.
 
@@ -1067,3 +1068,27 @@ fingers when nothing is on show; the singing counted); narrows/widens/diagonal n
 pitch. Pitch checks allow for the whole-Hz range (~3 px at a bottom near 40 Hz).
 Tests seen failing: anchor off (5); no pull (3 app, 2 core); singing not gathered; dormancy
 ignored (2). Left open: not on a phone; no follow in playback, no "fit the pitch" action.
+
+### Phase A12 — 2026-09-26
+Built: `AudioRoute` (core): a route's devices (AudioDeviceInfo id, type, product name), its
+rate and how each stream opened; `AudioRouteReporter`, which `OboeAudioIO` (JNI:
+`AudioManager.getDevices()`, matched by `getDeviceId()`) and the tests' fake implement.
+`LatencyCalibration`: `routeKey()` ("oboe", type and product name, never the id: a headset
+gets a new one at each plug-in), `onlyRecordDevice()` (a phone is output-only until its first
+take), a figure's `outputStreams`/`inputStreams`. `MainWindow::latencyKey()`,
+`audioRoute()`; the runner keys a result by its first take's route (`TakeLatency::route`).
+Staleness on a route: stale only if a stream it describes opened otherwise (API, MMAP,
+sharing, mode, burst, buffer and capacity, preset); reported latencies ignored (they moved
+4 ms take to take). Desktop: key and 1 ms rule as they were. `PunchIn::placedWith`:
+`judgeTake()` counts each punch-in as if placed with the first's round trip; Oboe's reported
+pair moves per start, which made the spread and the calibrated figure wrong. Dialog: Copy
+(all platforms), Save Report... (Android, `saveTextThroughPicker()`, Save Log's code), the
+route and the phone's loopback on the instructions, a phone's advice for NoSignal/Fading, a
+Streams row; Start asks for the microphone first (the runner refuses a take without it: the
+permission's answer would otherwise start a take of the user's after the check had ended).
+Not changed: the dialog's size and layout (A12c), the timeouts (26 s reference ~1.3 s here,
+a punch-in ~0.6 s: 60 s and 30 s leave 5-10x for a slower phone).
+Tests seen failing: placement not counted (core Unsteady, app Unsteady 10 ms); streams not
+passed (a route's figure unused once reported latency moved).
+For A8: calibrate-audio.md §5 (route key, streams rule), recording.md "Latency", §3 judging.
+Left open: none of it on a phone; which input an output-only device will open is a guess.

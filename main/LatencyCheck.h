@@ -329,8 +329,12 @@ namespace LatencyCheck
         double start;
         double end;
 
-        PunchIn() : start(0), end(0) { }
-        PunchIn(double s, double e) : start(s), end(e) { }
+        /// The round trip the punch-in was placed with, in seconds, if
+        /// known; see judgeTake()
+        double placedWith;
+
+        PunchIn() : start(0), end(0), placedWith(0) { }
+        PunchIn(double s, double e) : start(s), end(e), placedWith(0) { }
     };
 
     /// One judged event: which of the layout's, in which punch-in, and
@@ -382,7 +386,10 @@ namespace LatencyCheck
 
         /// Across punch-ins, over those with an event found: the
         /// median of their median offsets, which weighs every stream
-        /// start alike, and the largest minus the smallest of them
+        /// start alike, and the largest minus the smallest of them.
+        /// Each counted as if its punch-in had been placed with the
+        /// first one's round trip (PunchIn::placedWith): what is left is
+        /// how the device moved, not how the placing did
         double medianOffset;
         double spread;
 
@@ -426,6 +433,15 @@ namespace LatencyCheck
      * events were found, and also when none was, judged or not: there
      * is then nothing to measure.  Unsteady and Scattered look at the
      * spread across punch-ins and within each, whichever is larger.
+     *
+     * Punch-ins placed with different round trips (a device whose
+     * reported latencies move between starts, as Oboe's do) land that
+     * much apart for that reason alone: across punch-ins, each one's
+     * offset is taken as if it had been placed with the first one's
+     * round trip, so that calibratedRoundTrip() of the first one's and
+     * the median offset is the round trip the device had, and the
+     * spread and the line are its own.  Each PunchInResult keeps where
+     * its punch-in landed.
      */
     TakeSummary judgeTake(const Layout &layout,
                           const float *take, sv::sv_frame_t count,
