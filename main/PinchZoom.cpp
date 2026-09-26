@@ -101,4 +101,31 @@ centreFor(double frame, ZoomLevel z, int width, double x)
     return sv_frame_t(std::llround(frame - dx * framesPerPixel(z)));
 }
 
+AxisMovement::AxisMovement(double deadZone) :
+    m_deadZone(deadZone),
+    m_counting(false),
+    m_offset(0.0)
+{
+}
+
+double
+AxisMovement::update(double along, double across)
+{
+    if (!m_counting &&
+        std::fabs(along) > m_deadZone &&
+        2.0 * std::fabs(along) >= std::fabs(across)) {
+        m_counting = true;
+        m_offset = (along > 0.0 ? m_deadZone : -m_deadZone);
+    }
+    return m_counting ? along - m_offset : 0.0;
+}
+
+void
+AxisMovement::start(double along)
+{
+    if (m_counting) return;
+    m_counting = true;
+    m_offset = along;
+}
+
 }

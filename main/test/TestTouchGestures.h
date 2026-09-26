@@ -16,7 +16,9 @@
 
 // Tier 5: touch on the panes of the real MainWindow (TouchGestures).
 // Pinch, two fingers dragged and a long press; one finger and the
-// mouse as they were.
+// mouse as they were. Up and down, two fingers zoom and scroll the
+// analyser's frequency range, which is checked through svgui's own
+// mapping of the pane.
 //
 // The touch goes in where a platform's does (QTest::touchEvent goes
 // through QWindowSystemInterface), so Qt makes mouse events of it as it
@@ -28,14 +30,21 @@
 
 #include "../MainWindow.h"
 #include "../Analyser.h"
+#include "../AlternatePitchTrack.h"
 #include "../PinchZoom.h"
 #include "../TouchGestures.h"
+#include "../VerticalZoom.h"
 
 #include "version.h"
 
 #include "view/Pane.h"
 #include "view/PaneStack.h"
 #include "view/ViewManager.h"
+#include "layer/CoordinateScale.h"
+#include "layer/Layer.h"
+#include "layer/TimeValueLayer.h"
+#include "widgets/CommandHistory.h"
+#include "widgets/InteractiveFileFinder.h"
 #include "data/fileio/WavFileWriter.h"
 #include "data/model/RelativelyFineZoomConstraint.h"
 #include "transform/ModelTransformerFactory.h"
@@ -49,10 +58,12 @@
 #include <QMessageBox>
 #include <QPointingDevice>
 #include <QSettings>
+#include <QStyleHints>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
 
+#include <cmath>
 #include <cstdlib>
 #include <vector>
 
@@ -69,6 +80,8 @@ public:
     sv::PaneStack *paneStack() { return m_paneStack; }
     sv::ViewManager *viewManager() { return m_viewManager; }
     Analyser *analyser() { return m_analyser; }
+    AlternatePitchTrack *alternatePitch() { return m_alternatePitch; }
+    void toggleAlternatePitch() { alternatePitchToggled(); }
 
     void discardModifications() { m_documentModified = false; }
     void doCloseSession() { discardModifications(); closeSession(); }
@@ -118,6 +131,51 @@ class TestTouchGestures : public QObject
 
     sv::MultiSelection::SelectionList selections() {
         return m_window->viewManager()->getSelections();
+    }
+
+    // The analyser's frequency range, which the pane draws pitch on
+    VerticalZoom::Range frequencyRange() {
+        VerticalZoom::Range r;
+        r.log = true;
+        m_window->analyser()->getDisplayFrequencyExtents(r.min, r.max);
+        return r;
+    }
+
+    static double octaves(const VerticalZoom::Range &r) {
+        return std::log2(r.max / r.min);
+    }
+
+    static QString text(const VerticalZoom::Range &r) {
+        return QString("%1 to %2 Hz").arg(r.min).arg(r.max);
+    }
+
+    // Where the pane draws a frequency, and what it draws at y: svgui's
+    // mapping, not the one under test
+    double yForFrequency(double f) {
+        return pane()->getEffectiveVerticalExtents("Hz")
+            .getCoordForValue(pane(), f);
+    }
+
+    double frequencyAtY(double y) {
+        return pane()->getEffectiveVerticalExtents("Hz")
+            .getValueForCoord(pane(), y);
+    }
+
+    // How far the fingers go up or down before that counts
+    static int deadZone() {
+        return 2 * QGuiApplication::styleHints()->startDragDistance();
+    }
+
+    // Two fingers down together, moved in ten even steps, and lifted
+    // together
+    void twoFingers(sv::Pane *p, QPoint a0, QPoint b0, QPoint a1, QPoint b1) {
+        Touch t = touch();
+        t.press(0, a0, p).press(1, b0, p).commit();
+        for (int i = 1; i <= 10; ++i) {
+            t.move(0, a0 + (a1 - a0) * i / 10, p)
+                .move(1, b0 + (b1 - b0) * i / 10, p).commit();
+        }
+        t.release(0, a1, p).release(1, b1, p).commit();
     }
 
     bool analysed() {
@@ -195,6 +253,10 @@ private slots:
         settings.setValue(QString("network-permission-%1").arg(TONY_VERSION),
                           false);
         settings.endGroup();
+
+        // As main() does; without it a .ton file is not a session
+        sv::InteractiveFileFinder::getInstance()
+            ->setApplicationSessionExtension("ton");
 
         connect(&m_watchdog, &QTimer::timeout,
                 this, [this]() { dismissDialog(); });
@@ -556,6 +618,311 @@ private slots:
         QVERIFY(framesPerPixel() < startLevel);
         QVERIFY(p->getZoomLevel() == expected);
         QCOMPARE(p->getCentreFrame(), centre);
+    }
+
+    // Fingers spread up the pane: the frequency range narrows by as
+    // much as they spread, less what the dead zone took, about the
+    // frequency between them, which stays there. The time axis stays as
+    // it was, the pitch layers in the pane are drawn on the new range,
+    // and nothing goes into the undo history
+    void vertical_pinch_narrows_the_frequency_range() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        m_window->toggleAlternatePitch();
+        QVERIFY(m_window->alternatePitch()->isShown());
+
+        sv::Pane *p = pane();
+        QVERIFY2(p->height() >= 300,
+                 qPrintable(QString("the pane is %1 high").arg(p->height())));
+        int x = p->width() / 2 + 100;
+        int y = p->height() / 2 - 60;
+        sv::sv_frame_t centre = p->getCentreFrame();
+        VerticalZoom::Range before = frequencyRange();
+        QCOMPARE(before.min, 40.0);
+        QCOMPARE(before.max, 1500.0);
+        double held = frequencyAtY(y);
+
+        int commands = 0;
+        auto counted = connect(sv::CommandHistory::getInstance(),
+                               qOverload<>(&sv::CommandHistory::commandExecuted),
+                               this, [&commands]() { ++commands; });
+        twoFingers(p, QPoint(x, y - 50), QPoint(x, y + 50),
+                   QPoint(x, y - 100), QPoint(x, y + 100));
+        disconnect(counted);
+        QCOMPARE(commands, 0);
+
+        VerticalZoom::Range after = frequencyRange();
+        double factor = (200.0 - deadZone()) / 100.0;
+        double narrowed = octaves(before) / octaves(after);
+        QVERIFY2(std::fabs(narrowed - factor) < 0.01 * factor,
+                 qPrintable(QString("%1, then %2: %3 times narrower, not %4")
+                            .arg(text(before)).arg(text(after))
+                            .arg(narrowed).arg(factor)));
+        QVERIFY2(std::fabs(yForFrequency(held) - y) <= 1.0,
+                 qPrintable(QString("%1 Hz was at %2, then at %3")
+                            .arg(held).arg(y).arg(yForFrequency(held))));
+
+        // As far as the centre goes, to the whole pixel the fingers hold
+        QCOMPARE(framesPerPixel(), double(startLevel));
+        QVERIFY(std::abs(p->getCentreFrame() - centre) < startLevel);
+
+        // The reference's pitch and notes, and the alternate pitch track
+        // that follows them
+        Analyser *a = m_window->analyser();
+        std::vector<sv::Layer *> layers {
+            a->getLayer(Analyser::PitchTrack),
+            a->getLayer(Analyser::Notes),
+            m_window->alternatePitch()->getLayer()
+        };
+        for (sv::Layer *layer : layers) {
+            QVERIFY(layer);
+            sv::CoordinateScale scale =
+                p->getEffectiveVerticalExtentsForLayer(layer);
+            QVERIFY2(scale.isLogarithmic() &&
+                     scale.getDisplayMinimum() == after.min &&
+                     scale.getDisplayMaximum() == after.max,
+                     qPrintable(QString("%1 is drawn from %2 to %3")
+                                .arg(layer->objectName())
+                                .arg(scale.getDisplayMinimum())
+                                .arg(scale.getDisplayMaximum())));
+        }
+
+        QCOMPARE(m_window->menuRequests, 0);
+        QCOMPARE(QGuiApplication::mouseButtons(), Qt::NoButton);
+    }
+
+    // Fingers brought together up the pane: the range widens, about
+    // the frequency between them
+    void vertical_pinch_widens_the_frequency_range() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->analyser()->setDisplayFrequencyExtents(100, 800));
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2 - 100;
+        int y = p->height() / 2 - 40;
+        VerticalZoom::Range before = frequencyRange();
+        QCOMPARE(before.min, 100.0);
+        double held = frequencyAtY(y);
+
+        twoFingers(p, QPoint(x, y - 100), QPoint(x, y + 100),
+                   QPoint(x, y - 50), QPoint(x, y + 50));
+
+        VerticalZoom::Range after = frequencyRange();
+        double factor = (100.0 + deadZone()) / 200.0;
+        double narrowed = octaves(before) / octaves(after);
+        QVERIFY2(std::fabs(narrowed - factor) < 0.01 * factor,
+                 qPrintable(QString("%1, then %2: %3 times narrower, not %4")
+                            .arg(text(before)).arg(text(after))
+                            .arg(narrowed).arg(factor)));
+        QVERIFY2(std::fabs(yForFrequency(held) - y) <= 1.0,
+                 qPrintable(QString("%1 Hz was at %2, then at %3")
+                            .arg(held).arg(y).arg(yForFrequency(held))));
+        QCOMPARE(framesPerPixel(), double(startLevel));
+    }
+
+    // Fingers spread across the pane, not quite level, and drifting down
+    // a little: the time axis zooms, and the frequency range is left
+    // exactly as it was. Their spread up the pane grows by more than the
+    // dead zone, but by less than half as much as across
+    void horizontal_pinch_leaves_the_frequency_range() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2;
+        int y = p->height() / 2;
+        int drift = deadZone() / 2;
+        VerticalZoom::Range before = frequencyRange();
+
+        twoFingers(p, QPoint(x - 50, y - 15), QPoint(x + 50, y + 15),
+                   QPoint(x - 150, y - 35 + drift),
+                   QPoint(x + 150, y + 35 + drift));
+
+        QVERIFY(framesPerPixel() < startLevel / 2.0);
+        VerticalZoom::Range after = frequencyRange();
+        QCOMPARE(after.min, before.min);
+        QCOMPARE(after.max, before.max);
+    }
+
+    // Spread along both: both zoom, each about the fingers
+    void diagonal_pinch_zooms_time_and_frequency() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2 - 100;
+        int y = p->height() / 2 - 30;
+        sv::sv_frame_t frame = p->getFrameForX(x);
+        VerticalZoom::Range before = frequencyRange();
+        double held = frequencyAtY(y);
+
+        twoFingers(p, QPoint(x - 50, y - 50), QPoint(x + 50, y + 50),
+                   QPoint(x - 100, y - 100), QPoint(x + 100, y + 100));
+
+        QCOMPARE(framesPerPixel(), startLevel / 2.0);
+        QVERIFY2(std::abs(p->getFrameForX(x) - frame) <= startLevel / 2,
+                 qPrintable(QString("frame %1 under the fingers, then %2")
+                            .arg(frame).arg(p->getFrameForX(x))));
+
+        VerticalZoom::Range after = frequencyRange();
+        double factor = (200.0 - deadZone()) / 100.0;
+        double narrowed = octaves(before) / octaves(after);
+        QVERIFY2(std::fabs(narrowed - factor) < 0.01 * factor,
+                 qPrintable(QString("%1, then %2: %3 times narrower, not %4")
+                            .arg(text(before)).arg(text(after))
+                            .arg(narrowed).arg(factor)));
+        QVERIFY2(std::fabs(yForFrequency(held) - y) <= 1.0,
+                 qPrintable(QString("%1 Hz was at %2, then at %3")
+                            .arg(held).arg(y).arg(yForFrequency(held))));
+    }
+
+    // Two fingers side by side dragged down the pane: what was between
+    // them goes down with them, as far as they went beyond the dead
+    // zone, and the range keeps its height. Time stays where it was
+    void vertical_two_finger_drag_scrolls_the_frequency_range() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2;
+        int y = p->height() / 2 - 80;
+        sv::sv_frame_t centre = p->getCentreFrame();
+        VerticalZoom::Range before = frequencyRange();
+        double held = frequencyAtY(y);
+
+        twoFingers(p, QPoint(x - 50, y), QPoint(x + 50, y),
+                   QPoint(x - 50, y + 120), QPoint(x + 50, y + 120));
+
+        VerticalZoom::Range after = frequencyRange();
+        double expected = y + 120 - deadZone();
+        QVERIFY2(std::fabs(yForFrequency(held) - expected) <= 1.0,
+                 qPrintable(QString("%1 Hz was at %2, then at %3, not %4")
+                            .arg(held).arg(y).arg(yForFrequency(held))
+                            .arg(expected)));
+        QVERIFY2(after.max > before.max &&
+                 std::fabs(octaves(after) - octaves(before)) < 0.01,
+                 qPrintable(QString("%1, then %2")
+                            .arg(text(before)).arg(text(after))));
+
+        // As far as the centre goes, to the whole pixel the fingers hold
+        QCOMPARE(framesPerPixel(), double(startLevel));
+        QVERIFY(std::abs(p->getCentreFrame() - centre) < startLevel);
+        QCOMPARE(QGuiApplication::mouseButtons(), Qt::NoButton);
+    }
+
+    // No narrower than a major third, no wider than the piano, and no
+    // further up or down: held there, the range stays while the fingers
+    // go on, and goes back with them as soon as they turn. The range is
+    // whole Hz (the spectrogram's), hence the half hertz allowed
+    void frequency_range_stays_within_its_limits() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2;
+        int y = p->height() / 2;
+        VerticalZoom::Limits limits = VerticalZoom::pitchLimits();
+
+        QVERIFY(m_window->analyser()->setDisplayFrequencyExtents(200, 260));
+        twoFingers(p, QPoint(x, y - 50), QPoint(x, y + 50),
+                   QPoint(x, y - 120), QPoint(x, y + 120));
+        VerticalZoom::Range r = frequencyRange();
+        double semitones = 12.0 * octaves(r);
+        QVERIFY2(semitones > 3.9 && semitones < 4.1,
+                 qPrintable(text(r) + QString(": %1 semitones")
+                            .arg(semitones)));
+
+        QVERIFY(m_window->analyser()->setDisplayFrequencyExtents(40, 1500));
+        twoFingers(p, QPoint(x, y - 120), QPoint(x, y + 120),
+                   QPoint(x, y - 20), QPoint(x, y + 20));
+        r = frequencyRange();
+        QVERIFY2(std::fabs(r.min - limits.lowest) <= 0.5 &&
+                 std::fabs(r.max - limits.highest) <= 0.5,
+                 qPrintable(text(r)));
+
+        QVERIFY(m_window->analyser()->setDisplayFrequencyExtents(40, 1500));
+        VerticalZoom::Range start = frequencyRange();
+        int top = 20;
+        int bottom = p->height() - 40;
+        Touch t = touch();
+        t.press(0, QPoint(x - 50, top), p).press(1, QPoint(x + 50, top), p)
+            .commit();
+        for (int i = 1; i <= 10; ++i) {
+            int at = top + (bottom - top) * i / 10;
+            t.move(0, QPoint(x - 50, at), p).move(1, QPoint(x + 50, at), p)
+                .commit();
+        }
+        r = frequencyRange();
+        QVERIFY2(std::fabs(r.max - limits.highest) <= 0.5 &&
+                 std::fabs(octaves(r) - octaves(start)) < 0.01,
+                 qPrintable(text(start) + ", then " + text(r)));
+
+        double atTurn = frequencyAtY(bottom);
+        for (int i = 1; i <= 5; ++i) {
+            int at = bottom - 10 * i;
+            t.move(0, QPoint(x - 50, at), p).move(1, QPoint(x + 50, at), p)
+                .commit();
+        }
+        t.release(0, QPoint(x - 50, bottom - 50), p)
+            .release(1, QPoint(x + 50, bottom - 50), p).commit();
+        QVERIFY2(std::fabs(yForFrequency(atTurn) - (bottom - 50)) <= 1.0,
+                 qPrintable(QString("%1 Hz was at %2, then at %3")
+                            .arg(atTurn).arg(bottom)
+                            .arg(yForFrequency(atTurn))));
+        QCOMPARE(QGuiApplication::mouseButtons(), Qt::NoButton);
+    }
+
+    // The range the fingers leave is the session's: saved with it, and
+    // there again when it is opened
+    void frequency_range_is_saved_with_the_session() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2;
+        int y = p->height() / 2;
+        twoFingers(p, QPoint(x, y - 50), QPoint(x, y + 50),
+                   QPoint(x, y - 100), QPoint(x, y + 120));
+        VerticalZoom::Range zoomed = frequencyRange();
+        QVERIFY(zoomed.min > 40.0 && zoomed.max < 1500.0);
+
+        QString session = m_dir.filePath("zoomed.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        m_window->doCloseSession();
+        QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(), 30000);
+
+        VerticalZoom::Range restored = frequencyRange();
+        QCOMPARE(restored.min, zoomed.min);
+        QCOMPARE(restored.max, zoomed.max);
+        sv::CoordinateScale scale = pane()->getEffectiveVerticalExtentsForLayer
+            (m_window->analyser()->getLayer(Analyser::PitchTrack));
+        QCOMPARE(scale.getDisplayMinimum(), zoomed.min);
+        QCOMPARE(scale.getDisplayMaximum(), zoomed.max);
+    }
+
+    // The selection strip shows no frequencies: two fingers dragged up
+    // it leave the range alone
+    void frequency_range_is_the_pitch_pane_s_only() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *s = strip();
+        int x = s->width() / 2;
+        int y = s->height() - 5;
+        VerticalZoom::Range before = frequencyRange();
+
+        twoFingers(s, QPoint(x - 50, y), QPoint(x + 50, y),
+                   QPoint(x - 50, y - 60), QPoint(x + 50, y - 60));
+
+        VerticalZoom::Range after = frequencyRange();
+        QCOMPARE(after.min, before.min);
+        QCOMPARE(after.max, before.max);
+        QCOMPARE(QGuiApplication::mouseButtons(), Qt::NoButton);
     }
 };
 

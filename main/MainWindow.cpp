@@ -6648,7 +6648,38 @@ void
 MainWindow::paneAdded(Pane *pane)
 {
     pane->setPlaybackFollow(PlaybackScrollPage);
-    new TouchGestures(pane); // owned by the pane
+
+    // Two fingers zoom and scroll the frequency range as well, in the
+    // pane the reference's analyser shows it in: every pitch and note
+    // layer there is drawn on it, aligned to its spectrogram's scale
+    TouchGestures::VerticalRange range;
+    range.get = [this, pane](VerticalZoom::Range &shown) {
+        double min, max;
+        if (!m_analyser || m_analyser->getPane() != pane ||
+            !m_analyser->getDisplayFrequencyExtents(min, max)) {
+            return false;
+        }
+        // What the pane draws values in Hz on, which is that range
+        // unless something else has come to set the scale
+        CoordinateScale scale = pane->getEffectiveVerticalExtents("Hz");
+        if (scale.getDisplayMinimum() != min ||
+            scale.getDisplayMaximum() != max ||
+            !(scale.isLogarithmic() || scale.isLinear())) {
+            return false;
+        }
+        shown.min = min;
+        shown.max = max;
+        shown.log = scale.isLogarithmic();
+        return true;
+    };
+    range.set = [this](const VerticalZoom::Range &wanted) {
+        m_analyser->setDisplayFrequencyExtents(wanted.min, wanted.max);
+    };
+    range.limits = VerticalZoom::pitchLimits();
+
+    TouchGestures *gestures = new TouchGestures(pane); // owned by the pane
+    gestures->setVerticalRange(range);
+
     m_paneStack->sizePanesEqually();
     if (m_overview) m_overview->registerView(pane);
 }    

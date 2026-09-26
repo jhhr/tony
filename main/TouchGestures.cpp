@@ -21,13 +21,13 @@
 #include <QEvent>
 #include <QGestureRecognizer>
 #include <QGuiApplication>
-#include <QLineF>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPointingDevice>
 #include <QStyleHints>
 #include <QTouchEvent>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace sv;
@@ -107,6 +107,12 @@ TouchGestures::TouchGestures(Pane *pane) :
 TouchGestures::~TouchGestures()
 {
     stopWatchingMenu();
+}
+
+void
+TouchGestures::setVerticalRange(const VerticalRange &range)
+{
+    m_verticalRange = range;
 }
 
 bool
@@ -396,14 +402,40 @@ TouchGestures::beginPinch()
     QPointF a = m_points.value(m_pinchA);
     QPointF b = m_points.value(m_pinchB);
 
-    m_startSpan = QLineF(a, b).length();
+    m_startCentre = (a + b) / 2.0;
+    m_startSpreadX = spread(a.x() - b.x());
+    m_startSpreadY = spread(a.y() - b.y());
+
+    // Two fingers dragged together change their spread a little: that
+    // is not yet a pinch. Twice the slop, as Android's own detector has.
+    // Up the pane the same goes for their travel: the range stays put
+    // while the fingers scroll or zoom in time
+    double deadZone = 2 * slop();
+    m_spreadX = PinchZoom::AxisMovement(deadZone);
+    m_spreadY = PinchZoom::AxisMovement(deadZone);
+    m_travelY = PinchZoom::AxisMovement(deadZone);
+
     m_startFramesPerPixel =
         PinchZoom::framesPerPixel(m_pane->getZoomLevel());
-    m_zooming = false;
 
     m_anchorFrame = PinchZoom::frameAtX
         (m_pane->getCentreFrame(), m_pane->getZoomLevel(),
-         m_pane->width(), (a.x() + b.x()) / 2.0);
+         m_pane->width(), m_startCentre.x());
+
+    // The range the fingers start from, within its limits (one typed
+    // in may not be), and the value under the point between them
+    m_haveRange = false;
+    double height = m_pane->height();
+    VerticalZoom::Range shown;
+    if (height > 0 && m_verticalRange.get && m_verticalRange.set &&
+        m_verticalRange.get(shown)) {
+        m_haveRange = true;
+        m_shownRange = shown;
+        m_startRange = VerticalZoom::limited
+            (shown, m_verticalRange.limits, height, m_startCentre.y());
+        m_anchorValue = VerticalZoom::valueAtY
+            (m_startRange, height, m_startCentre.y());
+    }
 }
 
 void
@@ -418,19 +450,25 @@ TouchGestures::updatePinch()
 
     QPointF a = m_points.value(m_pinchA);
     QPointF b = m_points.value(m_pinchB);
-    double span = QLineF(a, b).length();
+    QPointF travel = (a + b) / 2.0 - m_startCentre;
+    double spreadX = spread(a.x() - b.x());
+    double spreadY = spread(a.y() - b.y());
     double x = (a.x() + b.x()) / 2.0;
 
-    // Two fingers dragged together change their distance a little: that
-    // is not yet a pinch. Twice the slop, as Android's own detector has
-    if (!m_zooming && std::fabs(span - m_startSpan) > 2 * slop()) {
-        m_zooming = true;
-    }
+    // Each axis zooms by the spread along it, once that counts
+    m_spreadX.update(spreadX - m_startSpreadX, spreadY - m_startSpreadY);
+    double pinchY = m_spreadY.update(spreadY - m_startSpreadY,
+                                     spreadX - m_startSpreadX);
 
-    if (m_zooming && m_startSpan > 0.0 && span > 0.0) {
+    // A range zoomed about the fingers goes with them up and down, as the
+    // time axis goes with them across
+    if (m_spreadY.isCounting()) m_travelY.start(travel.y());
+    double travelY = m_travelY.update(travel.y(), travel.x());
+
+    if (m_spreadX.isCounting()) {
         ZoomLevel current = m_pane->getZoomLevel();
         ZoomLevel level = PinchZoom::pinchedLevel
-            (current, m_startFramesPerPixel * m_startSpan / span);
+            (current, m_startFramesPerPixel * m_startSpreadX / spreadX);
         if (!(level == current)) {
             m_pane->setZoomLevel(level);
         }
@@ -454,6 +492,39 @@ TouchGestures::updatePinch()
 
     if (centre != m_pane->getCentreFrame()) {
         m_pane->setCentreFrame(centre);
+    }
+
+    updateVerticalRange((m_startSpreadY + pinchY) / m_startSpreadY,
+                        travelY);
+}
+
+void
+TouchGestures::updateVerticalRange(double factor, double travel)
+{
+    // Left as it is until the fingers plainly move up or down
+    if (!m_haveRange) return;
+    if (!m_spreadY.isCounting() && !m_travelY.isCounting()) return;
+
+    double height = m_pane->height();
+    if (!(height > 0)) return;
+
+    // The value that was between the fingers goes where they are now,
+    // with the range narrowed by as much as they have spread
+    double y = m_startCentre.y() + travel;
+    VerticalZoom::Range wanted = VerticalZoom::zoomedAbout
+        (m_startRange, factor, m_anchorValue, height, y);
+    VerticalZoom::Range range = VerticalZoom::limited
+        (wanted, m_verticalRange.limits, height, y);
+
+    // Held at a limit, the range stays while the fingers go on: what is
+    // under them then is what they hold, as at the ends of the audio
+    if (range != wanted) {
+        m_anchorValue = VerticalZoom::valueAtY(range, height, y);
+    }
+
+    if (range != m_shownRange) {
+        m_shownRange = range;
+        m_verticalRange.set(range);
     }
 }
 
@@ -534,4 +605,13 @@ TouchGestures::slop() const
     // Qt's distance for a drag to start: in logical pixels, which on a
     // phone are the platform's density-independent ones
     return QGuiApplication::styleHints()->startDragDistance();
+}
+
+double
+TouchGestures::spread(double distance) const
+{
+    // The fingers' spread along one axis, but never less than four
+    // times the slop: two fingers side by side are hardly apart up the
+    // pane, and a ratio of two such spreads could be anything
+    return std::max(std::fabs(distance), 4.0 * std::max(slop(), 1));
 }

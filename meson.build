@@ -1180,6 +1180,7 @@ tony_core_files = [
   'main/TakeEvents.cpp',
   'main/TakesFile.cpp',
   'main/TakeTiming.cpp',
+  'main/VerticalZoom.cpp',
 ]
 
 tony_app_files = [
@@ -1494,6 +1495,7 @@ if system != 'android'
     'main/test/TestSingingTakes.h',
     'main/test/TestTakesFile.h',
     'main/test/TestTakeTiming.h',
+    'main/test/TestVerticalZoom.h',
   ])
 
   tony_core_test_exe = executable(

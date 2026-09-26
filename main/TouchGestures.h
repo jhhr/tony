@@ -15,6 +15,9 @@
 #ifndef TONY_TOUCH_GESTURES_H
 #define TONY_TOUCH_GESTURES_H
 
+#include "PinchZoom.h"
+#include "VerticalZoom.h"
+
 #include "base/BaseTypes.h"
 
 #include <QHash>
@@ -25,6 +28,7 @@
 #include <QTimer>
 #include <QWidget>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -36,9 +40,16 @@ class Pane;
 }
 
 /**
- * Touch on one pane: pinch to zoom the time axis about the fingers,
- * two fingers dragged to scroll it, and a long press for the pane's
- * right-button menu. MainWindow gives every pane one; the pane owns it.
+ * Touch on one pane: pinch to zoom about the fingers, two fingers
+ * dragged to scroll, and a long press for the pane's right-button
+ * menu. MainWindow gives every pane one; the pane owns it.
+ *
+ * The time axis zooms by the fingers' spread across the pane and
+ * follows them across it. Given a vertical range (setVerticalRange()),
+ * the range zooms by their spread up the pane and follows them up and
+ * down, each axis only once the fingers plainly move along it
+ * (PinchZoom::AxisMovement): a pinch across the pane leaves the range
+ * alone, and a pinch up the pane the zoom level.
  *
  * One finger is left to Qt, which makes mouse events of a touch that
  * nothing accepts: tapping, dragging in Navigate mode and selecting in
@@ -73,6 +84,21 @@ public:
     explicit TouchGestures(sv::Pane *pane);
     virtual ~TouchGestures();
 
+    /**
+     * The range of values the pane's layers are drawn over, bottom to
+     * top, for two fingers to zoom and scroll. Changing it makes no
+     * undo step. A pane without one moves in time only.
+     */
+    struct VerticalRange {
+        /// The range shown now, on the pane's scale; false if none
+        std::function<bool(VerticalZoom::Range &)> get;
+        /// Show another
+        std::function<void(const VerticalZoom::Range &)> set;
+        VerticalZoom::Limits limits;
+    };
+
+    void setVerticalRange(const VerticalRange &range);
+
     /// How long one finger must rest for a long press, in ms
     static const int longPressMs = 500;
 
@@ -99,6 +125,7 @@ private:
     void startTwoFingers();
     void beginPinch();
     void updatePinch();
+    void updateVerticalRange(double factor, double travel);
 
     void hold(QMouseEvent *);
     void replayHeld();
@@ -110,6 +137,7 @@ private:
     void removePoint(int id);
     QPointF sourcePosition() const;
     int slop() const;
+    double spread(double distance) const;
 
     sv::Pane *m_pane;
     State m_state = State::Idle;
@@ -134,10 +162,26 @@ private:
     // The two points of the pinch, and the view when they came down
     int m_pinchA = -1;
     int m_pinchB = -1;
-    double m_startSpan = 0.0;
+    QPointF m_startCentre;
+    double m_startSpreadX = 0.0;
+    double m_startSpreadY = 0.0;
     double m_startFramesPerPixel = 1.0;
     double m_anchorFrame = 0.0;
-    bool m_zooming = false;
+
+    // How much of the fingers' movement since then counts: the change
+    // in their spread across the pane and up it, and the travel of
+    // the point between them up it
+    PinchZoom::AxisMovement m_spreadX;
+    PinchZoom::AxisMovement m_spreadY;
+    PinchZoom::AxisMovement m_travelY;
+
+    // The vertical range, as it was when they came down and as last
+    // shown, and the value that was under the point between them
+    VerticalRange m_verticalRange;
+    bool m_haveRange = false;
+    VerticalZoom::Range m_startRange;
+    VerticalZoom::Range m_shownRange;
+    double m_anchorValue = 0.0;
 };
 
 #endif

@@ -21,8 +21,9 @@
 /**
  * The arithmetic of a two-finger gesture on a pane's time axis: which
  * zoom level a pinch asks for, and where the pane must be centred for
- * a frame to stay under the fingers.  TouchGestures does as the
- * answers say.
+ * a frame to stay under the fingers; and, for either axis, when the
+ * fingers' movement along it counts.  TouchGestures does as the
+ * answers say (VerticalZoom has the vertical axis).
  *
  * The x mapping is svgui's View::getFrameForX() made continuous: the
  * same centre, rounded the same way, so that a frame placed at x by
@@ -63,6 +64,35 @@ namespace PinchZoom
      */
     sv::sv_frame_t centreFor(double frame, sv::ZoomLevel z, int width,
                              double x);
+
+    /**
+     * How much of the fingers' movement along one axis counts: the
+     * change in their spread, or the travel of the point between them,
+     * since they came down. None until the movement is plainly meant:
+     * more than the dead zone, and at least half as much as the same
+     * movement across the axis, so that a pinch or a drag along one
+     * axis leaves the other alone. From then on all of it, less what
+     * was taken for the dead zone, so that nothing jumps when it
+     * starts to count.
+     */
+    class AxisMovement
+    {
+    public:
+        explicit AxisMovement(double deadZone = 0.0);
+
+        /// What counts of the movement along, with across the other's
+        double update(double along, double across);
+
+        /// Count from now on, from along as it is now
+        void start(double along);
+
+        bool isCounting() const { return m_counting; }
+
+    private:
+        double m_deadZone;
+        bool m_counting;
+        double m_offset;
+    };
 }
 
 #endif
