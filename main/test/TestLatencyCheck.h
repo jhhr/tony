@@ -939,17 +939,23 @@ private slots:
             }
         }
 
-        // 9.1 s in the first punch-in only; 11.4 s in both, so in the
-        // second, which recorded over the first
+        // Event 5 in the first punch-in only; event 6 in both, so in the
+        // second, which recorded over the first.  They are far enough
+        // apart for the second to start after all the finder reads for
+        // event 5
+        const double t5 = expectedAt(layout, 5);
+        const double t6 = expectedAt(layout, 6);
+        QVERIFY(t6 - t5 > before + after + 0.2);
         const frame_t later = framesOf(0.2);
-        punchIns = { { 8.0, 13.0 }, { 10.5, 13.0 } };
+        punchIns = { { t5 - before - 0.1, t6 + after + 0.1 },
+                     { t6 - before - 0.1, t6 + after + 0.1 } };
         s = judge(layout, spliced(reference, kRate, punchIns, { shift, later }),
                   kRate, punchIns);
         QCOMPARE(s.judged, 2);
         QCOMPARE(s.punchIns[0].judged, 1);
         QCOMPARE(s.punchIns[1].judged, 1);
-        QCOMPARE(s.events[0].event, 4);
-        QCOMPARE(s.events[1].event, 5);
+        QCOMPARE(s.events[0].event, 5);
+        QCOMPARE(s.events[1].event, 6);
         QCOMPARE(s.events[1].punchIn, 1);
         QCOMPARE(s.events[1].arrival.errorFrames, later);
     }
@@ -967,8 +973,10 @@ private slots:
         const double length = double(layout.length) / layout.rate;
 
         struct Case { int count; int each; };
+        // 4 x 3 is what a calibration records (spec 2), and fits only
+        // because the spacings where the punch-ins meet are wide enough
         for (Case c : { Case { 2, 2 }, Case { 4, 2 }, Case { 3, 3 },
-                        Case { 1, 12 } }) {
+                        Case { 4, 3 }, Case { 1, 12 } }) {
 
             const punchins_t exact =
                 LatencyCheck::punchInsFor(layout, c.count, c.each);

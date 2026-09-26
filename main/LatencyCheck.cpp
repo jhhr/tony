@@ -28,8 +28,11 @@ namespace {
 const double pi = 3.14159265358979323846;
 
 // Sweep to sweep, in tenths of a second so that the times are the same
-// at every rate: each value from 1.6 to 2.6 s once, in an irregular order
-const int calibrationSpacings[] = { 21, 16, 25, 19, 23, 17, 26, 20, 18, 24, 22 };
+// at every rate: each value from 1.6 to 2.6 s once, in an irregular order.
+// The 4th, 7th and 10th are 1.9 s or more: a calibration's four punch-ins
+// of three events each meet there, and the finder needs 1.9 s between
+// the last sweep of one punch-in and the first of the next
+const int calibrationSpacings[] = { 21, 16, 25, 19, 17, 23, 26, 20, 24, 18, 22 };
 const int calibrationSpacingCount =
     int(sizeof(calibrationSpacings) / sizeof(calibrationSpacings[0]));
 
