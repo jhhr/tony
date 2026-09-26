@@ -26,8 +26,8 @@ Audacity's measurements) was a separate report, not kept in the repository.
   `suggestedLatency` chosen for the driver under Playback > Audio Latency on both sides,
   0.2 s unless another is chosen ([recording.md](recording.md#latency)).
 - **The device need not run at the reference's rate.** It opens at PortAudio's default
-  rate: for "(System Default)" through MME most likely 44.1 kHz, for a device whose name
-  exists only under WASAPI or WDM-KS often 48 kHz. A recording is converted to the
+  rate: through MME most likely 44.1 kHz, through WASAPI the rate of Windows' mixer, often
+  48 kHz ([audio-drivers.md](audio-drivers.md)). A recording is converted to the
   reference's rate as it is spliced, and the round trip is counted in seconds and turned
   into frames of the recording ([recording.md](recording.md#latency)), so a check on such
   a device is judged, and its figure kept, like any other. The result names the device's
@@ -212,9 +212,9 @@ the round trip is exactly the old sum; a core test checks it over a grid of valu
 The menu line, Forget Measured Latency and the dialog's instructions use the rate of the
 last take placed with a round trip, or before any take the session's: the device's rate is
 not known before a take (`AudioCallbackRecordTarget` has no getter for it). Choosing a
-device from the menu resets it. So on a device at another rate than the session's, the
-three see a figure kept for it only once a take has been recorded since Tony started or
-the device was chosen; takes are placed with it from the first.
+device or a driver from the menu resets it. So on a device at another rate than the
+session's, the three see a figure kept for it only once a take has been recorded since
+Tony started or the device or driver was chosen; takes are placed with it from the first.
 
 A dev run places its takes with the round trip the calibration before it measured, for the
 run only: nothing is stored, the menu line goes on describing the window's own figure, and
@@ -360,7 +360,9 @@ and the whole `DevChecks.txt`. What the numbers decide:
 - **Sweeps found, the input peak, the echo:** the finder's thresholds, NoSignal and Clipped.
 - **The recording's rate:** whether the device runs at the reference's 44.1 kHz or its
   takes are converted; a figure is kept for each rate.
-- **The report's header:** the drivers built in and what the device reports.
+- **The report's header:** the driver and the latency asked of it, the drivers built in,
+  and what the device reports: which run on which driver is which
+  ([audio-drivers.md](audio-drivers.md), §7).
 - **Items 1 and 2**, each sweep's offset and each start gap: the ±2 ms. **Item 3**, how far
   the dots trail the cursor. **Items 4 and 12**, the margin, the looks in the gaps and the
   longest wait: how the gap check fares with a real device's blocks. **Item 5**, each
@@ -435,25 +437,15 @@ What it rests on:
 The open points are also in [open-points.md](open-points.md), briefly; this section has
 the reasons.
 
-**Next: a lower-latency driver** (the user's decision, 2026-09-26, from the restart jitter
-below). In order:
-
-1. **The device's rate.** Done: a recording at another rate than the reference's is
-   converted as it is spliced, whatever the device's rate (the other way, the record
-   target asking for the session's rate through `getApplicationSampleRate()` in the svapp
-   fork, fails where the device runs only at its mixer's rate), and Calibrate Audio
-   measures such a device, and keeps its figure, like any other. It came first because
-   WASAPI opens at the Windows mixer's rate, usually 48 kHz.
-2. **A `bqaudioio` fork**, `jhhr/bqaudioio`, pinned: an implementation per Windows host
-   API, WASAPI's automatic rate conversion, and a `suggestedLatency` that can be set
-   ([forks.md](forks.md#bqaudioio)). Done; the plan from here on is in
-   [audio-drivers.md](audio-drivers.md).
-3. **A driver type in Tony**: MME, DirectSound or WASAPI, and the latency asked of it,
-   under Playback > Audio Driver and Audio Latency; the device menus list that type's
-   devices only; the stored round trip kept per type. Done.
-4. **Measure** with Calibrate Audio and a dev run on each type, on the user's PC.
-
-**MME stays the default** until such a run shows WASAPI, or another type, better.
+**The driver project** (the user's decision, 2026-09-26, from the restart jitter below) is
+in [audio-drivers.md](audio-drivers.md): Playback > Audio Driver and Audio Latency put
+WASAPI and DirectSound next to MME, each with its own devices, latency and stored round
+trip. Left of it: Calibrate Audio and a dev run on each driver, on the user's PC. **MME
+stays the default** until such a run shows another better. The device's rate came first,
+as WASAPI opens at the Windows mixer's rate. A recording is converted as it is spliced,
+whatever the device's rate; the other way, the record target asking for the session's
+rate through `getApplicationSampleRate()` in the svapp fork, fails where the device runs
+only at its mixer's rate.
 
 **Restart jitter on MME.** Every take restarts the stream. On the user's PC the offset
 between input and output moved by about 13 ms between two takes and by 5 to 20 ms over three
@@ -461,9 +453,10 @@ calibrations, while the sweeps within one take agreed to 0.3 ms; the start gap, 
 0 frames both times, does not see it. No one stored figure then places every take.
 Considered: widening items 1 and 2 to ±15 ms; keeping the stream running between takes (an
 svapp change, which would make one session's takes agree with each other but not with the
-reference). Chosen: the driver project. Until then items 1 and 2 keep ±2 ms and fail on MME,
-the true reading, and so do items 7 and 13 whenever their punch-in lands more than 2 ms off.
-Item 10, by reading the code, does not fail for it (the join is a dip, below).
+reference). Chosen: the driver project, whose runs on WASAPI are still to come. Items 1
+and 2 keep ±2 ms and fail on MME, the true reading, and so do items 7 and 13 whenever
+their punch-in lands more than 2 ms off. Item 10, by reading the code, does not fail for
+it (the join is a dip, below).
 
 **For the user to decide:**
 
@@ -538,7 +531,8 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
   as the Preferences give it, staleness either side of the tolerance, the round trip in use
   and its frames at the recording's rate. `TestTakeDiff`: each comparison passing and
   failing on purpose, and the real `splice()` and `erase()` through files, whose fades lie
-  inside the range.
+  inside the range. `TestAudioDriverSettings`: the drivers, the default and the latency
+  kept per driver ([audio-drivers.md](audio-drivers.md), §6).
 - **The round trip in the take path** (`TestRecordWorkflow`, `latency_*`): a stored figure
   lines a take up where the reported pair does not, a stale one is ignored, and the
   reported pair is converted at the device's rate, also when the device was opened before
@@ -552,19 +546,24 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
   that never calls back; the check's playback, and a session opened after it playing as
   before; the user's toggles and their settings untouched; plans refused; the plan's round
   trip and pre-roll; keeping the session; replacing a check's own session without asking,
-  and asking before the user's; Record ignored; the menu and the dialog. Its runs are two
-  punch-ins of two sweeps on the first 11 s of the calibration reference, about 13 s each.
+  and asking before the user's; Record ignored; the menu and the dialog, the dialog naming
+  the driver. The driver and latency menus are tested here too, as they open the device
+  again: a driver chosen, MME named by default, the latency and the round trip kept per
+  driver, both greyed out during a take and a check ([audio-drivers.md](audio-drivers.md),
+  §6). Its runs are two punch-ins of two sweeps on the first 11 s of the calibration
+  reference, about 13 s each.
 - **`TestDevChecks`** (`test-tony-dev`, development builds only): whole dev runs on the
   loopback fake. Passing, with the fake's true round trip and a long song of 60 s (240 s
-  would add most of a minute to every passing run). Failing: the round trip 20 ms off (items
-  1, 2, 7 and 13; item 10 still passes, both punch-ins moved alike); an echo tap, with the
-  microphone on input 2 (item 4 fails, item 5 judged on input 2); the take made audible
-  during the re-record's lead-in (items 4 and 12, also through a stall); a stall of the GUI
-  thread in the lead-in (item 12 still judged, or not judged, never failed). Also cancel, a
-  closed session, the dev checks deleted during a run, the scratch folders, and the dialog
-  carrying on into them. Parts that no fault run makes fail (among them item 3's dots on
-  the tones, item 9, and item 10's step) were seen failing with the code broken for a
-  moment. About 4 minutes.
+  would add most of a minute to every passing run). Failing: the round trip 20 ms off
+  (items 1, 2, 7 and 13; item 10 still passes, both punch-ins moved alike); an echo tap,
+  with the microphone on input 2 (item 4 fails, item 5 judged on input 2); the take made
+  audible during the re-record's lead-in (items 4 and 12, also through a stall); a stall
+  of the GUI thread in the lead-in (item 12 still judged, or not judged, never failed).
+  Also cancel, a closed session, the dev checks deleted during a run, the scratch folders,
+  the report's header with the driver and the latency asked for, and the dialog carrying
+  on into them. Parts that no fault run makes fail (among them item 3's dots on the tones,
+  item 9, and item 10's step) were seen failing with the code broken for a moment. About 4
+  minutes.
 
 How the tests are built, and what to watch for: [testing.md](testing.md), "The audio check
 and the dev checks".
@@ -592,7 +591,7 @@ and the dev checks".
 | How runs are driven | Polling timers and signals, never a nested event loop |
 | `test-tony-device` (from `default`) | Its checks moved into the dev run, and it is retired |
 | Where the dev checks' tests run | `test-tony-dev`, a third executable in development builds, run when a change touches what the checks drive (`AGENTS.md`) |
-| Restart jitter on MME (about 13 ms) | Not tuned away: a lower-latency driver is the next project; MME stays the default until a run shows another type better |
+| Restart jitter on MME (about 13 ms) | Not tuned away: WASAPI was put next to MME to be measured against it ([audio-drivers.md](audio-drivers.md)); MME stays the default until a run shows another driver better |
 | The notes merge at a join inside a held note | Fixed on this branch: one note across the join ([takes.md](takes.md)) |
 
 ## 13. Facts checked in the code
@@ -601,7 +600,7 @@ So that later work does not derive them again.
 
 - **bqaudioio's `PortAudioIO`**, as upstream has it and the fork's `port` still does
   (the fork's per-host-API implementations and settable latency:
-  [audio-drivers.md](audio-drivers.md)):
+  [forks.md](forks.md#bqaudioio)):
   - one duplex `Pa_OpenStream`, `suggestedLatency = 0.2`, no host-API stream info;
   - input goes to the record target **before** output is asked for, in the same callback;
   - `suspend()`/`resume()` are `Pa_StopStream`/`Pa_StartStream`. `MainWindowBase::stop()`
@@ -627,8 +626,9 @@ So that later work does not derive them again.
   any file (the wrapper then passes the figure through and tells the play source 0);
   `getSystemRecordLatency()` at the device's. They differ only when the device is not at
   44.1 kHz.
-- **Device choice.** `getDeviceIndex()` takes the first PortAudio device with the given
-  name, across host APIs. MME names are cut to 31 characters.
+- **Device choice.** Under `port`, `getDeviceIndex()` takes the first PortAudio device
+  with the given name, across host APIs; under a driver, the first of its host API, else
+  that host API's default device. MME names are cut to 31 characters.
 - **Settings a check must not write:** the toggles `m_recordIntoSelection`
   (`MainWindow/recordintoselection`), `m_playRefWhileRecording` and `m_preRoll` write
   QSettings when toggled; `wantedPreRollFrames()` reads `MainWindow/prerollseconds`.

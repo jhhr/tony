@@ -104,8 +104,9 @@ reached. Three scripts in `deploy/linux/` do the work:
   or about a week has passed. It installs the packages, Qt, ccache and mold, the Android SDK
   and NDK when `dl.google.com` is reachable, and spends what is left of four minutes filling
   ccache from a build of the libraries. It also writes an `autoMode` entry to
-  `/root/.claude/settings.json` by which auto mode trusts the four library forks as it does
-  Tony's own repository ([forks.md](forks.md#changing-a-fork)): auto mode reads that from
+  `/root/.claude/settings.json` by which auto mode trusts four of the library forks (all but
+  `bqaudioio`) as it does Tony's own repository ([forks.md](forks.md#changing-a-fork)):
+  auto mode reads that from
   the user's settings, never from the repository's `.claude/settings.json`. The snapshot is kept only when the script ends
   within about five minutes, so any change to it has to keep to that. Its logs are in
   `/var/log/tony-environment/`.
@@ -188,3 +189,28 @@ Why each part is as it is:
 - Measured and left alone: `-g1` compiles svcore in 19 % less time than `-g`, but Windows
   builds `debugoptimized`, with full debug information; clang is no faster than GCC; and a
   unity build fails in the libraries, which define the same names in several files.
+
+## Checking the fork's Windows code
+
+The bqaudioio fork's drivers ([forks.md](forks.md#bqaudioio)) are under `#ifdef _WIN32`,
+so the Linux build compiles none of them. Here they are checked by compiling the two files
+for Windows with MinGW-w64, against the headers of PortAudio 19.7.0, the version of MSYS2's
+package:
+
+```sh
+apt-get install -y g++-mingw-w64-x86-64-posix
+mkdir -p tmp/pa197
+for h in portaudio.h pa_win_wasapi.h pa_win_waveformat.h; do
+  curl -sSfo tmp/pa197/$h https://raw.githubusercontent.com/PortAudio/portaudio/v19.7.0/include/$h
+done
+for f in PortAudioIO AudioFactory; do
+  x86_64-w64-mingw32-g++ -std=c++17 -fsyntax-only -DHAVE_PORTAUDIO -Itmp/pa197 \
+    -Ibqaudioio/bqaudioio -Ibqaudioio/src -Ibqvec bqaudioio/src/$f.cpp
+done
+```
+
+Both must compile without a word. WASAPI's stream info is included only where
+`__has_include` finds `pa_win_wasapi.h`, and a missing header drops it without an error:
+run the line for `PortAudioIO` with `-E` in place of `-fsyntax-only` and look for
+`wasapiInfo.flags` in the output. Nothing more of the Windows part can be tried here: it
+runs only on the user's PC.

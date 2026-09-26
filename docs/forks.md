@@ -1,7 +1,7 @@
 # Dependency forks
 
 Tony's libraries are separate repositories checked out into the top-level directories by
-[repoint](../repoint-project.json) and **gitignored in this repository**. Four of them are
+[repoint](../repoint-project.json) and **gitignored in this repository**. Five of them are
 forks under `github.com/jhhr` that exist only for this Tony fork:
 
 | Directory | Fork branch | Why it is forked |
@@ -26,15 +26,17 @@ library over a workaround in `main/`.
    which reaches the fork branch when the Tony branch is merged. Commit messages there
    follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
-   upstream sonic-visualiser — do not push there. In a cloud session the checkouts are
+   upstream sonic-visualiser, and in a `bqaudioio` cloned from its mirror it is
+   breakfastquay's — do not push there. In a cloud session the checkouts are
    `container-setup.sh`'s, whose `origin` is the fork, and two checks stand in the way:
    - The session's git proxy refuses a push to a repository not attached to the session,
      a new branch included (HTTP 403). The session's add-repository tool attaches it, with
      push access.
    - Auto mode trusts only the repository the session started in and its remotes, and so
      blocks committing in a fork's checkout, attaching the fork and pushing to it. The
-     environment's setup script names the four forks as trusted as well, which the user
-     chose ([building.md](building.md#building-on-linux)); `claude auto-mode config`
+     environment's setup script names four of the forks, all but `bqaudioio`, as trusted
+     as well, which the user chose ([building.md](building.md#building-on-linux));
+     `claude auto-mode config`
      shows whether a session has that entry. Without it, the user's own message has to
      ask for the action, naming the fork and the branch. After a denial, stop and tell the
      user what is blocked: trying again another way counts as getting round the check, and
@@ -191,6 +193,11 @@ The driver project ([audio-drivers.md](audio-drivers.md)), on the fork branch
 
 Only the Windows cross-compile (MinGW-w64 against PortAudio 19.7.0's headers) and the
 user's PC see the Windows part; Linux builds none of it.
+
+A `bqaudioio/` cloned from the mirror before the fork was pinned does not have the pin:
+`git remote add jhhr https://github.com/jhhr/bqaudioio`, `git fetch jhhr`, then
+`git checkout -B feat/wasapi jhhr/feat/wasapi` (the branch that goes with Tony's
+`feat/wasapi`). `container-setup.sh` does the equivalent by itself in a cloud session.
 
 ## Known defects in the forks, not fixed
 

@@ -17,13 +17,13 @@ area are what to ask the user to try. Launch with `.\build.bat run`.
 
 ## 1. The device check: Calibrate Audio with the dev checks
 
-Once per machine, and again for each output device sung with (Bluetooth headphones have a
-latency of their own). It covers: latency on this machine; several recordings in one take,
-each in time; nothing of the take coming back out of the speakers; how long Stop takes on a
-four-minute song; live dots from whichever input the microphone is on; and a device that
-records nothing. Besides those: recording over part of a take, the lead-in, the pre-roll
-near the start, two takes meeting inside a note, and Record into Selection stopping by
-itself.
+Once per machine and driver, and again for each output device sung with (Bluetooth
+headphones have a latency of their own). It covers: latency on this machine; several
+recordings in one take, each in time; nothing of the take coming back out of the speakers;
+how long Stop takes on a four-minute song; live dots from whichever input the microphone
+is on; and a device that records nothing. Besides those: recording over part of a take,
+the lead-in, the pre-roll near the start, two takes meeting inside a note, and Record into
+Selection stopping by itself.
 
 It calibrates, then records test references of sweeps and tones through the air, placing
 the takes with the round trip it has just measured, for the run only: a four-minute song
@@ -33,8 +33,10 @@ file, and compares the take before and after each punch-in.
 
 1. A development build: any build type but `release` (`build.bat` builds
    `debugoptimized`).
-2. Choose the devices under **Playback > Audio Output Device** and **Audio Input Device**
-   (or leave the system default): the run records with them, as any take does.
+2. On Windows, choose the driver and the latency under **Playback > Audio Driver** and
+   **Audio Latency** (section 2). Then the devices under **Playback > Audio Output
+   Device** and **Audio Input Device**, which list that driver's (or leave the system
+   default): the run records with them, as any take does.
 3. With wired headphones, hold one earcup against the microphone, off your ears; with
    speakers, a moderate volume and the microphone where it hears them. A quiet room.
 4. **Playback > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
@@ -47,8 +49,9 @@ file, and compares the take before and after each punch-in.
    data folder (`%APPDATA%\sonic-visualiser\Tony` on Windows). The test session is saved
    beside it in a `dev-checks-<n>` folder and left open, to be looked at and played.
 
-The report's header names the devices, the audio drivers built in, the playback and record
-latencies the device reports, and the round trip used. Then, item by item:
+The report's header names the devices, the driver and the latency asked of it, the audio
+drivers built in, the playback and record latencies the device reports, and the round trip
+used. Then, item by item:
 
 - **1** `latency_on_this_machine`: where each sweep of each punch-in landed against the
   reference, in ms (+ is late), within ±2 ms; the same after saving and reopening.
@@ -83,8 +86,24 @@ the sweeps within one take agree to 0.3 ms; the start gap does not see it. No on
 trip then places every take within ±2 ms: expect items 1 and 2 to fail, and items 7 and 13
 whenever their punch-in lands more than 2 ms off. Item 10 shows two punch-ins that landed
 apart only in its number "second punch-in against the first": the join is a 10 ms dip, which
-hides a jump. That is the true reading, not a fault of the check: the remedy is a
-lower-latency driver, the next project ([calibrate-audio.md](calibrate-audio.md), §10).
+hides a jump. That is the true reading, not a fault of the check: WASAPI is there to be
+measured against it, below.
+
+**On each driver (Windows).** The driver project waits for these runs to decide the
+default ([audio-drivers.md](audio-drivers.md), §7). The same setup each time, wired
+headphones with one earcup against the microphone:
+
+1. **MME at 200 ms**: what Tony has always asked for.
+2. **WASAPI at 20 ms.**
+3. **WASAPI at 10 ms.**
+
+Each is steps 2 to 5 above, with that driver and latency and the devices chosen under it:
+Calibrate Audio carrying on into the dev checks. After each, select and copy the result
+page's text, and copy `DevChecks.txt` to a name that says which run it was
+(`DevChecks-wasapi-20.txt`, say): the next run writes over it. Send back the three pairs,
+and whether anything crackled or dropped out during a run. Press **Use this latency** on
+the driver and latency you will sing with: the figure is kept for that driver only.
+Not yet done.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and
@@ -101,7 +120,39 @@ no device at all Record does no harm and the next file is analysed (the "Couldn'
 audio device" warning comes back once per file opened); with a device that opens but
 delivers nothing the take is dropped quietly, no harm.
 
-## 2. Still by hand
+## 2. The audio driver and latency menus (Windows)
+
+Only on Windows, where the menus are shown. The design is in
+[audio-drivers.md](audio-drivers.md).
+
+1. **The first start** with a build that has them: **Playback > Audio Driver** lists MME,
+   DirectSound and WASAPI with MME ticked, and **Audio Latency** lists 10 to 200 ms with
+   200 ms ticked. **Audio Output Device** and **Audio Input Device** tick the devices
+   chosen before. One shown as "(not connected)" is a name MME does not have (MME cuts
+   names to 31 characters): MME's default device is used instead, until the device is
+   chosen again from the list. The line under Calibrate Audio reads "Latency: driver's
+   figure, …": a round trip measured before is not carried over, so calibrate again.
+2. **WASAPI lists its own devices.** Choose WASAPI while the reference plays: playback
+   stops. The device menus now list WASAPI's names, whole, with (System Default) ticked.
+   Choose the headphones and the microphone, play and record a short take: sound comes
+   out, and the take sits in time by ear. Back to MME: MME's choices are ticked again.
+3. **A latency change opens the device again.** On WASAPI choose 20 ms, then 10 ms: each
+   time what was playing stops, and the next play and take work. Note the figure in
+   "Latency: driver's figure, …" at each latency, and whether 10 ms crackles.
+4. **Greyed out during a take**: while recording, and while Calibrate Audio runs, Audio
+   Driver and Audio Latency cannot be opened.
+5. **The reports name the driver.** Calibrate Audio's first page and its result page
+   show "Driver: WASAPI"; `DevChecks.txt` has "Audio driver: WASAPI" and "Latency asked
+   for: 20.0 ms" under the devices at its head.
+6. **After Use this latency on WASAPI** the latency line gives the measured figure. Once
+   Tony is started again, or the driver chosen again, it may read "driver's figure" until
+   the first take: the device's rate, often 48 kHz there, is not known before. Takes use
+   the kept figure from the first; a known limit ([audio-drivers.md](audio-drivers.md),
+   §8).
+
+Not tried yet.
+
+## 3. Still by hand
 
 1. **A device in use**: another program holding the microphone exclusively. Record does
    nothing harmful, and the next file opened is analysed as usual.
@@ -128,7 +179,7 @@ delivers nothing the take is dropped quietly, no harm.
 7. **Live dots on this machine**: during a take the dots keep up with the cursor and grow
    smoothly, and neither they nor the cursor stutter, in a maximised window.
 
-## 3. Lyrics
+## 4. Lyrics
 
 1.  **Legibility**: the words, dark on light boxes along the bottom of the pane, are
     readable over the waveform, the pitch tracks, the alternate pitch track and the live
@@ -188,7 +239,7 @@ delivers nothing the take is dropped quietly, no harm.
     through the take from its position; after Stop it is back on the word at the take's
     position. The same with Play Reference While Recording off.
 
-## 4. Lyrics: import and export dialogs, editing
+## 5. Lyrics: import and export dialogs, editing
 
 1.  **The file dialogs on Windows.** Import Lyrics opens beside the reference and offers
     "Lyrics (*.ttml *.lrc)" first, then TTML, LRC and all files. Export Lyrics offers
