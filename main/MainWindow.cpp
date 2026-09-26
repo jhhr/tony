@@ -226,6 +226,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioCheck(nullptr),
     m_audioCheckTakes(false),
     m_audioCheckRoundTrip(-1.0),
+    m_audioCheckPreRoll(AudioCheckRunner::kPreRollSeconds),
 #ifdef TONY_DEV_CHECKS
     m_devChecks(nullptr),
 #endif
@@ -5086,7 +5087,7 @@ MainWindow::wantedPreRollFrames() const
     double seconds = 0.0;
     if (m_audioCheckTakes) {
         // The audio check's takes have a lead-in of their own
-        seconds = AudioCheckRunner::kPreRollSeconds;
+        seconds = m_audioCheckPreRoll;
     } else {
         if (!m_preRoll || !m_preRoll->isChecked()) return 0;
         QSettings settings;

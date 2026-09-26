@@ -59,8 +59,6 @@ of its own, on both platforms.
 2. **The mains** that run suites, `tony-core-test.cpp`, `tony-app-test.cpp` and
    `tony-dev-test.cpp`, set the application name through that function instead of the
    literal, right after constructing the application and before anything reads settings.
-   `tony-device-check.cpp` runs by hand against a real device and is never sharded: leave
-   it.
 3. **`deploy/linux/run-tests.sh`**: drop the per-process `HOME` and XDG directories, so
    that Linux runs rely on the same thing Windows will, and keep proving it. Keep the
    per-process log directories. The script stays where it is. Its header comment says it

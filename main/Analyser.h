@@ -249,6 +249,17 @@ public:
     void cancelRangedAnalysis() { discardRangedAnalysis(); }
 
     /**
+     * For the tests only: while held, a ranged analysis that has
+     * finished is not merged and counts as running.  A test that has to
+     * act during the analysis of a short range cannot count on it
+     * otherwise: pYIN may finish before analyseRange() returns, and the
+     * merge is then over with.  Letting go merges a finished result at
+     * once, as its completion would have; one still running is merged
+     * when it finishes.  Never held in the application.
+     */
+    void setRangedMergeHeld(bool held);
+
+    /**
      * What the last ranged merge took out of and put into the pitch
      * track and the notes.  Reversing these two changes undoes the
      * merge, which is how the recording that asked for it is made
@@ -411,6 +422,9 @@ protected:
     // run stamped past it.  The near edge needs no such flag -- a run
     // cannot stamp anything before its own first two hops anyway
     bool m_rangedClippedEnd;
+
+    // Set only by a test (setRangedMergeHeld())
+    bool m_rangedMergeHeld;
 
     // What the last merge did, for the undo command of the recording
     // that asked for the analysis (see getRangedPitchChange())
