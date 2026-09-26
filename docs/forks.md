@@ -26,10 +26,17 @@ library over a workaround in `main/`.
    follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
    upstream sonic-visualiser — do not push there. In a cloud session the checkouts are
-   `container-setup.sh`'s, whose `origin` is the fork. There a push, even of a new branch,
-   is refused (HTTP 403) unless the fork is attached to the session: attach it with the
-   session's add-repository tool, with push access, and push from the checkout that is
-   there. Do not start the session with the forks selected instead: a session with several
+   `container-setup.sh`'s, whose `origin` is the fork, and two checks stand in the way:
+   - The session's git proxy refuses a push to a repository not attached to the session,
+     a new branch included (HTTP 403). The session's add-repository tool attaches it, with
+     push access.
+   - Auto mode trusts only the repository the session started in and its remotes. It
+     blocks committing in a fork's checkout, attaching the fork and pushing to it, unless
+     the user's own message asks for that action, naming the fork and the branch. After a
+     denial, stop and tell the user what is blocked: trying again another way counts as
+     getting round the check, and is blocked too. The user can instead push the change.
+
+   Do not start the session with the forks selected instead: a session with several
    repositories runs no repository's SessionStart hook, so the background build does not
    start.
 3. Put the new commit hash in `repoint-lock.json` as that library's `pin`, and commit that
