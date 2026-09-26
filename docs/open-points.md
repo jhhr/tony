@@ -11,11 +11,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **No overwrite question when recording into a selection**: the selection is taken as the
   consent. Right in use?
 - **Take operations clear the undo history with no prompt** (all but Rename).
-- **A selection is an entry of the undo history**: making one re-analyses the reference in
-  it (upstream Tony's pitch candidates) and pushes "Re-Analyse Selection". Selecting for
-  Record into Selection or for Erase therefore puts such entries between "Record Singing"
-  and "Erase Singing", and if the re-analysis finishes after an erase, Ctrl+Z takes it
-  back instead of the erase.
 - **The Edit tool edits the take's note at the time it is used, wherever in the pane**,
   the band of the coverage strip included. The strip itself takes no edits. Should the band
   keep the tools off the notes?

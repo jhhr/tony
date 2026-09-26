@@ -70,6 +70,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPointer>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -2941,6 +2942,61 @@ private slots:
         m_window->document()->deleteLayer(notes, true);
         QVERIFY2(!a->getLayer(Analyser::Notes),
                  "the analyser still points at its deleted note layer");
+    }
+
+    // Pitch candidates are the analyser's own layers: they come and go
+    // with no entry in the undo history, an undo leaves them alone, and
+    // the next re-analysis deletes them. As undoable layers they could be
+    // undone out of the pane while the analyser went on listing them, and
+    // the next re-analysis then made a command of each that a later undo
+    // crashed on
+    void candidates_make_no_undo_entries() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        sv::Pane *pane = a->getPane();
+        auto candidates = [&]() {
+            std::vector<QPointer<sv::Layer>> found;
+            for (int i = 0; i < pane->getLayerCount(); ++i) {
+                sv::Layer *layer = pane->getLayer(i);
+                if (layer->getLayerPresentationName() == "candidate") {
+                    found.push_back(layer);
+                }
+            }
+            return found;
+        };
+        sv::CommandHistory::getInstance()->clear();
+
+        std::vector<QPointer<sv::Layer>> earlier;
+        for (double start : { 0.5, 0.8 }) {
+            QString error = a->reAnalyseSelection
+                (sv::Selection(sv::sv_frame_t(start * rate),
+                               sv::sv_frame_t((start + 0.7) * rate)),
+                 Analyser::FrequencyRange());
+            QVERIFY2(error.isEmpty(), qPrintable(error));
+            QTRY_VERIFY_WITH_TIMEOUT(a->haveHigherPitchCandidate(), 30000);
+            QVERIFY(!candidates().empty());
+            for (const QPointer<sv::Layer> &layer : earlier) {
+                QVERIFY2(!layer, "a re-analysis left the candidates of the "
+                         "one before it alive");
+            }
+            QString undone = undoOnce();
+            QVERIFY2(undone.isEmpty(),
+                     qPrintable("the re-analysis left \"" + undone +
+                                "\" in the undo history"));
+            QVERIFY2(a->haveHigherPitchCandidate() && !candidates().empty(),
+                     "an undo took the pitch candidates away");
+            earlier = candidates();
+        }
+
+        a->clearReAnalysis();
+        QVERIFY2(candidates().empty(),
+                 "clearing the re-analysis left candidates in the pane");
+        for (const QPointer<sv::Layer> &layer : earlier) {
+            QVERIFY2(!layer, "clearing the re-analysis left its candidates "
+                     "alive");
+        }
     }
 
     void load_background_music() {

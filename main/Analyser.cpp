@@ -33,7 +33,6 @@
 #include "layer/LayerFactory.h"
 #include "layer/SpectrogramLayer.h"
 #include "layer/Colour3DPlotLayer.h"
-#include "layer/ShowLayerCommand.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
 
@@ -162,10 +161,9 @@ Analyser::analyseExistingFile()
 QString
 Analyser::doAllAnalyses(bool withPitchTrack)
 {
-    m_reAnalysingSelection = Selection();
-    m_reAnalysisCandidates.clear();
-    m_currentCandidate = -1;
-    m_candidatesVisible = false;
+    // Candidates of the analysis being replaced. Only forgotten, they
+    // would stay in the pane: nothing takes a layer of ours out but us
+    discardPitchCandidates();
 
     // Note that we need at least one main-model layer (time ruler,
     // waveform or what have you). It could be hidden if we don't want
@@ -969,10 +967,7 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
     }
 
     if (!m_reAnalysisCandidates.empty()) {
-        CommandHistory::getInstance()->startCompoundOperation
-            (tr("Discard Previous Candidates"), true);
         discardPitchCandidates();
-        CommandHistory::getInstance()->endCompoundOperation();
     }
 
     m_reAnalysingSelection = sel;
@@ -1432,16 +1427,10 @@ Analyser::showPitchCandidates(bool shown)
 {
     if (m_candidatesVisible == shown) return;
 
+    // Directly and not by command, as with every layer of our own: see
+    // layersCreated()
     foreach (Layer *layer, m_reAnalysisCandidates) {
-        if (shown) {
-            CommandHistory::getInstance()->addCommand
-                (new ShowLayerCommand(m_pane, layer, true,
-                                      tr("Show Pitch Candidates")));
-        } else {
-            CommandHistory::getInstance()->addCommand
-                (new ShowLayerCommand(m_pane, layer, false,
-                                      tr("Hide Pitch Candidates")));
-        }
+        layer->showLayer(m_pane, shown);
     }
 
     m_candidatesVisible = shown;
@@ -1468,9 +1457,10 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
         }
         m_currentAsyncHandle = 0;
 
-        CommandHistory::getInstance()->startCompoundOperation
-            (tr("Re-Analyse Selection"), true);
-
+        // Like every layer of our own, the candidates make no undo
+        // commands. An undo could otherwise take them out of the pane
+        // while they stay on our list, and removing them again later
+        // left a command holding a layer already deleted
         m_reAnalysisCandidates.clear();
 
         vector<Layer *> all;
@@ -1491,7 +1481,7 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
                 t->setBaseColour
                     (ColourDatabase::getInstance()->getColourIndex(tr("Bright Orange")));
                 t->setPresentationName("candidate");
-                m_document->addLayerToView(m_pane, t);
+                m_document->attachLayerToView(m_pane, t);
                 m_reAnalysisCandidates.push_back(t);
                 /*
                 cerr << "New re-analysis candidate model has "
@@ -1505,8 +1495,6 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
             m_candidatesVisible = !show; // to ensure the following takes effect
             showPitchCandidates(show);
         }
-
-        CommandHistory::getInstance()->endCompoundOperation();
     }
 
     emit layersChanged();
@@ -1628,15 +1616,14 @@ Analyser::clearReAnalysis()
 void
 Analyser::discardPitchCandidates()
 {
-    if (!m_reAnalysisCandidates.empty()) {
-        // We don't use a compound command here, because we may be
-        // already in one. Caller bears responsibility for doing that
-        foreach (Layer *layer, m_reAnalysisCandidates) {
-            // This will cause the layer to be deleted later (ownership is
-            // transferred to the remove command)
-            m_document->removeLayerFromView(m_pane, layer);
+    // Deleted outright, with no command: see layersCreated(). They exist
+    // only once their transform has finished, so there is none to cancel
+    vector<Layer *> doomed = m_reAnalysisCandidates;
+    m_reAnalysisCandidates.clear(); // before deleteLayer() tells us of each
+    if (m_document) {
+        for (Layer *layer : doomed) {
+            m_document->deleteLayer(layer, true);
         }
-        m_reAnalysisCandidates.clear();
     }
 
     m_currentCandidate = -1;

@@ -6763,11 +6763,7 @@ MainWindow::octaveShift(bool up)
 void
 MainWindow::togglePitchCandidates()
 {
-    CommandHistory::getInstance()->startCompoundOperation(tr("Toggle Pitch Candidates"), true);
-
     m_analyser->showPitchCandidates(!m_analyser->arePitchCandidatesShown());
-
-    CommandHistory::getInstance()->endCompoundOperation();
 
     updateMenuStates();
 }

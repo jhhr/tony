@@ -95,12 +95,15 @@ These were all learned from crashes or wrong behaviour. They hold for any new co
 
 ### Tony's own layers make no undo commands
 
-Every layer Tony makes for itself — analysers' layers, live dots, the recording's hidden
-waveform, the alternate pitch track, the coverage strip, background music — is added with
-**`Document::attachLayerToView()`** (svapp fork): in the view and in the layer-view map, so
-the session keeps it, but no command and no modified flag. `addLayerToView()` (the
-undoable Add Layer) must not be used for these: Undo after a take has to find the take.
-Whoever attaches the layer calls `documentModified()` if the change should count.
+Every layer Tony makes for itself — analysers' layers, pitch candidates, live dots, the
+recording's hidden waveform, the alternate pitch track, the coverage strip, background
+music — is added with **`Document::attachLayerToView()`** (svapp fork): in the view and in
+the layer-view map, so the session keeps it, but no command and no modified flag.
+`addLayerToView()` (the undoable Add Layer) must not be used for these: Undo after a take
+has to find the take. Whoever attaches the layer calls `documentModified()` if the change
+should count. Such a layer is shown and hidden with `showLayer()` and removed with
+`deleteLayer(layer, true)`, never by command: an undo that takes a layer out of the pane
+leaves whoever keeps a pointer to it holding a layer that the redo stack owns and deletes.
 
 ### Commands
 
