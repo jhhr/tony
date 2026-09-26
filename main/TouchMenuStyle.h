@@ -33,6 +33,11 @@ class QMenu;
  * QMenu scrolls by; the lift that ends a drag chooses nothing. A tap
  * chooses an item as before.
  *
+ * Menus and combo box lists stay inside the part of the screen a popup
+ * may use (PopupArea): clear of the system bars an app drawn edge to
+ * edge lies under, which the main window's safe area margins give, and
+ * of the top and bottom edges of the screen by edgeMargin.
+ *
  * Built everywhere and tested on the desktop, whose style is left as it
  * is: only main() on Android installs it.
  */
@@ -43,6 +48,17 @@ class TouchMenuStyle : public QProxyStyle
 public:
     // The application's style, or base if given, with menus for touch
     TouchMenuStyle(QStyle *base = nullptr);
+
+    // The window whose safe area popups keep inside: the main window,
+    // which covers the screen on a phone. None by default
+    void setSafeAreaWindow(QWidget *window);
+
+    // How far popups keep from the top and bottom of the screen, in
+    // pixels: 0 by default
+    void setEdgeMargin(int pixels);
+
+    // Where popup may be, in global coordinates
+    QRect usableArea(const QWidget *popup) const;
 
     int styleHint(StyleHint hint,
                   const QStyleOption *option = nullptr,
@@ -66,12 +82,19 @@ private:
     // The height a finger moves to scroll the menu by one row
     static int rowHeight(QMenu *menu);
 
+    // Whether widget is a combo box's list, a popup window of its own
+    static bool isComboList(const QWidget *widget);
+
     // The menu pressed on, where, how far the scrolling has followed the
     // finger, and whether the press has become a drag
     QPointer<QMenu> m_menu;
     double m_pressY;
     double m_scrolledToY;
     bool m_dragging;
+
+    QPointer<QWidget> m_safeAreaWindow;
+    int m_edgeMargin;
+    mutable QRect m_lastUsable;
 };
 
 #endif

@@ -16,15 +16,19 @@
 
 // Tier 5: menus taller than the screen, as a phone has them
 // (TouchMenuStyle): on the screen in one column, scrolled by a finger
-// dragged over them, every item reachable, and a tap still a choice.
-// The menus are real popups on the offscreen platform's screen; the
-// mouse events are what Qt makes of a finger on Android.
+// dragged over them, every item reachable, and a tap still a choice;
+// menus and combo box lists clear of the system bars and of the top and
+// bottom of the screen. The menus are real popups on the offscreen
+// platform's screen; the mouse events are what Qt makes of a finger on
+// Android.
 
 #include "../TouchMenuStyle.h"
 
 #include <QObject>
 #include <QtTest>
+#include <QAbstractItemView>
 #include <QAction>
+#include <QComboBox>
 #include <QGuiApplication>
 #include <QMenu>
 #include <QScreen>
@@ -201,6 +205,120 @@ private slots:
 
         QCOMPARE(triggered.count(), 1);
         QCOMPARE(triggered.at(0).at(0).value<QAction *>(), shown);
+    }
+
+    // --- Clear of the system bars and the screen's edges ---
+
+    static QRect onScreen(QWidget *w) {
+        return QRect(w->mapToGlobal(QPoint(0, 0)), w->size());
+    }
+
+    // Inside area, give or take the two pixels the offscreen platform
+    // moves a popup by
+    static bool within(QRect r, QRect area) {
+        return area.adjusted(-2, -2, 2, 2).contains(r);
+    }
+
+    static QString describe(QRect r, QRect area) {
+        return QString("%1,%2 %3x%4 in %5,%6 %7x%8")
+            .arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height())
+            .arg(area.x()).arg(area.y()).arg(area.width()).arg(area.height());
+    }
+
+    void a_long_menu_keeps_clear_of_the_top_and_bottom_and_still_scrolls() {
+        m_style->setEdgeMargin(60);
+        QMenu *menu = longMenu();
+        QVERIFY(QTest::qWaitForWindowExposed(menu));
+
+        QRect usable = m_style->usableArea(menu);
+        QCOMPARE(usable, screen().adjusted(0, 60, 0, -60));
+        QVERIFY2(within(onScreen(menu), usable),
+                 qPrintable(describe(onScreen(menu), usable)));
+
+        QPoint low(menu->width() / 2, menu->height() * 3 / 4);
+        QPoint high(menu->width() / 2, menu->height() / 4);
+        for (int i = 0; i < 10 && !shows(itemCount - 1); ++i) {
+            drag(low, high);
+        }
+        QVERIFY(shows(itemCount - 1));
+        QVERIFY2(within(onScreen(menu), usable),
+                 qPrintable(describe(onScreen(menu), usable)));
+    }
+
+    void a_short_menu_at_the_very_top_is_moved_down() {
+        m_style->setEdgeMargin(60);
+        m_menu.reset(new QMenu);
+        m_menu->setStyle(m_style.get());
+        m_menu->addAction("Open...");
+        m_menu->addAction("Open Recent");
+        m_menu->addAction("Save Session");
+        m_menu->popup(screen().topLeft());
+        QVERIFY(QTest::qWaitForWindowExposed(m_menu.get()));
+
+        QRect usable = m_style->usableArea(m_menu.get());
+        QVERIFY2(within(onScreen(m_menu.get()), usable),
+                 qPrintable(describe(onScreen(m_menu.get()), usable)));
+        QVERIFY(onScreen(m_menu.get()).top() >= screen().top() + 58);
+    }
+
+    void menus_keep_inside_the_main_windows_safe_area() {
+        // The offscreen platform has no system bars and no safe area
+        // margins: a main window short of the screen on every side
+        // stands for the part the bars leave
+        QWidget window;
+        window.setGeometry(screen().adjusted(40, 80, -40, -100));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        m_style->setSafeAreaWindow(&window);
+
+        QMenu *menu = longMenu();
+        QVERIFY(QTest::qWaitForWindowExposed(menu));
+
+        QRect usable = m_style->usableArea(menu);
+        QCOMPARE(usable, onScreen(&window) & screen());
+        QVERIFY2(within(onScreen(menu), usable),
+                 qPrintable(describe(onScreen(menu), usable)));
+
+        m_menu.reset();
+    }
+
+    void a_combo_boxs_list_keeps_clear_too() {
+        m_style->setEdgeMargin(60);
+
+        // At the top of the screen, as the take box is in the compact
+        // layout's toolbar, its list longer than the screen is high
+        QComboBox combo;
+        combo.setStyle(m_style.get());
+        for (int i = 0; i < itemCount; ++i) {
+            combo.addItem(QString("Take %1").arg(i));
+        }
+        combo.setCurrentIndex(itemCount / 2);
+        QWidget *list = combo.view()->parentWidget();
+        list->setStyle(m_style.get());
+        combo.move(screen().topLeft());
+        combo.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&combo));
+
+        combo.showPopup();
+        QVERIFY(QTest::qWaitForWindowExposed(list));
+
+        QRect usable = m_style->usableArea(list);
+        QVERIFY2(within(onScreen(list), usable),
+                 qPrintable(describe(onScreen(list), usable)));
+
+        combo.hidePopup();
+    }
+
+    void without_margins_menus_are_placed_as_before() {
+        // As the desktop has it: the style's own margin, and the screen
+        TouchMenuStyle plain;
+        m_menu.reset(new QMenu);
+        m_menu->addAction("Item");
+        QCOMPARE(plain.usableArea(m_menu.get()), screen());
+        QCOMPARE(plain.pixelMetric(QStyle::PM_MenuDesktopFrameWidth, nullptr,
+                                   m_menu.get()),
+                 plain.baseStyle()->pixelMetric
+                 (QStyle::PM_MenuDesktopFrameWidth, nullptr, m_menu.get()));
     }
 };
 

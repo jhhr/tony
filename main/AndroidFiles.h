@@ -18,6 +18,9 @@
 #include <QString>
 #include <QStringList>
 
+class QIODevice;
+class QUrl;
+
 /**
  * File work that only the Android build calls: Android hands Tony
  * neither its Vamp plugins under their own names nor the files the user
@@ -67,6 +70,14 @@ public:
                           QString &error);
 
     /**
+     * The same, from in, open for reading: on Android a file descriptor
+     * the file's provider gave (AndroidStorage::openDocument()), which
+     * may be a pipe. sourceName says where it came from, for the log.
+     */
+    static QString copyIn(QIODevice &in, QString sourceName, QString name,
+                          QString dir, QString &error);
+
+    /**
      * name as a file name that can be used in any directory: path
      * separators and the characters Windows refuses become '_', and a
      * name that is empty or only dots becomes "imported".
@@ -74,10 +85,30 @@ public:
     static QString safeFileName(QString name);
 
     /**
+     * The URI of a file picked in Android's picker, as the string Android
+     * wrote: Android lets Tony read that document through that exact
+     * string only (its grants are matched by string), and Qt's
+     * QFileDialog::selectedFiles() gives it partly decoded (spaces and
+     * letters such as 'ä' unencoded, "%3A" and "%2F" kept). Qt's own
+     * content file engine turns that back into a URI with '(' and ')'
+     * (and "!'*") encoded, which Android leaves as they are, so for a
+     * name holding any of those it finds no grant and reports the file
+     * missing. picked is the QUrl the picker gave (selectedUrls()).
+     */
+    static QString grantedUri(const QUrl &picked);
+
+    /**
+     * The authority of a content:// URI: which app's provider the file
+     * comes from, such as com.google.android.apps.docs.storage (Google
+     * Drive); "" if uri is not content://.
+     */
+    static QString providerOf(QString uri);
+
+    /**
      * The real path of the file a content:// URI from Android's file
-     * picker names, when it lies in the phone's own storage; "" for any
-     * other URI (a cloud provider's, the media provider's, a download
-     * known only by number), which has no path Tony could use.
+     * picker names, when the URI itself says it; "" for any other URI (a
+     * cloud provider's, and the documents whose path is looked up in
+     * MediaStore: see pathLookupFor()).
      *
      * The external storage provider's documents, alone or under a folder
      * grant (.../document/<id> and .../tree/<id>/document/<id>), have ids
@@ -89,6 +120,57 @@ public:
      * URI, and may be partly decoded in the string Qt hands over.
      */
     static QString pathFromContentUri(QString uri, QString primaryRoot);
+
+    /**
+     * How the real path of a picked document can be found, if it is in
+     * the phone's own storage. Only InUri needs nothing more than the
+     * URI; the rest need All files access, without which MediaStore
+     * shows Tony none of the files other apps put there.
+     */
+    enum class PathLookup {
+        None,          // A cloud provider's, or not a file: no path
+        InUri,         // pathFromContentUri()
+        MediaStore,    // The _data column of mediaStoreUriFor()'s row
+        ByNameAndSize  // A numbered download: see chooseDownload()
+    };
+    static PathLookup pathLookupFor(QString uri);
+
+    /**
+     * The MediaStore row (content://media/external/...) whose _data
+     * column holds the path of the file behind uri, for the downloads
+     * provider's "msf:<n>" (a download MediaStore knows) and the media
+     * provider's "audio:<n>", "image:<n>", "video:<n>" and
+     * "document:<n>" (the picker's Audio, Images, Videos and Documents,
+     * and much of its Recent); "" for any other uri.
+     */
+    static QString mediaStoreUriFor(QString uri);
+
+    /**
+     * The downloads provider names a file the download manager fetched
+     * by its number there ("<n>"), and the download manager shows other
+     * apps none of its records. Such a file is found in MediaStore, where
+     * the download manager puts every download, by the name and size the
+     * provider gives: candidates are the paths of the files of that name
+     * and size. Returns the only one, or else the only one in the
+     * Download folder of primaryRoot; "" if that does not settle it.
+     */
+    static QString chooseDownload(QStringList candidates, QString primaryRoot);
+
+    /**
+     * Whether name has one of the extensions in patterns, a list such as
+     * svcore's getKnownExtensions() give ("*.wav *.mp3"), in any case.
+     * The picker offers every file, and Android's file types cannot say
+     * which are Tony's (see MainWindow::getOpenFileName()).
+     */
+    static bool hasExtensionIn(QString name, QString patterns);
+
+    /**
+     * The entries of the recent files list that can be opened: paths of
+     * files that are there. A file moved or deleted since, and anything
+     * that is not a path (a content:// URI, which the picker's grant no
+     * longer covers), is left out.
+     */
+    static QStringList usableRecentFiles(QStringList identifiers);
 
     /**
      * The name Save Session As suggests on Android, where the system's

@@ -45,13 +45,19 @@
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
+#include "AndroidStorage.h"
+#include "LogFile.h"
+#include "PopupArea.h"
 #include "TouchMenuStyle.h"
 #include <QStandardPaths>
+#include <QtCore/qcoreapplication_platform.h>
 #include <android/log.h>
 #include <cerrno>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 #endif
 
 #include "../version.h"
@@ -144,10 +150,50 @@ protected:
 };
 
 #ifdef Q_OS_ANDROID
+// Each line that goes to the system log goes to a file in the app's own
+// storage as well, from when keepSystemLogInFile() is called (it needs
+// the application): the user, who has no adb to read the system log
+// with, can save a copy of it with Help > Save Log... and send it. The
+// lines before that are held until then
+static std::mutex logFileMutex;
+static LogFile *logFile = nullptr;
+static std::vector<std::string> linesBeforeLogFile;
+
+static void
+writeToLogFile(const std::string &line)
+{
+    std::lock_guard<std::mutex> lock(logFileMutex);
+    if (logFile) {
+        logFile->write(QByteArray::fromStdString(line));
+    } else if (linesBeforeLogFile.size() < 1000) {
+        linesBeforeLogFile.push_back(line);
+    }
+}
+
+static void
+keepSystemLogInFile(QString path)
+{
+    std::lock_guard<std::mutex> lock(logFileMutex);
+    LogFile *file = new LogFile(path, 512 * 1024);
+    if (!file->open()) {
+        delete file;
+        linesBeforeLogFile.clear();
+        __android_log_write(ANDROID_LOG_WARN, "Tony",
+                            "Cannot write the log file");
+        return;
+    }
+    for (const std::string &line : linesBeforeLogFile) {
+        file->write(QByteArray::fromStdString(line));
+    }
+    linesBeforeLogFile.clear();
+    logFile = file;
+}
+
 // An Android app's stdout and stderr lead nowhere, and Tony and svcore
 // report through cerr. Send both into a pipe, and have a thread pass what
 // comes out of it on to the system log (logcat), a line at a time, under
-// the tag "Tony". Qt's own messages go to the system log already.
+// the tag "Tony", and to the log file. Qt's own messages go to the system
+// log only.
 static void
 sendOutputToSystemLog()
 {
@@ -172,6 +218,7 @@ sendOutputToSystemLog()
                 // The system log cuts longer lines short
                 if (buffer[i] == '\n' || line.size() >= 1000) {
                     __android_log_write(ANDROID_LOG_INFO, "Tony", line.c_str());
+                    writeToLogFile(line);
                     line.clear();
                 }
                 if (buffer[i] != '\n') line += buffer[i];
@@ -310,6 +357,13 @@ main(int argc, char **argv)
     QApplication::setOrganizationDomain("sonicvisualiser.org");
     QApplication::setApplicationName("Tony");
 
+#ifdef Q_OS_ANDROID
+    keepSystemLogInFile(AndroidStorage::logPath());
+    cerr << "Tony " << TONY_VERSION << " on Android API "
+         << QNativeInterface::QAndroidApplication::sdkVersion()
+         << ", Qt " << qVersion() << endl;
+#endif
+
     QStringList pluginProblems = setupTonyVampPath();
 
     QStringList args = application.arguments();
@@ -398,6 +452,20 @@ main(int argc, char **argv)
 
     QScreen *screen = QApplication::primaryScreen();
     QRect available = screen->availableGeometry();
+
+#ifdef Q_OS_ANDROID
+    // Menus clear of the system bars, which the main window's safe area
+    // margins give, and a finger's width from the screen's top and bottom
+    if (TouchMenuStyle *style =
+        qobject_cast<TouchMenuStyle *>(QApplication::style())) {
+        int margin = PopupArea::fingerWidth(screen->physicalDotsPerInchY());
+        style->setSafeAreaWindow(gui);
+        style->setEdgeMargin(margin);
+        cerr << "Menus keep " << margin << " px from the screen's top and "
+             << "bottom (" << screen->physicalDotsPerInchY() << " px per "
+             << "inch)" << endl;
+    }
+#endif
 
     int width = (available.width() * 2) / 3;
     int height = available.height() / 2;

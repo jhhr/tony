@@ -44,9 +44,33 @@ public:
     // /storage/emulated/0; "" if Android does not say
     static QString primaryRoot();
 
-    // The real path of a content:// URI the file picker gave, if it names
-    // a file in the phone's own storage; else ""
-    QString pathFor(QString uri) const;
+    // The real path of the file a content:// URI the file picker gave
+    // names, if it is in the phone's own storage: from the URI, or from
+    // MediaStore, which shows Tony other apps' files only with All files
+    // access (AndroidFiles::pathLookupFor()). Else "", with why saying
+    // why not. Whether the file is there is not checked. The URI as
+    // Android wrote it (AndroidFiles::grantedUri()): the picker's grant
+    // is for that string only
+    static QString pathFor(QString uri, QString &why);
+
+    // The name the file's provider gives the document at uri; "" if it
+    // gives none
+    static QString displayName(QString uri);
+
+    // A file descriptor for the document at uri, open to read ("r") or
+    // write ("w"), which the caller closes (QFile's AutoCloseHandle); -1
+    // on failure, with error saying why. Called here rather than through
+    // QFile, whose content file engine rebuilds the URI, differently for
+    // names with parentheses, and then has no grant for it
+    static int openDocument(QString uri, QString mode, QString &error);
+
+    // Removes the document at uri if it is empty: the one the picker
+    // makes for a save, when the save is not made there. True if it did
+    static bool removeIfEmpty(QString uri);
+
+    // The file Tony's output is kept in as well as the system log
+    // (main.cpp), which Help > Save Log... saves a copy of (LogFile)
+    static QString logPath();
 
     // Asks for All files access: why, in a box, and then the system's
     // settings page for it; back from there, checks again. True if Tony

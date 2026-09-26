@@ -16,7 +16,9 @@
 #include "TestRealtimePitchTracker.h"
 #include "TestLatencyShift.h"
 #include "TestCoverage.h"
+#include "TestLogFile.h"
 #include "TestPinchZoom.h"
+#include "TestPopupArea.h"
 #include "TestStreamLatency.h"
 #include "TestTakeAudio.h"
 #include "TestTakeEvents.h"
@@ -78,7 +80,19 @@ int main(int argc, char *argv[])
     }
 
     {
+        TestLogFile t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestPinchZoom t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestPopupArea t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

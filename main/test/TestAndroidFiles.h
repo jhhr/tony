@@ -16,11 +16,12 @@
 
 // Tier 1: the file work the Android build does at start (the Vamp plugin
 // links) and when a file is picked (the copy into app storage, the path
-// of a picked content:// URI, the names Save Session As suggests and
-// accepts), done here on plain files in a temporary directory and on
-// URIs written as Android writes them. What only a phone has -- a
-// provider behind the URI, the installed library directory -- is not
-// here.
+// of a picked content:// URI or where to look it up, the URI string
+// Android granted, the files Tony opens, the names Save Session As
+// suggests and accepts, the recent files that are still there), done
+// here on plain files in a temporary directory and on URIs written as
+// Android writes them. What only a phone has -- a provider behind the
+// URI, MediaStore, the installed library directory -- is not here.
 
 #include "../AndroidFiles.h"
 
@@ -28,6 +29,7 @@
 
 #include <QObject>
 #include <QtTest>
+#include <QBuffer>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -143,6 +145,26 @@ private slots:
         QCOMPARE(QDir(into).entryList(QDir::Files), QStringList({ "take.wav" }));
     }
 
+    void a_file_is_copied_from_what_its_provider_hands_over() {
+        // On Android: a file descriptor from the provider, through the URI
+        // as Android wrote it, which may be a pipe with no size
+        QByteArray content("ID3 and the rest of an MP3");
+        QBuffer pipe(&content);
+        QVERIFY(pipe.open(QIODevice::ReadOnly));
+
+        QString into = newPath("imported");
+        QString error;
+        QString copy = AndroidFiles::copyIn
+            (pipe, "content://com.google.android.apps.docs.storage/document/"
+             "acc%3D1%3Bdoc%3Dencoded%3Dabc",
+             "(vocals) Avi Kaplan - Peace Somehow.mp3", into, error);
+
+        QCOMPARE(error, QString());
+        QCOMPARE(copy, QDir(into).filePath
+                 ("(vocals) Avi Kaplan - Peace Somehow.mp3"));
+        QCOMPARE(readFile(copy), content);
+    }
+
     void a_name_cannot_put_the_copy_elsewhere() {
         QString source = newDir("provider") + "/document";
         QVERIFY(writeFile(source, "x"));
@@ -250,7 +272,8 @@ private slots:
                 "acc%3D1%3Bdoc%3Dencoded%3DabcDEF",
             "content://com.dropbox.android.document/document/"
                 "%2FSongs%2Ftest.ton",
-            // The media provider and a download, by number
+            // The media provider and a download, by number: looked up in
+            // MediaStore instead (pathLookupFor())
             "content://com.android.providers.media.documents/document/audio%3A42",
             "content://com.android.providers.downloads.documents/document/msf%3A1234",
             "content://com.android.providers.downloads.documents/document/1234",
@@ -293,6 +316,229 @@ private slots:
                  ("content://com.android.providers.downloads.documents/"
                   "document/raw%3A%2Fstorage%2F..%2Fdata%2Fx", root),
                  QString());
+    }
+
+    // The user's session, whose name has spaces and parentheses, in each
+    // form its URI can come in: as Android writes it; as
+    // QFileDialog::selectedFiles() gives it (what the "File does not
+    // exist" box showed); and as Qt's content file engine rebuilds it,
+    // with the parentheses encoded as well
+    void the_users_session_has_its_path_in_every_form_of_its_uri() {
+        QString root = "/storage/emulated/0";
+        QString provider =
+            "content://com.android.externalstorage.documents/document/";
+        QString name = "(vocals) Avi Kaplan - Peace Somehow.ton";
+        QString inMusic = "/storage/emulated/0/Music/" + name;
+        QString inDownload = "/storage/emulated/0/Download/" + name;
+
+        QString android = provider + "primary%3AMusic%2F"
+            "(vocals)%20Avi%20Kaplan%20-%20Peace%20Somehow.ton";
+        QString shown = provider + "primary%3AMusic%2F"
+            "(vocals) Avi Kaplan - Peace Somehow.ton";
+        QString rebuilt = provider + "primary%3AMusic%2F"
+            "%28vocals%29%20Avi%20Kaplan%20-%20Peace%20Somehow.ton";
+
+        QCOMPARE(pickedAsQtGivesIt(android), shown);
+        QCOMPARE(AndroidFiles::pathFromContentUri(android, root), inMusic);
+        QCOMPARE(AndroidFiles::pathFromContentUri(shown, root), inMusic);
+        QCOMPARE(AndroidFiles::pathFromContentUri(rebuilt, root), inMusic);
+        QCOMPARE(AndroidFiles::pathLookupFor(shown),
+                 AndroidFiles::PathLookup::InUri);
+
+        // In Download, by the phone's storage or by the Downloads root
+        QString download = provider + "primary%3ADownload%2F"
+            "(vocals)%20Avi%20Kaplan%20-%20Peace%20Somehow.ton";
+        QCOMPARE(AndroidFiles::pathFromContentUri(download, root), inDownload);
+        QCOMPARE(AndroidFiles::pathFromContentUri
+                 (pickedAsQtGivesIt(download), root), inDownload);
+        QString raw = "content://com.android.providers.downloads.documents/"
+            "document/raw%3A%2Fstorage%2Femulated%2F0%2FDownload%2F"
+            "(vocals)%20Avi%20Kaplan%20-%20Peace%20Somehow.ton";
+        QCOMPARE(AndroidFiles::pathFromContentUri(raw, root), inDownload);
+        QCOMPARE(AndroidFiles::pathFromContentUri
+                 (pickedAsQtGivesIt(raw), root), inDownload);
+
+        // Under a grant of the folder
+        QString tree = "content://com.android.externalstorage.documents/"
+            "tree/primary%3AMusic/document/primary%3AMusic%2F"
+            "(vocals)%20Avi%20Kaplan%20-%20Peace%20Somehow.ton";
+        QCOMPARE(AndroidFiles::pathFromContentUri(tree, root), inMusic);
+        QCOMPARE(AndroidFiles::pathFromContentUri
+                 (pickedAsQtGivesIt(tree), root), inMusic);
+    }
+
+    // What Tony opens a picked document by, when it has no path: the URI
+    // exactly as Android wrote it, which is what Android granted
+    void the_uri_is_opened_as_android_wrote_it() {
+        QStringList uris = {
+            "content://com.android.externalstorage.documents/document/"
+                "primary%3AMusic%2F(vocals)%20Avi%20Kaplan%20-%20Peace%20"
+                "Somehow.ton",
+            // Uri.encode() leaves "_-!.~'()*" as they are, and encodes
+            // the rest as UTF-8, in capitals
+            "content://com.android.externalstorage.documents/document/"
+                "primary%3ADownload%2FIt's%20a%20*star*!%20%C3%84%C3%A4ni"
+                "%20%2B%26%3D%3B%2C%24%23%3F%25%5B%5D.wav",
+            "content://com.android.externalstorage.documents/document/"
+                "primary%3ADownload%2F%7B%7D%7C%5C%5E%60%22%3C%3E%40.wav",
+            "content://com.android.externalstorage.documents/tree/"
+                "primary%3AMusic/document/primary%3AMusic%2F(a)%20b.ton",
+            "content://com.google.android.apps.docs.storage/document/"
+                "acc%3D1%3Bdoc%3Dencoded%3DAbC-_x%2Fy%2Bz%3D%3D",
+            "content://com.android.providers.downloads.documents/document/"
+                "msf%3A1000001234",
+            "content://com.android.providers.downloads.documents/document/"
+                "raw%3A%2Fstorage%2Femulated%2F0%2FDownload%2Fx%20(1).ton",
+            "content://com.android.providers.downloads.documents/document/1234",
+            "content://com.android.providers.media.documents/document/"
+                "audio%3A42",
+        };
+        for (QString uri : uris) {
+            QCOMPARE(AndroidFiles::grantedUri(QUrl(uri)), uri);
+        }
+
+        // Not the string the picker's selectedFiles() gives: that has the
+        // spaces decoded, and is another URI to Android
+        QVERIFY(pickedAsQtGivesIt(uris[0]) != uris[0]);
+    }
+
+    void the_provider_is_named() {
+        QCOMPARE(AndroidFiles::providerOf
+                 ("content://com.google.android.apps.docs.storage/document/"
+                  "acc%3D1%3Bdoc%3Dencoded%3Dabc"),
+                 QString("com.google.android.apps.docs.storage"));
+        QCOMPARE(AndroidFiles::providerOf
+                 ("content://com.android.externalstorage.documents/root/primary"),
+                 QString("com.android.externalstorage.documents"));
+        QCOMPARE(AndroidFiles::providerOf("/storage/emulated/0/x.ton"),
+                 QString());
+        QCOMPARE(AndroidFiles::providerOf(""), QString());
+    }
+
+    void downloads_and_media_are_looked_up_in_mediastore() {
+        QString downloads =
+            "content://com.android.providers.downloads.documents/document/";
+        QString media =
+            "content://com.android.providers.media.documents/document/";
+        using L = AndroidFiles::PathLookup;
+
+        QCOMPARE(AndroidFiles::pathLookupFor(downloads + "msf%3A1000001234"),
+                 L::MediaStore);
+        QCOMPARE(AndroidFiles::mediaStoreUriFor(downloads + "msf%3A1000001234"),
+                 QString("content://media/external/downloads/1000001234"));
+        // As the picker's selectedFiles() gives it
+        QCOMPARE(AndroidFiles::mediaStoreUriFor(downloads + "msf:77"),
+                 QString("content://media/external/downloads/77"));
+
+        QCOMPARE(AndroidFiles::pathLookupFor(media + "audio%3A42"),
+                 L::MediaStore);
+        QCOMPARE(AndroidFiles::mediaStoreUriFor(media + "audio%3A42"),
+                 QString("content://media/external/audio/media/42"));
+        QCOMPARE(AndroidFiles::mediaStoreUriFor(media + "image%3A7"),
+                 QString("content://media/external/images/media/7"));
+        QCOMPARE(AndroidFiles::mediaStoreUriFor(media + "video%3A8"),
+                 QString("content://media/external/video/media/8"));
+        QCOMPARE(AndroidFiles::mediaStoreUriFor(media + "document%3A9"),
+                 QString("content://media/external/file/9"));
+
+        // A download known by its number in the download manager
+        QCOMPARE(AndroidFiles::pathLookupFor(downloads + "1234"),
+                 L::ByNameAndSize);
+        QCOMPARE(AndroidFiles::mediaStoreUriFor(downloads + "1234"), QString());
+
+        // The path is in the URI
+        QCOMPARE(AndroidFiles::pathLookupFor
+                 (downloads + "raw%3A%2Fstorage%2Femulated%2F0%2FDownload%2Fa.ton"),
+                 L::InUri);
+        QCOMPARE(AndroidFiles::pathLookupFor
+                 ("content://com.android.externalstorage.documents/document/"
+                  "primary%3AMusic%2Fa.ton"),
+                 L::InUri);
+
+        // Nothing to look up: folders, the providers' roots and groups, a
+        // cloud provider's documents, ids that are not numbers
+        QStringList none = {
+            downloads + "msd%3A55",
+            downloads + "downloads",
+            downloads + "msf%3A12a",
+            downloads + "raw%3ASong.mp3",
+            media + "audio_root",
+            media + "album%3A3",
+            media + "artist%3A4",
+            media + "images_bucket%3A5",
+            media + "audio%3A",
+            "content://com.android.providers.media.documents/tree/audio_root",
+            "content://com.google.android.apps.docs.storage/document/"
+                "acc%3D1%3Bdoc%3Dencoded%3Dabc",
+            "content://com.android.externalstorage.documents/document/Music",
+            "content://media/external/audio/media/42",
+            "/storage/emulated/0/Download/a.ton",
+            "",
+        };
+        for (QString uri : none) {
+            QCOMPARE(AndroidFiles::pathLookupFor(uri), L::None);
+            QCOMPARE(AndroidFiles::mediaStoreUriFor(uri), QString());
+        }
+    }
+
+    void a_numbered_download_is_found_by_name_and_size() {
+        QString root = "/storage/emulated/0";
+        QString download = "/storage/emulated/0/Download/Song (1).mp3";
+        QString copy = "/storage/emulated/0/Music/Song (1).mp3";
+        QString deeper = "/storage/emulated/0/Download/Old/Song (1).mp3";
+
+        QCOMPARE(AndroidFiles::chooseDownload({ download }, root), download);
+        QCOMPARE(AndroidFiles::chooseDownload({ copy }, root), copy);
+
+        // Several of that name and size: the one in Download
+        QCOMPARE(AndroidFiles::chooseDownload({ copy, download, deeper }, root),
+                 download);
+        QCOMPARE(AndroidFiles::chooseDownload({ download, copy }, root + "/"),
+                 download);
+        QCOMPARE(AndroidFiles::chooseDownload({ download, download }, root),
+                 download);
+
+        // Not settled
+        QCOMPARE(AndroidFiles::chooseDownload({ copy, deeper }, root), QString());
+        QCOMPARE(AndroidFiles::chooseDownload({ download, copy }, ""), QString());
+        QCOMPARE(AndroidFiles::chooseDownload({}, root), QString());
+        QCOMPARE(AndroidFiles::chooseDownload({ "" }, root), QString());
+    }
+
+    void only_tonys_own_files_are_opened() {
+        QString session = "*.ton";
+        QString audio = "*.aiff *.flac *.mp3 *.ogg *.opus *.wav";
+
+        QVERIFY(AndroidFiles::hasExtensionIn
+                ("(vocals) Avi Kaplan - Peace Somehow.ton", session));
+        QVERIFY(AndroidFiles::hasExtensionIn("Song.MP3", audio));
+        QVERIFY(AndroidFiles::hasExtensionIn("Song v1.2.wav", audio));
+        QVERIFY(AndroidFiles::hasExtensionIn("a.WaV", "*.WAV"));
+
+        QVERIFY(!AndroidFiles::hasExtensionIn("Song.ton", audio));
+        QVERIFY(!AndroidFiles::hasExtensionIn("Notes.pdf", session + " " + audio));
+        QVERIFY(!AndroidFiles::hasExtensionIn("Song", audio));
+        QVERIFY(!AndroidFiles::hasExtensionIn("Song.mp3.part", audio));
+        QVERIFY(!AndroidFiles::hasExtensionIn("mp3", audio));
+        QVERIFY(!AndroidFiles::hasExtensionIn("", audio));
+        QVERIFY(!AndroidFiles::hasExtensionIn("Song.mp3", ""));
+    }
+
+    void recent_files_that_are_gone_are_left_out() {
+        QString dir = newDir("recent");
+        QString here = dir + "/Here.ton";
+        QString moved = dir + "/Moved.ton";
+        QVERIFY(writeFile(here, "BZh91AY&SY"));
+
+        QStringList recent = {
+            moved,
+            here,
+            "content://com.android.externalstorage.documents/document/"
+                "primary%3AMusic%2FSong.mp3",
+            newDir("a-folder"),
+            "",
+        };
+        QCOMPARE(AndroidFiles::usableRecentFiles(recent), QStringList({ here }));
     }
 
     // --- The name Save Session As suggests and accepts ---

@@ -914,8 +914,20 @@ protected:
     // is, by its path, once Tony has All files access (AndroidStorage),
     // so that a session finds its audio and takes beside it. Other audio
     // is copied into the app's own storage and the copy's path returned;
-    // other sessions are refused
+    // other sessions are refused. Tony's own picker, not svgui's dialog:
+    // that asks Qt whether the URI's file exists, and Qt's content file
+    // engine says no for a name with parentheses (AndroidFiles::
+    // grantedUri()); and it offers only the types Qt names for its
+    // filters, which are not always Android's
     QString getOpenFileName(sv::FileFinder::FileType type) override;
+
+    // What to tell the user of a picked file that could not be opened or
+    // saved, to pass on: its provider, the path looked for, and why
+    QString pickDetails(QString uri, QString path, QString why) const;
+
+    // Help > Save Log...: Tony's log (main.cpp) through the save picker,
+    // for a user who cannot read the system log to send
+    void saveLog();
 
     // Save Session As: Tony's own picker, which suggests a name (svgui's
     // suggests none), and then the path of the file picked in the phone's
@@ -924,6 +936,11 @@ protected:
     // are saved as before
     QString getSaveFileName(sv::FileFinder::FileType type) override;
     AndroidStorage *m_storage;
+
+    // A recent file that has been moved or deleted is said to be so, and
+    // is no longer offered (RecentFiles keeps it, having no way to drop
+    // one)
+    bool recentFileIsThere(QString path);
 
     // Android sends Tony to the background: playback stops, a take being
     // recorded is finished as Stop finishes it, and the session is saved

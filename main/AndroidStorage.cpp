@@ -22,6 +22,7 @@
 #include <QJniObject>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStandardPaths>
 #include <QtCore/qcoreapplication_platform.h>
 
 #include <iostream>
@@ -56,10 +57,313 @@ AndroidStorage::primaryRoot()
         ("getAbsolutePath", "()Ljava/lang/String;").toString();
 }
 
+// ContentResolver calls are made through JNI directly rather than through
+// QJniObject, which clears an exception a call throws (a
+// SecurityException for a URI without a grant, say) and tells only the
+// system log: here it is caught and said, for the user's message and
+// Tony's own log
+namespace {
+
+// The exception the last call left, as Java names it, cleared; "" if
+// there is none
 QString
-AndroidStorage::pathFor(QString uri) const
+takeException(QJniEnvironment &env)
 {
-    return AndroidFiles::pathFromContentUri(uri, primaryRoot());
+    if (!env->ExceptionCheck()) return "";
+    jthrowable thrown = env->ExceptionOccurred();
+    env->ExceptionClear();
+    QString text("an unknown exception");
+    if (thrown) {
+        jclass thrownClass = env->GetObjectClass(thrown);
+        jmethodID toString = env->GetMethodID
+            (thrownClass, "toString", "()Ljava/lang/String;");
+        jobject description =
+            (toString ? env->CallObjectMethod(thrown, toString) : nullptr);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (description) {
+            text = QJniObject::fromLocalRef(description).toString();
+        }
+        env->DeleteLocalRef(thrownClass);
+        env->DeleteLocalRef(thrown);
+    }
+    return text;
+}
+
+QJniObject
+contentResolver()
+{
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid()) return QJniObject();
+    return context.callObjectMethod
+        ("getContentResolver", "()Landroid/content/ContentResolver;");
+}
+
+// Uri.parse(): the same string, to the character, so that a grant for it
+// is found
+QJniObject
+parseUri(QString uri)
+{
+    return QJniObject::callStaticObjectMethod
+        ("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;",
+         QJniObject::fromString(uri).object<jstring>());
+}
+
+jobjectArray
+stringArray(QJniEnvironment &env, QStringList strings)
+{
+    jclass stringClass = env->FindClass("java/lang/String");
+    jobjectArray array = env->NewObjectArray(jsize(strings.size()),
+                                             stringClass, nullptr);
+    for (int i = 0; i < strings.size(); ++i) {
+        QJniObject s = QJniObject::fromString(strings[i]);
+        env->SetObjectArrayElement(array, jsize(i), s.object());
+    }
+    env->DeleteLocalRef(stringClass);
+    return array;
+}
+
+// ContentResolver.query(): each row the values of columns in order, as
+// strings ("" for none). Empty, with error saying why, if it fails
+QList<QStringList>
+query(QString uri, QStringList columns, QString selection,
+      QStringList arguments, QString &error)
+{
+    QList<QStringList> rows;
+
+    QJniObject resolver = contentResolver();
+    QJniObject parsed = parseUri(uri);
+    if (!resolver.isValid() || !parsed.isValid()) {
+        error = "no content resolver";
+        return rows;
+    }
+
+    QJniEnvironment env;
+    jclass resolverClass = env->GetObjectClass(resolver.object());
+    jmethodID queryMethod = env->GetMethodID
+        (resolverClass, "query",
+         "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;"
+         "[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;");
+    env->DeleteLocalRef(resolverClass);
+    if (!queryMethod) {
+        error = takeException(env);
+        return rows;
+    }
+
+    jobjectArray projection = stringArray(env, columns);
+    jobjectArray selectionArgs =
+        (arguments.empty() ? nullptr : stringArray(env, arguments));
+    QJniObject selectionString;
+    if (selection != "") selectionString = QJniObject::fromString(selection);
+
+    jobject cursor = env->CallObjectMethod
+        (resolver.object(), queryMethod, parsed.object(), projection,
+         selectionString.isValid() ? selectionString.object() : nullptr,
+         selectionArgs, nullptr);
+    QString thrown = takeException(env);
+
+    env->DeleteLocalRef(projection);
+    if (selectionArgs) env->DeleteLocalRef(selectionArgs);
+
+    if (thrown != "") {
+        error = thrown;
+        return rows;
+    }
+    if (!cursor) {
+        error = "the provider answered nothing";
+        return rows;
+    }
+
+    QJniObject c = QJniObject::fromLocalRef(cursor);
+    while (c.callMethod<jboolean>("moveToNext", "()Z")) {
+        QStringList row;
+        for (int i = 0; i < columns.size(); ++i) {
+            row << c.callObjectMethod("getString", "(I)Ljava/lang/String;",
+                                      jint(i)).toString();
+        }
+        rows << row;
+    }
+    c.callMethod<void>("close", "()V");
+    return rows;
+}
+
+}
+
+QString
+AndroidStorage::pathFor(QString uri, QString &why)
+{
+    QString app = QApplication::applicationName();
+    QString error;
+
+    switch (AndroidFiles::pathLookupFor(uri)) {
+
+    case AndroidFiles::PathLookup::None:
+        why = tr("its provider gives no path for it");
+        return "";
+
+    case AndroidFiles::PathLookup::InUri: {
+        QString path = AndroidFiles::pathFromContentUri(uri, primaryRoot());
+        if (path == "") why = tr("its path could not be read from its URI");
+        return path;
+    }
+
+    case AndroidFiles::PathLookup::MediaStore: {
+        if (!hasAllFilesAccess()) {
+            why = tr("%1 has no All files access, without which it cannot "
+                     "look up where the file is").arg(app);
+            return "";
+        }
+        QString row = AndroidFiles::mediaStoreUriFor(uri);
+        QList<QStringList> rows = query(row, { "_data" }, "", {}, error);
+        if (rows.size() == 1 && rows[0].size() == 1 && rows[0][0] != "") {
+            return rows[0][0];
+        }
+        why = (error != "" ?
+               tr("MediaStore could not be asked for %1: %2").arg(row, error) :
+               tr("MediaStore has no path for %1").arg(row));
+        return "";
+    }
+
+    case AndroidFiles::PathLookup::ByNameAndSize: {
+        if (!hasAllFilesAccess()) {
+            why = tr("%1 has no All files access, without which it cannot "
+                     "look up where the file is").arg(app);
+            return "";
+        }
+        // The name and size the downloads provider gives, through the
+        // picker's grant; then the files of that name and size
+        QList<QStringList> document =
+            query(uri, { "_display_name", "_size" }, "", {}, error);
+        if (document.size() != 1 || document[0].size() != 2 ||
+            document[0][0] == "") {
+            why = (error != "" ?
+                   tr("its provider could not be asked for its name: %1")
+                   .arg(error) :
+                   tr("its provider gives no name for it"));
+            return "";
+        }
+        QString name = document[0][0];
+        QString size = document[0][1];
+        QList<QStringList> files =
+            query("content://media/external/file", { "_data" },
+                  "_display_name = ? AND _size = ?", { name, size }, error);
+        QStringList candidates;
+        for (const QStringList &file : files) {
+            if (!file.empty()) candidates << file[0];
+        }
+        QString path = AndroidFiles::chooseDownload(candidates, primaryRoot());
+        if (path == "") {
+            why = (error != "" ?
+                   tr("MediaStore could not be asked for it: %1").arg(error) :
+                   tr("MediaStore has %1 files named \"%2\" of %3 bytes, "
+                      "not one").arg(QString::number(candidates.size()),
+                                     name, size));
+        }
+        return path;
+    }
+    }
+
+    return "";
+}
+
+QString
+AndroidStorage::displayName(QString uri)
+{
+    QString error;
+    QList<QStringList> rows = query(uri, { "_display_name" }, "", {}, error);
+    if (rows.size() == 1 && rows[0].size() == 1) return rows[0][0];
+    if (error != "") {
+        cerr << "AndroidStorage: no name for " << uri.toStdString() << ": "
+             << error.toStdString() << endl;
+    }
+    return "";
+}
+
+int
+AndroidStorage::openDocument(QString uri, QString mode, QString &error)
+{
+    QJniObject resolver = contentResolver();
+    QJniObject parsed = parseUri(uri);
+    if (!resolver.isValid() || !parsed.isValid()) {
+        error = "no content resolver";
+        return -1;
+    }
+
+    QJniEnvironment env;
+    jclass resolverClass = env->GetObjectClass(resolver.object());
+    jmethodID open = env->GetMethodID
+        (resolverClass, "openFileDescriptor",
+         "(Landroid/net/Uri;Ljava/lang/String;)"
+         "Landroid/os/ParcelFileDescriptor;");
+    env->DeleteLocalRef(resolverClass);
+    if (!open) {
+        error = takeException(env);
+        return -1;
+    }
+
+    QJniObject modeString = QJniObject::fromString(mode);
+    jobject descriptor = env->CallObjectMethod
+        (resolver.object(), open, parsed.object(), modeString.object());
+    QString thrown = takeException(env);
+    if (thrown != "") {
+        error = thrown;
+        return -1;
+    }
+    if (!descriptor) {
+        error = "the provider gave nothing to read";
+        return -1;
+    }
+
+    // Ours to close from here
+    QJniObject pfd = QJniObject::fromLocalRef(descriptor);
+    int fd = pfd.callMethod<jint>("detachFd", "()I");
+    if (fd < 0) error = "the provider gave no file descriptor";
+    return fd;
+}
+
+bool
+AndroidStorage::removeIfEmpty(QString uri)
+{
+    QString error;
+    QList<QStringList> rows = query(uri, { "_size" }, "", {}, error);
+    if (rows.size() != 1 || rows[0].size() != 1 || rows[0][0] != "0") {
+        return false;
+    }
+
+    QJniObject resolver = contentResolver();
+    QJniObject parsed = parseUri(uri);
+    if (!resolver.isValid() || !parsed.isValid()) return false;
+
+    QJniEnvironment env;
+    jclass contract = env->FindClass("android/provider/DocumentsContract");
+    jmethodID remove = (contract ? env->GetStaticMethodID
+                        (contract, "deleteDocument",
+                         "(Landroid/content/ContentResolver;"
+                         "Landroid/net/Uri;)Z") : nullptr);
+    bool removed = false;
+    if (remove) {
+        removed = env->CallStaticBooleanMethod
+            (contract, remove, resolver.object(), parsed.object());
+    }
+    QString thrown = takeException(env);
+    if (contract) env->DeleteLocalRef(contract);
+
+    if (thrown != "") {
+        cerr << "AndroidStorage: could not remove the empty "
+             << uri.toStdString() << ": " << thrown.toStdString() << endl;
+        return false;
+    }
+    if (removed) {
+        cerr << "AndroidStorage: removed the empty " << uri.toStdString()
+             << endl;
+    }
+    return removed;
+}
+
+QString
+AndroidStorage::logPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + "/log/tony.log";
 }
 
 bool

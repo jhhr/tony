@@ -116,18 +116,24 @@ QString
 AndroidFiles::copyIn(QString source, QString name, QString dir,
                      QString &error)
 {
+    QFile in(source);
+    if (!in.open(QIODevice::ReadOnly)) {
+        error = QString("cannot read it: %1").arg(in.errorString());
+        return "";
+    }
+    return copyIn(in, source, name, dir, error);
+}
+
+QString
+AndroidFiles::copyIn(QIODevice &in, QString sourceName, QString name,
+                     QString dir, QString &error)
+{
     if (!QDir().mkpath(dir)) {
         error = QString("cannot create the folder %1").arg(dir);
         return "";
     }
 
     QString target = QDir(dir).filePath(safeFileName(name));
-
-    QFile in(source);
-    if (!in.open(QIODevice::ReadOnly)) {
-        error = QString("cannot read it: %1").arg(in.errorString());
-        return "";
-    }
 
     // QSaveFile writes a file of its own and renames it over the target
     // at the end, so a copy that fails half-way leaves the earlier one
@@ -165,8 +171,8 @@ AndroidFiles::copyIn(QString source, QString name, QString dir,
         return "";
     }
 
-    SVCERR << "AndroidFiles: copied " << total << " bytes from " << source
-           << " to " << target << endl;
+    SVCERR << "AndroidFiles: copied " << total << " bytes from "
+           << sourceName << " to " << target << endl;
     return target;
 }
 
@@ -203,11 +209,20 @@ pathUnder(QString root, QString relative)
     return QDir::cleanPath(root + "/" + relative);
 }
 
-QString
-AndroidFiles::pathFromContentUri(QString uri, QString primaryRoot)
+static const QString externalStorageProvider
+("com.android.externalstorage.documents");
+static const QString downloadsProvider
+("com.android.providers.downloads.documents");
+static const QString mediaProvider
+("com.android.providers.media.documents");
+
+// The authority of a content:// URI and the parts of its path, decoded;
+// false if it is not content://
+static bool
+splitContentUri(QString uri, QString &authority, QStringList &parts)
 {
     const QString scheme("content://");
-    if (!uri.startsWith(scheme, Qt::CaseInsensitive)) return "";
+    if (!uri.startsWith(scheme, Qt::CaseInsensitive)) return false;
 
     // Nothing the picker gives has a query or a fragment
     QString rest = uri.mid(scheme.size());
@@ -218,23 +233,67 @@ AndroidFiles::pathFromContentUri(QString uri, QString primaryRoot)
     // Split before decoding: a '/' inside the id is %2F in every form of
     // the URI, Android's and QUrl's, while spaces and letters such as 'ä'
     // may come either way
-    QStringList parts = rest.split('/');
-    QString authority = parts.takeFirst();
+    parts = rest.split('/');
+    authority = parts.takeFirst();
     for (QString &part : parts) {
         part = QUrl::fromPercentEncoding(part.toUtf8());
     }
+    return true;
+}
 
-    QString id;
+// The authority and the decoded document id of a content:// URI that
+// names a document, alone or under a folder grant; false for any other
+static bool
+splitDocumentUri(QString uri, QString &authority, QString &id)
+{
+    QStringList parts;
+    if (!splitContentUri(uri, authority, parts)) return false;
+
     if (parts.size() == 2 && parts[0] == "document") {
         id = parts[1];
     } else if (parts.size() == 4 && parts[0] == "tree" &&
                parts[2] == "document") {
         id = parts[3];
     } else {
-        return "";
+        return false;
     }
+    return true;
+}
 
-    if (authority == "com.android.externalstorage.documents") {
+// Whether id is "<prefix><a number>"
+static bool
+isNumberedId(QString id, QString prefix)
+{
+    static const QRegularExpression number("^[0-9]+$");
+    return id.startsWith(prefix) &&
+        number.match(id.mid(prefix.size())).hasMatch();
+}
+
+QString
+AndroidFiles::grantedUri(const QUrl &picked)
+{
+    // QUrl keeps the encoding it was given of everything but the
+    // characters no one encodes (letters, digits, "-._~"), which Android
+    // does not encode either: so this is the string Android wrote
+    return picked.toString(QUrl::FullyEncoded);
+}
+
+QString
+AndroidFiles::providerOf(QString uri)
+{
+    QString authority;
+    QStringList parts;
+    if (!splitContentUri(uri, authority, parts)) return "";
+    return authority;
+}
+
+QString
+AndroidFiles::pathFromContentUri(QString uri, QString primaryRoot)
+{
+    QString authority, id;
+    if (!splitDocumentUri(uri, authority, id)) return "";
+
+    if (authority == externalStorageProvider) {
 
         int colon = id.indexOf(':');
         if (colon <= 0) return "";
@@ -255,7 +314,7 @@ AndroidFiles::pathFromContentUri(QString uri, QString primaryRoot)
         return "";
     }
 
-    if (authority == "com.android.providers.downloads.documents") {
+    if (authority == downloadsProvider) {
         // Only these carry a path; the rest are numbers in a database
         const QString raw("raw:/");
         if (!id.startsWith(raw)) return "";
@@ -263,6 +322,114 @@ AndroidFiles::pathFromContentUri(QString uri, QString primaryRoot)
     }
 
     return "";
+}
+
+AndroidFiles::PathLookup
+AndroidFiles::pathLookupFor(QString uri)
+{
+    QString authority, id;
+    if (!splitDocumentUri(uri, authority, id)) return PathLookup::None;
+
+    if (authority == externalStorageProvider) {
+        // A volume and a path: pathFromContentUri() says which it takes
+        return (id.indexOf(':') > 0 ? PathLookup::InUri : PathLookup::None);
+    }
+
+    if (authority == downloadsProvider) {
+        if (id.startsWith("raw:/")) return PathLookup::InUri;
+        if (isNumberedId(id, "msf:")) return PathLookup::MediaStore;
+        if (isNumberedId(id, "")) return PathLookup::ByNameAndSize;
+        return PathLookup::None; // "msd:<n>", a folder, and the rest
+    }
+
+    if (authority == mediaProvider && mediaStoreUriFor(uri) != "") {
+        return PathLookup::MediaStore;
+    }
+
+    return PathLookup::None;
+}
+
+QString
+AndroidFiles::mediaStoreUriFor(QString uri)
+{
+    QString authority, id;
+    if (!splitDocumentUri(uri, authority, id)) return "";
+
+    // MediaStore.<collection>.getContentUri("external", n): "external" is
+    // every volume. The providers' own ids, from DownloadStorageProvider
+    // (MediaStoreDownloadsHelper) and MediaDocumentsProvider
+    // (getUriForDocumentId())
+    const QString media("content://media/external/");
+
+    if (authority == downloadsProvider) {
+        if (isNumberedId(id, "msf:")) {
+            return media + "downloads/" + id.mid(4);
+        }
+        return "";
+    }
+
+    if (authority == mediaProvider) {
+        const QStringList types { "audio", "image", "video", "document" };
+        const QStringList collections {
+            "audio/media", "images/media", "video/media", "file"
+        };
+        for (int i = 0; i < types.size(); ++i) {
+            QString prefix = types[i] + ":";
+            if (isNumberedId(id, prefix)) {
+                return media + collections[i] + "/" + id.mid(prefix.size());
+            }
+        }
+    }
+
+    return "";
+}
+
+QString
+AndroidFiles::chooseDownload(QStringList candidates, QString primaryRoot)
+{
+    candidates.removeAll(QString());
+    candidates.removeDuplicates();
+    if (candidates.size() == 1) return candidates[0];
+
+    // The download manager saves into the Download folder: the one of
+    // several that lies there directly, if only one does. (Android's
+    // paths, as strings: QFileInfo would give them a drive on Windows)
+    if (primaryRoot == "") return "";
+    QString downloads = QDir::cleanPath(primaryRoot + "/Download");
+    QString chosen;
+    for (QString path : candidates) {
+        QString clean = QDir::cleanPath(path);
+        if (clean.left(clean.lastIndexOf('/')) == downloads) {
+            if (chosen != "") return "";
+            chosen = path;
+        }
+    }
+    return chosen;
+}
+
+bool
+AndroidFiles::hasExtensionIn(QString name, QString patterns)
+{
+    QString suffix = QFileInfo(name).suffix().toLower();
+    if (suffix == "") return false;
+    for (QString pattern : patterns.split(' ', Qt::SkipEmptyParts)) {
+        if (pattern.toLower() == "*." + suffix) return true;
+    }
+    return false;
+}
+
+QStringList
+AndroidFiles::usableRecentFiles(QStringList identifiers)
+{
+    // Two letters at least: "C:" is a Windows drive
+    static const QRegularExpression scheme("^[a-zA-Z][a-zA-Z0-9+.-]+:");
+    QStringList usable;
+    for (QString identifier : identifiers) {
+        if (scheme.match(identifier).hasMatch()) continue;
+        if (!QFileInfo(identifier).isFile()) continue;
+        usable << identifier;
+    }
+    return usable;
 }
 
 QString

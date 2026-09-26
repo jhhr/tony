@@ -29,12 +29,16 @@
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
 #include "AndroidStorage.h"
+#include "LogFile.h"
 #include "OboeAudioIO.h"
+#include "data/fileio/AudioFileReaderFactory.h"
+#include <QDateTime>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QPermissions>
 #include <QStandardPaths>
 #include <QThread>
+#include <unistd.h>
 #endif
 
 #include "framework/Document.h"
@@ -1324,10 +1328,20 @@ MainWindow::setupHelpMenu()
     connect(action, SIGNAL(triggered()), this, SLOT(whatsNew()));
     menu->addAction(action);
     
-    action = new QAction(tr("&About %1").arg(name), this); 
-    action->setStatusTip(tr("Show information about %1").arg(name)); 
+    action = new QAction(tr("&About %1").arg(name), this);
+    action->setStatusTip(tr("Show information about %1").arg(name));
     connect(action, SIGNAL(triggered()), this, SLOT(about()));
     menu->addAction(action);
+
+#ifdef Q_OS_ANDROID
+    // The phone's system log needs a computer to read; this copy of what
+    // Tony wrote to it can be sent instead
+    menu->addSeparator();
+    action = new QAction(tr("Save &Log..."), this);
+    action->setStatusTip(tr("Save a copy of %1's log, to send when something went wrong").arg(name));
+    connect(action, &QAction::triggered, this, [this]() { saveLog(); });
+    menu->addAction(action);
+#endif
 }
 
 void
@@ -1335,6 +1349,13 @@ MainWindow::setupRecentFilesMenu()
 {
     m_recentFilesMenu->clear();
     vector<QString> files = m_recentFiles.getRecent();
+#ifdef Q_OS_ANDROID
+    // Only the files that are still where they were: nothing else could
+    // be opened from here, a content:// URI whose grant has gone included
+    QStringList usable = AndroidFiles::usableRecentFiles
+        (QStringList(files.begin(), files.end()));
+    files = vector<QString>(usable.begin(), usable.end());
+#endif
     for (size_t i = 0; i < files.size(); ++i) {
         QString path = files[i];
         QAction *action = m_recentFilesMenu->addAction(path);
@@ -2755,78 +2776,241 @@ MainWindow::closeSession()
 QString
 MainWindow::getOpenFileName(FileFinder::FileType type)
 {
-    QString path = MainWindowBase::getOpenFileName(type);
-    if (!path.startsWith("content:")) return path;
+    // Layers and other data go through svgui's dialog as before
+    if (type != FileFinder::AudioFile &&
+        type != FileFinder::SessionOrAudioFile &&
+        type != FileFinder::SessionFile) {
+        return MainWindowBase::getOpenFileName(type);
+    }
 
     QString app = QApplication::applicationName();
 
-    // The name the user knows the file by, which Qt asks the file's
-    // provider for: the URI need not contain it
-    QString name = QFileInfo(path).fileName();
+    // Every file is offered: a provider disables the files whose type is
+    // not among those asked for, and Android knows no type for .ton, nor
+    // Qt one Drive gives every audio file. What was picked is checked
+    // below instead
+    QFileDialog dialog(this, (type == FileFinder::AudioFile ?
+                              tr("Select an audio file") :
+                              tr("Select a session or audio file")));
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+
+    if (!dialog.exec()) return "";
+    QList<QUrl> urls = dialog.selectedUrls();
+    if (urls.empty() || urls[0].isEmpty()) return "";
+    if (urls[0].isLocalFile()) return urls[0].toLocalFile();
+
+    QString uri = AndroidFiles::grantedUri(urls[0]);
+
+    // The name the user knows the file by, which the file's provider
+    // gives: the URI need not contain it
+    QString name = AndroidStorage::displayName(uri);
+    if (name == "") name = urls[0].fileName();
+    cerr << "MainWindow::getOpenFileName: picked " << uri << ", \""
+         << name << "\"" << endl;
+
     bool session = (QFileInfo(name).suffix().toLower() == "ton");
+    bool audio = AndroidFiles::hasExtensionIn
+        (name, AudioFileReaderFactory::getKnownExtensions());
+    if (!audio && (!session || type == FileFinder::AudioFile)) {
+        QMessageBox::warning
+            (this, tr("Cannot open the file"),
+             (type == FileFinder::AudioFile ?
+              tr("<b>\"%1\" is not an audio file %2 can open</b><p>%2 opens audio files such as WAV and MP3.</p>") :
+              tr("<b>\"%1\" is not a file %2 can open</b><p>%2 opens sessions (.ton) and audio files such as WAV and MP3.</p>"))
+             .arg(name.toHtmlEscaped(), app) + pickDetails(uri, "", ""));
+        return "";
+    }
 
     // A file in the phone's own storage has a path, and with All files
     // access that is what is opened, as on the desktop: a session finds
     // its audio and takes folder beside it, and a session saved beside
     // audio opened so finds the audio. Asked for with a session, which
     // cannot do without it, and the first time with audio, which can
-    QString local = m_storage->pathFor(path);
-    if (local != "") {
-        if (!AndroidStorage::hasAllFilesAccess() &&
-            (session || !m_storage->hasAsked())) {
-            m_storage->ask
-                (session ?
-                 tr("A session keeps its audio and its takes folder beside "
-                    "it, and %1 opens and saves it there, where it is.")
-                 .arg(app) :
-                 tr("Audio opened where it is can have its session saved "
-                    "beside it. Otherwise %1 copies the audio into its own "
-                    "storage.").arg(app));
-        }
-        if (AndroidStorage::hasAllFilesAccess()) {
-            if (QFileInfo(local).isFile()) {
-                cerr << "MainWindow::getOpenFileName: opening " << path
-                     << " where it is, " << local << endl;
-                return local;
-            }
-            cerr << "MainWindow::getOpenFileName: " << path << " should be "
-                 << local << ", which is not there" << endl;
-        }
+    bool hasPath =
+        (AndroidFiles::pathLookupFor(uri) != AndroidFiles::PathLookup::None);
+    if (hasPath && !AndroidStorage::hasAllFilesAccess() &&
+        (session || !m_storage->hasAsked())) {
+        m_storage->ask
+            (session ?
+             tr("A session keeps its audio and its takes folder beside "
+                "it, and %1 opens and saves it there, where it is.")
+             .arg(app) :
+             tr("Audio opened where it is can have its session saved "
+                "beside it. Otherwise %1 copies the audio into its own "
+                "storage.").arg(app));
     }
+
+    QString local, why;
+    if (!hasPath) {
+        why = tr("its provider gives no path for it");
+    } else if (!AndroidStorage::hasAllFilesAccess()) {
+        why = tr("%1 has no All files access").arg(app);
+    } else {
+        local = AndroidStorage::pathFor(uri, why);
+        if (local != "" && QFileInfo(local).isFile()) {
+            cerr << "MainWindow::getOpenFileName: opening " << uri
+                 << " where it is, " << local << endl;
+            return local;
+        }
+        if (local != "") why = tr("there is no file at that path");
+    }
+    cerr << "MainWindow::getOpenFileName: no path for " << uri << ": "
+         << why << endl;
 
     // A session read through the picker comes without the audio and
     // takes beside it: the picker lets Tony read the one file only
     if (session) {
-        if (local == "") {
+        if (!hasPath) {
             QMessageBox::warning
                 (this, tr("Cannot open the session"),
-                 tr("<b>The session cannot be opened from here</b><p>A session needs its audio and its takes folder beside it, and from here (Downloads, or a cloud app such as Drive) %1 is given the one file only.</p><p>Keep sessions in a folder of the phone's own storage, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer, and open them by browsing to that folder in the picker.</p>")
-                 .arg(app));
+                 tr("<b>The session cannot be opened from here</b><p>A session needs its audio and its takes folder beside it, and from here (a cloud app such as Drive) %1 is given the one file only.</p><p>Keep sessions in a folder of the phone's own storage, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer, and open them by browsing to that folder in the picker.</p>")
+                 .arg(app) + pickDetails(uri, local, why));
         } else if (!AndroidStorage::hasAllFilesAccess()) {
             QMessageBox::warning
                 (this, tr("Cannot open the session"),
                  tr("<b>%1 may not open the session where it is</b><p>A session needs its audio and its takes folder beside it, and %1 can read those only with All files access. Allow it when %1 asks, or in the phone's Settings, Apps, %1.</p>")
-                 .arg(app));
+                 .arg(app) + pickDetails(uri, local, why));
         } else {
             QMessageBox::warning
                 (this, tr("Cannot open the session"),
-                 tr("<b>The session was not found where it should be</b><p>%1 looked for it at \"%2\".</p>")
-                 .arg(app, local.toHtmlEscaped()));
+                 tr("<b>The session was not found where it should be</b>")
+                 + pickDetails(uri, local, why));
         }
         return "";
     }
 
+    // Audio without a path is read through the picker's grant, from a
+    // file descriptor the provider opens: Qt's own content file engine
+    // rebuilds the URI, differently for a name with parentheses, and is
+    // then refused
     QString dir = QStandardPaths::writableLocation
         (QStandardPaths::AppDataLocation) + "/imported";
     QString error;
-    QString copy = AndroidFiles::copyIn(path, name, dir, error);
+    QString copy;
+    int fd = AndroidStorage::openDocument(uri, "r", error);
+    if (fd >= 0) {
+        QFile in;
+        if (in.open(fd, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle)) {
+            copy = AndroidFiles::copyIn(in, uri, name, dir, error);
+        } else {
+            ::close(fd);
+            error = in.errorString();
+        }
+    }
     if (copy == "") {
         QMessageBox::critical
             (this, tr("Failed to open file"),
-             tr("<b>File open failed</b><p>\"%1\" could not be copied into %2's own storage: %3")
-             .arg(name.toHtmlEscaped(), app, error.toHtmlEscaped()));
+             tr("<b>File open failed</b><p>\"%1\" could not be copied into %2's own storage: %3</p>")
+             .arg(name.toHtmlEscaped(), app, error.toHtmlEscaped())
+             + pickDetails(uri, local, why));
     }
     return copy;
+}
+
+QString
+MainWindow::pickDetails(QString uri, QString path, QString why) const
+{
+    // Small print for the user to pass on: which app's provider the file
+    // came from, where Tony looked for it, and why that did not do
+    QString provider = AndroidFiles::providerOf(uri);
+    QString details = "<p><small>";
+    details += tr("From: %1").arg((provider != "" ? provider : uri)
+                                  .toHtmlEscaped());
+    if (path != "") {
+        details += "<br>" + tr("Looked for at: %1").arg(path.toHtmlEscaped());
+    }
+    if (why != "") {
+        details += "<br>" + tr("Because: %1").arg(why.toHtmlEscaped());
+    }
+    details += "</small></p>";
+    return details;
+}
+
+void
+MainWindow::saveLog()
+{
+    QString app = QApplication::applicationName();
+
+    QByteArray log = LogFile::contents(AndroidStorage::logPath());
+    if (log.isEmpty()) {
+        QMessageBox::information
+            (this, tr("No log"),
+             tr("<b>There is no log to save</b><p>%1 could not keep one on this phone.</p>").arg(app));
+        return;
+    }
+
+    QFileDialog dialog(this, tr("Save the log"));
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+    dialog.setMimeTypeFilters({ "text/plain" });
+    dialog.selectFile(QString("tony-log-%1.txt")
+                      .arg(QDateTime::currentDateTime()
+                           .toString("yyyyMMdd-HHmmss")));
+    if (!dialog.exec()) return;
+    QList<QUrl> urls = dialog.selectedUrls();
+    if (urls.empty() || urls[0].isEmpty()) return;
+
+    // A new document the picker has made, through its grant: one file,
+    // which any provider can take, a cloud app's included
+    QString target = (urls[0].isLocalFile() ? urls[0].toLocalFile() :
+                      AndroidFiles::grantedUri(urls[0]));
+    QString error;
+    QFile out;
+    bool opened = false;
+    if (urls[0].isLocalFile()) {
+        out.setFileName(target);
+        opened = out.open(QIODevice::WriteOnly | QIODevice::Truncate);
+        if (!opened) error = out.errorString();
+    } else {
+        int fd = AndroidStorage::openDocument(target, "w", error);
+        if (fd >= 0) {
+            opened = out.open(fd, QIODevice::WriteOnly,
+                              QFileDevice::AutoCloseHandle);
+            if (!opened) {
+                ::close(fd);
+                error = out.errorString();
+            }
+        }
+    }
+
+    bool written = opened && out.write(log) == log.size();
+    if (opened && !written) error = out.errorString();
+    if (opened) out.close();
+
+    if (!written) {
+        cerr << "MainWindow::saveLog: could not write " << target << ": "
+             << error << endl;
+        QMessageBox::critical
+            (this, tr("Failed to save the log"),
+             tr("<b>The log was not saved</b><p>%1</p>")
+             .arg(error.toHtmlEscaped()) + pickDetails(target, "", ""));
+        return;
+    }
+    cerr << "MainWindow::saveLog: saved " << log.size() << " bytes to "
+         << target << endl;
+}
+
+bool
+MainWindow::recentFileIsThere(QString path)
+{
+    if (!AndroidFiles::usableRecentFiles({ path }).empty()) return true;
+
+    QString app = QApplication::applicationName();
+    QString own = QStandardPaths::writableLocation
+        (QStandardPaths::AppDataLocation);
+    if (!path.startsWith(own) && !AndroidStorage::hasAllFilesAccess()) {
+        QMessageBox::warning
+            (this, tr("Cannot open the file"),
+             tr("<b>%1 may not open \"%2\" where it is</b><p>That needs All files access, which %1 no longer has. Allow it in the phone's Settings, Apps, %1, or open the file with File, Open.</p>")
+             .arg(app, path.toHtmlEscaped()));
+    } else {
+        QMessageBox::warning
+            (this, tr("File not found"),
+             tr("<b>\"%1\" is no longer there</b><p>It has been moved or deleted since it was last opened. Open it with File, Open from where it is now.</p>")
+             .arg(path.toHtmlEscaped()));
+    }
+    return false;
 }
 
 QString
@@ -2865,19 +3049,28 @@ MainWindow::getSaveFileName(FileFinder::FileType type)
     if (suggested != "") dialog.selectFile(suggested);
 
     if (!dialog.exec()) return "";
-    QStringList selected = dialog.selectedFiles();
-    if (selected.empty() || selected[0] == "") return "";
-    QString picked = selected[0];
+    QList<QUrl> urls = dialog.selectedUrls();
+    if (urls.empty() || urls[0].isEmpty()) return "";
+    QString picked = (urls[0].isLocalFile() ? urls[0].toLocalFile() :
+                      AndroidFiles::grantedUri(urls[0]));
 
     // The picker has made an empty document of that name by now
-    QString local = (picked.startsWith("content:") ?
-                     m_storage->pathFor(picked) : picked);
+    QString local = picked, why;
+    if (!urls[0].isLocalFile()) {
+        local = AndroidStorage::pathFor(picked, why);
+        if (local != "" && !QFileInfo(local).exists()) {
+            why = tr("there is no file at that path");
+            local = "";
+        }
+    }
     if (local == "") {
-        AndroidFiles::removeIfEmpty(picked);
+        cerr << "MainWindow::getSaveFileName: no path for " << picked
+             << ": " << why << endl;
+        AndroidStorage::removeIfEmpty(picked);
         QMessageBox::warning
             (this, tr("Cannot save the session there"),
-             tr("<b>The session cannot be saved there</b><p>A session keeps its audio and its takes folder beside it, which %1 can write only in a folder of the phone's own storage, not in Downloads or through a cloud app.</p><p>Browse to a folder of the phone's own storage in the picker, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer.</p>")
-             .arg(app));
+             tr("<b>The session cannot be saved there</b><p>A session keeps its audio and its takes folder beside it, which %1 can write only in a folder of the phone's own storage, not through a cloud app.</p><p>Browse to a folder of the phone's own storage in the picker, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer.</p>")
+             .arg(app) + pickDetails(picked, "", why));
         return "";
     }
 
@@ -6430,6 +6623,15 @@ MainWindow::openRecentFile()
 
     QString path = action->objectName();
     if (path == "") return;
+
+#ifdef Q_OS_ANDROID
+    // A file moved or deleted since, said so, rather than "could not be
+    // opened"
+    if (!recentFileIsThere(path)) {
+        setupRecentFilesMenu();
+        return;
+    }
+#endif
 
     FileOpenStatus status = openPath(path, ReplaceSession);
 
