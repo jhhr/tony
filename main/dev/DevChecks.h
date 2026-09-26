@@ -48,7 +48,9 @@ struct CheckResult
 {
     enum class Verdict { Pass, Fail, Measured, Skipped };
 
-    /// The item of docs/manual-checklist.md it settles, and its name
+    /// The item it settles, in the manual checklist's numbering from
+    /// before default's rewrite of it (docs/calibrate-audio.md explains),
+    /// and its name
     int item;
     QString name;
 

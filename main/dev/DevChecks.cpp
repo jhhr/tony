@@ -1931,9 +1931,11 @@ DevChecks::joinsCheck(QString reason) const
     // without a step, the pitch track without a hole or a frame twice,
     // one note runs through it, and outside the two ranges the take's
     // pitch and notes are as they were.  Each part is named when it
-    // fails: two punch-ins placed differently, as on a device whose
-    // offset moves when its stream restarts, show in the step and the
-    // pitch, and the note merge may fail on its own
+    // fails.  Two punch-ins placed differently, as on a device whose
+    // offset moves when its stream restarts, do not show in the step:
+    // each splice fades against the silence the file held there, so the
+    // join is a dip of a few ms that hides a jump of phase.  Hence the
+    // number "second punch-in against the first", which does
     const sv_samplerate_t rate = stage.result.referenceRate;
     const LatencyCheck::PunchIn &first = s.punchIns[0].range;
     const LatencyCheck::PunchIn &second = s.punchIns[1].range;
