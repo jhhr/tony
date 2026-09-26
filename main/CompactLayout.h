@@ -49,7 +49,9 @@ class QWidget;
  *
  * Hidden while compact: the note-editing tools and the audio device
  * menus (Parts::hiddenActions), the overview (Parts::hiddenWidgets) and
- * the tear-off handles of the menus, which a finger would catch.
+ * the tear-off handles of the menus, which a finger would catch. Shown
+ * while compact: the thin song scroll bar in the overview's place
+ * (Parts::shownWidgets).
  *
  * Switching off puts back exactly what was there when it was switched
  * on: the menu bar, which toolbars were on show, the hidden actions and
@@ -83,6 +85,9 @@ public:
         /// Hidden while compact (a submenu is hidden by its menuAction())
         QList<QAction *> hiddenActions;
         QList<QWidget *> hiddenWidgets;
+
+        /// Shown while compact, and as they were again when switched off
+        QList<QWidget *> shownWidgets;
     };
 
     explicit CompactLayout(QMainWindow *window);

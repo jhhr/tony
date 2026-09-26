@@ -25,10 +25,15 @@
 #include "../Analyser.h"
 #include "../CompactLayout.h"
 #include "../LyricsTrack.h"
+#include "../SongScroll.h"
+#include "../SongScrollBar.h"
 
 #include "version.h"
 
+#include "layer/Layer.h"
 #include "view/Overview.h"
+#include "view/Pane.h"
+#include "view/PaneStack.h"
 #include "view/ViewManager.h"
 #include "data/fileio/WavFileWriter.h"
 #include "transform/ModelTransformerFactory.h"
@@ -38,10 +43,12 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
+#include <QGuiApplication>
 #include <QMap>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPointingDevice>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -49,6 +56,8 @@
 #include <QToolButton>
 #include <QWidgetAction>
 
+#include <cmath>
+#include <cstdlib>
 #include <vector>
 
 /**
@@ -62,6 +71,9 @@ public:
     CompactLayout *compact() { return m_compactLayout; }
     QComboBox *takeBox() { return m_takeCombo; }
     QWidget *overview() { return m_overview; }
+    SongScrollBar *songScroll() { return m_songScroll; }
+    sv::PaneStack *paneStack() { return m_paneStack; }
+    QAction *zoomInAction() { return m_zoomInAction; }
     SingingTakes *takes() { return m_takes; }
     sv::ViewManager *viewManager() { return m_viewManager; }
     LyricsTrack *lyrics() { return m_lyrics; }
@@ -110,6 +122,7 @@ class TestCompactLayout : public QObject
         QSize iconSize;
         bool menuBarShown = false;
         bool overviewShown = false;
+        bool songScrollShown = false;
         // Of the toolbars in the window's layout, by name
         QMap<QString, bool> toolBarsShown;
         QMap<QString, QSize> toolBarIconSizes;
@@ -151,6 +164,7 @@ class TestCompactLayout : public QObject
         layout.iconSize = m_window->iconSize();
         layout.menuBarShown = m_window->menuBar()->isVisible();
         layout.overviewShown = m_window->overview()->isVisible();
+        layout.songScrollShown = m_window->songScroll()->isVisible();
         for (QToolBar *toolBar: layoutToolBars()) {
             QString name = toolBar->objectName();
             layout.toolBarsShown[name] = toolBar->isVisible();
@@ -171,6 +185,7 @@ class TestCompactLayout : public QObject
     void verifySameLayout(const Layout &now, const Layout &before) {
         QCOMPARE(now.menuBarShown, before.menuBarShown);
         QCOMPARE(now.overviewShown, before.overviewShown);
+        QCOMPARE(now.songScrollShown, before.songScrollShown);
         QCOMPARE(now.toolBarsShown, before.toolBarsShown);
         QCOMPARE(now.toolBarIconSizes, before.toolBarIconSizes);
         QCOMPARE(now.iconSize, before.iconSize);
@@ -253,6 +268,59 @@ class TestCompactLayout : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(analysed(), 30000);
     }
 
+    SongScrollBar *songScroll() { return m_window->songScroll(); }
+    sv::Pane *pane() { return m_window->paneStack()->getPane(0); }
+
+    // The panes at level frames per pixel about centre
+    void setView(int level, sv::sv_frame_t centre) {
+        pane()->setZoomLevel
+            (sv::ZoomLevel(sv::ZoomLevel::FramesPerPixel, level));
+        pane()->setCentreFrame(centre);
+        settle();
+    }
+
+    // Whether the strip has painted the thumb for what the panes show
+    bool paintedAsNow() {
+        SongScroll::Thumb painted = songScroll()->getPaintedThumb();
+        SongScroll::Thumb now = songScroll()->currentThumb();
+        return now.width() > 0.0 &&
+            std::fabs(painted.x0 - now.x0) < 1.0 &&
+            std::fabs(painted.x1 - now.x1) < 1.0;
+    }
+
+    static QString text(const SongScroll::Thumb &t) {
+        return QString("[%1, %2]").arg(t.x0).arg(t.x1);
+    }
+
+    // The frames a pixel of the strip stands for
+    double stripFramesPerPixel() {
+        return double(songScroll()->getSongFrames()) / songScroll()->width();
+    }
+
+    int voicedColumns() {
+        int n = 0;
+        for (const auto &c : songScroll()->getContour()) {
+            if (!c.isEmpty()) ++n;
+        }
+        return n;
+    }
+
+    // The reference open and analysed, and the window compact
+    void openCompactWithReference() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+        openReference();
+        if (QTest::currentTestFailed()) return;
+        switchCompact();
+        QVERIFY(songScroll()->isVisible());
+        QVERIFY(pane());
+        QVERIFY(songScroll()->getSongFrames() > 0);
+
+        // The last of the analysis drawn: nothing else is to repaint the
+        // strip while a test looks at what does
+        QTRY_VERIFY(!songScroll()->isContourPending());
+    }
+
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
         if (!modal) return;
@@ -297,6 +365,11 @@ private slots:
 
     void cleanup() {
         if (m_window) {
+            // A test that failed with Qt's button pressed must not leave
+            // it so for the next
+            if (QGuiApplication::mouseButtons() != Qt::NoButton) {
+                QTest::mouseRelease(m_window->windowHandle(), Qt::LeftButton);
+            }
             QTRY_VERIFY_WITH_TIMEOUT
                 (!sv::ModelTransformerFactory::getInstance()
                  ->haveRunningTransformers(), 30000);
@@ -350,6 +423,7 @@ private slots:
 
         QVERIFY(!m_window->menuBar()->isVisible());
         QVERIFY(!m_window->overview()->isVisible());
+        QVERIFY(m_window->songScroll()->isVisible());
         QCOMPARE(int(layoutToolBars().size()), 7); // the window's six and this
         for (QToolBar *toolBar: layoutToolBars()) {
             if (toolBar == bar) continue;
@@ -552,6 +626,7 @@ private slots:
         Layout before = layout();
         QVERIFY(before.menuBarShown);
         QVERIFY(before.overviewShown);
+        QVERIFY(!before.songScrollShown);
         QVERIFY(!before.toolBarsShown["Playback Controls"]);
         QVERIFY(before.toolBarsShown["Show and Play"]);
         QCOMPARE(int(before.toolBarsShown.size()), 6);
@@ -680,6 +755,7 @@ private slots:
         QVERIFY(m_window->takeBox()->isVisible());
         QVERIFY(!m_window->menuBar()->isVisible());
         QVERIFY(!m_window->overview()->isVisible());
+        QVERIFY(m_window->songScroll()->isVisible());
         for (QToolBar *toolBar: layoutToolBars()) {
             if (toolBar == bar) continue;
             QVERIFY2(!toolBar->isVisible(), qPrintable(toolBar->objectName()));
@@ -691,6 +767,7 @@ private slots:
         QVERIFY(!m_window->compact()->getAction()->isChecked());
         QVERIFY(m_window->menuBar()->isVisible());
         QVERIFY(m_window->overview()->isVisible());
+        QVERIFY(!m_window->songScroll()->isVisible());
         QCOMPARE(int(layoutToolBars().size()), 6);
         for (QToolBar *toolBar: layoutToolBars()) {
             QVERIFY2(toolBar->isVisible(), qPrintable(toolBar->objectName()));
@@ -777,6 +854,220 @@ private slots:
         if (QTest::currentTestFailed()) return;
         QCOMPARE(m_window->lyrics()->getTextScale(), 0.5);
         QSettings().remove("MainWindow/lyricssize");
+    }
+
+    // The song scroll bar (SongScrollBar) takes the overview's place
+    // while compact, a thin strip above the panes, and goes with it
+    void song_scroll_bar_in_place_of_the_overview() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        SongScrollBar *strip = songScroll();
+        QVERIFY(strip);
+        QVERIFY(!strip->isVisible());
+        QVERIFY(m_window->overview()->isVisible());
+
+        switchCompact();
+        QVERIFY(strip->isVisible());
+        QVERIFY(!m_window->overview()->isVisible());
+        QCOMPARE(strip->height(), int(SongScrollBar::stripHeight));
+        QWidget *stack = m_window->paneStack();
+        QVERIFY(strip->mapTo(m_window, QPoint(0, strip->height())).y() <=
+                stack->mapTo(m_window, QPoint(0, 0)).y());
+        QVERIFY2(strip->width() > m_window->width() * 9 / 10,
+                 qPrintable(QString("%1 wide").arg(strip->width())));
+
+        switchCompact();
+        QVERIFY(!strip->isVisible());
+        QVERIFY(m_window->overview()->isVisible());
+    }
+
+    // Dragging the thumb moves every pane by as much as the drag, and a
+    // finger does it as the mouse does. The playhead stays
+    void song_scroll_bar_drag_moves_the_panes() {
+        openCompactWithReference();
+        if (QTest::currentTestFailed()) return;
+
+        SongScrollBar *strip = songScroll();
+        sv::Pane *p = pane();
+        setView(16, 30000);
+        QTRY_VERIFY(paintedAsNow());
+
+        SongScroll::Thumb thumb = strip->currentThumb();
+        QVERIFY2(thumb.width() > 50.0 && thumb.x0 > 100.0 &&
+                 thumb.x1 < strip->width() - 150.0, qPrintable(text(thumb)));
+        int y = strip->height() / 2;
+        // Grabbed off its middle: the panes move from where they were,
+        // not to where the thumb was grabbed
+        QPoint from(int(thumb.x0 + thumb.width() / 4), y);
+        QPoint to = from + QPoint(100, 0);
+        sv::sv_frame_t start = p->getCentreFrame();
+        sv::sv_frame_t playhead =
+            m_window->viewManager()->getPlaybackFrame();
+
+        QTest::mousePress(strip, Qt::LeftButton, Qt::NoModifier, from);
+        for (int i = 1; i <= 10; ++i) {
+            QTest::mouseMove(strip, from + (to - from) * i / 10);
+        }
+        QTest::mouseRelease(strip, Qt::LeftButton, Qt::NoModifier, to);
+        sv::sv_frame_t byMouse = p->getCentreFrame() - start;
+
+        // to within a pixel of the pane's, to which it rounds its centre
+        double expected = 100 * stripFramesPerPixel();
+        QVERIFY2(std::fabs(double(byMouse) - expected) <= 17.0,
+                 qPrintable(QString("the mouse moved it by %1, not %2")
+                            .arg(byMouse).arg(expected)));
+        QCOMPARE(m_window->paneStack()->getPane(1)->getCentreFrame(),
+                 p->getCentreFrame());
+        QTRY_VERIFY(paintedAsNow());
+        QVERIFY2(strip->getPaintedThumb().x0 > thumb.x0 + 90.0,
+                 qPrintable(text(strip->getPaintedThumb())));
+        QCOMPARE(m_window->viewManager()->getPlaybackFrame(), playhead);
+
+        p->setCentreFrame(start);
+        settle();
+        QCOMPARE(p->getCentreFrame(), start);
+
+        // Not a double click with the mouse's press
+        QTest::qWait(QApplication::doubleClickInterval() + 100);
+
+        QPointingDevice *device = QTest::createTouchDevice();
+        QTest::QTouchEventWidgetSequence t =
+            QTest::touchEvent(m_window, device, false);
+        t.press(0, from, strip).commit();
+        for (int i = 1; i <= 10; ++i) {
+            t.move(0, from + (to - from) * i / 10, strip).commit();
+        }
+        t.release(0, to, strip).commit();
+        sv::sv_frame_t byTouch = p->getCentreFrame() - start;
+
+        QCOMPARE(byTouch, byMouse);
+        QCOMPARE(QGuiApplication::mouseButtons(), Qt::NoButton);
+        QCOMPARE(m_window->viewManager()->getPlaybackFrame(), playhead);
+    }
+
+    // A press beside the thumb centres the panes there, and a drag goes
+    // on from there
+    void song_scroll_bar_press_beside_the_thumb_centres_there() {
+        openCompactWithReference();
+        if (QTest::currentTestFailed()) return;
+
+        SongScrollBar *strip = songScroll();
+        sv::Pane *p = pane();
+        setView(16, 20000);
+        QTRY_VERIFY(paintedAsNow());
+
+        QPoint at(strip->width() * 3 / 4, strip->height() / 2);
+        QVERIFY2(!SongScroll::hitsThumb(strip->currentThumb(), at.x()),
+                 qPrintable(text(strip->currentThumb())));
+        sv::sv_frame_t target = SongScroll::jumpCentre
+            (at.x(), strip->getSongFrames(), strip->width());
+        sv::sv_frame_t playhead =
+            m_window->viewManager()->getPlaybackFrame();
+
+        QTest::mousePress(strip, Qt::LeftButton, Qt::NoModifier, at);
+        QVERIFY2(std::llabs(p->getCentreFrame() - target) <= 16,
+                 qPrintable(QString("centred on %1, not %2")
+                            .arg(p->getCentreFrame()).arg(target)));
+
+        QPoint to = at - QPoint(40, 0);
+        for (int i = 1; i <= 4; ++i) {
+            QTest::mouseMove(strip, at + (to - at) * i / 4);
+        }
+        QTest::mouseRelease(strip, Qt::LeftButton, Qt::NoModifier, to);
+        double expected = double(target) - 40 * stripFramesPerPixel();
+        QVERIFY2(std::fabs(double(p->getCentreFrame()) - expected) <= 17.0,
+                 qPrintable(QString("dragged to %1, not %2")
+                            .arg(p->getCentreFrame()).arg(expected)));
+
+        QTRY_VERIFY(paintedAsNow());
+        QVERIFY(SongScroll::hitsThumb(strip->getPaintedThumb(), to.x()));
+        QCOMPARE(m_window->viewManager()->getPlaybackFrame(), playhead);
+    }
+
+    // The thumb follows a zoom, and playback's turning of the page,
+    // which moves the panes without a signal of their own
+    void song_scroll_bar_follows_zoom_and_paging() {
+        openCompactWithReference();
+        if (QTest::currentTestFailed()) return;
+
+        SongScrollBar *strip = songScroll();
+        sv::Pane *p = pane();
+        setView(32, 20000);
+        QTRY_VERIFY(paintedAsNow());
+        double wide = strip->getPaintedThumb().width();
+
+        m_window->zoomInAction()->trigger();
+        QVERIFY(p->getZoomLevel().level < 32);
+        QTRY_VERIFY(paintedAsNow());
+        QVERIFY2(strip->getPaintedThumb().width() < wide - 10.0,
+                 qPrintable(QString("%1 wide, was %2")
+                            .arg(strip->getPaintedThumb().width()).arg(wide)));
+
+        setView(16, 10000);
+        QTRY_VERIFY(paintedAsNow());
+        SongScroll::Thumb before = strip->getPaintedThumb();
+
+        sv::sv_frame_t far = 60000;
+        QVERIFY(far > p->getEndFrame());
+        m_window->viewManager()->setPlaybackFrame(far);
+        QVERIFY2(p->getStartFrame() <= far && far <= p->getEndFrame(),
+                 "the pane did not turn the page");
+        QTRY_VERIFY(paintedAsNow());
+        QVERIFY2(strip->getPaintedThumb().x0 > before.x0 + 100.0,
+                 qPrintable(text(strip->getPaintedThumb())));
+        int x = int(std::lround(SongScroll::xForFrame
+                                (far, strip->getSongFrames(),
+                                 strip->width())));
+        QCOMPARE(strip->getPaintedPlayheadX(), x);
+    }
+
+    // The contour is the reference's pitch; closing the session leaves
+    // none of it, nor a thumb, and the next reference has its own
+    void song_scroll_bar_contour_and_closing_the_session() {
+        openCompactWithReference();
+        if (QTest::currentTestFailed()) return;
+
+        SongScrollBar *strip = songScroll();
+        Analyser *a = m_window->analyser();
+        QCOMPARE(strip->getSongModel(), a->getMainModelId());
+        QCOMPARE(strip->getPitchModel(),
+                 a->getLayer(Analyser::PitchTrack)->getModel());
+
+        // The sine is voiced throughout, at the one pitch
+        int columns = int(std::lround(strip->width() *
+                                      strip->devicePixelRatioF()));
+        QTRY_VERIFY2(voicedColumns() > columns * 8 / 10,
+                     qPrintable(QString("%1 of %2 columns voiced")
+                                .arg(voicedColumns()).arg(columns)));
+        const auto &contour = strip->getContour();
+        for (int c = columns / 4; c < columns * 3 / 4; ++c) {
+            QVERIFY2(!contour[c].isEmpty() &&
+                     std::fabs(contour[c].low - 220.5) < 3.0 &&
+                     std::fabs(contour[c].high - 220.5) < 3.0,
+                     qPrintable(QString("column %1: %2 to %3").arg(c)
+                                .arg(contour[c].low).arg(contour[c].high)));
+        }
+
+        m_window->doCloseSession();
+        settle();
+        QVERIFY(strip->getSongModel().isNone());
+        QVERIFY(strip->getPitchModel().isNone());
+        strip->repaint();
+        QCOMPARE(voicedColumns(), 0);
+        QCOMPARE(strip->getPaintedThumb().width(), 0.0);
+        QCOMPARE(strip->getPaintedPlayheadX(), -1);
+
+        // Nothing to move, and nothing breaks
+        QTest::mouseClick(strip, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(strip->width() / 2, strip->height() / 2));
+
+        openReference();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(strip->getSongModel(), a->getMainModelId());
+        QTRY_VERIFY2(voicedColumns() > columns * 8 / 10,
+                     qPrintable(QString("%1 of %2 columns voiced")
+                                .arg(voicedColumns()).arg(columns)));
     }
 };
 

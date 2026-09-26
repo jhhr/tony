@@ -203,7 +203,7 @@ since 2026-09-26 `.github/workflows/android.yml` builds the APK on CI as well.)
   the driver is named "Oboe" on the result page and in the report, not "(unknown)".)
 - A14 — (Lead) The audio stream kept running between takes on Android, suspended once idle.
   Done.
-- A15 — The song scroll bar: a thin navigator in the compact layout.
+- A15 — The song scroll bar: a thin navigator in the compact layout. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -1336,3 +1336,25 @@ recording, counted as idle). Not tested: the background suspend (Android only).
 Left open: a phone run should show items 1 and 2 within ±2 ms through Bluetooth, and no take
 misplaced after a busy spell (the input lost at the end of the long song's takes, now while
 the stream runs on).
+
+### Phase A15 — 2026-09-26
+Built: `SongScroll` (core: frame/x, the thumb cut to the strip then widened to 16 px and
+moved back inside, press-on-thumb, drag and jump centres, pitch columns where each event
+stands for the model's resolution, log-scale y). `SongScrollBar` (app widget, 24 px): the
+contour cached in an image at the device ratio, rebuilt on a model change (250 ms gathering),
+size, ratio, song length or palette; thumb (rest dimmed with the window colour), playhead.
+Moves the panes with `ViewManager::setGlobalCentreFrame()`; follows the ViewManager's centre,
+zoom and playback-frame signals through a 0 ms check that repaints only on a pixel's move.
+`CompactLayout::Parts::shownWidgets` (saved and restored as the hidden ones are).
+MainWindow: made hidden in the Overview's grid cell; `syncSongScrollBar()` on the analyser's
+layersChanged, initialAnalysisCompleted, rangedAnalysisMerged, mainModelChanged and at the
+end of closeSession. Tests: TestSongScroll (15), TestCompactLayout (5 new, and the strip in
+the Layout comparisons).
+Choices / deviations: the playhead is left alone by the strip; the song's extent is the
+reference's audio only (a take past its end is not shown); nothing of the singing track or
+takes drawn; a test hook `isContourPending()` (a late contour rebuild repainted the strip and
+hid a missing playback-frame connection until the test waited for it).
+Tests seen failing: press always jumping (drag test, 6400 frames not 10000); no playback-frame
+connection (paging test); events not spanning their resolution (two core column tests).
+Left open: not on a phone: whether 24 dp suits a finger, and the contour's contrast in dark
+mode. Panes past the reference's end (a take past it) leave the thumb at the strip's end.

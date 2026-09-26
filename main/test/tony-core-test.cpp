@@ -27,6 +27,7 @@
 #include "TestTakesFile.h"
 #include "TestTakeTiming.h"
 #include "TestVerticalZoom.h"
+#include "TestSongScroll.h"
 #include "TestLyrics.h"
 #include "TestLyricsTtml.h"
 #include "TestLyricsEdit.h"
@@ -155,6 +156,12 @@ int main(int argc, char *argv[])
 
     {
         TestVerticalZoom t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestSongScroll t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

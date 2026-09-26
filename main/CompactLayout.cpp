@@ -162,6 +162,11 @@ CompactLayout::switchOn()
         m_saved.widgets.push_back({ widget, widget->isHidden() });
         widget->hide();
     }
+    for (QWidget *widget: m_parts.shownWidgets) {
+        if (!widget) continue;
+        m_saved.widgets.push_back({ widget, widget->isHidden() });
+        widget->show();
+    }
 
     for (QAction *action: m_parts.hiddenActions) {
         if (!action) continue;

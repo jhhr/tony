@@ -19,6 +19,7 @@
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
 #include "CompactLayout.h"
+#include "SongScrollBar.h"
 #include "PlotSize.h"
 #include "LyricsSize.h"
 #include "AudioCheckRunner.h"
@@ -167,6 +168,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_realtimePitchLayer(nullptr),
     m_liveDotsFeed(40),
     m_overview(0),
+    m_songScroll(nullptr),
     m_compactLayout(nullptr),
     m_plotSize(nullptr),
     m_lyricsSize(nullptr),
@@ -418,6 +420,11 @@ MainWindow::MainWindow(AudioMode audioMode,
             (ColourDatabase::getInstance()->getColourIndex(tr("Blue")));
     }        
 
+    // The overview takes too much of a phone's height: the compact layout
+    // shows this in its place instead (setupCompactLayout())
+    m_songScroll = new SongScrollBar(m_viewManager, m_paneStack, frame);
+    m_songScroll->hide();
+
     m_fader = new Fader(frame, false);
     connect(m_fader, SIGNAL(mouseEntered()), this, SLOT(mouseEnteredWidget()));
     connect(m_fader, SIGNAL(mouseLeft()), this, SLOT(mouseLeftWidget()));
@@ -469,6 +476,7 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     layout->setSpacing(4);
     layout->addWidget(m_overview, 0, 1);
+    layout->addWidget(m_songScroll, 0, 1); // never both on show
     layout->addWidget(scroll, 1, 1);
 
     layout->setColumnStretch(1, 10);
@@ -484,6 +492,15 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_alternatePitch = new AlternatePitchTrack(this);
     connect(m_analyser, SIGNAL(layersChanged()),
             this, SLOT(syncAlternatePitchTrack()));
+
+    // The song scroll bar draws the reference's pitch, whose layer and
+    // model are replaced when the reference is analysed again
+    connect(m_analyser, &Analyser::layersChanged,
+            this, &MainWindow::syncSongScrollBar);
+    connect(m_analyser, &Analyser::initialAnalysisCompleted,
+            this, &MainWindow::syncSongScrollBar);
+    connect(m_analyser, &Analyser::rangedAnalysisMerged,
+            this, &MainWindow::syncSongScrollBar);
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
@@ -2464,8 +2481,10 @@ MainWindow::setupCompactLayout()
         }
     }
 
-    // For room: the panes are what a phone's height is wanted for
+    // For room: the panes are what a phone's height is wanted for.  The
+    // song scroll bar, a thin strip, navigates the song in its place
     parts.hiddenWidgets = { m_overview };
+    parts.shownWidgets = { m_songScroll };
 
     m_compactLayout->setParts(parts);
 }
@@ -3168,6 +3187,9 @@ MainWindow::closeSession()
     m_document = 0;
     m_viewManager->clearSelections();
     m_timeRulerLayer = 0; // document owned this
+
+    // No song and no pitch: nothing of this one left drawn
+    syncSongScrollBar();
 
     m_sessionFile = "";
 
@@ -4330,6 +4352,16 @@ MainWindow::syncAlternatePitchTrack()
     Layer *reference = m_analyser->getLayer(Analyser::PitchTrack);
     m_alternatePitch->setSource(reference ? reference->getModel() : ModelId());
     updateAlternatePitchForTake();
+}
+
+void
+MainWindow::syncSongScrollBar()
+{
+    if (!m_songScroll) return;
+    Layer *reference = m_analyser ?
+        m_analyser->getLayer(Analyser::PitchTrack) : nullptr;
+    m_songScroll->setSongModel(getMainModelId());
+    m_songScroll->setPitchModel(reference ? reference->getModel() : ModelId());
 }
 
 void
@@ -9277,6 +9309,8 @@ MainWindow::mainModelChanged(ModelId model)
     m_panLayer->setModel(model);
 
     MainWindowBase::mainModelChanged(model);
+
+    syncSongScrollBar();
 
     if (m_playTarget || m_audioIO) {
         connect(m_fader, SIGNAL(valueChanged(float)),

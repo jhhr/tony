@@ -47,6 +47,7 @@ class QComboBox;
 class QActionGroup;
 class QToolBar;
 class CompactLayout;
+class SongScrollBar;
 class PlotSize;
 class LyricsSize;
 
@@ -269,6 +270,7 @@ protected slots:
     virtual void alternatePitchUp();
     virtual void alternatePitchDown();
     virtual void syncAlternatePitchTrack();
+    void syncSongScrollBar();
 
     virtual void importLyrics();
     virtual void exportLyrics();
@@ -421,6 +423,10 @@ protected:
     LiveDotsFeed          m_liveDotsFeed;
 
     sv::Overview  *m_overview;
+
+    // The overview's thin stand-in in the compact layout, which shows it
+    // in the overview's place; hidden otherwise
+    SongScrollBar *m_songScroll;
 
     // The layout for a phone: one toolbar of touch-sized buttons in place
     // of the menu bar and the other toolbars.  MainWindow only hands it
