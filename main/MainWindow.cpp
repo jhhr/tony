@@ -20,6 +20,7 @@
 #include "Analyser.h"
 #include "CompactLayout.h"
 #include "PlotSize.h"
+#include "LyricsSize.h"
 #include "AudioCheckRunner.h"
 #include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
@@ -166,6 +167,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_overview(0),
     m_compactLayout(nullptr),
     m_plotSize(nullptr),
+    m_lyricsSize(nullptr),
     m_playAction(nullptr),
     m_recordAction(nullptr),
     m_zoomInAction(nullptr),
@@ -518,6 +520,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     // Before the menus: their switches are in the View menu
     m_compactLayout = new CompactLayout(this);
     m_plotSize = new PlotSize(m_viewManager, this);
+    m_lyricsSize = new LyricsSize(this);
+    m_lyrics->setTextScale(m_lyricsSize->getTextScale());
+    connect(m_lyricsSize, &LyricsSize::textScaleChanged,
+            m_lyrics, &LyricsTrack::setTextScale);
 
     setupMenus();
     setupToolbars();
@@ -1165,6 +1171,8 @@ MainWindow::setupViewMenu()
     menu->addAction(m_compactLayout->getAction());
     QMenu *plotSizeMenu = menu->addMenu(tr("Plot &Size"));
     plotSizeMenu->addActions(m_plotSize->getActions());
+    QMenu *lyricsSizeMenu = menu->addMenu(tr("Lyrics Si&ze"));
+    lyricsSizeMenu->addActions(m_lyricsSize->getActions());
     // Enabled and checked in updateLayerStatuses().  Not "Show &Lyrics":
     // Peek Left has the L
     m_showLyrics = new QAction(tr("Show L&yrics"), this);

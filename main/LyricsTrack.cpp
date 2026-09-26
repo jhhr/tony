@@ -46,7 +46,8 @@ LyricsTrack::LyricsTrack(QObject *parent) :
     QObject(parent),
     m_document(nullptr),
     m_pane(nullptr),
-    m_layer(nullptr)
+    m_layer(nullptr),
+    m_textScale(1.0)
 {
 }
 
@@ -54,14 +55,12 @@ LyricsTrack::~LyricsTrack()
 {
 }
 
-double
-LyricsTrack::textScale()
+void
+LyricsTrack::setTextScale(double scale)
 {
-#ifdef Q_OS_ANDROID
-    return 0.65;
-#else
-    return 1.0;
-#endif
+    if (!(scale > 0.0)) return;
+    m_textScale = scale;
+    if (m_layer) m_layer->setLyricsTextScale(m_textScale);
 }
 
 QString
@@ -172,7 +171,7 @@ LyricsTrack::configureLayer()
     // scale to this layer
     m_layer->setVerticalScale(RegionLayer::EqualSpaced);
     m_layer->setPlotStyle(RegionLayer::PlotLyrics);
-    m_layer->setLyricsTextScale(textScale());
+    m_layer->setLyricsTextScale(m_textScale);
 
     // The words are dark on light boxes whatever this is; grey rather
     // than the layer's default black wherever else its colour shows

@@ -48,6 +48,7 @@ class QActionGroup;
 class QToolBar;
 class CompactLayout;
 class PlotSize;
+class LyricsSize;
 
 class AudioCheckRunner;
 struct AudioCheckResult;
@@ -423,6 +424,9 @@ protected:
 
     // View > Plot Size: how large the panes draw pitch and notes
     PlotSize      *m_plotSize;
+
+    // View > Lyrics Size: how large the lyrics' words are drawn
+    LyricsSize    *m_lyricsSize;
 
     QAction       *m_playAction;
     QAction       *m_recordAction;
