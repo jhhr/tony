@@ -3976,6 +3976,10 @@ private slots:
         QVERIFY(newAudio != oldAudio);
         auto wfm = sv::ModelById::getAs<sv::WaveFileModel>(newAudio);
         QVERIFY(wfm);
+        // svcore reads a file this small on a thread of its own, and its
+        // length grows from 0 until it is ready: nothing here has waited,
+        // as no analysis follows the swap (CI's macOS found 0 frames)
+        QTRY_VERIFY(wfm->isReady());
         QCOMPARE(wfm->getFrameCount(), sv::sv_frame_t(2.0 * rate));
         QVERIFY2(!sv::ModelById::get(oldAudio),
                  "the audio that was swapped out was not released");
