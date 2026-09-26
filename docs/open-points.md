@@ -20,9 +20,11 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
 - Of the [manual checklist](manual-checklist.md), the device check (Calibrate Audio with
   the dev checks) has been run on real hardware only in part: Calibrate Audio, and a dev
-  run of an early build with items 1 and 2 only (the user's PC, MME, 2026-09-26). The whole
-  dev run not yet. Of section 2, only the looks, from cloud screenshots (2026-09-25). None
-  of the lyrics items.
+  run of an early build with items 1 and 2 only (the user's PC, MME, 2026-09-26); then
+  Calibrate Audio and a whole dev run on MME at 200 ms and on WASAPI at 20 and 10 ms
+  (2026-09-26, [audio-drivers.md](audio-drivers.md), §7). Not DirectSound, nor the driver
+  menus themselves (section 2). Of section 3, only the looks, from cloud screenshots (2026-09-25). None of the lyrics
+  items.
 - **The dev checks' "not judged" reads Pass.** Items 4 and 12 pass when no look at the
   output lay in a silent gap, with a message that says so, and the report's Totals then
   overstate. Should it count otherwise, as Measured say?
@@ -33,14 +35,8 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 ## Not built
 
-- **A lower-latency driver**, the next project (the user's decision, 2026-09-26): first
-  the device-rate fix (a take recorded at 48 kHz is placed frame for frame into the
-  44.1 kHz session; convert when it is spliced), then a `bqaudioio` fork for choosing the
-  host API, WASAPI's rate conversion and a settable `suggestedLatency` (`jhhr/bqaudioio`
-  exists, the remote `jhhr` in `bqaudioio/`, not pinned yet: [forks.md](forks.md)), then a
-  driver type in Tony with the stored round trip per type, then Calibrate Audio and a dev
-  run on each type. MME stays the default until a run shows another better
-  ([calibrate-audio.md](calibrate-audio.md), §10).
+- **Beyond the three drivers** ([audio-drivers.md](audio-drivers.md), §8): WASAPI's
+  exclusive mode and WDM-KS, lower still but taking the device from every other program.
 - Showing two takes at once, or any comparison of takes other than switching.
 - Singing track gain and pan are not saved in the session.
 - Background music is not saved in the session; it is reloaded by hand.
@@ -72,10 +68,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   is not known. `TestUiChecks::grabPaneRedrawn()` works around it.
 - With no audio device at all, "Couldn't open audio device" is shown again for every file
   opened (`MainWindowBase::createAudioIO()` tries each time).
-- **A recording device not at 44.1 kHz** probably places take audio at the wrong scale:
-  recordings are written at the device's rate, take timing uses the reference's 44.1 kHz,
-  and the splice does not resample. Unverified; see
-  [mobile-port.md](mobile-port.md#sample-rate).
 - **If pYIN fails part-way, the live dots wait for ever**: they are removed on
   `initialAnalysisCompleted`, which then never comes.
 - **`Analyser::newFileLoaded()` error path for the singing track** (pYIN plugin missing):
@@ -148,11 +140,19 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
 
-- **Restart jitter on MME.** Every take restarts the stream, and on the user's PC the
-  offset between input and output moved by about 13 ms from one start to the next. No one
-  round trip then places every take: the dev checks' items 1 and 2, and 7 and 13 whenever
-  their punch-in lands more than 2 ms off, fail on MME today. The remedy is the driver
-  project above.
+- **Restart jitter.** Each start of the stream moved the offset between input and output
+  by up to about 8 ms either way on the user's PC, on MME and WASAPI alike, and items 1,
+  2, 7 and 13 failed on it. The stream is now kept running between takes on desktop
+  ([recording.md](recording.md#latency)); a dev run on WASAPI at 20 ms is to show that
+  they pass. Opening the device again (a driver, latency or device chosen, a device menu
+  opened, Tony started again) still moves the alignment, so a figure kept from an earlier
+  session is up to about 8 ms off: calibrate at the start of a session. And the
+  microphone shows as in use from the first take until Tony quits.
+- **A round trip is kept per driver, not per latency**: after a latency change the kept
+  figure is used unless the latencies the device reports moved by more than 1 ms. And
+  before a device's first take, the menu line, Forget Measured Latency and the dialog
+  look the figure up at the session's rate, so on a 48 kHz device they show the driver's
+  figure although one is kept ([audio-drivers.md](audio-drivers.md), §8).
 - The runner allows the reference's analysis 60 s (`kReferenceTimeoutMs`); the 4-minute
   song's took 10.4 s on the cloud machine, so a PC six times slower ends the dev run at its
   first stage.

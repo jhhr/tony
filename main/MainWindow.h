@@ -52,6 +52,7 @@ class LyricsSize;
 
 class AudioCheckRunner;
 struct AudioCheckResult;
+class AudioDriverMenus;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -352,6 +353,11 @@ protected slots:
 
     virtual void rescanAudioDevices();
     virtual void audioDeviceSelected(QAction *);
+
+    // Playback > Audio Driver or Audio Latency chosen, and written to the
+    // Preferences: the device is opened again, with it
+    void audioDriverChosen(QString implementation);
+    void audioLatencyChosen(double seconds);
 
     // Playback > Calibrate Audio: the audio check's dialog, not modal
     virtual void calibrateAudio();
@@ -839,6 +845,9 @@ protected:
     QMenu         *m_audioInputDeviceMenu;
     QActionGroup  *m_audioInputDeviceGroup;
 
+    // Playback > Audio Driver and Audio Latency, before the device menus
+    AudioDriverMenus *m_audioDriverMenus;
+
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;
     QAction       *m_rwdAction;
@@ -892,6 +901,16 @@ protected:
                                       QActionGroup *group,
                                       const std::vector<std::string> &names,
                                       QString settingKey);
+
+    // The implementations bqaudioio has, of which the drivers are offered
+    // in Playback > Audio Driver.  Virtual so that the tests can give
+    // drivers the platform they run on does not have
+    virtual QStringList audioImplementationNames() const;
+
+    // Where no driver is named and MME is built in, name it (and carry
+    // the devices chosen before over to it): before a device is opened,
+    // and before the Playback menu shows the device menus
+    void nameDefaultAudioDriver();
 
     // Helpers for the singing / second-track workflow.
     // deferAnalysis=true skips pYIN: swapSingingAudio() uses it, as the
@@ -1193,6 +1212,13 @@ protected:
     // of its own, has been changed, and is not incomplete
     bool maySaveUnasked() const;
 
+    // Whether Stop, and the end of a take, suspend the audio device. Not
+    // on desktop: each start of a stream can move its input against its
+    // output by several ms, which no one measured figure can place every
+    // take with, so the stream is kept running from the first take on.
+    // On Android they do: a phone should not keep its microphone open
+    bool suspendAudioOnStop() const override;
+
 #ifdef Q_OS_ANDROID
     // Android's file picker gives content:// URIs, which svcore's readers
     // cannot open. A file in the phone's own storage is opened where it
@@ -1249,6 +1275,13 @@ protected:
     QTimer *m_audioDeviceCheck;
     QElapsedTimer m_audioDeviceReopened;
     int m_audioDeviceReopens;
+#else
+    // Before each device is opened: a driver named where none is, and
+    // the latency chosen for it handed to bqaudioio. Then openAudioIO()
+    void createAudioIO() override;
+
+    // Opens the device the Preferences name, as MainWindowBase does
+    virtual void openAudioIO();
 #endif
 
     // A session must not be saved in the middle of the analysis of a

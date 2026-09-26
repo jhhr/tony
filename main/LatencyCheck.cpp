@@ -551,10 +551,11 @@ LatencyCheck::judgeTake(const Layout &layout,
     }
 
     // Across punch-ins: each one that found anything counts once, at
-    // its median, since what moves from one to the next is the stream
-    // start, which every punch-in makes once.  A punch-in placed with a
-    // longer round trip than the first lands that much earlier, which is
-    // no movement of the device's
+    // its median, since what moves from one to the next is the take: a
+    // stream started again for each (Android, or svapp's default) moves
+    // its input against its output.  A punch-in placed with a longer
+    // round trip than the first lands that much earlier, which is no
+    // movement of the device's
     const double firstPlaced =
         punchIns.empty() ? 0.0 : punchIns.front().placedWith;
     vector<double> positions, medians;

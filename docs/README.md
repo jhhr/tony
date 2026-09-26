@@ -18,8 +18,9 @@ methods, and they do not tell the story of fixed bugs.
 | [takes.md](takes.md) | Takes: decisions, the audio swap, ranged analysis and merge, undo, the coverage strip, files and sessions, limitations |
 | [forks.md](forks.md) | The `jhhr/*` library forks: how to change one, what each adds, known defects |
 | [open-points.md](open-points.md) | Decisions waiting for the user, things not built, weak spots |
-| [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes, starting with the device check (Calibrate Audio with the dev checks). Tried so far: Calibrate Audio and part of a dev run on the user's PC, and the looks from cloud screenshots; the rest not yet |
+| [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes, starting with the device check (Calibrate Audio with the dev checks, on each driver) and the driver menus. Tried so far: Calibrate Audio and part of a dev run on the user's PC, and the looks from cloud screenshots; the rest not yet |
 | [mobile-port.md](mobile-port.md) | Porting to a phone: decisions, what in the code any port depends on, Android against Sailfish OS |
 | [port-android.md](port-android.md), [port-sailfish.md](port-sailfish.md) | Platform facts with sources, the work, and the first test port for each |
 | [calibrate-audio.md](calibrate-audio.md) | Calibrate Audio, which measures the round trip through an earcup held to the mic, and the dev checks that settle the checklist's device items: what they do, what each verdict and check means, which numbers to send back, design, tests, decisions, open points, the user's runs |
 | [windows-shards.md](windows-shards.md) | Plan, built and proven on Linux, left to try on Windows: sharded test runs from Git Bash on Windows, each shard kept apart by an application name of its own |
+| [audio-drivers.md](audio-drivers.md) | Playback > Audio Driver and Audio Latency on Windows (MME, DirectSound, WASAPI): why, decisions, facts, the design in Tony, tests, what the measurements on the user's PC are to settle, open points |

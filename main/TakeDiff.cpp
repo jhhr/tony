@@ -14,6 +14,7 @@
 
 #include "TakeDiff.h"
 
+#include "RealtimePitchTracker.h"
 #include "TakeEvents.h"
 
 #include <algorithm>
@@ -330,4 +331,64 @@ TakeDiff::stepAt(const float *samples, sv_frame_t frames, int channels,
 
     result.pass = result.stepDb <= kMaxStepDb;
     return result;
+}
+
+TakeDiff::DotReach
+TakeDiff::dotReach(sv_samplerate_t rate)
+{
+    DotReach reach;
+    if (rate <= 0) return reach;
+    reach.before = double(kDotHops * RealtimePitchTracker::kHopSize) / rate;
+    reach.after = reach.before +
+        double(RealtimePitchTracker::kWindowSize / 2) / rate;
+    reach.onset = double(RealtimePitchTracker::kWindowSize) / rate;
+    return reach;
+}
+
+TakeDiff::LiveDot
+TakeDiff::placeLiveDot(const LatencyCheck::Layout &layout,
+                       double punchInStart, double seconds, double hz)
+{
+    LiveDot dot;
+    const DotReach reach = dotReach(layout.rate);
+    if (layout.rate <= 0) return dot;
+
+    auto atOnset = [&](double start) {
+        return seconds >= start - reach.before &&
+            seconds < start + reach.onset;
+    };
+
+    for (const LatencyCheck::Event &e : layout.events) {
+        const double sweepAt = double(e.sweepStart) / layout.rate;
+        if (seconds >= sweepAt - reach.before &&
+            seconds <= sweepAt + LatencyCheck::kSweepSeconds + reach.after) {
+            dot.place = DotPlace::OnSweep;
+            return dot;
+        }
+    }
+
+    // The first windows of a punch-in straddle the start of what is
+    // kept: before it, what the mic heard during the lead-in
+    if (atOnset(punchInStart)) {
+        dot.place = DotPlace::AtOnset;
+    }
+
+    for (const LatencyCheck::Event &e : layout.events) {
+        const double from = double(e.toneStart) / layout.rate;
+        const double to = double(e.toneStart + e.toneLength) / layout.rate;
+        if (seconds < from - reach.before || seconds > to + reach.after) {
+            continue;
+        }
+        const bool voiced = (hz > 0.0);
+        dot.toneHz = e.toneHz;
+        dot.cents = (voiced ? 1200.0 * std::log2(hz / e.toneHz) : 0.0);
+        if (dot.place == DotPlace::AtOnset || atOnset(from)) {
+            dot.place = DotPlace::AtOnset;
+        } else {
+            dot.place = (voiced && std::fabs(dot.cents) <= kDotCents ?
+                         DotPlace::OnPitch : DotPlace::OffPitch);
+        }
+        return dot;
+    }
+    return dot;
 }

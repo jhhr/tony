@@ -6,9 +6,9 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 12 minutes on Windows; on Linux 9 in one process, a minute and a half in eight (measured 2026-09-26), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
-| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 4 minutes in one process, a little over one in eight (2026-09-26, Linux): each test records a dev run's takes, or part of them, in real time |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 12 minutes on Windows; on Linux about 10 in one process, a minute and a half in eight (measured 2026-09-26), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
+| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 5 minutes in one process, under two in eight (2026-09-26, Linux): each test records a dev run's takes, or part of them, in real time |
 
 `meson test` / `build.bat test` runs these three (`test-tony-dev` where it is built) plus
 four svcore suites. No suite uses the
@@ -139,18 +139,31 @@ Windows path would start an escape in the C string.
   `inputDelay` frames late, as speakers into a microphone), `echoDelay` / `echoGain` (a
   second arrival of the loopback, as an input played back out and heard again),
   `inputChannel` (the input on one channel only, as a microphone on input 2),
-  `reportLevels` (the peaks of each block, as `PortAudioIO` reports them for the meters)
-  and `neverCallsBack` (a device that opens and then delivers nothing). It captures the
-  output, so tests can assert what reached the speakers.
+  `reportLevels` (the peaks of each block, as `PortAudioIO` reports them for the meters),
+  `restartShift` (the loopback moved that many frames at each resume after the first:
+  early, late, on time, and again, as a real stream's input moves against its output at
+  each start) and `neverCallsBack` (a device that opens and then delivers nothing). It
+  captures the output, so tests can assert what reached the speakers, and counts its
+  resumes (`getResumeCount()`, `isSuspended()`). Its programmed input, the origin of
+  `inputFollowsPlayback` and `getPlayStartFrame()` all start again at each resume.
 - `TestMainWindow` (`TestMainWindow.h`, shared by the four suites that drive a window:
   `TestRecordWorkflow`, `TestUiChecks` and `TestAudioCheck` in `test-tony-app`,
   `TestDevChecks` in `test-tony-dev`): subclass of `MainWindow` that exposes protected
   operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
   and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
-  Playback menu's actions). It installs the fake device through `createAudioIO()`, or no
-  device at all when made with `installDevice` false, and **answers dialogs
-  through virtual seams**: `confirmRecordingOverTake()`, `confirmDeleteTake()`,
-  `askForTakeName()`, `askForLyricsFile()`, `askForLyricsExportFile()` (which also keeps
+  Playback menu's actions). It installs the fake device through `openAudioIO()`, which
+  `MainWindow::createAudioIO()` calls once it has named the driver and applied its
+  latency, or no device at all when made with `installDevice` false, and keeps what the
+  Preferences named for the last device opened (`audioIOOpenedFor()`). The drivers are
+  the ones a test gives with `setAudioImplementations()`, none by default, whatever the
+  platform has. **It suspends the device at Stop and at the end of a take**, as svapp does
+  by default and unlike the application on desktop, which keeps the stream running
+  ([recording.md](recording.md#latency)): a great many tests rely on each take resuming
+  the fake, and so starting its programmed input again. A test that wants the
+  application's way calls `keepAudioRunning(true)`; `applicationSuspendsAudioOnStop()`
+  gives what `MainWindow` itself chooses. It **answers dialogs through virtual seams**: `confirmRecordingOverTake()`,
+  `confirmDeleteTake()`, `askForTakeName()`, `askForLyricsFile()`,
+  `askForLyricsExportFile()` (which also keeps
   the path it was offered), each with a `set...Answer()` and a counter of questions asked.
   `askForLyricsWordText()` takes a queue of answers (`answerWordText()`,
   `cancelWordText()`; none left is Cancel) and can run something while the question is
@@ -238,8 +251,12 @@ The rules of the edits themselves are tested without a window, in `TestLyricsEdi
   `setApplicationSessionExtension("ton")` and the record directory.
 - `QSignalSpy` connects directly; for a signal from another thread use a receiver object
   on the test thread.
-- In `TestMainWindow` override only `createAudioIO()`: `~MainWindowBase` calls
-  `deleteAudioIO()` non-virtually.
+- In `TestMainWindow` override only `openAudioIO()`: `~MainWindowBase` calls
+  `deleteAudioIO()` non-virtually, and `MainWindow::createAudioIO()` names the driver and
+  applies its latency before it calls `openAudioIO()`.
+- A hidden `QAction` reads as disabled, whatever it was set to: a test of when the Audio
+  Driver and Audio Latency menus are greyed out gives the window drivers first
+  (`setAudioImplementations()`, `doRebuildAudioDriverMenus()`), so that they are shown.
 - The app and dev mains draw text without sub-pixel anti-aliasing. Ubuntu's fontconfig asks
   for it and Qt 6.4 follows it: the scale's labels then have orange fringes, which
   `TestUiChecks` takes for live dots. A new main that shows a window needs the same.
@@ -358,8 +375,9 @@ What they cover is in [calibrate-audio.md](calibrate-audio.md), section 11. Both
 follow `TestRecordWorkflow`'s (a `TestMainWindow`, the dialog watchdog, the user's toggles
 reset in `init()`), and `TestDevChecks`' is a copy of `TestAudioCheck`'s, not shared: each
 class keeps its own. `cleanup()` also removes any round trip a test stored, which would
-place the next test's takes. How they are built, and what to keep in mind when adding to
-them:
+place the next test's takes, and `TestAudioCheck`'s the driver, the devices kept per
+driver and the latencies a test named. How they are built, and what to keep in mind when
+adding to them:
 
 - **The loopback fake.** Both record through `FakeAudioIO` with `loopback` on (their
   `loopback()`). The device reports 2 × 4096 frames out and 4096 in, and the true round
@@ -370,6 +388,12 @@ them:
   `ResamplerWrapper` then adds about 1.1 ms that nothing reports, which the check measures
   with the rest. `TestDevChecks`' loopback also has `reportLevels` on, for the observer's
   output levels.
+- **The stream kept running.** With `restartShift` at 441 frames (10 ms), a check whose
+  window suspends at Stop, as the tests' windows do, lands its second punch-in 10 ms from
+  the first (Unsteady), and with `keepAudioRunning(true)` both land alike, the fake
+  resumed once; one whole dev run passes so, and fails items 1, 2, 7 and 13 without it.
+  Kept running, the programmed input plays once, from the first take: the room's noise
+  of `loopbackInARoom()` is then in the first 10 s of the run only.
 - **Keep them short.** Every run records in real time.
   - `TestAudioCheck`'s `shortPlan()` is two punch-ins of two sweeps on the calibration
     reference cut short after its fifth event (10.8 s), about 13 s a run.

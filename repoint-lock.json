@@ -10,7 +10,7 @@
       "pin": "23e1365ca62faf73fe99511f1920280897dc49a3"
     },
     "svapp": {
-      "pin": "f6da7b793f82d569472b284f97c3f7637a1c031f"
+      "pin": "532e1739a3121b7ebc17d5758926455fc03a7abe"
     },
     "checker": {
       "pin": "fae540cf4a79ac5ed5a4d4dc0df680b1acbe8628"
@@ -31,7 +31,7 @@
       "pin": "38c3e524416a"
     },
     "bqaudioio": {
-      "pin": "017ab3ed3a33"
+      "pin": "e7c836fc1199340e55fabb40ce29a8f2a655be6a"
     },
     "bqaudiostream": {
       "pin": "9b59e706f9dda8507c5e1b07ad619c060f65bd29"

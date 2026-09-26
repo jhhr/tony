@@ -74,10 +74,11 @@ from a cloud session.
 
 ### Audio I/O
 
-- **bqaudioio is upstream, not a fork.** It is on sourcehut (Mercurial), mirrored at
-  `github.com/breakfastquay/bqaudioio`. `AudioFactory.cpp` knows JACK, PulseAudio and
-  PortAudio only. A new backend, or any buffer change, means forking it by the procedure
-  in [forks.md](forks.md) and adding it to `repoint-project.json`.
+- **bqaudioio is the fork `jhhr/bqaudioio`** since the driver project
+  ([audio-drivers.md](audio-drivers.md)); upstream is on sourcehut (Mercurial), mirrored
+  at `github.com/breakfastquay/bqaudioio`. `AudioFactory.cpp` knows JACK, PulseAudio and
+  PortAudio only (on Windows, PortAudio also restricted to one host API). A new backend,
+  or any buffer change, goes in the fork by the procedure in [forks.md](forks.md).
 - `PortAudioIO.cpp` (about 760 lines) is the model for a new backend:
   - one duplex stream, input and output in the same callback;
   - input and output latency from the stream info, handed to `setSystemRecordLatency()`

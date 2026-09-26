@@ -17,10 +17,13 @@
 // Tier 2: the comparisons the development checks make on a real take,
 // on synthetic samples and events: each passing, and failing on
 // purpose. Two tests run the real splice through files, since where
-// its fades fall is what the audio comparison relies on.
+// its fades fall is what the audio comparison relies on. And where
+// live dots lie among the dev reference's sounds.
 
 #include "../TakeDiff.h"
 #include "../TakeAudio.h"
+#include "../LatencyCheck.h"
+#include "../RealtimePitchTracker.h"
 #include "TestSignals.h"
 
 #include "data/fileio/FileSource.h"
@@ -111,6 +114,31 @@ class TestTakeDiff : public QObject
             events.push_back(pitchAt(f));
         }
         return events;
+    }
+
+    static QString placeName(TakeDiff::DotPlace place) {
+        switch (place) {
+        case TakeDiff::DotPlace::OnPitch: return "on pitch";
+        case TakeDiff::DotPlace::OffPitch: return "off pitch";
+        case TakeDiff::DotPlace::AtOnset: return "at an onset";
+        case TakeDiff::DotPlace::OnSweep: return "on a sweep";
+        case TakeDiff::DotPlace::OnNothing: return "on nothing";
+        }
+        return "?";
+    }
+
+    // Where a dot lies, and a message saying where it was and what it
+    // was taken for
+    static bool placedAs(double punchIn, double seconds, double hz,
+                         TakeDiff::DotPlace expected, QString &message) {
+        const TakeDiff::LiveDot dot = TakeDiff::placeLiveDot
+            (LatencyCheck::devLayout(), punchIn, seconds, hz);
+        message = QString("a dot at %1 s, %2 Hz, in a punch-in from %3 s: "
+                          "%4, %5 cents from %6 Hz, not %7")
+            .arg(seconds, 0, 'f', 4).arg(hz).arg(punchIn)
+            .arg(placeName(dot.place)).arg(dot.cents, 0, 'f', 1)
+            .arg(dot.toneHz).arg(placeName(expected));
+        return dot.place == expected;
     }
 
     static void removeFrame(sv::EventVector &events, frame_t frame) {
@@ -628,6 +656,117 @@ private slots:
         Signal tone = sine(framesOf(0.2));
         QVERIFY(!stepAt(tone, framesOf(0.2) + 1000).pass);
         QVERIFY(!stepAt(Signal(), 0).pass);
+    }
+
+    // Item 3 of the dev checks, at the tone of 245 Hz from 7.5 s in the
+    // first punch-in, where the user's runs had dots 50 to 75 cents off
+    // from 7.516 to 7.528 s on every driver. Those dots, in the first
+    // window of the tracker from the tone's start, are not judged, and
+    // the item passes; the same dots one window later are off pitch, and
+    // make it fail. In tune there, they are on pitch
+    void live_dots_off_pitch_at_a_tones_onset_are_not_judged() {
+        const LatencyCheck::Layout layout = LatencyCheck::devLayout();
+        const LatencyCheck::Event &e = layout.events[3];
+        QCOMPARE(e.toneHz, 245.0);
+        const double onset = double(e.toneStart) / layout.rate;
+        QVERIFY(std::fabs(onset - 7.5) < 1e-9);
+        const double window =
+            double(RealtimePitchTracker::kWindowSize) / layout.rate;
+        const double punchIn = 6.3;
+        const double sharp = 254.6;
+
+        const TakeDiff::LiveDot first =
+            TakeDiff::placeLiveDot(layout, punchIn, 7.519, sharp);
+        QCOMPARE(first.toneHz, 245.0);
+        QVERIFY2(std::fabs(first.cents - 67.0) < 1.0,
+                 qPrintable(QString::number(first.cents)));
+
+        QString message;
+        for (double at : { 7.516, 7.519, 7.528, onset + window - 0.0005 }) {
+            QVERIFY2(placedAs(punchIn, at, sharp,
+                              TakeDiff::DotPlace::AtOnset, message),
+                     qPrintable(message));
+            QVERIFY2(placedAs(punchIn, at + window, sharp,
+                              TakeDiff::DotPlace::OffPitch, message),
+                     qPrintable(message));
+            QVERIFY2(placedAs(punchIn, at + window, 245.0,
+                              TakeDiff::DotPlace::OnPitch, message),
+                     qPrintable(message));
+        }
+
+        // Within kDotCents either way, and no further
+        const double cents = TakeDiff::kDotCents;
+        const double at = onset + 0.3;
+        QVERIFY2(placedAs(punchIn, at, 245.0 * std::pow(2.0, (cents - 1) / 1200),
+                          TakeDiff::DotPlace::OnPitch, message),
+                 qPrintable(message));
+        QVERIFY2(placedAs(punchIn, at, 245.0 * std::pow(2.0, -(cents - 1) / 1200),
+                          TakeDiff::DotPlace::OnPitch, message),
+                 qPrintable(message));
+        QVERIFY2(placedAs(punchIn, at, 245.0 * std::pow(2.0, (cents + 1) / 1200),
+                          TakeDiff::DotPlace::OffPitch, message),
+                 qPrintable(message));
+        QVERIFY2(placedAs(punchIn, at, 0.0, TakeDiff::DotPlace::OffPitch,
+                          message), qPrintable(message));
+    }
+
+    // The punch-in from 16.8 s, where the tone of 245 Hz before it ends:
+    // its first window straddles the start of what is kept, and the
+    // user's runs had dots off pitch there too, from 16.803 to 16.822 s.
+    // They are not judged; the same dots in a punch-in that began before
+    // the tone are, against the tone they trail. The same at a punch-in
+    // starting in silence, where one window later a dot is on nothing
+    void live_dots_at_a_punch_ins_start_are_not_judged() {
+        const LatencyCheck::Layout layout = LatencyCheck::devLayout();
+        const double window =
+            double(RealtimePitchTracker::kWindowSize) / layout.rate;
+        const double sharp = 254.6;
+        QString message;
+        for (double at : { 16.803, 16.822 }) {
+            QVERIFY2(placedAs(16.8, at, sharp, TakeDiff::DotPlace::AtOnset,
+                              message), qPrintable(message));
+            QVERIFY2(placedAs(15.0, at, sharp, TakeDiff::DotPlace::OffPitch,
+                              message), qPrintable(message));
+        }
+
+        // Between the tone that ends at 11.9 s and the sweep at 13.1 s
+        QVERIFY2(placedAs(12.3, 12.31, sharp, TakeDiff::DotPlace::AtOnset,
+                          message), qPrintable(message));
+        QVERIFY2(placedAs(12.3, 12.31 + window, sharp,
+                          TakeDiff::DotPlace::OnNothing, message),
+                 qPrintable(message));
+    }
+
+    // How far a sound's dots reach: a hop before its start, half a
+    // window and a hop past its end; a sweep's at any pitch
+    void live_dots_reach_of_a_sound() {
+        const LatencyCheck::Layout layout = LatencyCheck::devLayout();
+        const TakeDiff::DotReach reach = TakeDiff::dotReach(layout.rate);
+        QVERIFY(std::fabs(reach.before - 256 / 44100.0) < 1e-12);
+        QVERIFY(std::fabs(reach.after - (256 + 1024) / 44100.0) < 1e-12);
+        QVERIFY(std::fabs(reach.onset - 2048 / 44100.0) < 1e-12);
+
+        // The event at 7.2 s: its sweep, then its tone from 7.5 to 8.3 s
+        const double punchIn = 6.3;
+        const double e = 0.0005;
+        QString message;
+        for (double at : { 7.2 - reach.before + e, 7.3,
+                           7.4 + reach.after - e }) {
+            QVERIFY2(placedAs(punchIn, at, 900.0, TakeDiff::DotPlace::OnSweep,
+                              message), qPrintable(message));
+        }
+        for (double at : { 7.2 - reach.before - e, 7.4 + reach.after + e,
+                           7.5 - reach.before - e, 8.3 + reach.after + e }) {
+            QVERIFY2(placedAs(punchIn, at, 245.0,
+                              TakeDiff::DotPlace::OnNothing, message),
+                     qPrintable(message));
+        }
+        QVERIFY2(placedAs(punchIn, 7.5 - reach.before + e, 245.0,
+                          TakeDiff::DotPlace::AtOnset, message),
+                 qPrintable(message));
+        QVERIFY2(placedAs(punchIn, 8.3 + reach.after - e, 245.0,
+                          TakeDiff::DotPlace::OnPitch, message),
+                 qPrintable(message));
     }
 };
 

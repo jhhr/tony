@@ -59,9 +59,10 @@
             "owner": "breakfastquay"
         },
         "bqaudioio": {
-            "vcs": "hg",
-            "service": "sourcehut",
-            "owner": "breakfastquay"
+            "vcs": "git",
+            "service": "github",
+            "owner": "jhhr",
+            "branch": "master"
         },
         "bqaudiostream": {
             "vcs": "git",

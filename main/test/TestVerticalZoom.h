@@ -52,7 +52,6 @@ class TestVerticalZoom : public QObject
         return r.log ? std::log2(r.max / r.min) : r.max - r.min;
     }
 
-    // Not "near": Windows headers define near and far as empty macros
     static bool within(double a, double b, double tolerance) {
         return std::fabs(a - b) <= tolerance;
     }
@@ -343,10 +342,10 @@ private slots:
         m.start(100.0); // already counting: no change
         QCOMPARE(m.update(18.0, 0.0), 10.0);
 
-        PinchZoom::AxisMovement outside(20.0);
-        outside.start(-50.0);
-        QCOMPARE(outside.update(-50.0, 0.0), 0.0);
-        QCOMPARE(outside.update(-60.0, 500.0), -10.0);
+        PinchZoom::AxisMovement distant(20.0);
+        distant.start(-50.0);
+        QCOMPARE(distant.update(-50.0, 0.0), 0.0);
+        QCOMPARE(distant.update(-60.0, 500.0), -10.0);
     }
 };
 

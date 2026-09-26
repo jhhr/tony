@@ -21,6 +21,7 @@
 
 #include "../MainWindow.h"
 #include "../Analyser.h"
+#include "../AudioDriverMenus.h"
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
 
@@ -37,6 +38,7 @@
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QMenu>
+#include <QSettings>
 #include <QTimer>
 
 #include <functional>
@@ -190,6 +192,33 @@ public:
     QMenu *playbackMenu() { return m_playbackMenu; }
     QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
     QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
+
+    // Playback > Audio Driver and Audio Latency, from the implementations
+    // given here: none unless a test gives some, whatever the platform
+    // has. Rebuilt as the app rebuilds them when they open
+    void setAudioImplementations(QStringList names) {
+        m_implementations = names;
+    }
+    AudioDriverMenus *audioDriverMenus() { return m_audioDriverMenus; }
+    void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
+    void doRescanAudioDevices() { rescanAudioDevices(); }
+
+    // Whether Stop, and the end of a take, leave the device running, as
+    // the application has them do on desktop. Not unless a test asks:
+    // the fake starts its programmed input again at every resume, and
+    // many tests rely on each take resuming it once
+    void keepAudioRunning(bool on) { m_keepAudioRunning = on; }
+    // What the application itself chooses, whatever this window does
+    bool applicationSuspendsAudioOnStop() const {
+        return MainWindow::suspendAudioOnStop();
+    }
+
+    // How often a device has been opened, and the driver and devices the
+    // Preferences named for the last one
+    int audioIOOpened() const { return m_audioIOOpened; }
+    LatencyCalibration::Key audioIOOpenedFor() const {
+        return m_audioIOOpenedFor;
+    }
     TakeLatency takeLatency() { return m_takeLatency; }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
 
@@ -323,9 +352,15 @@ protected:
         MainWindow::onRealtimePitchDetected(estimates);
     }
 
-    void createAudioIO() override {
+    // MainWindow::createAudioIO() has named the driver and applied its
+    // latency by now; the fake is opened in place of the device svapp
+    // would open, and what that would have been asked for is kept
+    void openAudioIO() override {
         if (m_audioIO || m_playTarget) return;
         if (!m_installDevice) return;
+        ++m_audioIOOpened;
+        QSettings settings;
+        m_audioIOOpenedFor = LatencyCalibration::currentKey(settings, 0);
         m_fakeConfig.inputIsKept = [this]() {
             return m_recordTarget->isRecording();
         };
@@ -333,6 +368,14 @@ protected:
             (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
              m_fakeConfig);
         m_playSource->setSystemPlaybackTarget(m_audioIO);
+    }
+
+    QStringList audioImplementationNames() const override {
+        return m_implementations;
+    }
+
+    bool suspendAudioOnStop() const override {
+        return !m_keepAudioRunning;
     }
 
     bool confirmRecordingOverTake() override {
@@ -420,6 +463,10 @@ protected:
 private:
     FakeAudioIO::Config m_fakeConfig;
     bool m_installDevice;
+    QStringList m_implementations;
+    bool m_keepAudioRunning = false;
+    int m_audioIOOpened = 0;
+    LatencyCalibration::Key m_audioIOOpenedFor;
     int m_liveDotsDelayMs = 0;
     bool m_recordOverAnswer = true;
     bool m_recordOverInDialog = false;

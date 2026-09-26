@@ -16,6 +16,7 @@
 #define TONY_TAKE_DIFF_H
 
 #include "Coverage.h"
+#include "LatencyCheck.h"
 
 #include "base/BaseTypes.h"
 #include "base/Event.h"
@@ -26,8 +27,9 @@
 /**
  * What a change did to a take, and what the joins it left look like:
  * the comparisons the development checks make on a real take (the
- * audio and events outside a punch-in, and the join of two punch-ins
- * inside a held tone).  Each returns whether it passed and the numbers
+ * audio and events outside a punch-in, the join of two punch-ins
+ * inside a held tone, and where its live dots lie among the
+ * reference's sounds).  Each returns whether it passed and the numbers
  * behind the answer, so that a check can report them.
  *
  * Pure functions over sample buffers, event vectors and frames: no
@@ -297,6 +299,74 @@ namespace TakeDiff
     SampleStep stepAt(const float *samples, sv::sv_frame_t frames,
                       int channels, sv::sv_samplerate_t rate,
                       sv::sv_frame_t join);
+
+    /**
+     * Live dots against the reference they were sung to, on a loopback,
+     * where what is sung is the reference itself (the dev checks' item
+     * 3).
+     *
+     * A dot is drawn at the middle of the live tracker's window, but YIN
+     * hears mostly the window's first half, so a dot comes up to half a
+     * window after the sound that made it, and not before it: on the
+     * loopback fake a tone's dots begin about 540 frames into it and end
+     * up to 440 past it.  So a sound's dots lie from its start to half a
+     * window past its end, give or take kDotHops of the tracker's hops;
+     * and those on a tone are within kDotCents of its pitch.
+     *
+     * Two kinds of dot are counted apart, their pitch not judged.  The
+     * end of each sweep, near 8 kHz, makes a dot or two at a subharmonic
+     * just under the tracker's 1 kHz ceiling.  And a dot within one
+     * window after a tone's start, or after the punch-in's, comes of a
+     * window that straddles that start: on the fake it is on pitch, but
+     * through a real speaker, room and microphone it wanders, 50 to 75
+     * cents on the user's runs, at the same places on every driver.
+     */
+    constexpr int kDotHops = 1;
+    constexpr double kDotCents = 50.0;
+
+    /// Where a live dot lies among the reference's sounds
+    enum class DotPlace {
+        OnPitch,    ///< on a tone, within kDotCents of its pitch
+        OffPitch,   ///< on a tone, further from its pitch
+        AtOnset,    ///< within a window after a tone's or the punch-in's start
+        OnSweep,    ///< on a sweep
+        OnNothing   ///< on none of the reference's sounds
+    };
+
+    struct LiveDot {
+        DotPlace place;
+
+        /// The tone it lies on, or at the start of, and how far the dot
+        /// is from its pitch in cents; 0 for a dot on no tone
+        double toneHz;
+        double cents;
+
+        LiveDot() : place(DotPlace::OnNothing), toneHz(0), cents(0) { }
+    };
+
+    /**
+     * How far a sound's dots reach, in seconds: before its start, and
+     * past its end; and how long after a start they are not judged.
+     * The tracker's frames, counted at the rate given: the reference's,
+     * as the dots are placed on its timeline.
+     */
+    struct DotReach {
+        double before;
+        double after;
+        double onset;
+        DotReach() : before(0), after(0), onset(0) { }
+    };
+    DotReach dotReach(sv::sv_samplerate_t rate);
+
+    /**
+     * Where a dot, at the given seconds and pitch on the reference's
+     * timeline, lies among the sounds of the layout, for a punch-in
+     * starting at punchInStart seconds.  The reach of one sound never
+     * meets the next's; a dot on a sweep near the punch-in's start is
+     * on the sweep.
+     */
+    LiveDot placeLiveDot(const LatencyCheck::Layout &layout,
+                         double punchInStart, double seconds, double hz);
 }
 
 #endif

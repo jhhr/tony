@@ -32,8 +32,8 @@ only what they need:
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `TakeDiff` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `TakeDiff`, `AudioDriverSettings` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioDriverMenus`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Development builds are every build type but `release`: they define `TONY_DEV_CHECKS` and
 compile `main/dev/`, and everything that uses it elsewhere is inside `#ifdef

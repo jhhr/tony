@@ -72,12 +72,18 @@ class TestDevChecks : public QObject
 
     // The rate the user's phone records and plays at
     static constexpr double phoneRate = 48000.0;
+    // A device at another rate, as WASAPI's mixer often runs
+    static constexpr double otherRate = 48000.0;
 
     // What the device reports, and what the round trip really is: as
     // TestAudioCheck's, 123 frames (2.8 ms) more than reported
     static constexpr int reportedOut = 2 * 4096;
     static constexpr int reportedIn = 4096;
     static constexpr int roundTrip = 3 * 4096 + 123;
+
+    // How far the fake's input moves against its output each time its
+    // stream starts again: 10 ms, as TestAudioCheck's
+    static constexpr int restartShift = 441;
 
     // The long song of the passing run: a quarter of the real one, long
     // enough that its analysis takes well over twice a punch-in's
@@ -253,8 +259,8 @@ class TestDevChecks : public QObject
         return ok ? ms : std::nan("");
     }
 
-    // Item 3's "279: 274 on the tones, 5 on the sweeps, 0 elsewhere" as
-    // 279; -1 for anything else
+    // Item 3's "279: 262 on the tones, 12 at onsets, 5 on the sweeps, 0
+    // elsewhere" as 279; -1 for anything else
     static int dotCount(QString text) {
         bool ok = false;
         int n = text.section(':', 0, 0).toInt(&ok);
@@ -621,8 +627,11 @@ private slots:
                  describe());
         QVERIFY2(mic->message.startsWith("Not applicable here"), describe());
 
-        // What the device says of itself, at the head of the report
-        for (QString words : { QString("Audio drivers built in: "),
+        // What the device says of itself, at the head of the report, and
+        // the driver it was opened through with the latency asked of it
+        for (QString words : { QString("Audio driver: (auto)\n"),
+                               QString("Latency asked for: 200.0 ms\n"),
+                               QString("Audio drivers built in: "),
                                QString("Playback latency reported: 8192 "
                                        "frames (185.8 ms)"),
                                QString("Record latency reported: 4096 "
@@ -777,8 +786,11 @@ private slots:
                  QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
 
         // The take had pitch wherever a check compares it: every part was
-        // judged (dev_checks_without_pitch() has the other way)
+        // judged (dev_checks_without_pitch() has the other way).  Not
+        // item 3, which leaves the dots at a sound's onset unjudged
+        // whatever the take holds
         for (const CheckResult &c : m_report.checks) {
+            if (c.item == 3) continue;
             QVERIFY2(!c.message.contains("not judged"), describe(c.item));
         }
 
@@ -793,6 +805,54 @@ private slots:
         QVERIFY(!m_window->isDocumentModified());
         QVERIFY(!m_window->audioCheckTakes());
         QVERIFY(m_window->recordAction()->isEnabled());
+    }
+
+    // A whole run on a device at 48 kHz against references at 44.1, as
+    // WASAPI's runs were: the takes are recorded at the device's rate
+    // and converted as they are spliced, and each check counts every
+    // figure at its own rate. The fake's delay counts its own frames, so
+    // the true round trip is roundTrip frames at 48 kHz; bqaudioio's
+    // ResamplerWrapper holds the output back about 1.1 ms more, which
+    // nothing reports, and the sweeps land that late, within item 1's
+    // 2 ms. Every item passes. Item 14 finds each take stopping about as
+    // far past its selection as at 44.1 kHz, where it reads 0.25 to 0.35
+    // s: with the round trip in the device's frames added to the lead-in
+    // and the selection in the reference's, it read 0.34 s more, and
+    // failed, as it did on the user's runs
+    void dev_checks_pass_at_48000() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.sampleRate = int(otherRate);
+        makeWindow(config);
+
+        runDevChecks(roundTrip / otherRate);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_checks.size()), 5);
+        for (const AudioCheckResult &r : m_checks) {
+            QCOMPARE(r.recordingRate, otherRate);
+            QCOMPARE(r.referenceRate, rate);
+        }
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            // Item 5 is measured only: the loopback is on both inputs
+            const CheckResult::Verdict expected = (c.item == 5 ?
+                CheckResult::Verdict::Measured : CheckResult::Verdict::Pass);
+            QVERIFY2(c.verdict == expected, describe(c.item));
+        }
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+
+        const CheckResult *stops = check(14);
+        QVERIFY(stops);
+        for (QString range : { QString("19.20 to 21.20 s"),
+                               QString("1.00 to 4.20 s") }) {
+            const QString words = number(*stops, "stopped, " + range);
+            bool ok = false;
+            const double past = words.section(' ', 0, 0).toDouble(&ok);
+            QVERIFY2(ok && past >= 0.2 && past <= 0.45,
+                     qPrintable(range + ": " + words));
+        }
     }
 
     // The same with a round trip 20 ms too long: every take is spliced
@@ -948,6 +1008,40 @@ private slots:
                  describe(3));
         QCOMPARE(lastReportLine(),
                  QString("Totals: 9 passed, 1 failed, 1 measured, 0 skipped"));
+    }
+
+    // A device whose input moves 10 ms against its output each time its
+    // stream starts, with the stream kept running between takes, as the
+    // application keeps it on desktop: started once, at the run's first
+    // take, so that every take shares one alignment, and every item
+    // passes. Suspended at each Stop, as svapp does unless told
+    // otherwise, the takes land 10 ms apart in turn, and items 1, 2, 7
+    // and 13 fail
+    void dev_checks_pass_with_the_stream_kept_running() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.restartShift = restartShift;
+        makeWindow(config);
+        m_window->keepAudioRunning(true);
+
+        runDevChecks(roundTrip / rate);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_checks.size()), 5);
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            // Item 5 is measured only: the loopback is on both inputs
+            const CheckResult::Verdict expected = (c.item == 5 ?
+                CheckResult::Verdict::Measured : CheckResult::Verdict::Pass);
+            QVERIFY2(c.verdict == expected, describe(c.item));
+        }
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+        QVERIFY(check(10));
+        QCOMPARE(number(*check(10), "second punch-in against the first"),
+                 QString("0.0 ms"));
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+        QVERIFY(!m_window->fake()->isSuspended());
     }
 
     // The loopback heard a second time, 50 ms later at half the level, as

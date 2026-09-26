@@ -417,11 +417,11 @@ namespace LatencyCheck
         int found;
 
         /// Across punch-ins, over those with an event found: the
-        /// median of their median offsets, which weighs every stream
-        /// start alike, and the largest minus the smallest of them.
-        /// Each counted as if its punch-in had been placed with the
-        /// first one's round trip (PunchIn::placedWith): what is left is
-        /// how the device moved, not how the placing did
+        /// median of their median offsets, which weighs every take
+        /// alike, and the largest minus the smallest of them.  Each
+        /// counted as if its punch-in had been placed with the first
+        /// one's round trip (PunchIn::placedWith): what is left is how
+        /// the device moved, not how the placing did
         double medianOffset;
         double spread;
 

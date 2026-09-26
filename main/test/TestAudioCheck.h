@@ -82,6 +82,11 @@ class TestAudioCheck : public QObject
     static constexpr int reportedIn = 4096;
     static constexpr int roundTrip = 3 * 4096 + 123;
 
+    // How far the fake's input moves against its output each time its
+    // stream starts again: 10 ms, as a real driver's did by up to 8 ms
+    // either way (FakeAudioIO::Config::restartShift)
+    static constexpr int restartShift = 441;
+
     QTemporaryDir m_dir;
     TestMainWindow *m_window = nullptr;
     QTimer m_watchdog;
@@ -238,8 +243,119 @@ class TestAudioCheck : public QObject
         settings.endGroup();
     }
 
-    static LatencyCalibration::Key key(QString output, QString input) {
+    // The devices chosen under a driver, as its device menus write them
+    static void setDevices(QString output, QString input, QString driver) {
+        QSettings settings;
+        settings.beginGroup("Preferences");
+        settings.setValue("audio-playback-device-" + driver, output);
+        settings.setValue("audio-record-device-" + driver, input);
+        settings.endGroup();
+    }
+
+    // The implementations bqaudioio has on Windows, whatever it has here
+    static QStringList windowsImplementations() {
+        return { "port", "mme", "directsound", "wasapi" };
+    }
+
+    // A Preference, as the driver and device menus write it
+    static void setPreference(QString name, QString value) {
+        QSettings settings;
+        settings.setValue("Preferences/" + name, value);
+    }
+
+    static QString preference(QString name) {
+        QSettings settings;
+        return settings.value("Preferences/" + name).toString();
+    }
+
+    // The driver, the devices kept for each driver and the latency asked
+    // of each, as a test may have left them
+    static void forgetDriverPreferences() {
+        QSettings settings;
+        settings.beginGroup("Preferences");
+        for (const QString &name : settings.childKeys()) {
+            if (name == "audio-target" ||
+                name.startsWith("audio-latency-") ||
+                name.startsWith("audio-playback-device-") ||
+                name.startsWith("audio-record-device-")) {
+                settings.remove(name);
+            }
+        }
+        settings.endGroup();
+    }
+
+    // A menu's entries, the one ticked, and one by its text
+    static QStringList entries(QMenu *menu) {
+        QStringList texts;
+        for (QAction *a : menu->actions()) {
+            if (!a->isSeparator()) texts << a->text();
+        }
+        return texts;
+    }
+
+    static QString ticked(QMenu *menu) {
+        for (QAction *a : menu->actions()) {
+            if (a->isChecked()) return a->text();
+        }
+        return {};
+    }
+
+    static QAction *entry(QMenu *menu, QString text) {
+        for (QAction *a : menu->actions()) {
+            if (a->text() == text) return a;
+        }
+        return nullptr;
+    }
+
+    // Playback > Audio Driver or Audio Latency opened, and an entry of it
+    // chosen
+    void chooseDriver(QString text) {
+        QMenu *menu = m_window->audioDriverMenus()->driverMenu();
+        emit menu->aboutToShow();
+        QAction *action = entry(menu, text);
+        QVERIFY2(action, qPrintable(text + " not in: " +
+                                    entries(menu).join(", ")));
+        action->trigger();
+    }
+
+    void chooseLatency(QString text) {
+        QMenu *menu = m_window->audioDriverMenus()->latencyMenu();
+        emit menu->aboutToShow();
+        QAction *action = entry(menu, text);
+        QVERIFY2(action, qPrintable(text + " not in: " +
+                                    entries(menu).join(", ")));
+        action->trigger();
+    }
+
+    // Audio Driver and Audio Latency, which are greyed out together:
+    // both enabled, or both not
+    bool driverMenusEnabled() {
+        AudioDriverMenus *menus = m_window->audioDriverMenus();
+        return menus->driverMenu()->menuAction()->isEnabled() &&
+            menus->latencyMenu()->menuAction()->isEnabled();
+    }
+
+    bool driverMenusDisabled() {
+        AudioDriverMenus *menus = m_window->audioDriverMenus();
+        return !menus->driverMenu()->menuAction()->isEnabled() &&
+            !menus->latencyMenu()->menuAction()->isEnabled();
+    }
+
+    // Shown, as they are where there is more than one driver: a hidden
+    // action is disabled as well, whatever it was set to
+    void showDriverMenus(QStringList implementations) {
+        m_window->setAudioImplementations(implementations);
+        m_window->doRebuildAudioDriverMenus();
+    }
+
+    double latencyApplied() {
+        return m_window->audioDriverMenus()->appliedLatency();
+    }
+
+    static LatencyCalibration::Key key(QString output, QString input,
+                                       QString driver = QString()) {
         LatencyCalibration::Key key;
+        key.implementation = driver;
         key.playbackDevice = output;
         key.recordDevice = input;
         key.rate = rate;
@@ -648,9 +764,11 @@ private slots:
     }
 
     void cleanup() {
-        // A round trip a test stored would place the next test's takes.
-        // First, as the waits below return early when they fail
+        // A round trip a test stored would place the next test's takes,
+        // and a driver it named open the next test's device.  First, as
+        // the waits below return early when they fail
         QSettings().remove("LatencyCalibration");
+        forgetDriverPreferences();
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -1023,6 +1141,69 @@ private slots:
         QSettings settings;
         LatencyCalibration::Figure figure;
         QVERIFY(!LatencyCalibration::load(settings, speaker, figure));
+    }
+
+    // A device whose input moves 10 ms against its output each time its
+    // stream starts, and a window that suspends it at Stop, as svapp
+    // does unless told otherwise: each take starts the stream again, and
+    // the second punch-in lands 10 ms from the first, which is Unsteady.
+    // The negative of the next test, and the proof that the fake's shift
+    // works
+    void check_takes_move_apart_when_the_stream_restarts() {
+        FakeAudioIO::Config config = loopback();
+        config.restartShift = restartShift;
+        makeWindow(config);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(m_window->fake()->getResumeCount(), 2);
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        const double apart = r.summary.punchIns[0].medianOffset -
+            r.summary.punchIns[1].medianOffset;
+        QVERIFY2(std::fabs(apart * rate - restartShift) <= 4.0,
+                 qPrintable(QString("the second punch-in %1 frames before "
+                                    "the first: %2")
+                            .arg(apart * rate).arg(describe(r).constData())));
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Unsteady,
+                 describe(r).constData());
+    }
+
+    // The same device with the stream kept running between takes, as
+    // the application keeps it on desktop: started once, at the first
+    // take, and suspended neither by Stop nor by the end of a take, so
+    // that both punch-ins land alike and the check is Ok
+    void check_takes_agree_with_the_stream_kept_running() {
+        FakeAudioIO::Config config = loopback();
+        config.restartShift = restartShift;
+        makeWindow(config);
+#ifdef Q_OS_ANDROID
+        QVERIFY(m_window->applicationSuspendsAudioOnStop());
+#else
+        QVERIFY(!m_window->applicationSuspendsAudioOnStop());
+#endif
+        m_window->keepAudioRunning(true);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        const double apart = r.summary.punchIns[0].medianOffset -
+            r.summary.punchIns[1].medianOffset;
+        QVERIFY2(std::fabs(apart) <= 0.0002,
+                 qPrintable(QString("the second punch-in %1 ms before the "
+                                    "first: %2")
+                            .arg(apart * 1000.0).arg(describe(r).constData())));
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+        QVERIFY(!m_window->fake()->isSuspended());
     }
 
     // Cancel during a take stops it through the Stop path, clears the
@@ -1633,8 +1814,11 @@ private slots:
     // round trip measured for the devices the check started on, and the
     // menu's line says what the devices named now are placed with
     void calibrate_audio_from_the_menu() {
-        setDevices("Speakers A", "Microphone A");
+        // As on Windows: a driver named, and the devices chosen under it
+        setPreference("audio-target", "wasapi");
+        setDevices("Speakers A", "Microphone A", "wasapi");
         makeWindow(loopback());
+        showDriverMenus(windowsImplementations());
 
         m_window->calibrateAudioAction()->trigger();
         CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
@@ -1664,7 +1848,7 @@ private slots:
         dialog->startCheck();
         QVERIFY(m_window->audioCheck()->isRunning());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
-        setDevices("Speakers B", "Microphone B");
+        setDevices("Speakers B", "Microphone B", "wasapi");
 
         // Small while the check runs: the dialog hidden, and its
         // indicator, which the window's status bar holds, on show there
@@ -1680,6 +1864,7 @@ private slots:
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(!m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(!m_window->audioInputMenu()->menuAction()->isEnabled());
+        QVERIFY(driverMenusDisabled());
         QVERIFY2(dialog->pageText().contains("Recording punch-in 1 of 2"),
                  qPrintable(dialog->pageText()));
         // The step, the punch-in and the time left, on one line
@@ -1698,6 +1883,7 @@ private slots:
         QVERIFY(m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(m_window->audioInputMenu()->menuAction()->isEnabled());
+        QVERIFY(driverMenusEnabled());
 
         // 12411 frames measured, 12288 reported, at 44.1 kHz
         QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());
@@ -1718,16 +1904,16 @@ private slots:
         LatencyCalibration::Figure figure;
         QSettings settings;
         QVERIFY(!LatencyCalibration::load
-                (settings, key("Speakers B", "Microphone B"), figure));
+                (settings, key("Speakers B", "Microphone B", "wasapi"), figure));
         QVERIFY(LatencyCalibration::load
-                (settings, key("Speakers A", "Microphone A"), figure));
+                (settings, key("Speakers A", "Microphone A", "wasapi"), figure));
         QVERIFY2(std::fabs(figure.roundTrip * rate - roundTrip) <= 4.0,
                  qPrintable(QString("kept %1 frames")
                             .arg(figure.roundTrip * rate)));
 
         QCOMPARE(latencyLine(), QString("Latency: driver's figure, 279 ms"));
         QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
-        setDevices("Speakers A", "Microphone A");
+        setDevices("Speakers A", "Microphone A", "wasapi");
         const QString line = latencyLine();
         QVERIFY2(line.startsWith("Latency: measured 281 ms, "),
                  qPrintable(line));
@@ -1902,22 +2088,27 @@ private slots:
     }
 
     // Not while an ordinary take is being recorded: the check records
-    // takes of its own
+    // takes of its own. Nor can the driver or its latency be chosen,
+    // which would open the device again under the take
     void calibrate_audio_not_during_a_take() {
         makeWindow(FakeAudioIO::Config());
+        showDriverMenus(windowsImplementations());
         openSong();
         if (QTest::currentTestFailed()) return;
         QVERIFY(m_window->calibrateAudioAction()->isEnabled());
+        QVERIFY(driverMenusEnabled());
 
         m_window->doRecord();
         QVERIFY(m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
+        QVERIFY(driverMenusDisabled());
         QTest::qWait(300);
 
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QTRY_VERIFY_WITH_TIMEOUT
             (m_window->calibrateAudioAction()->isEnabled(), 10000);
+        QVERIFY(driverMenusEnabled());
     }
 
     // Closing the dialog while its check runs cancels the check; opened
@@ -2084,6 +2275,236 @@ private slots:
         QVERIFY(dialog->isVisible());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
         QVERIFY(indicator->isHidden());
+    }
+
+    // Playback > Audio Driver: the drivers among the implementations
+    // bqaudioio has, by the names the user knows, in their order, with
+    // the one named ticked, and Audio Latency with it, both before the
+    // device menus. One driver is no choice, and neither is shown
+    void driver_menu_lists_the_drivers() {
+        setPreference("audio-target", "wasapi");
+        makeWindow(FakeAudioIO::Config());
+        showDriverMenus({ "port", "wasapi", "directsound", "mme" });
+
+        QMenu *drivers = m_window->audioDriverMenus()->driverMenu();
+        QMenu *latencies = m_window->audioDriverMenus()->latencyMenu();
+        QVERIFY(drivers->menuAction()->isVisible());
+        QVERIFY(latencies->menuAction()->isVisible());
+        QCOMPARE(drivers->title(), QString("Audio Dri&ver"));
+        QCOMPARE(latencies->title(), QString("Audio &Latency"));
+        QCOMPARE(entries(drivers),
+                 QStringList({ "MME", "DirectSound", "WASAPI" }));
+        QCOMPARE(ticked(drivers), QString("WASAPI"));
+        QCOMPARE(entries(latencies),
+                 QStringList({ "10 ms", "20 ms", "50 ms", "100 ms",
+                               "200 ms" }));
+        // WASAPI's own, none having been chosen
+        QCOMPARE(ticked(latencies), QString("20 ms"));
+
+        const QList<QAction *> playback = m_window->playbackMenu()->actions();
+        const qsizetype driverAt = playback.indexOf(drivers->menuAction());
+        const qsizetype latencyAt = playback.indexOf(latencies->menuAction());
+        QVERIFY(driverAt >= 0);
+        QCOMPARE(latencyAt, driverAt + 1);
+        QVERIFY(latencyAt <
+                playback.indexOf(m_window->audioOutputMenu()->menuAction()));
+
+        // Ticked afresh as the menu opens
+        setPreference("audio-target", "directsound");
+        setPreference("audio-latency-directsound", "0.05");
+        emit drivers->aboutToShow();
+        QCOMPARE(ticked(drivers), QString("DirectSound"));
+        QCOMPARE(ticked(latencies), QString("50 ms"));
+
+        m_window->setAudioImplementations({ "port", "mme" });
+        m_window->doRebuildAudioDriverMenus();
+        QVERIFY(!drivers->menuAction()->isVisible());
+        QVERIFY(!latencies->menuAction()->isVisible());
+    }
+
+    // Choosing WASAPI names it and opens the device again, WASAPI's
+    // devices this time; the device menus then write WASAPI's keys, and
+    // MME's are left as they were
+    void driver_chosen_from_the_menu() {
+        setPreference("audio-target", "mme");
+        setPreference("audio-playback-device-mme", "Speakers (MME)");
+        setPreference("audio-record-device-mme", "Mic (MME)");
+        setPreference("audio-playback-device-wasapi", "Speakers (WASAPI)");
+        setPreference("audio-record-device-wasapi", "Mic (WASAPI)");
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations(windowsImplementations());
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), 1);
+        QCOMPARE(m_window->audioIOOpenedFor().implementation, QString("mme"));
+        QCOMPARE(m_window->audioIOOpenedFor().playbackDevice,
+                 QString("Speakers (MME)"));
+
+        chooseDriver("WASAPI");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(preference("audio-target"), QString("wasapi"));
+        QCOMPARE(m_window->audioIOOpened(), 2);
+        QVERIFY(m_window->fake());
+        const LatencyCalibration::Key opened = m_window->audioIOOpenedFor();
+        QCOMPARE(opened.implementation, QString("wasapi"));
+        QCOMPARE(opened.playbackDevice, QString("Speakers (WASAPI)"));
+        QCOMPARE(opened.recordDevice, QString("Mic (WASAPI)"));
+        QCOMPARE(ticked(m_window->audioDriverMenus()->driverMenu()),
+                 QString("WASAPI"));
+
+        // The driver in use chosen again: nothing to open afresh
+        chooseDriver("WASAPI");
+        QCOMPARE(m_window->audioIOOpened(), 2);
+
+        // (System Default), from a menu that lists WASAPI's devices (none
+        // here, where there is no WASAPI)
+        m_window->doRescanAudioDevices();
+        QAction *systemDefault =
+            m_window->audioOutputMenu()->actions().value(0);
+        QVERIFY(systemDefault);
+        QCOMPARE(systemDefault->text(), QString("(System Default)"));
+        systemDefault->trigger();
+        QCOMPARE(preference("audio-playback-device-wasapi"), QString());
+        QCOMPARE(preference("audio-playback-device-mme"),
+                 QString("Speakers (MME)"));
+        QCOMPARE(m_window->audioIOOpenedFor().playbackDevice, QString());
+        QCOMPARE(m_window->audioIOOpenedFor().recordDevice,
+                 QString("Mic (WASAPI)"));
+    }
+
+    // With no driver named, WASAPI is named before the first device is
+    // opened, and the devices chosen before are WASAPI's; or before the
+    // Playback menu shows its device menus; MME where there is no WASAPI.
+    // A driver named already is left alone
+    void driver_named_by_default() {
+        setDevices("Speakers", "Microphone");
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations(windowsImplementations());
+        QVERIFY(!m_window->fake());
+        QCOMPARE(preference("audio-target"), QString());
+
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), 1);
+        LatencyCalibration::Key opened = m_window->audioIOOpenedFor();
+        QCOMPARE(opened.implementation, QString("wasapi"));
+        QCOMPARE(opened.playbackDevice, QString("Speakers"));
+        QCOMPARE(opened.recordDevice, QString("Microphone"));
+        QCOMPARE(preference("audio-target"), QString("wasapi"));
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Speakers"));
+        QCOMPARE(preference("audio-record-device-wasapi"),
+                 QString("Microphone"));
+        QCOMPARE(latencyApplied(), 0.02);
+
+        forgetDriverPreferences();
+        setPreference("audio-target", "auto");
+        emit m_window->playbackMenu()->aboutToShow();
+        QCOMPARE(preference("audio-target"), QString("wasapi"));
+
+        forgetDriverPreferences();
+        m_window->setAudioImplementations({ "port", "mme", "directsound" });
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpenedFor().implementation, QString("mme"));
+        QCOMPARE(preference("audio-target"), QString("mme"));
+        QCOMPARE(latencyApplied(), 0.2);
+        m_window->setAudioImplementations(windowsImplementations());
+
+        setPreference("audio-target", "directsound");
+        m_window->recreateAudioIO();
+        emit m_window->playbackMenu()->aboutToShow();
+        QCOMPARE(m_window->audioIOOpenedFor().implementation,
+                 QString("directsound"));
+        QCOMPARE(preference("audio-target"), QString("directsound"));
+
+        // Nor is anything named where there is neither
+        forgetDriverPreferences();
+        m_window->setAudioImplementations({ "pulse", "port", "jack" });
+        m_window->recreateAudioIO();
+        emit m_window->playbackMenu()->aboutToShow();
+        QCOMPARE(m_window->audioIOOpenedFor().implementation, QString());
+        QCOMPARE(preference("audio-target"), QString());
+    }
+
+    // The latency is chosen per driver, handed to bqaudioio as the device
+    // is opened, and choosing one opens it again; where none has been
+    // chosen, 20 ms on WASAPI and 200 ms on the others
+    void latency_kept_per_driver() {
+        setPreference("audio-target", "mme");
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations(windowsImplementations());
+        m_window->recreateAudioIO();
+        QCOMPARE(latencyApplied(), 0.2);
+
+        chooseLatency("50 ms");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(preference("audio-latency-mme").toDouble(), 0.05);
+        QCOMPARE(m_window->audioIOOpened(), 2);
+        QCOMPARE(latencyApplied(), 0.05);
+
+        chooseDriver("WASAPI");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyApplied(), 0.02);
+        emit m_window->audioDriverMenus()->latencyMenu()->aboutToShow();
+        QCOMPARE(ticked(m_window->audioDriverMenus()->latencyMenu()),
+                 QString("20 ms"));
+
+        chooseLatency("10 ms");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyApplied(), 0.01);
+        QCOMPARE(preference("audio-latency-mme").toDouble(), 0.05);
+
+        chooseDriver("MME");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyApplied(), 0.05);
+        emit m_window->audioDriverMenus()->latencyMenu()->aboutToShow();
+        QCOMPARE(ticked(m_window->audioDriverMenus()->latencyMenu()),
+                 QString("50 ms"));
+        QCOMPARE(m_window->audioIOOpened(), 5);
+    }
+
+    // A round trip measured under one driver is not the one takes are
+    // placed with under another, and is again under the first. The
+    // check's instructions name the driver
+    void measured_latency_kept_per_driver() {
+        setPreference("audio-target", "mme");
+        makeWindow(loopback());
+        m_window->setAudioImplementations(windowsImplementations());
+        m_window->recreateAudioIO();
+        const LatencyCalibration::InUse reported = m_window->latencyInUse();
+        QVERIFY(reported.source == LatencyCalibration::Source::Reported);
+
+        LatencyCalibration::Figure figure;
+        figure.roundTrip = 0.3;
+        figure.date = QDateTime::currentDateTimeUtc();
+        figure.reportedOutput = reported.reportedOutput;
+        figure.reportedInput = reported.reportedInput;
+        LatencyCalibration::Key mme = key("", "");
+        mme.implementation = "mme";
+        QSettings settings;
+        LatencyCalibration::store(settings, mme, figure);
+        QVERIFY(m_window->latencyInUse().source ==
+                LatencyCalibration::Source::Measured);
+
+        chooseDriver("WASAPI");
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->latencyInUse().source ==
+                LatencyCalibration::Source::Reported);
+        QVERIFY2(latencyLine().startsWith("Latency: driver's figure"),
+                 qPrintable(latencyLine()));
+
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        for (QString words : { "Driver:", "WASAPI" }) {
+            QVERIFY2(dialog->pageText().contains(words),
+                     qPrintable(words + " not in: " + dialog->pageText()));
+        }
+        dialog->close();
+
+        chooseDriver("MME");
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->latencyInUse().source ==
+                LatencyCalibration::Source::Measured);
+        QCOMPARE(m_window->latencyInUse().roundTrip, 0.3);
     }
 };
 

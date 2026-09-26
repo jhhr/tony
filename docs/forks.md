@@ -1,7 +1,7 @@
 # Dependency forks
 
 Tony's libraries are separate repositories checked out into the top-level directories by
-[repoint](../repoint-project.json) and **gitignored in this repository**. Four of them are
+[repoint](../repoint-project.json) and **gitignored in this repository**. Five of them are
 forks under `github.com/jhhr` that exist only for this Tony fork:
 
 | Directory | Fork branch | Why it is forked |
@@ -10,12 +10,9 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 | `svgui/` | `jhhr/svgui` `tony-customizations` | See below. |
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
+| `bqaudioio/` | `jhhr/bqaudioio` `master` | See below. Upstream is Mercurial on sourcehut; the fork started from its GitHub mirror. |
 
-`pyin/` and the rest are upstream and must stay untouched. `bqaudioio/` too, for now: a
-fork of it, `jhhr/bqaudioio`, was created on 2026-09-26 for the lower-latency driver work
-([open-points.md](open-points.md)), and the checkout has it as the remote `jhhr`, but
-`repoint-project.json` still takes bqaudioio from sourcehut and nothing is pinned to the
-fork. It joins the table when that work first pins it.
+`pyin/` and the rest are upstream and must stay untouched.
 
 ## Changing a fork
 
@@ -29,15 +26,17 @@ library over a workaround in `main/`.
    which reaches the fork branch when the Tony branch is merged. Commit messages there
    follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
-   upstream sonic-visualiser — do not push there. In a cloud session the checkouts are
+   upstream sonic-visualiser, and in a `bqaudioio` cloned from its mirror it is
+   breakfastquay's — do not push there. In a cloud session the checkouts are
    `container-setup.sh`'s, whose `origin` is the fork, and two checks stand in the way:
    - The session's git proxy refuses a push to a repository not attached to the session,
      a new branch included (HTTP 403). The session's add-repository tool attaches it, with
      push access.
    - Auto mode trusts only the repository the session started in and its remotes, and so
      blocks committing in a fork's checkout, attaching the fork and pushing to it. The
-     environment's setup script names the four forks as trusted as well, which the user
-     chose ([building.md](building.md#building-on-linux)); `claude auto-mode config`
+     environment's setup script names four of the forks, all but `bqaudioio`, as trusted
+     as well, which the user chose ([building.md](building.md#building-on-linux));
+     `claude auto-mode config`
      shows whether a session has that entry. Without it, the user's own message has to
      ask for the action, naming the fork and the branch. After a denial, stop and tell the
      user what is blocked: trying again another way counts as getting round the check, and
@@ -88,6 +87,9 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `AudioGenerator::removeModel()`/`clearModels()` also delete the continuous synth.
 - `SVFileReader` restores the `start` attribute of wave file models (upstream wrote it and
   never read it). Only older `.ton` files need it now.
+- `MainWindowBase::suspendAudioOnStop()`, a virtual that `stop()` asks before it suspends
+  the device: Tony's is false on desktop, so the stream runs on between takes
+  ([recording.md](recording.md#latency)).
 
 ### svgui
 
@@ -177,6 +179,31 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `ViewManager::setPlotScale()` / `plotScaleChanged()` is Tony's View > Plot Size; each
   view drops its cache on a change. On a hi-DPI desktop (ratio 2) this doubles points and
   notes, and thickens the pens of every layer drawn through a `ViewProxy`.
+
+### bqaudioio
+
+The driver project ([audio-drivers.md](audio-drivers.md)), on the fork branch
+`feat/wasapi`:
+
+- **An implementation per Windows host API.** `mme`, `directsound` and `wasapi` are
+  PortAudio restricted to that host API: their device lists hold its devices only, and
+  with no device named its own default devices are used. `port` is as upstream has it:
+  every host API's devices, the first whose name matches, and PortAudio's default
+  devices. The three are reported only on Windows and only where PortAudio has the host
+  API; asking for them elsewhere would initialise PortAudio for nothing.
+- **WASAPI converts rates.** A WASAPI device opens with `paWinWasapiAutoConvert`: in shared
+  mode each side runs at its own mixer's rate, and the stream opens at the output's. The
+  header comes from PortAudio (`pa_win_wasapi.h`, found with `__has_include`).
+- **A settable latency.** `AudioFactory::setSuggestedLatency()` sets what both sides ask
+  for, for the streams opened after; 0.2 s, upstream's fixed figure, when unset.
+
+Only the Windows cross-compile (MinGW-w64 against PortAudio 19.7.0's headers) and the
+user's PC see the Windows part; Linux builds none of it.
+
+A `bqaudioio/` cloned from the mirror before the fork was pinned does not have the pin:
+`git remote add jhhr https://github.com/jhhr/bqaudioio`, `git fetch jhhr`, then
+`git checkout -B feat/wasapi jhhr/feat/wasapi` (the branch that goes with Tony's
+`feat/wasapi`). `container-setup.sh` does the equivalent by itself in a cloud session.
 
 ## Known defects in the forks, not fixed
 

@@ -36,6 +36,9 @@ orange pitch track to compare with it.
    status bar counts you in, and nothing sung during the lead-in is kept
  * an optional "record into the selection only": select the phrase, and the
    recording starts and stops at the ends of the selection by itself
+ * on Windows, Playback -> Audio Driver chooses MME, DirectSound or WASAPI, and
+   Playback -> Audio Latency how much latency is asked of it (10 to 200 ms);
+   each driver keeps its own devices, latency and measured round trip
  * a take is one recording or many. A strip along the bottom of the pane shows
    where there is singing and where there is not; recording over a part of it
    replaces just that part, and only the part that changed is analysed again

@@ -22,11 +22,12 @@ Audacity's measurements) was a separate report, not kept in the repository.
   a measured figure the round trip is the sum of the output and input latency the device
   reports. The start gap is measured and right; the reported pair comes from
   `Pa_GetStreamInfo()`, which on MME, DirectSound and WASAPI is buffer sizes only.
-  Audacity measured it off by −5 to +155 ms. bqaudioio opens the stream with
-  `suggestedLatency = 0.2` on both sides.
+  Audacity measured it off by −5 to +155 ms. bqaudioio opens the stream with the
+  `suggestedLatency` chosen for the driver under Playback > Audio Latency on both sides,
+  0.2 s unless another is chosen ([recording.md](recording.md#latency)).
 - **The device need not run at the reference's rate.** It opens at PortAudio's default
-  rate: for "(System Default)" through MME most likely 44.1 kHz, for a device whose name
-  exists only under WASAPI or WDM-KS often 48 kHz. A recording is converted to the
+  rate: through MME most likely 44.1 kHz, through WASAPI the rate of Windows' mixer, often
+  48 kHz ([audio-drivers.md](audio-drivers.md)). A recording is converted to the
   reference's rate as it is spliced, and the round trip is counted in seconds and turned
   into frames of the recording ([recording.md](recording.md#latency)), so a check on such
   a device is judged, and its figure kept, like any other. The result names the device's
@@ -60,9 +61,9 @@ its text is 85 % of the phone's font, its buttons finger-sized, and it scrolls w
 finger. Three pages:
 
 1. **Instructions:** one earcup against the microphone, off your ears; a moderate volume
-   and a quiet room; the output and input devices and the latency in use; how long it
-   takes. In development builds the checkbox **Run the dev checks after calibrating**, on
-   every time the page is shown and not remembered. **Start**.
+   and a quiet room; the driver, the output and input devices and the latency in use; how
+   long it takes. In development builds the checkbox **Run the dev checks after
+   calibrating**, on every time the page is shown and not remembered. **Start**.
 2. **Progress:** the step and the punch-in, a bar and the time left (the recording to come,
    plus a guess of 3 s for each analysis), **Cancel**. During the dev checks, their stage.
 3. **Result** (§4): **Use this latency** (only when the calibration is usable), **Check
@@ -82,8 +83,9 @@ finger. Three pages:
    Each is an ordinary take: its range is selected, `record()` is called with Record into
    Selection, Play Reference While Recording and a 1 s pre-roll whatever the toolbar says,
    and the take stops itself at the end of the selection through the Stop path, is spliced
-   and analysed. So every punch-in restarts the audio stream, as a real take does, and is
-   placed with the round trip every take is placed with, which is what is being measured.
+   and analysed. So every punch-in meets the audio stream as a real take does (kept
+   running between takes on desktop, started again for each on Android), and is placed
+   with the round trip every take is placed with, which is what is being measured.
    The next punch-in waits for the take's analysis, which keeps pYIN's load out of its
    timing.
 3. **The check's playback.** Tony normalises every audio file to full scale as it reads it
@@ -151,7 +153,7 @@ reference has it: positive is late.
 spare: the splice cuts and crossfades at the range's ends, and a sweep cut in half says
 nothing about the audio path. Where a later punch-in overlaps an earlier one, the event is
 judged in the later only. Each punch-in has the median and spread of its offsets; across
-punch-ins, the offset is the median of their medians (each stream start counts once), with
+punch-ins, the offset is the median of their medians (each take counts once), with
 their spread and a line fitted over position.
 
 **Verdicts**, in order of precedence: the first that applies is the verdict, and all are
@@ -192,7 +194,7 @@ round trip measured (not for NoSignal) against the driver's, output plus input; 
 takes were placed with (measured before, or the driver's figure); where each punch-in
 landed (+ is late); the spread; sweeps found of those judged; both rates ("recorded at
 48000 Hz, converted to the reference's 44100 Hz" where they differ); the input peak in
-dBFS; the echo; the devices. A failed run shows why it ended instead.
+dBFS; the echo; the driver and the devices. A failed run shows why it ended instead.
 
 **Use this latency** keeps the calibrated round trip for the devices the check started on,
 not for those the Preferences name when it is pressed (the result stays on show for as long
@@ -239,9 +241,9 @@ the round trip is exactly the old sum; a core test checks it over a grid of valu
 The menu line, Forget Measured Latency and the dialog's instructions use the rate of the
 last take placed with a round trip, or before any take the session's: the device's rate is
 not known before a take (`AudioCallbackRecordTarget` has no getter for it). Choosing a
-device from the menu resets it. So on a device at another rate than the session's, the
-three see a figure kept for it only once a take has been recorded since Tony started or
-the device was chosen; takes are placed with it from the first.
+device or a driver from the menu resets it. So on a device at another rate than the
+session's, the three see a figure kept for it only once a take has been recorded since
+Tony started or the device or driver was chosen; takes are placed with it from the first.
 
 A dev run places its takes with the round trip the calibration before it measured, for the
 run only: nothing is stored, the menu line goes on describing the window's own figure, and
@@ -330,7 +332,7 @@ rewrote it; the report and [manual-checklist.md](manual-checklist.md) §1 use th
 | --- | --- | --- | --- |
 | 1 | `latency_on_this_machine` | every punch-in of every stage placed within ±2 ms; after the reopen, the take's file judged again over the dev take's punch-ins gives the same offsets to the frame, and the pitch and notes the session restored are the same events (values as the file rounds them) | offsets of each punch-in, the largest, the round trip used, the same after reopening |
 | 2 | `several_phrases_in_one_take` | at least two punch-ins; each wholly in the take's coverage, its median offset within ±2 ms, its own start gap measured | each punch-in's median offset and start gap |
-| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Dots on the sweeps (a subharmonic of their top) are counted apart | dots per punch-in, on tones, on sweeps, elsewhere; how far behind the cursor they appeared, median and spread |
+| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Counted apart and not judged: dots on the sweeps (a subharmonic of their top), and dots within one window of the tracker (46 ms) after a tone's start or the punch-in's, whose window straddles that start: on the fake they are on pitch, but through a real speaker, room and microphone they wander 50 to 75 cents (`TakeDiff::placeLiveDot()`) | dots per punch-in, on tones, at onsets, on sweeps, elsewhere, and the message says how many were at onsets; how far behind the cursor they appeared, median and spread |
 | 4 | `nothing_of_the_take_in_the_speakers` | no echo in any stage; an output level of exactly 0 at every look that lies wholly in one of the reference's silent gaps; Play Singing Audio the same after each take as before, and the take heard or not as it says | the second arrival; the largest output level in the gaps, and over how many looks; the largest output level; the margin of a look |
 | 5 | `mic_on_input_2` | stage 2: judged only when the microphone is on input 2 alone (an input within 20 dB of the loudest carries it), and then passes when every punch-in drew more than 10 dots; otherwise Measured, "not applicable here"; a Fail when no input recorded anything | each input's peak in each punch-in; which inputs carry the microphone |
 | 7 | `record_from_a_position` | stage 3: placed within ±2 ms; outside the selection the take's audio the same bit for bit, and its pitch and notes beyond ±0.25 s unchanged | the range, offsets, audio, pitch and notes outside |
@@ -342,7 +344,10 @@ rewrote it; the report and [manual-checklist.md](manual-checklist.md) §1 use th
 
 Item 10 does not judge placement: items 1 and 2 do. Item 14 works out what the take needed
 from the round trip, start gap, lead-in and range itself, not with `TakeTiming`, whose
-margin is part of what it checks.
+margin is part of what it checks; each in seconds at its own rate, since the raw
+recording, the round trip and the start gap count the device's frames and the lead-in and
+range the reference's. Added up as frames, they read a take on a 48 kHz device about 8 % of
+its lead-in and range too long, 0.34 and 0.36 s for stages 4 and 3, and fail it.
 
 **Pitch that is not there.** When the take has no pitch where a check compares it (as on a
 phone whose speaker played none of the tones), the pitch part of items 1, 7, 9 and 12, and
@@ -375,9 +380,10 @@ song was left out (`Options::longSeconds` of 0, for tests only).
 
 `DevChecks.txt` in `TONY_TEST_LOG_DIR` if that is set, else in the application data
 directory (`%APPDATA%\sonic-visualiser\Tony` on Windows), written over by each run. Its
-header: the date, the output and input devices, the audio drivers built in, the playback and
-record latencies the device reports (frames and ms), the round trip for the run, the
-scratch folder, the session saved, and why the run ended early if it did. Then each check
+header: the date, the output and input devices, the audio driver they were opened through
+and the latency asked of it, the audio drivers built in, the playback and record latencies
+the device reports (frames and ms), the round trip for the run, the scratch folder, the
+session saved, and why the run ended early if it did. Then each check
 under "Item N", with its verdict, message and numbers, and last `Totals: N passed, N failed,
 N measured, N skipped`, as the suites end.
 
@@ -394,12 +400,15 @@ page's text), and on Android **Save Report...** saves them through the file pick
 phone keeps `DevChecks.txt` where only Tony can read it. What the numbers decide:
 
 - **The round trip measured against the driver's, and where each punch-in landed:** how
-  wrong the driver is, and how far the offset moves from one stream start to the next (the
-  Unsteady and Scattered thresholds, and the restart jitter of §10).
+  wrong the driver is, and how far the offset moves from one take to the next (the
+  Unsteady and Scattered thresholds, and whether the stream kept running holds one
+  alignment, §10).
 - **Sweeps found, the input peak, the echo:** the finder's thresholds, NoSignal and Clipped.
 - **The recording's rate:** whether the device runs at the reference's 44.1 kHz or its
   takes are converted; a figure is kept for each rate.
-- **The report's header:** the drivers built in and what the device reports.
+- **The report's header:** the driver and the latency asked of it, the drivers built in,
+  and what the device reports: which run on which driver is which
+  ([audio-drivers.md](audio-drivers.md), §7).
 - **Items 1 and 2**, each sweep's offset and each start gap: the ±2 ms. **Item 3**, how far
   the dots trail the cursor. **Items 4 and 12**, the margin, the looks in the gaps and the
   longest wait: how the gap check fares with a real device's blocks. **Item 5**, each
@@ -474,35 +483,31 @@ What it rests on:
 The open points are also in [open-points.md](open-points.md), briefly; this section has
 the reasons.
 
-**Next: a lower-latency driver** (the user's decision, 2026-09-26, from the restart jitter
-below). In order:
+**The driver project** (the user's decision, 2026-09-26, from the restart jitter below) is
+in [audio-drivers.md](audio-drivers.md): Playback > Audio Driver and Audio Latency put
+WASAPI and DirectSound next to MME, each with its own devices, latency and stored round
+trip. The user's runs on each made **WASAPI at 20 ms the default**. The device's rate came first,
+as WASAPI opens at the Windows mixer's rate. A recording is converted as it is spliced,
+whatever the device's rate; the other way, the record target asking for the session's
+rate through `getApplicationSampleRate()` in the svapp fork, fails where the device runs
+only at its mixer's rate.
 
-1. **The device's rate.** Done: a recording at another rate than the reference's is
-   converted as it is spliced, whatever the device's rate (the other way, the record
-   target asking for the session's rate through `getApplicationSampleRate()` in the svapp
-   fork, fails where the device runs only at its mixer's rate), and Calibrate Audio
-   measures such a device, and keeps its figure, like any other. It came first because
-   WASAPI opens at the Windows mixer's rate, usually 48 kHz.
-2. **A `bqaudioio` fork**, `jhhr/bqaudioio` (created 2026-09-26; the remote `jhhr` in
-   `bqaudioio/`). Nothing uses it yet: `repoint-project.json` still takes bqaudioio from
-   sourcehut, and nothing is pinned to the fork. For choosing the host API, WASAPI's
-   automatic rate conversion, and a `suggestedLatency` that can be set.
-3. **A driver type in Tony**: MME, DirectSound or WASAPI; the device menus list that type's
-   devices only (today every host API's are listed, and `getDeviceIndex()` takes the first
-   name that matches, which is MME's); the stored round trip kept per type.
-4. **Measure** with Calibrate Audio and a dev run on each type, on the user's PC.
-
-**MME stays the default** until such a run shows WASAPI, or another type, better.
-
-**Restart jitter on MME.** Every take restarts the stream. On the user's PC the offset
-between input and output moved by about 13 ms between two takes and by 5 to 20 ms over three
-calibrations, while the sweeps within one take agreed to 0.3 ms; the start gap, measured at
-0 frames both times, does not see it. No one stored figure then places every take.
-Considered: widening items 1 and 2 to ±15 ms; keeping the stream running between takes (an
-svapp change, which would make one session's takes agree with each other but not with the
-reference). Chosen: the driver project. Until then items 1 and 2 keep ±2 ms and fail on MME,
-the true reading, and so do items 7 and 13 whenever their punch-in lands more than 2 ms off.
-Item 10, by reading the code, does not fail for it (the join is a dip, below).
+**Restart jitter.** Every take restarted the stream. On the user's PC the offset between
+input and output moved by about 13 ms between two takes and by 5 to 20 ms over three
+calibrations on MME, and by up to about 8 ms either way on WASAPI as well
+([audio-drivers.md](audio-drivers.md), §7), while the sweeps within one take agreed to
+0.3 ms; the start gap, measured at 0 frames both times, does not see it. No one stored
+figure then placed every take. Considered: widening items 1 and 2 to ±15 ms; the driver
+project, whose WASAPI restarted as unsteadily; keeping the stream running between takes.
+**Chosen, and built: the stream is kept running between takes on desktop**
+([recording.md](recording.md#latency)), so that a session's takes share one alignment,
+which the calibration at its start measures. Items 1 and 2 keep ±2 ms. Not yet measured
+on a real device: the next dev run, on WASAPI at 20 ms, should pass items 1, 2, 7 and 13.
+What still moves the alignment is opening the device again (a driver, latency or device
+chosen, a device menu opened, Tony started again): a figure kept from an earlier session
+is up to about 8 ms off, and takes after a reopen land that far out until the next
+calibration. Item 10, by reading the code, does not fail for a moved alignment (the join is
+a dip, below).
 
 **For the user to decide:**
 
@@ -543,8 +548,9 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
 - The calibration's result page does not give the microphone's channel or the noise floor:
   nothing in the calibration measures them (item 5 of the dev run finds the channel).
 - Windows' audio enhancements, echo cancellation or noise suppression can take the sweeps
-  out, and Tony cannot ask for raw capture (bqaudioio is upstream, and MME has no raw
-  mode): NoSignal and Fading tell the user to turn them off.
+  out, and Tony does not ask for raw capture (MME has no raw mode, and the bqaudioio
+  fork does not ask WASAPI for its own): NoSignal and Fading tell the user to turn them
+  off.
 - Not in the dev run, of what the retired `test-tony-device` did: a take with no lead-in
   and not into a selection, stopped by hand; "no dialog" over every take (item 14 watches
   stages 3 and 4); with no device at all, the "Couldn't open audio device" warning once for
@@ -577,7 +583,11 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
   as the Preferences give it, staleness either side of the tolerance, the round trip in use
   and its frames at the recording's rate. `TestTakeDiff`: each comparison passing and
   failing on purpose, and the real `splice()` and `erase()` through files, whose fades lie
-  inside the range.
+  inside the range; item 3's places for a live dot, with dots 67 cents sharp at the times
+  of the user's runs (7.516 to 7.528 s, the tone of 245 Hz from 7.5 s; 16.803 to 16.822 s,
+  the punch-in from 16.8 s) not judged, and off pitch one window later, and the reach of a
+  sound. `TestAudioDriverSettings`: the drivers, the default and the latency
+  kept per driver ([audio-drivers.md](audio-drivers.md), §6).
 - **The round trip in the take path** (`TestRecordWorkflow`, `latency_*`): a stored figure
   lines a take up where the reported pair does not, a stale one is ignored, and the
   reported pair is converted at the device's rate, also when the device was opened before
@@ -591,19 +601,30 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
   that never calls back; the check's playback, and a session opened after it playing as
   before; the user's toggles and their settings untouched; plans refused; the plan's round
   trip and pre-roll; keeping the session; replacing a check's own session without asking,
-  and asking before the user's; Record ignored; the menu and the dialog. Its runs are two
-  punch-ins of two sweeps on the first 11 s of the calibration reference, about 13 s each.
+  and asking before the user's; Record ignored; the menu and the dialog, the dialog naming
+  the driver. The driver and latency menus are tested here too, as they open the device
+  again: a driver chosen, WASAPI (or MME) named by default, the latency and the round trip kept per
+  driver, both greyed out during a take and a check ([audio-drivers.md](audio-drivers.md),
+  §6). On a fake whose loopback moves 10 ms at each restart, a check whose window suspends
+  at Stop lands its punch-ins 10 ms apart (Unsteady), and one kept running, as the
+  application keeps it on desktop, lands them alike (Ok), the fake resumed once. Its runs
+  are two punch-ins of two sweeps on the first 11 s of the calibration reference, about
+  13 s each.
 - **`TestDevChecks`** (`test-tony-dev`, development builds only): whole dev runs on the
   loopback fake. Passing, with the fake's true round trip and a long song of 60 s (240 s
-  would add most of a minute to every passing run). Failing: the round trip 20 ms off (items
-  1, 2, 7 and 13; item 10 still passes, both punch-ins moved alike); an echo tap, with the
-  microphone on input 2 (item 4 fails, item 5 judged on input 2); the take made audible
-  during the re-record's lead-in (items 4 and 12, also through a stall); a stall of the GUI
-  thread in the lead-in (item 12 still judged, or not judged, never failed). Also cancel, a
-  closed session, the dev checks deleted during a run, the scratch folders, and the dialog
-  carrying on into them. Parts that no fault run makes fail (among them item 3's dots on
-  the tones, item 9, and item 10's step) were seen failing with the code broken for a
-  moment. About 4 minutes.
+  would add most of a minute to every passing run); the same on a 48 kHz fake, every
+  item passing and item 14 reading about as at 44.1 kHz; and the same with the fake's
+  loopback moving 10 ms at each restart and the stream kept running, every item passing
+  (suspended at each Stop, items 1, 2, 7 and 13 fail). Failing: the round trip 20 ms off
+  (items 1, 2, 7 and 13; item 10 still passes, both punch-ins moved alike); an echo tap,
+  with the microphone on input 2 (item 4 fails, item 5 judged on input 2); the take made
+  audible during the re-record's lead-in (items 4 and 12, also through a stall); a stall
+  of the GUI thread in the lead-in (item 12 still judged, or not judged, never failed).
+  Also cancel, a closed session, the dev checks deleted during a run, the scratch folders,
+  the report's header with the driver and the latency asked for, and the dialog carrying
+  on into them. Parts that no fault run makes fail (among them item 3's dots on the tones,
+  item 9, and item 10's step) were seen failing with the code broken for a moment. About 6
+  minutes.
 
 How the tests are built, and what to watch for: [testing.md](testing.md), "The audio check
 and the dev checks".
@@ -617,7 +638,10 @@ and the dev checks".
 - item 9: a 60 s song analysed in 2.9 to 3.0 s, its punch-ins merged in 0.59 to 0.70 s (20
   to 24 %); a 240 s song in 10.4 s, its punch-ins in 0.63 and 0.75 s (6 to 7 %);
 - item 10: the step reads −8.3 dB, the dip; the largest pitch gap is one hop;
-- item 12: 57 looks in the lead-in's gaps; item 14: 0.30 to 0.35 s past the selection's end.
+- item 3: 12 to 15 of each punch-in's 280 to 306 dots at onsets;
+- item 12: 57 looks in the lead-in's gaps; item 14: 0.25 to 0.35 s past the selection's end;
+- at 48 kHz, every sweep at +1.0 to +1.1 ms, the resampler's hold-back, which the round trip
+  given leaves out; item 14: 0.28 and 0.32 s.
 
 ## 12. Decisions
 
@@ -631,18 +655,22 @@ and the dev checks".
 | How runs are driven | Polling timers and signals, never a nested event loop |
 | `test-tony-device` (from `default`) | Its checks moved into the dev run, and it is retired |
 | Where the dev checks' tests run | `test-tony-dev`, a third executable in development builds, run when a change touches what the checks drive (`AGENTS.md`) |
-| Restart jitter on MME (about 13 ms) | Not tuned away: a lower-latency driver is the next project; MME stays the default until a run shows another type better |
+| Restart jitter on MME (about 13 ms) | Not tuned away: WASAPI, measured against it, restarts as unsteadily, and is the default for its lower round trip; the stream is kept running between takes on desktop ([audio-drivers.md](audio-drivers.md), §5) |
 | The notes merge at a join inside a held note | Fixed on this branch: one note across the join ([takes.md](takes.md)) |
 
 ## 13. Facts checked in the code
 
 So that later work does not derive them again.
 
-- **bqaudioio's `PortAudioIO`** (upstream, not a fork):
+- **bqaudioio's `PortAudioIO`**, as upstream has it and the fork's `port` still does
+  (the fork's per-host-API implementations and settable latency:
+  [forks.md](forks.md#bqaudioio)):
   - one duplex `Pa_OpenStream`, `suggestedLatency = 0.2`, no host-API stream info;
   - input goes to the record target **before** output is asked for, in the same callback;
-  - `suspend()`/`resume()` are `Pa_StopStream`/`Pa_StartStream`. `MainWindowBase::stop()`
-    suspends and `record()` resumes, so **every take restarts the stream**;
+  - `suspend()`/`resume()` are `Pa_StopStream`/`Pa_StartStream`, and do nothing in the
+    state they would bring about. `record()` resumes; `MainWindowBase::stop()` suspends
+    only where `suspendAudioOnStop()` says so (the svapp fork), which Tony's does on
+    Android alone, so on desktop the stream runs from the first take on;
   - it exposes no device names and ignores PortAudio's callback time info.
 - **Device rate.**
   - `AudioCallbackPlaySource::getApplicationSampleRate()` and
@@ -664,8 +692,9 @@ So that later work does not derive them again.
   any file (the wrapper then passes the figure through and tells the play source 0);
   `getSystemRecordLatency()` at the device's. They differ only when the device is not at
   44.1 kHz.
-- **Device choice.** `getDeviceIndex()` takes the first PortAudio device with the given
-  name, across host APIs. MME names are cut to 31 characters.
+- **Device choice.** Under `port`, `getDeviceIndex()` takes the first PortAudio device
+  with the given name, across host APIs; under a driver, the first of its host API, else
+  that host API's default device. MME names are cut to 31 characters.
 - **Settings a check must not write:** the toggles `m_recordIntoSelection`
   (`MainWindow/recordintoselection`), `m_playRefWhileRecording` and `m_preRoll` write
   QSettings when toggled; `wantedPreRollFrames()` reads `MainWindow/prerollseconds`.
@@ -684,7 +713,8 @@ So that later work does not derive them again.
   pass the device's block on, so the observer bounds a block by the frames received.
 - **The fake device.** `FakeAudioIO::Config::loopback` adds the output, the mean of its
   channels, to the input `inputDelay` frames late; the latencies it reports are independent
-  of that delay. It reports levels only with `reportLevels`.
+  of that delay, and `restartShift` moves it at each resume after the first. It reports
+  levels only with `reportLevels`.
 
 ## 14. The user's runs
 
@@ -695,4 +725,8 @@ So that later work does not derive them again.
   two sweeps of each punch-in agree to 0.2–0.3 ms, but punch-in 1 landed at +0.6 ms and
   punch-in 2 at −12.9 ms; the measured start gap was 0 frames both times. So the finder is
   precise, and what moves is the stream's offset between input and output at each restart.
-- The whole dev run: not yet.
+- **2026-09-26**, whole dev runs on MME at 200 ms and on WASAPI at 20 and 10 ms, each
+  after Calibrate Audio: the figures are in [audio-drivers.md](audio-drivers.md), §7.
+  Items 4, 9, 10 and 12 passed on all three; 1, 2, 7 and 13 failed on the restart jitter
+  on all three; 3 failed on dots at a sound's onset, and 14 on WASAPI on its own misreading
+  of a 48 kHz take, both since fixed in the checks.
