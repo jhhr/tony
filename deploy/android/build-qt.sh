@@ -33,6 +33,9 @@
 # The host Qt is built only for its tools, so it leaves out what they
 # do not need (SQL, printing, D-Bus, OpenGL, ICU) and uses Qt's bundled
 # third-party libraries, to depend on nothing the container may lack.
+# Nor on what a machine happens to have: with zstd found (libzstd-dev,
+# which CI's runner has), rcc compresses Tony's resources with it, and
+# Qt for Android, which has no zstd, cannot link or read them.
 # Qt for Android leaves out SQL and printing, which Tony does not use,
 # and has no OpenSSL: Qt Network works, without TLS.
 #
@@ -142,7 +145,7 @@ else
         -prefix "$qt_host" -release -nomake tests -nomake examples \
         -qt-zlib -qt-pcre -qt-doubleconversion -qt-freetype -qt-harfbuzz \
         -qt-libpng -qt-libjpeg -no-icu -no-glib -no-dbus -no-opengl \
-        -no-xcb -no-gtk -no-feature-sql -no-feature-printsupport
+        -no-xcb -no-gtk -no-zstd -no-feature-sql -no-feature-printsupport
     echo "  done in $(( (SECONDS - start) / 60 )) min"
 fi
 
