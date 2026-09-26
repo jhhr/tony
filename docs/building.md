@@ -96,7 +96,10 @@ reached. Three scripts in `deploy/linux/` do the work:
   the disk, which later sessions start from, until the script or the allowed hosts change
   or about a week has passed. It installs the packages, Qt, ccache and mold, the Android SDK
   and NDK when `dl.google.com` is reachable, and spends what is left of four minutes filling
-  ccache from a build of the libraries. The snapshot is kept only when the script ends
+  ccache from a build of the libraries. It also writes an `autoMode` entry to
+  `/root/.claude/settings.json` by which auto mode trusts the four library forks as it does
+  Tony's own repository ([forks.md](forks.md#changing-a-fork)): auto mode reads that from
+  the user's settings, never from the repository's `.claude/settings.json`. The snapshot is kept only when the script ends
   within about five minutes, so any change to it has to keep to that. Its logs are in
   `/var/log/tony-environment/`.
 - **`container-setup.sh`** makes any fresh Ubuntu 24.04 able to build: packages, Qt, the

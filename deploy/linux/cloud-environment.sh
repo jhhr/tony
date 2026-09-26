@@ -30,6 +30,8 @@
 # - Qt 6.11.2 from conda-forge in /opt/qt6-conda, where
 #   container-setup.sh looks for it.
 # - /etc/ccache.conf. meson uses ccache by itself when it is installed.
+# - An autoMode entry in /root/.claude/settings.json by which auto mode
+#   trusts the library forks as it does the session's own repository.
 # - The Android SDK and NDK in /opt/android/sdk, where
 #   deploy/android/setup-toolchain.sh installs them, when dl.google.com is
 #   reachable.
@@ -84,7 +86,44 @@ hash_dir = false
 base_dir = /home/user
 EOF
 
-# 2. Packages, Qt and the Android SDK, side by side
+# 2. Auto mode's trust, as the user chose it: the library forks are the
+# user's own repositories. Out of the box auto mode trusts only the
+# repository a session started in and its remotes, and blocks committing
+# in a fork's checkout, attaching the fork and pushing to it
+# (docs/forks.md). It reads autoMode from the user's settings, never
+# from the repository's .claude/settings.json, and combines them with
+# the platform's own (--settings); `claude auto-mode config` shows the
+# result.
+
+TONY_AUTOMODE_SETTINGS=${TONY_AUTOMODE_SETTINGS:-/root/.claude/settings.json} python3 - <<'EOF'
+import json, os
+path = os.environ["TONY_AUTOMODE_SETTINGS"]
+entries = [
+    "Trusted repo: besides the working repository github.com/jhhr/tony, the user's own "
+    "forks of its libraries, github.com/jhhr/svcore, github.com/jhhr/svgui, "
+    "github.com/jhhr/svapp and github.com/jhhr/bqaudiostream, checked out inside the "
+    "working directory as svcore/, svgui/, svapp/ and bqaudiostream/",
+    "Source control: github.com/jhhr/tony and those four forks. Committing in the fork "
+    "checkouts, attaching the forks to the session with push access and pushing branches "
+    "to them is routine work on Tony (docs/forks.md)",
+]
+settings = {}
+if os.path.exists(path):
+    with open(path) as f:
+        settings = json.load(f)
+environment = settings.setdefault("autoMode", {}).setdefault("environment", [])
+if not environment:
+    environment.append("$defaults")
+for entry in entries:
+    if entry not in environment:
+        environment.append(entry)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+EOF
+
+# 3. Packages, Qt and the Android SDK, side by side
 
 packages="
 build-essential pkg-config ninja-build meson git python3 curl ca-certificates
@@ -175,7 +214,7 @@ wait "$qt_pid"
 qt_status=$?
 say "Qt: exit $qt_status"
 
-# 3. ccache, from a build of the libraries in the checkout, until the
+# 4. ccache, from a build of the libraries in the checkout, until the
 # deadline
 
 fill_ccache() {

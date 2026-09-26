@@ -30,11 +30,14 @@ library over a workaround in `main/`.
    - The session's git proxy refuses a push to a repository not attached to the session,
      a new branch included (HTTP 403). The session's add-repository tool attaches it, with
      push access.
-   - Auto mode trusts only the repository the session started in and its remotes. It
-     blocks committing in a fork's checkout, attaching the fork and pushing to it, unless
-     the user's own message asks for that action, naming the fork and the branch. After a
-     denial, stop and tell the user what is blocked: trying again another way counts as
-     getting round the check, and is blocked too. The user can instead push the change.
+   - Auto mode trusts only the repository the session started in and its remotes, and so
+     blocks committing in a fork's checkout, attaching the fork and pushing to it. The
+     environment's setup script names the four forks as trusted as well, which the user
+     chose ([building.md](building.md#building-on-linux)); `claude auto-mode config`
+     shows whether a session has that entry. Without it, the user's own message has to
+     ask for the action, naming the fork and the branch. After a denial, stop and tell the
+     user what is blocked: trying again another way counts as getting round the check, and
+     is blocked too. The user can instead push the change.
 
    Do not start the session with the forks selected instead: a session with several
    repositories runs no repository's SessionStart hook, so the background build does not
