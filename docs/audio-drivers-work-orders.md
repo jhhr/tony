@@ -121,6 +121,46 @@ figure and checks again with it.
   made false (§1 "The device's sample rate is not checked", §10's driver project step 1,
   the device facts on `TakeAudio::splice()` and on the check naming the mismatch).
 
+### W3 — Driver and latency menus
+
+Read: the spec's §2–§4; recording.md "Latency"; calibrate-audio.md §5 (the key and the
+figure in use) and §8 (what `DevChecks.txt` says); in `MainWindow.cpp`,
+`audioDeviceSettingKey()`, `audioImplementationName()`, `buildAudioDeviceMenu()`,
+`rescanAudioDevices()`, `audioDeviceSelected()` and where the Playback menu makes the two
+device submenus; svapp's `MainWindowBase::createAudioIO()` and `recreateAudioIO()`, and
+where `createAudioIO()` is first called.
+
+- **"Audio Driver" submenu** in the Playback menu, before the two device submenus: one
+  checkable entry per driver implementation the factory reports (`mme`, `directsound`,
+  `wasapi`, in that order, named by `AudioFactory::getImplementationDescription()`), only
+  when there are at least two. The list comes from a virtual of `MainWindow` (see §3), so
+  that tests can give it. Choosing one: `Preferences/audio-target` becomes its name, the
+  latency for it is applied, playback stops, the device rate is forgotten as
+  `audioDeviceSelected()` does, and the IO is recreated; the device submenus then list
+  that driver's devices under its own keys. Greyed out during a take and while a check
+  runs, as Calibrate Audio is.
+- **The default.** Where `audio-target` is empty (or `auto`) and `mme` is reported, Tony
+  sets `mme` before the first IO is made, and copies the devices saved without a suffix
+  to the `-mme` keys where those are unset. It then does nothing again. Find out where
+  the first IO is made: this has to happen before it.
+- **"Audio Latency" submenu**, next to it and shown with it: 10, 20, 50, 100 and 200 ms,
+  checkable, kept per driver (`Preferences/audio-latency-<implementation>`, in seconds;
+  200 ms when unset, which is what every stream asked for until now). Applied with
+  `AudioFactory::setSuggestedLatency()` before every IO is made, and choosing one
+  recreates the IO. Greyed out as the driver menu is.
+- **Reports.** `DevChecks.txt` names the driver and the latency asked for, next to the
+  devices it names, so that runs on two drivers can be told apart. The Calibrate Audio
+  dialog's details name the driver where they name the devices.
+- Tests (app suite; a few, short): the menu from a given list, and none from one entry;
+  choosing WASAPI writes the setting, recreates the IO and moves the device keys to the
+  `-wasapi` suffix; greyed out during a take; the default and the copy of the devices, and
+  that a set `audio-target` is left alone; the latency kept per driver and applied (make
+  what was applied readable); a figure measured under one driver is not the one in use
+  under another (the key has the implementation already: test it through the window).
+  Show the default's test and the per-driver latency's test fail by breaking the code.
+- Docs: recording.md "Latency" (the latency asked for), calibrate-audio.md where it says
+  the reported pair comes from `suggestedLatency = 0.2`.
+
 ## 5. Log
 
 Capped at 25 lines per entry. Newest last.
