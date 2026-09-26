@@ -46,10 +46,13 @@ int main(int argc, char *argv[])
     }
 
     // Names distinct from the application's, so that nothing here reads
-    // or writes the user's real Tony settings
+    // or writes the user's real Tony settings, and a shard's distinct
+    // from the other shards', so that shards running at once keep apart
     QApplication app(argc, argv);
     app.setOrganizationName("tony-tests");
-    app.setApplicationName("test-tony-app");
+    app.setApplicationName(shardApplicationName
+                           ("test-tony-app",
+                            qEnvironmentVariable("TONY_TEST_SHARD")));
 
     // Text in shades of grey, whatever the machine's fontconfig asks for.
     // Ubuntu's asks for sub-pixel anti-aliasing, and Qt 6.4 follows it:
