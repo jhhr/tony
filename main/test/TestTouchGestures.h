@@ -80,6 +80,7 @@ public:
     sv::PaneStack *paneStack() { return m_paneStack; }
     sv::ViewManager *viewManager() { return m_viewManager; }
     Analyser *analyser() { return m_analyser; }
+    Analyser *analyser2() { return m_analyser2; }
     AlternatePitchTrack *alternatePitch() { return m_alternatePitch; }
     void toggleAlternatePitch() { alternatePitchToggled(); }
 
@@ -106,6 +107,10 @@ class TestTouchGestures : public QObject
     Q_OBJECT
 
     static constexpr double rate = 44100.0;
+
+    // The reference's pitch, and a low voice's (D2)
+    static constexpr double referenceHz = 220.5;
+    static constexpr double lowHz = 73.5;
 
     // Where each test starts: frames per pixel, and the centre frame
     static constexpr int startLevel = 64;
@@ -178,8 +183,7 @@ class TestTouchGestures : public QObject
         t.release(0, a1, p).release(1, b1, p).commit();
     }
 
-    bool analysed() {
-        Analyser *a = m_window->analyser();
+    bool analysed(Analyser *a) {
         return a && a->getLayer(Analyser::PitchTrack) &&
             a->getLayer(Analyser::Notes) &&
             a->getInitialAnalysisCompletion() >= 100 &&
@@ -188,25 +192,47 @@ class TestTouchGestures : public QObject
             ->haveRunningTransformers();
     }
 
-    // The window on show with six seconds of reference, analysed, and
-    // the view at startLevel about startCentre
-    void openWindow() {
+    bool analysed() { return analysed(m_window->analyser()); }
+
+    // A wav file in the test's directory, written the first time it is
+    // asked for; "" if it could not be
+    QString wavFile(QString name, const std::vector<float> &data) {
+        QString path = m_dir.filePath(name);
+        if (QFile::exists(path)) return path;
+        sv::WavFileWriter writer(path, rate, 1,
+                                 sv::WavFileWriter::WriteToTarget);
+        const float *ptr = data.data();
+        if (!writer.isOK() ||
+            !writer.writeSamples(&ptr, sv::sv_frame_t(data.size())) ||
+            !writer.close()) {
+            return "";
+        }
+        return path;
+    }
+
+    // Six seconds of a sine
+    QString sineFile(QString name, double hz) {
+        return wavFile(name, TestSignals::sine(hz, rate, int(6 * rate), 0.5));
+    }
+
+    // The view at startLevel about startCentre
+    void resetView() {
+        pane()->setZoomLevel
+            (sv::ZoomLevel(sv::ZoomLevel::FramesPerPixel, startLevel));
+        pane()->setCentreFrame(startCentre);
+    }
+
+    // The window on show with six seconds of reference, a sine at
+    // referenceHz unless another file is given, analysed, and the view at
+    // startLevel about startCentre
+    void openWindow(QString path = "") {
         m_window = new TouchTestWindow;
         m_window->resize(1000, 700);
         m_window->show();
         QVERIFY(QTest::qWaitForWindowExposed(m_window));
 
-        QString path = m_dir.filePath("reference.wav");
-        if (!QFile::exists(path)) {
-            std::vector<float> data = TestSignals::sine
-                (220.5, rate, int(6 * rate), 0.5);
-            sv::WavFileWriter writer(path, rate, 1,
-                                     sv::WavFileWriter::WriteToTarget);
-            const float *ptr = data.data();
-            QVERIFY(writer.isOK());
-            QVERIFY(writer.writeSamples(&ptr, sv::sv_frame_t(data.size())));
-            QVERIFY(writer.close());
-        }
+        if (path == "") path = sineFile("reference.wav", referenceHz);
+        QVERIFY(path != "");
 
         m_window->discardModifications();
         QCOMPARE(m_window->openPath(path, MainWindow::ReplaceSession),
@@ -215,10 +241,32 @@ class TestTouchGestures : public QObject
 
         QVERIFY(pane());
         QVERIFY(strip());
-        pane()->setZoomLevel
-            (sv::ZoomLevel(sv::ZoomLevel::FramesPerPixel, startLevel));
-        pane()->setCentreFrame(startCentre);
+        resetView();
         QCOMPARE(framesPerPixel(), double(startLevel));
+    }
+
+    // An analyser's pitch and notes hidden or shown again, straight to
+    // the layers as the app does for a while: Analyser::setVisible()
+    // writes a setting that both analysers share
+    void showPitch(Analyser *a, bool shown) {
+        a->getLayer(Analyser::PitchTrack)->showLayer(pane(), shown);
+        a->getLayer(Analyser::Notes)->showLayer(pane(), shown);
+    }
+
+    // Where a zoom by factor about a value at y puts it: towards the
+    // middle of the pane, its distance from there divided by the factor
+    double pulledTowardsMiddle(double y, double factor) {
+        double middle = pane()->height() / 2.0;
+        return middle + (y - middle) / factor;
+    }
+
+    // How far, in pixels, a frequency on r may be from where the fingers
+    // put it: the range is whole Hz (the spectrogram's), so each end may
+    // be half a hertz from theirs, which low down is a few pixels
+    double slack(const VerticalZoom::Range &r) {
+        return 1.0 + pane()->height() *
+            (std::log2((r.min + 0.5) / r.min) +
+             std::log2((r.max + 0.5) / r.max)) / octaves(r);
     }
 
     void dismissDialog() {
@@ -622,9 +670,11 @@ private slots:
 
     // Fingers spread up the pane: the frequency range narrows by as
     // much as they spread, less what the dead zone took, about the
-    // frequency between them, which stays there. The time axis stays as
-    // it was, the pitch layers in the pane are drawn on the new range,
-    // and nothing goes into the undo history
+    // pitch on show, the reference's sine, low in the pane and well
+    // below the fingers, which comes towards the middle of the pane by
+    // as much. The time axis stays as it was, the pitch layers in the
+    // pane are drawn on the new range, and nothing goes into the undo
+    // history
     void vertical_pinch_narrows_the_frequency_range() {
         openWindow();
         if (QTest::currentTestFailed()) return;
@@ -641,7 +691,11 @@ private slots:
         VerticalZoom::Range before = frequencyRange();
         QCOMPARE(before.min, 40.0);
         QCOMPARE(before.max, 1500.0);
-        double held = frequencyAtY(y);
+        QVERIFY(m_window->analyser()->setDisplayFrequencyExtents(150, 1200));
+        before = frequencyRange();
+        double pitchY = yForFrequency(referenceHz);
+        QVERIFY2(pitchY > 0.75 * p->height(),
+                 qPrintable(QString("the pitch is at %1").arg(pitchY)));
 
         int commands = 0;
         auto counted = connect(sv::CommandHistory::getInstance(),
@@ -659,9 +713,12 @@ private slots:
                  qPrintable(QString("%1, then %2: %3 times narrower, not %4")
                             .arg(text(before)).arg(text(after))
                             .arg(narrowed).arg(factor)));
-        QVERIFY2(std::fabs(yForFrequency(held) - y) <= 1.0,
-                 qPrintable(QString("%1 Hz was at %2, then at %3")
-                            .arg(held).arg(y).arg(yForFrequency(held))));
+        double expected = pulledTowardsMiddle(pitchY, factor);
+        QVERIFY2(std::fabs(yForFrequency(referenceHz) - expected) <=
+                 slack(after),
+                 qPrintable(QString("the pitch was at %1, then at %2, not %3")
+                            .arg(pitchY).arg(yForFrequency(referenceHz))
+                            .arg(expected)));
 
         // As far as the centre goes, to the whole pixel the fingers hold
         QCOMPARE(framesPerPixel(), double(startLevel));
@@ -693,7 +750,7 @@ private slots:
     }
 
     // Fingers brought together up the pane: the range widens, about
-    // the frequency between them
+    // the pitch on show, which stays where it was
     void vertical_pinch_widens_the_frequency_range() {
         openWindow();
         if (QTest::currentTestFailed()) return;
@@ -705,7 +762,8 @@ private slots:
         int y = p->height() / 2 - 40;
         VerticalZoom::Range before = frequencyRange();
         QCOMPARE(before.min, 100.0);
-        double held = frequencyAtY(y);
+        double pitchY = yForFrequency(referenceHz);
+        QVERIFY(pitchY > y + 20);
 
         twoFingers(p, QPoint(x, y - 100), QPoint(x, y + 100),
                    QPoint(x, y - 50), QPoint(x, y + 50));
@@ -717,9 +775,9 @@ private slots:
                  qPrintable(QString("%1, then %2: %3 times narrower, not %4")
                             .arg(text(before)).arg(text(after))
                             .arg(narrowed).arg(factor)));
-        QVERIFY2(std::fabs(yForFrequency(held) - y) <= 1.0,
-                 qPrintable(QString("%1 Hz was at %2, then at %3")
-                            .arg(held).arg(y).arg(yForFrequency(held))));
+        QVERIFY2(std::fabs(yForFrequency(referenceHz) - pitchY) <= 1.0,
+                 qPrintable(QString("the pitch was at %1, then at %2")
+                            .arg(pitchY).arg(yForFrequency(referenceHz))));
         QCOMPARE(framesPerPixel(), double(startLevel));
     }
 
@@ -747,17 +805,20 @@ private slots:
         QCOMPARE(after.max, before.max);
     }
 
-    // Spread along both: both zoom, each about the fingers
+    // Spread along both: both zoom, time about the fingers and the
+    // frequency range about the pitch
     void diagonal_pinch_zooms_time_and_frequency() {
         openWindow();
         if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->analyser()->setDisplayFrequencyExtents(100, 800));
 
         sv::Pane *p = pane();
         int x = p->width() / 2 - 100;
         int y = p->height() / 2 - 30;
         sv::sv_frame_t frame = p->getFrameForX(x);
         VerticalZoom::Range before = frequencyRange();
-        double held = frequencyAtY(y);
+        double pitchY = yForFrequency(referenceHz);
 
         twoFingers(p, QPoint(x - 50, y - 50), QPoint(x + 50, y + 50),
                    QPoint(x - 100, y - 100), QPoint(x + 100, y + 100));
@@ -774,9 +835,152 @@ private slots:
                  qPrintable(QString("%1, then %2: %3 times narrower, not %4")
                             .arg(text(before)).arg(text(after))
                             .arg(narrowed).arg(factor)));
-        QVERIFY2(std::fabs(yForFrequency(held) - y) <= 1.0,
-                 qPrintable(QString("%1 Hz was at %2, then at %3")
-                            .arg(held).arg(y).arg(yForFrequency(held))));
+        double expected = pulledTowardsMiddle(pitchY, factor);
+        QVERIFY2(std::fabs(yForFrequency(referenceHz) - expected) <=
+                 slack(after),
+                 qPrintable(QString("the pitch was at %1, then at %2, not %3")
+                            .arg(pitchY).arg(yForFrequency(referenceHz))
+                            .arg(expected)));
+    }
+
+    // With no pitch on show, the range zooms about the frequency between
+    // the fingers, which stays there: the reference's pitch and notes
+    // hidden, and then shown but below the range
+    void vertical_pinch_with_no_pitch_on_show_zooms_about_the_fingers() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2 + 50;
+        int y = p->height() / 2 - 60;
+        Analyser *a = m_window->analyser();
+
+        for (bool hidden : { true, false }) {
+            showPitch(a, !hidden);
+            QVERIFY(a->setDisplayFrequencyExtents(hidden ? 100 : 300, 1200));
+            VerticalZoom::Range before = frequencyRange();
+            double held = frequencyAtY(y);
+
+            twoFingers(p, QPoint(x, y - 50), QPoint(x, y + 50),
+                       QPoint(x, y - 100), QPoint(x, y + 100));
+
+            QString what = QString(hidden ? "hidden" : "below the range");
+            VerticalZoom::Range after = frequencyRange();
+            double factor = (200.0 - deadZone()) / 100.0;
+            double narrowed = octaves(before) / octaves(after);
+            QVERIFY2(std::fabs(narrowed - factor) < 0.01 * factor,
+                     qPrintable(what + QString(": %1 times narrower, not %2")
+                                .arg(narrowed).arg(factor)));
+            QVERIFY2(std::fabs(yForFrequency(held) - y) <= 1.0,
+                     qPrintable(what + QString(": %1 Hz was at %2, then at %3")
+                                .arg(held).arg(y).arg(yForFrequency(held))));
+        }
+    }
+
+    // The fifth phone test: a low voice, C2 and G2 by turns, near the
+    // bottom of the range as it opens, and the fingers spread up the
+    // middle of the pane, far above it. At every step, as the range
+    // narrows, both notes stay in view, and they end nearer the middle.
+    // Zoomed about the fingers, G2 went below the pane half way through
+    void low_pitch_stays_in_view_as_the_range_narrows() {
+        std::vector<float> voice;
+        for (int i = 0; i < 12; ++i) {
+            std::vector<float> note = TestSignals::sine
+                (i % 2 ? 98.0 : 65.4, rate, int(rate / 2), 0.5);
+            voice.insert(voice.end(), note.begin(), note.end());
+        }
+        QString path = wavFile("low-voice.wav", voice);
+        QVERIFY(path != "");
+        openWindow(path);
+        if (QTest::currentTestFailed()) return;
+
+        sv::Pane *p = pane();
+        int height = p->height();
+        int x = p->width() / 2;
+        int y = height / 2;
+        VerticalZoom::Range before = frequencyRange();
+        QCOMPARE(before.min, 40.0);
+        QCOMPARE(before.max, 1500.0);
+        double lowY = yForFrequency(65.4);
+        double highY = yForFrequency(98.0);
+        QVERIFY2(highY > 0.7 * height,
+                 qPrintable(QString("G2 at %1 of %2").arg(highY).arg(height)));
+
+        int from = 30;
+        int to = height / 2 - 20;
+        Touch t = touch();
+        t.press(0, QPoint(x, y - from), p).press(1, QPoint(x, y + from), p)
+            .commit();
+        for (int i = 1; i <= 10; ++i) {
+            int d = from + (to - from) * i / 10;
+            t.move(0, QPoint(x, y - d), p).move(1, QPoint(x, y + d), p)
+                .commit();
+            double low = yForFrequency(65.4);
+            double high = yForFrequency(98.0);
+            QVERIFY2(low <= height && high >= 0,
+                     qPrintable(QString("step %1, %2: C2 at %3, G2 at %4 "
+                                        "of %5")
+                                .arg(i).arg(text(frequencyRange()))
+                                .arg(low).arg(high).arg(height)));
+        }
+        t.release(0, QPoint(x, y - to), p).release(1, QPoint(x, y + to), p)
+            .commit();
+
+        VerticalZoom::Range after = frequencyRange();
+        QVERIFY2(octaves(after) < octaves(before) / 4,
+                 qPrintable(text(before) + ", then " + text(after)));
+        double middle = height / 2.0;
+        double lowAfter = yForFrequency(65.4);
+        double highAfter = yForFrequency(98.0);
+        QVERIFY2(std::fabs((lowAfter + highAfter) / 2 - middle) <
+                 std::fabs((lowY + highY) / 2 - middle) / 4,
+                 qPrintable(QString("C2 and G2 at %1 and %2, then at %3 and "
+                                    "%4, of %5")
+                            .arg(lowY).arg(highY).arg(lowAfter)
+                            .arg(highAfter).arg(height)));
+        QCOMPARE(QGuiApplication::mouseButtons(), Qt::NoButton);
+    }
+
+    // The singing's pitch counts as the reference's does. A low voice
+    // sung to a high reference: with the reference's pitch and notes
+    // hidden the zoom keeps the singing's in view, and with both on
+    // show it is about the middle between the two
+    void singing_pitch_on_show_is_kept_in_view() {
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        QString singing = sineFile("singing.wav", lowHz);
+        QVERIFY(singing != "");
+        m_window->loadSingingTrack(singing);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        QVERIFY(m_window->analyser2()->getPane() == pane());
+        resetView();
+
+        sv::Pane *p = pane();
+        int x = p->width() / 2;
+        int y = p->height() / 4;
+        Analyser *a = m_window->analyser();
+
+        for (bool reference : { false, true }) {
+            showPitch(a, reference);
+            QVERIFY(a->setDisplayFrequencyExtents(40, 1500));
+            double kept = reference ? std::sqrt(lowHz * referenceHz) : lowHz;
+            double keptY = yForFrequency(kept);
+
+            twoFingers(p, QPoint(x, y - 40), QPoint(x, y + 40),
+                       QPoint(x, y - 80), QPoint(x, y + 80));
+
+            double factor = (160.0 - deadZone()) / 80.0;
+            double expected = pulledTowardsMiddle(keptY, factor);
+            VerticalZoom::Range after = frequencyRange();
+            QVERIFY2(std::fabs(yForFrequency(kept) - expected) <=
+                     slack(after),
+                     qPrintable(QString("%1 Hz was at %2, then at %3, not "
+                                        "%4, on %5")
+                                .arg(kept).arg(keptY)
+                                .arg(yForFrequency(kept)).arg(expected)
+                                .arg(text(after))));
+        }
     }
 
     // Two fingers side by side dragged down the pane: what was between

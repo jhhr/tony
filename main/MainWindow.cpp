@@ -7692,6 +7692,19 @@ MainWindow::paneAdded(Pane *pane)
     };
     range.limits = VerticalZoom::pitchLimits();
 
+    // A zoom keeps in view the reference's pitch and notes and the
+    // singing's, those of them on show, in the time the pane shows
+    range.drawn = [this, pane]() {
+        std::vector<double> values;
+        for (Analyser *a : { m_analyser, m_analyser2 }) {
+            if (a && a->getPane() == pane) {
+                a->getPitchOnShow(pane->getStartFrame(), pane->getEndFrame(),
+                                  values);
+            }
+        }
+        return values;
+    };
+
     TouchGestures *gestures = new TouchGestures(pane); // owned by the pane
     gestures->setVerticalRange(range);
 
