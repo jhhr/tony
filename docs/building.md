@@ -104,3 +104,7 @@ on 2026-09-25 (Ubuntu 24.04, no sound card):
   `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
   only if it declares `Q_OBJECT`.
 - Windows headers define `near` and `far` as macros. Do not use them as identifiers.
+- The macOS SDK's `MacTypes.h` declares `normal`, `bold`, `italic`, `underline`,
+  `outline`, `shadow`, `condense` and `extend` in the global namespace. A function of one
+  of those names, even in an anonymous namespace, makes each unqualified call to it
+  ambiguous on macOS, and nothing else catches it.
