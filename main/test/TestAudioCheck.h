@@ -18,7 +18,8 @@
 // the real MainWindow, recording from the fake device with its output
 // looped back into its input, as an earcup held to the mic. A run is
 // two punch-ins of two sweeps each on the first 11 s of the calibration
-// reference, about 13 s of real time.
+// reference, about 13 s of real time. The windows have no development
+// checks, even in a development build: TestDevChecks has those.
 //
 // The same dialog watchdog as TestRecordWorkflow's: a dialog would
 // block the test for ever, so it is dismissed, and the test fails in
@@ -33,6 +34,7 @@
 #include "base/PlayParameterRepository.h"
 
 #include <QMenu>
+#include <QStandardPaths>
 
 class TestAudioCheck : public QObject
 {
@@ -59,6 +61,12 @@ class TestAudioCheck : public QObject
     void makeWindow(FakeAudioIO::Config config, bool installDevice = true) {
         delete m_window;
         m_window = new TestMainWindow(config, installDevice);
+#ifdef TONY_DEV_CHECKS
+        // The calibration alone, as a release build has it: with the
+        // dev checks there, the dialog carries on into them by default
+        // (TestDevChecks)
+        m_window->doDeleteDevChecks();
+#endif
         m_result = AudioCheckResult();
         m_finished = 0;
         m_progress.clear();
@@ -99,21 +107,88 @@ class TestAudioCheck : public QObject
         return plan;
     }
 
-    void startCheck() {
+    void startCheck() { startCheck(shortPlan()); }
+    void runCheck() { runCheck(shortPlan()); }
+
+    void startCheck(const AudioCheckRunner::Plan &plan,
+                    bool discard = true) {
         // As answering "No" to "do you want to save?", which the check
         // asks before it replaces the session
-        m_window->discardModifications();
-        QVERIFY(m_window->audioCheck()->start(shortPlan()));
+        if (discard) m_window->discardModifications();
+        QVERIFY(m_window->audioCheck()->start(plan));
         QVERIFY(m_window->audioCheck()->isRunning());
     }
 
-    void runCheck() {
-        startCheck();
+    void runCheck(const AudioCheckRunner::Plan &plan, bool discard = true) {
+        m_result = AudioCheckResult();
+        m_finished = 0;
+        startCheck(plan, discard);
         if (QTest::currentTestFailed()) return;
         QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0, 60000);
         QCOMPARE(m_finished, 1);
         QVERIFY(!m_window->audioCheck()->isRunning());
     }
+
+    // The short plan with one punch-in of its own, which judges the sweep
+    // at 7.2 s; its lead-in starts in the tone of the sweep before, so
+    // that the fake device's first audible sample is the first played
+    AudioCheckRunner::Plan onePunchIn() {
+        AudioCheckRunner::Plan plan = shortPlan();
+        plan.ranges = { LatencyCheck::PunchIn(6.3, 8.3) };
+        return plan;
+    }
+
+    // Every measured round trip kept, as the settings hold it
+    static QStringList storedLatency() {
+        QSettings settings;
+        settings.beginGroup("LatencyCalibration");
+        QStringList all;
+        for (const QString &key : settings.allKeys()) {
+            all << key + "=" + settings.value(key).toString();
+        }
+        settings.endGroup();
+        all.sort();
+        return all;
+    }
+
+    // A reference in the directory the check writes its own to, as a
+    // check before this one left it, opened and analysed; its path
+    QString openEarlierCheckReference() {
+        QDir().mkpath(AudioCheckRunner::referenceDirectory());
+        const QString path = AudioCheckRunner::nextReferencePath
+            (AudioCheckRunner::referenceDirectory(), "");
+        const AudioCheckRunner::Plan plan = shortPlan();
+        const std::vector<float> samples = LatencyCheck::generate(plan.layout);
+        sv::WavFileWriter writer(path, plan.layout.rate, 1,
+                                 sv::WavFileWriter::WriteToTarget);
+        const float *data = samples.data();
+        if (!writer.isOK() ||
+            !writer.writeSamples(&data, sv::sv_frame_t(samples.size())) ||
+            !writer.close()) {
+            return {};
+        }
+        m_window->discardModifications();
+        if (m_window->openPath(path, MainWindow::ReplaceSession) !=
+            MainWindow::FileOpenSucceeded) {
+            return {};
+        }
+        Analyser *analyser = m_window->analyser();
+        QTest::qWaitFor([analyser]() {
+            return analyser->getLayer(Analyser::PitchTrack) &&
+                analyser->getInitialAnalysisCompletion() >= 100 &&
+                !sv::ModelTransformerFactory::getInstance()
+                ->haveRunningTransformers();
+        }, 30000);
+        return path;
+    }
+
+    // The application's data directory, where a check writes its
+    // references unless told otherwise, is Qt's test location while one
+    // of these lives
+    struct TestDataLocation {
+        TestDataLocation() { QStandardPaths::setTestModeEnabled(true); }
+        ~TestDataLocation() { QStandardPaths::setTestModeEnabled(false); }
+    };
 
     // The devices the Preferences name, as the device menus write them
     // when the driver is left alone. The fake device takes no notice
@@ -837,6 +912,259 @@ private slots:
         QCOMPARE(AudioCheckRunner::nextReferencePath
                  (dir.path(), dir.filePath("song.wav")), one);
         QCOMPARE(files(), QStringList() << "song.wav");
+    }
+
+    // Punch-ins given in the plan must be recordable one after the other
+    // within the layout: overlapping, out of order, empty or outside it,
+    // the run does not start. Ranges that meet are fine. A plan that
+    // keeps the session needs one
+    void check_refuses_ranges_that_do_not_fit() {
+        makeWindow(loopback());
+        AudioCheckRunner::Plan plan = shortPlan();
+        using P = LatencyCheck::PunchIn;
+        const std::vector<std::vector<P>> refused = {
+            { P(2.2, 4.2), P(4.0, 6.3) },
+            { P(6.3, 8.3), P(2.2, 4.2) },
+            { P(-0.1, 2.0) },
+            { P(9.0, 11.0) },
+            { P(3.0, 3.0) },
+            { P(4.0, 3.0) },
+        };
+        for (const std::vector<P> &ranges : refused) {
+            plan.ranges = ranges;
+            QVERIFY(AudioCheckRunner::punchInsOf(plan).empty());
+            QVERIFY(!m_window->audioCheck()->start(plan));
+            QVERIFY(!m_window->audioCheck()->isRunning());
+        }
+
+        plan.ranges = { P(2.2, 4.2), P(4.2, 6.3), P(6.3, 10.8) };
+        const std::vector<P> given = AudioCheckRunner::punchInsOf(plan);
+        QCOMPARE(int(given.size()), 3);
+        QCOMPARE(given[1].start, 4.2);
+        QCOMPARE(given[2].end, 10.8);
+
+        // Without ranges, as many as it asks for from the layout
+        plan.ranges.clear();
+        QCOMPARE(int(AudioCheckRunner::punchInsOf(plan).size()), 2);
+
+        plan = onePunchIn();
+        plan.keepSession = true;
+        QVERIFY(!m_window->audioCheck()->start(plan));
+        QVERIFY(!m_window->audioCheck()->isRunning());
+
+        QTest::qWait(200);
+        QCOMPARE(m_finished, 0);
+    }
+
+    // A round trip of the run's own: its takes are placed with it and
+    // land where they belong, although another is kept for the devices
+    // and the window places every other take with that. The one kept,
+    // and the Playback menu's line about it, are as they were. The take
+    // measured its own start gap, as the device says it was
+    void check_uses_the_round_trip_it_is_given() {
+        makeWindow(loopback());
+
+        // With a file open, the device reports what it will during takes
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        const LatencyCalibration::InUse reported = m_window->latencyInUse();
+        LatencyCalibration::Figure figure;
+        figure.roundTrip = 0.3;
+        figure.date = QDateTime::currentDateTimeUtc();
+        figure.reportedOutput = reported.reportedOutput;
+        figure.reportedInput = reported.reportedInput;
+        {
+            QSettings settings;
+            LatencyCalibration::store(settings, key("", ""), figure);
+        }
+        const QString lineBefore = latencyLine();
+        const QStringList storedBefore = storedLatency();
+        QVERIFY2(lineBefore.startsWith("Latency: measured 300 ms"),
+                 qPrintable(lineBefore));
+
+        AudioCheckRunner::Plan plan = onePunchIn();
+        plan.roundTrip = roundTrip / rate;
+        runCheck(plan);
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(r.summary.judged, 1);
+        QCOMPARE(r.summary.found, 1);
+        QVERIFY2(std::fabs(r.summary.medianOffset * rate) <= 4.0,
+                 describe(r).constData());
+        QCOMPARE(int(r.takes.size()), 1);
+        const TakeLatency &t = r.takes[0];
+        QCOMPARE(t.roundTrip, sv::sv_frame_t(roundTrip));
+        QVERIFY(t.measured);
+        QCOMPARE(t.reportedOutput, reportedOut / rate);
+        QCOMPARE(t.reportedInput, reportedIn / rate);
+        QCOMPARE(r.usedRoundTrip, roundTrip / rate);
+
+        QVERIFY(t.startGapMeasured);
+        const long gap = m_window->fake()->getFramesBeforePlayStart();
+        QVERIFY2(gap >= 0 && std::labs(long(t.startGap) - gap) <= 16,
+                 qPrintable(QString("start gap %1 frames; the device says %2")
+                            .arg(t.startGap).arg(gap)));
+
+        QCOMPARE(latencyLine(), lineBefore);
+        QCOMPARE(storedLatency(), storedBefore);
+        const LatencyCalibration::InUse inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Measured);
+        QCOMPARE(inUse.roundTrip, 0.3);
+    }
+
+    // A run that keeps the session records into the one open, the
+    // reference and take of the run before: nothing is written, opened
+    // or asked, though the session is modified. The take keeps the
+    // earlier punch-in, and only the run's own is judged
+    void check_records_into_the_session_open() {
+        makeWindow(loopback());
+
+        AudioCheckRunner::Plan first = shortPlan();
+        first.ranges = { LatencyCheck::PunchIn(2.2, 4.2) };
+        runCheck(first);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_result.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(m_result).constData());
+        QCOMPARE(m_result.summary.judged, 1);
+        const sv::ModelId reference = m_window->mainModelId();
+        QVERIFY(m_window->isDocumentModified());
+
+        AudioCheckRunner::Plan second = onePunchIn();
+        second.keepSession = true;
+        second.referencePath = m_dir.filePath("not-written.wav");
+        runCheck(second, false);
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QVERIFY(!QFileInfo::exists(second.referencePath));
+        QVERIFY(m_window->mainModelId() == reference);
+        QCOMPARE(r.referenceRate, rate);
+
+        QCOMPARE(int(r.summary.punchIns.size()), 1);
+        QVERIFY(std::fabs(r.summary.punchIns[0].range.start - 6.3) < 1e-4);
+        QCOMPARE(r.summary.judged, 1);
+        QCOMPARE(int(r.summary.events.size()), 1);
+        QVERIFY(std::fabs(r.summary.events[0].expectedSeconds - 7.2) < 1e-4);
+        QCOMPARE(int(r.takes.size()), 1);
+
+        const Coverage &coverage = m_window->takes()->getCoverage();
+        QCOMPARE(int(coverage.getRanges().size()), 2);
+        QVERIFY(coverage.contains(sv::sv_frame_t(2.3 * rate)));
+        QVERIFY(coverage.contains(sv::sv_frame_t(6.4 * rate)));
+    }
+
+    // The session of an earlier check, never saved and changed by its
+    // takes, is replaced without asking; and the new reference goes to a
+    // file of its own, the earlier one being open
+    void check_replaces_its_own_session_without_asking() {
+        TestDataLocation testData;
+        makeWindow(loopback());
+        const QString earlier = openEarlierCheckReference();
+        QVERIFY(earlier != "");
+        const sv::ModelId reference = m_window->mainModelId();
+        m_window->markModified();
+        QVERIFY(m_window->isDocumentModified());
+
+        AudioCheckRunner::Plan plan = onePunchIn();
+        plan.referencePath = "";
+        startCheck(plan, false);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
+                                 30000);
+        QVERIFY2(m_dialogs.isEmpty(), qPrintable(m_dialogs.join(" | ")));
+        QVERIFY(m_window->mainModelId() != reference);
+
+        // The earlier one was open, so it stayed, and the new one has a
+        // name of its own
+        const QStringList references =
+            QDir(AudioCheckRunner::referenceDirectory()).entryList
+            (QStringList() << "calibrate-audio-reference*.wav", QDir::Files,
+             QDir::Name);
+        QCOMPARE(references, QStringList()
+                 << "calibrate-audio-reference-1.wav"
+                 << "calibrate-audio-reference-2.wav");
+        QCOMPARE(QFileInfo(earlier).fileName(),
+                 QString("calibrate-audio-reference-1.wav"));
+
+        m_window->audioCheck()->cancel();
+        QCOMPARE(m_finished, 1);
+    }
+
+    // A session of the user's is asked about before it is replaced: their
+    // song, and a check's session they saved. The watchdog answers
+    void check_asks_before_replacing_the_users_session() {
+        TestDataLocation testData;
+        makeWindow(loopback());
+
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        m_window->markModified();
+        startCheck(onePunchIn(), false);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_dialogs.isEmpty(), 10000);
+        QVERIFY2(m_dialogs.first().startsWith("Session modified"),
+                 qPrintable(m_dialogs.join(" | ")));
+        QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0 ||
+                                 m_window->recordTarget()->isRecording(),
+                                 30000);
+        m_window->audioCheck()->cancel();
+        QCOMPARE(m_finished, 1);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        m_dialogs.clear();
+
+        const QString earlier = openEarlierCheckReference();
+        QVERIFY(earlier != "");
+        QVERIFY(m_window->doSaveSessionAs(m_dir.filePath("kept.ton")));
+        m_window->markModified();
+        m_finished = 0;
+        startCheck(onePunchIn(), false);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_dialogs.isEmpty(), 10000);
+        QVERIFY2(m_dialogs.first().startsWith("Session modified"),
+                 qPrintable(m_dialogs.join(" | ")));
+        QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0 ||
+                                 m_window->recordTarget()->isRecording(),
+                                 30000);
+        m_window->audioCheck()->cancel();
+        QCOMPARE(m_finished, 1);
+        m_dialogs.clear();
+    }
+
+    // Record is shut while a check runs. A press that reaches the window
+    // all the same does not stop the check's take, which records to the
+    // end of its range as if nothing had happened
+    void check_ignores_the_record_button() {
+        makeWindow(loopback());
+        QVERIFY(m_window->recordAction()->isEnabled());
+
+        startCheck(onePunchIn());
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
+                                 30000);
+        QVERIFY(!m_window->recordAction()->isEnabled());
+
+        m_window->recordAction()->trigger();
+        emit m_window->recordAction()->triggered(false);
+        QVERIFY(m_window->recordTarget()->isRecording());
+        QVERIFY(m_window->recordAction()->isChecked());
+        QTest::qWait(300);
+        QVERIFY(m_window->recordTarget()->isRecording());
+
+        QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0, 60000);
+        QVERIFY2(m_result.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(m_result).constData());
+        QCOMPARE(m_result.summary.found, 1);
+        QCOMPARE(int(m_result.takes.size()), 1);
+        QVERIFY(m_window->recordAction()->isEnabled());
     }
 
     // Playback > Calibrate Audio: a dialog, not modal, that names the

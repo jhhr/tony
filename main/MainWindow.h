@@ -40,6 +40,9 @@ class QActionGroup;
 class AudioCheckRunner;
 struct AudioCheckResult;
 class CalibrateAudioDialog;
+#ifdef TONY_DEV_CHECKS
+class DevChecks;
+#endif
 
 namespace sv {
 class VersionTester;
@@ -55,6 +58,11 @@ class MainWindow : public sv::MainWindowBase
     // The audio check drives the take path of the window, and reads what
     // each take was placed with; see AudioCheckRunner
     friend class AudioCheckRunner;
+#ifdef TONY_DEV_CHECKS
+    // The development checks save and reopen the session, and read the
+    // take's pitch and notes; see DevChecks
+    friend class DevChecks;
+#endif
 
 public:
     MainWindow(AudioMode audioMode,
@@ -135,6 +143,12 @@ protected slots:
     // can switch to RecordCreateAdditionalModel before starting the capture,
     // causing the recording to be treated as the singing track.
     virtual void record();
+
+    // The Record button, and its shortcut: record() or Stop, except
+    // while the audio check runs, which records and stops takes of its
+    // own through record(); the button is shut then, and a press that
+    // gets here all the same is ignored
+    virtual void recordPressed();
 
 protected slots:
     virtual void openFile();
@@ -890,6 +904,26 @@ protected:
     // record(), recordingStarted() and wantedPreRollFrames() consult it
     AudioCheckRunner *m_audioCheck;
     bool m_audioCheckTakes;
+
+    // The round trip the check's takes are placed with in place of
+    // roundTripAt()'s, in seconds, for a run that brings one of its own
+    // (AudioCheckRunner::Plan::roundTrip); negative when it brings none.
+    // Read with m_audioCheckTakes, and never by latencyInUse()
+    double m_audioCheckRoundTrip;
+
+#ifdef TONY_DEV_CHECKS
+    // The development checks, which drive the audio check and the
+    // session; made with the window, deleted in its destructor after the
+    // dialog and before the runner, and told when the session closes
+    DevChecks *m_devChecks;
+#endif
+
+    // The audio check, or the development checks, are running: the take
+    // path and the devices are theirs until they end
+    bool audioCheckRunning() const;
+
+    // The Record button, shut while audioCheckRunning()
+    QAction *m_recordAction;
 
     // Playback > Calibrate Audio, made the first time it is chosen, and
     // the lines under it: the latency takes are placed with, and Forget

@@ -77,17 +77,26 @@ AudioCheckRunner::AudioCheckRunner(MainWindow *window) :
 
 AudioCheckRunner::~AudioCheckRunner()
 {
-    // Deleted by the window first thing in its destructor, so the window
-    // is whole here.  A run ends without a word: whoever was waiting for
-    // it goes with the window.  A take in progress is left to the window,
-    // as any take is when it is deleted: stopping it here would splice
-    // it and start its analysis in the middle of the window's teardown
-    m_timer->stop();
+    // Deleted by the window in its destructor, before anything it reads
+    // goes, so the window is whole here.  A run ends without a word:
+    // whoever was waiting for it goes with the window.  A take in
+    // progress is left to the window, as any take is when it is deleted:
+    // stopping it here would splice it and start its analysis in the
+    // middle of the window's teardown
     if (m_step != Step::Idle) {
         cerr << "AudioCheckRunner: the window is going; the run ends" << endl;
-        m_window->m_audioCheckTakes = false;
-        m_step = Step::Idle;
     }
+    abandon();
+}
+
+void
+AudioCheckRunner::abandon()
+{
+    m_timer->stop();
+    if (m_step == Step::Idle) return;
+    cerr << "AudioCheckRunner: the run is abandoned" << endl;
+    clearOverride();
+    m_step = Step::Idle;
 }
 
 AudioCheckRunner::Plan
@@ -98,6 +107,29 @@ AudioCheckRunner::calibrationPlan()
     plan.punchIns = 4;
     plan.eventsEach = 3;
     return plan;
+}
+
+vector<LatencyCheck::PunchIn>
+AudioCheckRunner::punchInsOf(const Plan &plan)
+{
+    if (plan.ranges.empty()) {
+        return LatencyCheck::punchInsFor
+            (plan.layout, plan.punchIns, plan.eventsEach);
+    }
+    if (plan.layout.rate <= 0) return {};
+
+    // One after another along the timeline, as judgeTake() is told they
+    // were recorded.  Two may meet, as takes into adjacent selections do.
+    // Written so that a range of NaNs fails too
+    const double length = double(plan.layout.length) / plan.layout.rate;
+    double free = 0.0;
+    for (const LatencyCheck::PunchIn &p : plan.ranges) {
+        if (!(p.start >= free) || !(p.end > p.start) || !(p.end <= length)) {
+            return {};
+        }
+        free = p.end;
+    }
+    return plan.ranges;
 }
 
 QString
@@ -143,12 +175,23 @@ AudioCheckRunner::start(const Plan &plan)
         return false;
     }
 
-    vector<LatencyCheck::PunchIn> punchIns = LatencyCheck::punchInsFor
-        (plan.layout, plan.punchIns, plan.eventsEach);
+    vector<LatencyCheck::PunchIn> punchIns = punchInsOf(plan);
     if (punchIns.empty()) {
-        cerr << "AudioCheckRunner::start: the layout has no room for "
-             << plan.punchIns << " punch-ins of " << plan.eventsEach
-             << " events" << endl;
+        if (plan.ranges.empty()) {
+            cerr << "AudioCheckRunner::start: the layout has no room for "
+                 << plan.punchIns << " punch-ins of " << plan.eventsEach
+                 << " events" << endl;
+        } else {
+            cerr << "AudioCheckRunner::start: the punch-ins given overlap, "
+                 << "are out of order, are empty or reach outside the layout"
+                 << endl;
+        }
+        return false;
+    }
+
+    if (plan.keepSession && !m_window->getMainModel()) {
+        cerr << "AudioCheckRunner::start: there is no session to record into"
+             << endl;
         return false;
     }
 
@@ -167,8 +210,16 @@ AudioCheckRunner::start(const Plan &plan)
     m_ends.clear();
     m_punchIn = 0;
 
-    cerr << "AudioCheckRunner::start: " << m_punchIns.size()
-         << " punch-ins of " << m_plan.eventsEach << " events" << endl;
+    cerr << "AudioCheckRunner::start: " << m_punchIns.size() << " punch-ins";
+    if (m_plan.ranges.empty()) {
+        cerr << " of " << m_plan.eventsEach << " events";
+    }
+    if (m_plan.keepSession) cerr << ", into the session open now";
+    if (m_plan.roundTrip >= 0.0) {
+        cerr << ", placed with a round trip of its own, "
+             << m_plan.roundTrip * 1000.0 << " ms";
+    }
+    cerr << endl;
 
     // Nothing is done before the first poll, so that however the run
     // ends, the caller hears of it through finished() and never from
@@ -263,9 +314,26 @@ AudioCheckRunner::poll()
 void
 AudioCheckRunner::openReference()
 {
+    // The session open now is the reference, as the caller says, and
+    // stays open with its take
+    if (m_plan.keepSession) {
+        if (!m_window->getMainModel()) {
+            end(tr("There is no session to record into."));
+            return;
+        }
+        referenceOpen();
+        return;
+    }
+
     // Each call below may show a dialog, and while one is up the run may
-    // end: the session closed, or the check cancelled
-    if (!m_window->checkSaveModified()) {
+    // end: the session closed, or the check cancelled.  A check's own
+    // session holds nothing of the user's, and its takes have marked it
+    // modified: it is let go as answering "No" does
+    if (sessionIsACheck()) {
+        cerr << "AudioCheckRunner: replacing the session of an earlier "
+             << "check without asking" << endl;
+        m_window->m_documentModified = false;
+    } else if (!m_window->checkSaveModified()) {
         if (m_step == Step::OpeningReference) {
             end(tr("Your session was kept open, so the check did not "
                    "replace it."));
@@ -280,12 +348,7 @@ AudioCheckRunner::openReference()
     // file has that one written over
     QString path = m_plan.referencePath;
     if (path == "") {
-        QString inUse;
-        if (auto model = std::dynamic_pointer_cast<ReadOnlyWaveFileModel>
-            (m_window->getMainModel())) {
-            inUse = model->getLocalFilename();
-        }
-        path = nextReferencePath(referenceDirectory(), inUse);
+        path = nextReferencePath(referenceDirectory(), mainModelFile());
         m_plan.referencePath = path;
     }
     cerr << "AudioCheckRunner: writing the reference to " << path << endl;
@@ -308,15 +371,49 @@ AudioCheckRunner::openReference()
     m_openingReference = false;
     if (m_step != Step::OpeningReference) return;
 
-    auto model = m_window->getMainModel();
-    if (status != MainWindowBase::FileOpenSucceeded || !model) {
+    if (status != MainWindowBase::FileOpenSucceeded ||
+        !m_window->getMainModel()) {
         end(tr("The test reference \"%1\" could not be opened.").arg(path));
         return;
     }
 
+    referenceOpen();
+}
+
+bool
+AudioCheckRunner::sessionIsACheck() const
+{
+    // Saved, it is the user's to keep, whatever it holds
+    if (m_window->m_sessionFile != "") return false;
+
+    const QString file = mainModelFile();
+    if (file == "") return false;
+
+    // Canonical paths, where both exist
+    return QFileInfo(file).absoluteDir() == QDir(referenceDirectory());
+}
+
+QString
+AudioCheckRunner::mainModelFile() const
+{
+    // Not ReadOnlyWaveFileModel::getLocalFilename(): with the "normalise
+    // audio" preference on, as Tony has it, that is the file the reader
+    // decoded the audio into, in the temporary directory.  The location
+    // is what the model was opened from, resolved here as it was then
+    auto model = std::dynamic_pointer_cast<ReadOnlyWaveFileModel>
+        (m_window->getMainModel());
+    if (!model) return "";
+    FileSource source(model->getLocation());
+    if (source.isRemote()) return "";
+    return source.getLocalFilename();
+}
+
+void
+AudioCheckRunner::referenceOpen()
+{
     // The punch-ins from here on are as the takes record them: in whole
     // frames of the session, which is what the selections are made of
-    const sv_samplerate_t rate = model->getSampleRate();
+    const sv_samplerate_t rate = m_window->getMainModel()->getSampleRate();
     m_result.referenceRate = rate;
     for (LatencyCheck::PunchIn &p : m_punchIns) {
         m_starts.push_back(sv_frame_t(std::llround(p.start * rate)));
@@ -325,7 +422,7 @@ AudioCheckRunner::openReference()
                                   double(m_ends.back()) / rate);
     }
 
-    // Its layers were made as it opened
+    // Its layers were made as it opened, or are there already
     setPlayback();
 
     setStep(Step::AnalysingReference, kReferenceTimeoutMs);
@@ -360,6 +457,7 @@ AudioCheckRunner::startPunchIn()
     setPlayback();
 
     m_window->m_audioCheckTakes = true;
+    m_window->m_audioCheckRoundTrip = m_plan.roundTrip;
     m_window->record();
     if (m_step != step) return;
 
@@ -380,7 +478,7 @@ AudioCheckRunner::startPunchIn()
 void
 AudioCheckRunner::takeStopped()
 {
-    m_window->m_audioCheckTakes = false;
+    clearOverride();
     m_result.takes.push_back(m_window->m_takeLatency);
 
     // The splice went wrong (the window has said so), or the recording
@@ -398,34 +496,49 @@ AudioCheckRunner::takeStopped()
 void
 AudioCheckRunner::judge()
 {
-    // The take's own file, and not its model: the model is normalised to
-    // full scale as it is read (the "normalise audio" preference), which
-    // would have every take clipped, and resampled to the session's rate.
     // The file holds what was recorded, at the rate it was recorded at
-    QString path = m_window->m_takes->getAudioPath();
+    vector<float> mono;
+    sv_samplerate_t rate = 0;
+    const QString error =
+        readTakeFile(m_window->m_takes->getAudioPath(), mono, rate);
+    if (error != "") {
+        end(error);
+        return;
+    }
+
+    m_result.summary = LatencyCheck::judgeTake
+        (m_plan.layout, mono.data(), sv_frame_t(mono.size()), rate,
+         m_punchIns);
+
+    end("");
+}
+
+QString
+AudioCheckRunner::readTakeFile(QString path, vector<float> &mono,
+                               sv_samplerate_t &rate)
+{
+    mono.clear();
+    rate = 0;
+
     FileSource source(path);
     WavFileReader reader(source);
     if (!reader.isOK() || reader.getChannelCount() < 1) {
-        end(tr("The take's audio file \"%1\" could not be read: %2")
-            .arg(path).arg(reader.getError()));
-        return;
+        return tr("The take's audio file \"%1\" could not be read: %2")
+            .arg(path).arg(reader.getError());
     }
 
     const int channels = reader.getChannelCount();
     const floatvec_t data = reader.getInterleavedFrames
         (0, reader.getFrameCount());
     const sv_frame_t count = sv_frame_t(data.size()) / channels;
-    vector<float> mono(count, 0.f);
+    mono.assign(count, 0.f);
     for (sv_frame_t i = 0; i < count; ++i) {
         float sum = 0.f;
         for (int c = 0; c < channels; ++c) sum += data[i * channels + c];
         mono[i] = sum / float(channels);
     }
-
-    m_result.summary = LatencyCheck::judgeTake
-        (m_plan.layout, mono.data(), count, reader.getSampleRate(), m_punchIns);
-
-    end("");
+    rate = reader.getSampleRate();
+    return "";
 }
 
 void
@@ -546,7 +659,7 @@ AudioCheckRunner::end(QString failure)
 
     m_timer->stop();
     m_step = Step::Idle;
-    m_window->m_audioCheckTakes = false;
+    clearOverride();
 
     m_result.failure = failure;
     if (!m_result.takes.empty()) {
@@ -585,6 +698,13 @@ AudioCheckRunner::end(QString failure)
     // A copy: whoever hears of it may start another run
     AudioCheckResult result = m_result;
     emit finished(result);
+}
+
+void
+AudioCheckRunner::clearOverride()
+{
+    m_window->m_audioCheckTakes = false;
+    m_window->m_audioCheckRoundTrip = -1.0;
 }
 
 bool

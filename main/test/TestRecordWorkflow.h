@@ -32,6 +32,10 @@
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
 
+#ifdef TONY_DEV_CHECKS
+#include "../dev/DevChecks.h"
+#endif
+
 #include "version.h"
 
 #include "framework/Document.h"
@@ -147,6 +151,9 @@ public:
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
     bool isDocumentModified() { return m_documentModified; }
+
+    // As any edit does
+    void markModified() { documentModified(); }
     void doCloseSession() { discardModifications(); closeSession(); }
 
     void setPlayReferenceWhileRecording(bool on) {
@@ -166,6 +173,19 @@ public:
     // the last take was placed with
     AudioCheckRunner *audioCheck() { return m_audioCheck; }
     bool audioCheckTakes() { return m_audioCheckTakes; }
+
+    // The Record button, as the user presses it
+    QAction *recordAction() { return m_recordAction; }
+
+#ifdef TONY_DEV_CHECKS
+    // The development checks; deleted as the window's destructor deletes
+    // them, with the window left, and then as a release build has it
+    DevChecks *devChecks() { return m_devChecks; }
+    void doDeleteDevChecks() {
+        delete m_devChecks;
+        m_devChecks = nullptr;
+    }
+#endif
 
     // Playback > Calibrate Audio, the dialog it shows once it has been
     // chosen, the lines under it, and the device menus above it

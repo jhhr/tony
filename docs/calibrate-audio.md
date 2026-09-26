@@ -40,6 +40,8 @@ with less noise.
 2. **Test session.** Tony writes a generated test reference and opens it the way
    File ▸ Open does. You are asked to save your work first. The run never touches your
    song's takes or undo history.
+   *Since C1a:* not when the session open is a check's own (never saved, its reference
+   in the check's directory): that is replaced without asking.
 3. **Calibration, about 30 s.** Four punch-ins, each spanning three of the reference's
    sweeps with the room the finder needs around them. The ranges come from the layout,
    not from fixed times: a 5 s punch-in judges only one or two sweeps. They use the
@@ -305,7 +307,7 @@ marked "Done" when it is committed.
 4. **Dev-check framework:**
    - **C0** `TakeDiff`, pure. Done.
    - **C1a** Build flag, `DevChecks`, report, friend access, the dialog's dev run.
-     Items 1 and 2.
+     Items 1 and 2. Done.
    - **C1b** `TakeObserver`. Items 7, 12, 13, 14.
 5. **C2** Observer group: items 3, 4, 5, 8, 15, 16.
 6. **C3** Join and long-song group: items 9 and 10.
@@ -426,6 +428,10 @@ Checked on 2026-09-25, so that phases do not re-derive them.
   - `checkSaveModified()` is what asks the user to save.
   - The reference is analysed when `Analyser::getInitialAnalysisCompletion() >= 100` and
     the layers exist. See `analysed()` in `TestRecordWorkflow.h`.
+  - *Found in C1a:* with "normalise audio" on, a model's `getLocalFilename()` is the
+    reader's decoded copy in the temporary directory, not the file opened. The file
+    opened is `getLocation()` resolved through `FileSource`
+    (`AudioCheckRunner::mainModelFile()`).
 - **The take after Stop.**
   - Its audio is the model `analyser2()->getMainModelId()`, and its file is
     `m_takes->getAudioPath()`. *Found in B1:* the model is normalised to full scale

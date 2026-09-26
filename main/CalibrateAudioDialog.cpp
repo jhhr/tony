@@ -27,6 +27,10 @@
 #include <QTextDocument>
 #include <QVBoxLayout>
 
+#ifdef TONY_DEV_CHECKS
+#include <QCheckBox>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -45,8 +49,8 @@ using LatencyCheck::Verdict;
 double
 expectedSeconds(const AudioCheckRunner::Plan &plan)
 {
-    const std::vector<LatencyCheck::PunchIn> ranges = LatencyCheck::punchInsFor
-        (plan.layout, plan.punchIns, plan.eventsEach);
+    const std::vector<LatencyCheck::PunchIn> ranges =
+        AudioCheckRunner::punchInsOf(plan);
     double seconds = 0.0;
     for (const LatencyCheck::PunchIn &r : ranges) {
         seconds += std::min(AudioCheckRunner::kPreRollSeconds, r.start) +
@@ -92,6 +96,12 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     m_latencyKept(false),
     m_expectedSeconds(0),
     m_shownPermille(0)
+#ifdef TONY_DEV_CHECKS
+    ,
+    m_devChecksBox(nullptr),
+    m_devRunning(false),
+    m_haveDevReport(false)
+#endif
 {
     setWindowTitle(tr("Calibrate Audio"));
     setModal(false);
@@ -110,8 +120,19 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
         return label;
     };
 
+    QWidget *instructions = new QWidget;
+    QVBoxLayout *instructionsLayout = new QVBoxLayout;
+    instructionsLayout->setContentsMargins(0, 0, 0, 0);
+    instructions->setLayout(instructionsLayout);
     m_instructions = textLabel();
-    m_pages->addWidget(m_instructions);
+    instructionsLayout->addWidget(m_instructions);
+#ifdef TONY_DEV_CHECKS
+    m_devChecksBox = new QCheckBox(tr("Run the dev checks after calibrating"));
+    m_devChecksBox->setChecked(true);
+    instructionsLayout->addWidget(m_devChecksBox);
+#endif
+    instructionsLayout->addStretch(1);
+    m_pages->addWidget(instructions);
 
     QWidget *progress = new QWidget;
     QVBoxLayout *progressLayout = new QVBoxLayout;
@@ -178,6 +199,117 @@ CalibrateAudioDialog::setPlan(const AudioCheckRunner::Plan &plan)
     m_plan = plan;
 }
 
+#ifdef TONY_DEV_CHECKS
+
+void
+CalibrateAudioDialog::setDevChecks(DevChecks *devChecks)
+{
+    if (m_devChecks) disconnect(m_devChecks, nullptr, this, nullptr);
+    m_devChecks = devChecks;
+    if (!devChecks) return;
+
+    // Direct, as the runner's: the report has no metatype
+    connect(devChecks, &DevChecks::progress,
+            this, &CalibrateAudioDialog::devProgress);
+    connect(devChecks, &DevChecks::finished,
+            this, &CalibrateAudioDialog::devFinished);
+}
+
+bool
+CalibrateAudioDialog::devChecksWanted() const
+{
+    return m_devChecksBox->isChecked();
+}
+
+void
+CalibrateAudioDialog::setDevChecksWanted(bool wanted)
+{
+    m_devChecksBox->setChecked(wanted);
+}
+
+void
+CalibrateAudioDialog::setDevOptions(const DevChecks::Options &options)
+{
+    m_devOptions = options;
+}
+
+bool
+CalibrateAudioDialog::startDevChecks(const AudioCheckResult &calibration)
+{
+    if (!m_devChecksBox->isChecked() || !m_devChecks) return false;
+
+    // They place their takes with what the calibration measured, which
+    // means nothing unless it can be used
+    if (!calibration.calibrationUsable()) {
+        m_devNote = tr("The dev checks did not run: they need a calibration "
+                       "that can be used.");
+        return false;
+    }
+
+    DevChecks::Options options = m_devOptions;
+    options.roundTrip = calibration.calibratedRoundTrip;
+    if (!m_devChecks->start(options)) {
+        m_devNote = tr("The dev checks could not start.");
+        return false;
+    }
+
+    m_devRunning = true;
+    m_step->setText(tr("Calibrated. Starting the dev checks..."));
+    m_timeLeft->setText(QString());
+    m_bar->setRange(0, 0);
+    return true;
+}
+
+void
+CalibrateAudioDialog::devProgress(QString stage, int stageNumber, int stages)
+{
+    if (!m_devRunning) return;
+    m_step->setText(tr("Dev checks, stage %1 of %2: %3...")
+                    .arg(stageNumber).arg(stages).arg(stage));
+    m_timeLeft->setText(QString());
+}
+
+void
+CalibrateAudioDialog::devFinished(const DevReport &report)
+{
+    // Only those that carried on from a calibration of this dialog's
+    if (!m_devRunning) return;
+    m_devRunning = false;
+    m_running = false;
+    m_devReport = report;
+    m_haveDevReport = true;
+    m_bar->setRange(0, 1000);
+    showResultPage();
+}
+
+QString
+CalibrateAudioDialog::devHtml() const
+{
+    QString html;
+    if (m_devNote != "") html += paragraph(m_devNote.toHtmlEscaped());
+    if (!m_haveDevReport) return html;
+
+    html += paragraph(bold(tr("Dev checks")));
+    if (m_devReport.failure != "") {
+        html += paragraph(tr("They ended early: %1")
+                          .arg(m_devReport.failure.toHtmlEscaped()));
+    }
+    html += "<ul>";
+    for (const CheckResult &c : m_devReport.checks) {
+        html += "<li>" + tr("Item %1, %2: %3").arg(c.item)
+            .arg(c.name.toHtmlEscaped())
+            .arg(CheckResult::verdictName(c.verdict)) + "</li>";
+    }
+    html += "</ul>";
+    html += paragraph(m_devReport.reportPath != "" ?
+                      tr("Report: %1").arg(m_devReport.reportPath
+                                           .toHtmlEscaped()) :
+                      tr("The report could not be written."));
+    return html;
+}
+
+#endif
+
 CalibrateAudioDialog::Page
 CalibrateAudioDialog::page() const
 {
@@ -215,6 +347,10 @@ CalibrateAudioDialog::present()
     // shown; a check of its own that is running stays on show
     if (!m_running) {
         m_instructions->setText(instructionsHtml());
+#ifdef TONY_DEV_CHECKS
+        // On each time the instructions are shown afresh
+        m_devChecksBox->setChecked(true);
+#endif
         showPage(Page::Instructions);
     }
     show();
@@ -231,7 +367,14 @@ CalibrateAudioDialog::startCheck()
     m_latencyKept = false;
     m_expectedSeconds = expectedSeconds(m_plan);
     m_shownPermille = 0;
+    m_bar->setRange(0, 1000);
     m_bar->setValue(0);
+#ifdef TONY_DEV_CHECKS
+    m_devRunning = false;
+    m_haveDevReport = false;
+    m_devReport = DevReport();
+    m_devNote = QString();
+#endif
     m_step->setText(tr("Starting the check..."));
     m_timeLeft->setText(QString());
 
@@ -253,6 +396,21 @@ CalibrateAudioDialog::startCheck()
 void
 CalibrateAudioDialog::cancelCheck()
 {
+#ifdef TONY_DEV_CHECKS
+    // Its dev checks, which end at once and report through devFinished()
+    if (m_devRunning) {
+        if (m_devChecks) {
+            m_devChecks->cancel();
+        } else {
+            // Gone with nothing said (the window is going)
+            m_devRunning = false;
+            m_running = false;
+            showResultPage();
+        }
+        return;
+    }
+#endif
+
     // The run ends at once, and its end comes back through
     // runnerFinished()
     if (m_running) m_runner->cancel();
@@ -276,6 +434,17 @@ void
 CalibrateAudioDialog::showResult(const AudioCheckResult &result)
 {
     m_result = result;
+#ifdef TONY_DEV_CHECKS
+    m_haveDevReport = false;
+    m_devReport = DevReport();
+    m_devNote = QString();
+#endif
+    showResultPage();
+}
+
+void
+CalibrateAudioDialog::showResultPage()
+{
     m_latencyKept = false;
     m_resultText->setText(resultHtml());
     showPage(Page::Result);
@@ -286,7 +455,7 @@ CalibrateAudioDialog::reject()
 {
     // Nothing else would show how the run went, and a check left running
     // behind a closed dialog would go on playing chirps
-    if (m_running) m_runner->cancel();
+    if (m_running) cancelCheck();
     QDialog::reject();
 }
 
@@ -294,6 +463,10 @@ void
 CalibrateAudioDialog::runnerProgress(const AudioCheckRunner::Progress &p)
 {
     if (!m_running) return;
+#ifdef TONY_DEV_CHECKS
+    // The runner's part in the dev checks, which show their own stages
+    if (m_devRunning) return;
+#endif
 
     QString step;
     switch (p.step) {
@@ -340,8 +513,18 @@ CalibrateAudioDialog::runnerFinished(const AudioCheckResult &result)
 {
     // A run started elsewhere is not this dialog's to show
     if (!m_running) return;
+#ifdef TONY_DEV_CHECKS
+    // Nor is the runner's part in the dev checks, which report for
+    // themselves.  A calibration carries on into them if they are
+    // wanted, and is shown with their report when they end
+    if (m_devRunning) return;
+    m_result = result;
+    if (startDevChecks(result)) return;
+#else
+    m_result = result;
+#endif
     m_running = false;
-    showResult(result);
+    showResultPage();
 }
 
 void
@@ -402,6 +585,16 @@ CalibrateAudioDialog::instructionsHtml() const
 
 QString
 CalibrateAudioDialog::resultHtml() const
+{
+#ifdef TONY_DEV_CHECKS
+    return calibrationHtml() + devHtml();
+#else
+    return calibrationHtml();
+#endif
+}
+
+QString
+CalibrateAudioDialog::calibrationHtml() const
 {
     const AudioCheckResult &r = m_result;
 

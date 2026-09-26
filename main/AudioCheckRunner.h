@@ -115,7 +115,9 @@ struct AudioCheckResult
  * Driven by a polling timer, like MainWindow's own take polling, and
  * never by a nested event loop: this runs in every build, and the
  * window can be closed at any moment.  MainWindow owns it, deletes it
- * first thing in its destructor, and tells it when the session closes.
+ * in its destructor after those who drive it (the dialog, the dev
+ * checks) and before anything it reads, and tells it when the session
+ * closes.
  * A friend of MainWindow: it drives the window's take path, reads what
  * the take was placed with, and sets the playback of the session it
  * opened, but changes nothing else there.
@@ -144,11 +146,32 @@ public:
         int punchIns;
         int eventsEach;
 
+        /// The punch-ins themselves, in seconds on the reference's
+        /// timeline, in the order they are recorded.  When there are
+        /// any, they are what is recorded, and punchIns and eventsEach
+        /// are not used.  They may meet but not overlap, and lie within
+        /// the layout (punchInsOf())
+        std::vector<LatencyCheck::PunchIn> ranges;
+
         /// Where the reference is written, over whatever is there; ""
         /// for a new file in referenceDirectory() (nextReferencePath())
         QString referencePath;
 
-        Plan() : punchIns(0), eventsEach(0) { }
+        /// Record into the session open now, which the caller says is
+        /// a reference made from this plan's layout, and into its take:
+        /// no reference is written or opened, and nothing is asked.
+        /// What earlier runs recorded stays in the take, and only this
+        /// run's punch-ins are judged
+        bool keepSession;
+
+        /// The round trip this run's takes are placed with, in seconds,
+        /// in place of the one the window places every take with;
+        /// negative for the window's own.  For the run only: nothing is
+        /// stored, and the window goes on saying it uses its own
+        double roundTrip;
+
+        Plan() : punchIns(0), eventsEach(0), keepSession(false),
+                 roundTrip(-1.0) { }
     };
 
     /// The steps of a run, in order; the last two come once for each
@@ -188,6 +211,14 @@ public:
     /// events each on the calibration layout
     static Plan calibrationPlan();
 
+    /// The punch-ins a run of the plan records, in seconds: its ranges
+    /// if it has any, else as many as it asks for from its layout
+    /// (LatencyCheck::punchInsFor()).  Empty if they cannot be
+    /// recorded: ranges that overlap, come out of order, are empty or
+    /// reach outside the layout, or a layout with no room for the
+    /// punch-ins asked for
+    static std::vector<LatencyCheck::PunchIn> punchInsOf(const Plan &plan);
+
     /// Where the reference is written unless the plan names a file:
     /// the application's data directory
     static QString referenceDirectory();
@@ -205,9 +236,16 @@ public:
 
     /**
      * Begin a run.  False, with nothing started, if one is running
-     * already, if a take is being recorded, or if the plan's punch-ins
-     * do not fit its layout (LatencyCheck::punchInsFor()).  Otherwise
-     * finished() comes once, at the end, however the run ends.
+     * already, if a take is being recorded, if the plan's punch-ins
+     * cannot be recorded (punchInsOf()), or if it keeps the session and
+     * there is none.  Otherwise finished() comes once, at the end,
+     * however the run ends.
+     *
+     * A run that replaces the session asks the user whether to save it
+     * first (MainWindow::checkSaveModified()), unless it is a check's
+     * own: never saved, and playing a reference in referenceDirectory().
+     * Nothing of the user's is in that, and Check Again would otherwise
+     * ask every time, the takes having changed it.
      */
     bool start(const Plan &plan);
 
@@ -215,11 +253,31 @@ public:
     /// path, and finished() says the run was cancelled
     void cancel();
 
+    /// End the run at once, with no finished() and no Stop path: for
+    /// the window's teardown, where whoever waits for the run goes as
+    /// well and a take in progress is left to the window, as any take
+    /// is when it is deleted.  The destructor does this
+    void abandon();
+
     bool isRunning() const;
 
     /// Called by MainWindow::closeSession() once the session is sure to
     /// close: a run ends then, unless it is the run replacing it
     void sessionClosing();
+
+    /// Whether the analyser, or any transform, is still at work: what
+    /// a run waits for after opening the reference and after each take
+    static bool analysing(Analyser *analyser);
+
+    /**
+     * A take's audio file, mixed to one channel, at the rate it was
+     * recorded at.  The file, and not the take's model: the model is
+     * normalised to full scale as it is read (the "normalise audio"
+     * preference), which would have every take clipped, and resampled
+     * to the session's rate.  "" on success, else what went wrong.
+     */
+    static QString readTakeFile(QString path, std::vector<float> &mono,
+                                sv::sv_samplerate_t &rate);
 
 signals:
     void finished(const AudioCheckResult &result);
@@ -259,6 +317,18 @@ private:
 
     void poll();
     void openReference();
+
+    /// The session open now is a check's own (see start()), and can be
+    /// replaced without asking
+    bool sessionIsACheck() const;
+
+    /// The audio file the session's main model was opened from, or ""
+    QString mainModelFile() const;
+
+    /// The session is open with the reference in it: the punch-ins in
+    /// frames of the session, its playback, and on to its analysis
+    void referenceOpen();
+
     void startPunchIn();
     void takeStopped();
     void judge();
@@ -286,8 +356,8 @@ private:
     /// End the run and say so; failure is empty for a run judged
     void end(QString failure);
 
-    /// Whether the analyser, or any transform, is still at work
-    static bool analysing(Analyser *analyser);
+    /// Take the override for the check's takes away from the window
+    void clearOverride();
 };
 
 #endif

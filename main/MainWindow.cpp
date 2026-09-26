@@ -26,6 +26,10 @@
 #include "TakeLayers.h"
 #include "TakesFile.h"
 
+#ifdef TONY_DEV_CHECKS
+#include "dev/DevChecks.h"
+#endif
+
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
 
@@ -205,6 +209,11 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takeLatency(),
     m_audioCheck(nullptr),
     m_audioCheckTakes(false),
+    m_audioCheckRoundTrip(-1.0),
+#ifdef TONY_DEV_CHECKS
+    m_devChecks(nullptr),
+#endif
+    m_recordAction(nullptr),
     m_calibrateAudioDialog(nullptr),
     m_calibrateAudioAction(nullptr),
     m_latencyLineAction(nullptr),
@@ -412,6 +421,16 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(m_audioCheck, &AudioCheckRunner::finished,
             this, [this]() { updateMenuStates(); });
 
+#ifdef TONY_DEV_CHECKS
+    // Likewise for the development checks, which run the check among
+    // stages of their own
+    m_devChecks = new DevChecks(this, m_audioCheck);
+    connect(m_devChecks, &DevChecks::progress,
+            this, [this]() { updateMenuStates(); });
+    connect(m_devChecks, &DevChecks::finished,
+            this, [this]() { updateMenuStates(); });
+#endif
+
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
     m_takeTimer = new QTimer(this);
@@ -468,10 +487,15 @@ MainWindow::MainWindow(AudioMode audioMode,
 
 MainWindow::~MainWindow()
 {
-    // The check's dialog first, as it holds the runner; then a check
+    // The check's dialog first, as it holds the runner and the dev
+    // checks; then the dev checks, which drive the runner; then a check
     // still running ends here, before anything it reads goes
     delete m_calibrateAudioDialog;
     m_calibrateAudioDialog = nullptr;
+#ifdef TONY_DEV_CHECKS
+    delete m_devChecks;
+    m_devChecks = nullptr;
+#endif
     delete m_audioCheck;
     m_audioCheck = nullptr;
 
@@ -1536,7 +1560,9 @@ MainWindow::setupToolbars()
     recordAction->setCheckable(true);
     recordAction->setShortcut(tr("Ctrl+Space"));
     recordAction->setStatusTip(tr("Record a new audio file. If a reference track is already loaded, the recording is added as the singing track alongside it."));
-    connect(recordAction, SIGNAL(triggered()), this, SLOT(record()));
+    connect(recordAction, &QAction::triggered,
+            this, &MainWindow::recordPressed);
+    m_recordAction = recordAction;
     connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
 	    recordAction, SLOT(setChecked(bool)));
     connect(m_recordTarget, SIGNAL(recordCompleted()),
@@ -2258,8 +2284,11 @@ MainWindow::updateMenuStates()
     emit canActOnTake(canChange && m_takes->getActiveIndex() >= 0);
 
     // The audio check records takes of its own, and keeps what it
-    // measures for the devices it started on
-    bool checking = m_audioCheck && m_audioCheck->isRunning();
+    // measures for the devices it started on.  Record is shut after the
+    // base class has opened it: a press would stop the check's take, or
+    // record one of the user's into the check's session
+    bool checking = audioCheckRunning();
+    if (checking) emit canRecord(false);
     if (m_calibrateAudioAction) {
         m_calibrateAudioAction->setEnabled(!inTake && !checking);
     }
@@ -2596,8 +2625,14 @@ MainWindow::closeSession()
     if (!checkSaveModified()) return;
 
     // A check has nothing left to record into; a take of its own that is
-    // running is stopped through the Stop path, as the check's Cancel does
+    // running is stopped through the Stop path, as the check's Cancel does.
+    // The runner first: one that is replacing the session for the dev
+    // checks carries on, and the dev checks see it running and carry on
+    // with it, as they do through a reopen of their own
     if (m_audioCheck) m_audioCheck->sessionClosing();
+#ifdef TONY_DEV_CHECKS
+    if (m_devChecks) m_devChecks->sessionClosing();
+#endif
 
     // Nothing of a take that is still running outlives its session
     stopTakePolling();
@@ -4084,6 +4119,36 @@ MainWindow::record()
 }
 
 void
+MainWindow::recordPressed()
+{
+    // The check starts and stops its takes through record() itself, and
+    // a press would stop its take early, or start one of the user's in
+    // the check's session.  The button is shut while it runs; a press
+    // that arrives all the same (queued before it was shut, say) leaves
+    // the button showing what is really happening
+    if (audioCheckRunning()) {
+        cerr << "MainWindow::recordPressed: the audio check is running; "
+             << "Record is ignored" << endl;
+        if (m_recordAction) {
+            m_recordAction->setChecked
+                (m_recordTarget && m_recordTarget->isRecording());
+        }
+        return;
+    }
+    record();
+}
+
+bool
+MainWindow::audioCheckRunning() const
+{
+    if (m_audioCheck && m_audioCheck->isRunning()) return true;
+#ifdef TONY_DEV_CHECKS
+    if (m_devChecks && m_devChecks->isRunning()) return true;
+#endif
+    return false;
+}
+
+void
 MainWindow::startTakePolling()
 {
     // Only a take that is to stop by itself needs watching: nothing else
@@ -4269,6 +4334,16 @@ MainWindow::recordingStarted()
             m_lastRecordingRate = recordingRate;
 
             LatencyCalibration::InUse inUse = roundTripAt(recordingRate);
+
+            // A check that brings a round trip of its own places its takes
+            // with that, for the run only (the dev checks, with the figure
+            // the calibration before them measured): nothing is stored,
+            // and latencyInUse() goes on describing roundTripAt()'s.  The
+            // reported pair stays the device's
+            const bool checkOwn =
+                m_audioCheckTakes && m_audioCheckRoundTrip >= 0.0;
+            if (checkOwn) inUse.roundTrip = m_audioCheckRoundTrip;
+
             sv_frame_t roundTrip =
                 LatencyCalibration::toFrames(inUse.roundTrip, recordingRate);
             m_recordingLatencyFrames = roundTrip + m_recordingStartGapEstimate;
@@ -4276,17 +4351,24 @@ MainWindow::recordingStarted()
             m_takeLatency.roundTrip = roundTrip;
             m_takeLatency.reportedOutput = inUse.reportedOutput;
             m_takeLatency.reportedInput = inUse.reportedInput;
-            m_takeLatency.measured =
+            m_takeLatency.measured = checkOwn ||
                 (inUse.source == LatencyCalibration::Source::Measured);
+            m_takeLatency.startGap = m_recordingStartGapEstimate;
+            m_takeLatency.startGapMeasured = false;
             cerr << "MainWindow::recordingStarted: round trip " << roundTrip
                  << " frames at " << recordingRate << " Hz ("
-                 << inUse.roundTrip * 1000.0 << " ms), "
-                 << LatencyCalibration::sourceName(inUse.source);
-            if (inUse.source == LatencyCalibration::Source::Measured) {
-                cerr << " on " << inUse.date.toString(Qt::ISODate).toStdString();
-            } else if (inUse.stale) {
-                cerr << ": the measured one is stale, the device reports "
-                     << "other latencies now";
+                 << inUse.roundTrip * 1000.0 << " ms), ";
+            if (checkOwn) {
+                cerr << "the audio check's own, for its run only";
+            } else {
+                cerr << LatencyCalibration::sourceName(inUse.source);
+                if (inUse.source == LatencyCalibration::Source::Measured) {
+                    cerr << " on "
+                         << inUse.date.toString(Qt::ISODate).toStdString();
+                } else if (inUse.stale) {
+                    cerr << ": the measured one is stale, the device reports "
+                         << "other latencies now";
+                }
             }
             cerr << "; output latency=" << outputLatency
                  << " input latency=" << inputLatency
@@ -4309,7 +4391,16 @@ void
 MainWindow::refineRecordingLatency()
 {
     sv_frame_t measured = m_recordingStartGapMeasured;
-    if (measured < 0 || measured == m_recordingStartGapEstimate) return;
+    if (measured < 0) return;
+
+    // Measured, whether or not the estimate was right: the audio check
+    // reports for each take which of the two it was placed with.  Kept
+    // here, on the GUI thread, and not by the audio callback that
+    // measures it
+    m_takeLatency.startGap = measured;
+    m_takeLatency.startGapMeasured = true;
+
+    if (measured == m_recordingStartGapEstimate) return;
     cerr << "MainWindow::refineRecordingLatency: start gap was " << measured
          << " frames, not the estimated " << m_recordingStartGapEstimate << endl;
     m_recordingLatencyFrames = currentRecordingLatency();
@@ -4437,6 +4528,9 @@ MainWindow::calibrateAudio()
 {
     if (!m_calibrateAudioDialog) {
         m_calibrateAudioDialog = new CalibrateAudioDialog(this, m_audioCheck);
+#ifdef TONY_DEV_CHECKS
+        m_calibrateAudioDialog->setDevChecks(m_devChecks);
+#endif
     }
     m_calibrateAudioDialog->present();
 }

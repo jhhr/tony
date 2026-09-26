@@ -18,6 +18,12 @@
 #include "AudioCheckRunner.h"
 #include "LatencyCalibration.h"
 
+#ifdef TONY_DEV_CHECKS
+#include "dev/DevChecks.h"
+#include <QPointer>
+class QCheckBox;
+#endif
+
 #include <QDialog>
 
 class MainWindow;
@@ -43,6 +49,13 @@ class QStackedWidget;
  * nothing else would show how the run ended.
  *
  * The window owns it, and makes it the first time it is asked for.
+ *
+ * In development builds the instructions page has a checkbox, on by
+ * default and not remembered, to carry on into the dev checks
+ * (DevChecks) once the calibration is done and usable, with the round
+ * trip it measured.  The progress page then follows them, Cancel ends
+ * whichever is running, and the result page adds a line for each check
+ * and the report file's path to the calibration's.
  */
 class CalibrateAudioDialog : public QDialog
 {
@@ -77,6 +90,19 @@ public:
     /// ms".  The Playback menu's line says the same
     static QString describeLatency(const LatencyCalibration::InUse &inUse);
 
+#ifdef TONY_DEV_CHECKS
+    /// The dev checks a calibration carries on into; none until given
+    void setDevChecks(DevChecks *devChecks);
+
+    /// "Run the dev checks after calibrating", on the instructions page
+    bool devChecksWanted() const;
+    void setDevChecksWanted(bool wanted);
+
+    /// Where the dev checks write their report and scratch folders, as
+    /// the tests set them; the round trip is always the calibration's
+    void setDevOptions(const DevChecks::Options &options);
+#endif
+
 public slots:
     /// Show the dialog and bring it to the front: on the instructions,
     /// with the devices and the latency as they are now, unless its
@@ -86,7 +112,8 @@ public slots:
     /// Start, and Check Again
     void startCheck();
 
-    /// Cancel: the run ends, and how it ended is the result shown
+    /// Cancel: the run ends, and how it ended is the result shown.  In
+    /// its dev checks, they end, and the calibration is shown with them
     void cancelCheck();
 
     /// Keep the round trip the check measured, for the devices it ran on
@@ -133,8 +160,36 @@ private:
 
     void showPage(Page page);
 
+    /// The result page for m_result as it stands
+    void showResultPage();
+
     QString instructionsHtml() const;
     QString resultHtml() const;
+    QString calibrationHtml() const;
+
+#ifdef TONY_DEV_CHECKS
+    QPointer<DevChecks> m_devChecks;
+    QCheckBox *m_devChecksBox;
+    DevChecks::Options m_devOptions;
+
+    /// The run this dialog started is in its dev checks
+    bool m_devRunning;
+
+    /// What they reported, or why they did not run
+    bool m_haveDevReport;
+    DevReport m_devReport;
+    QString m_devNote;
+
+    /// Carry a calibration on into the dev checks, if they are wanted
+    /// and it can be used; false if the run ends here, with m_devNote
+    /// saying why when they were wanted
+    bool startDevChecks(const AudioCheckResult &calibration);
+
+    void devProgress(QString stage, int stageNumber, int stages);
+    void devFinished(const DevReport &report);
+
+    QString devHtml() const;
+#endif
 
     /// Seconds in milliseconds, for reading: tenths below 10 ms, where
     /// they say something, whole ones from there on

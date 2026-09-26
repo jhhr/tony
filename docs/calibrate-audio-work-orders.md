@@ -709,3 +709,19 @@ Left open: every threshold untuned; nothing calls `TakeDiff` yet.
 - C1 is split into C1a (framework, items 1 and 2) and C1b (observer, items 7, 12, 13, 14); spec §7 says so.
 - DevChecks runs as stages driven by the runner and a timer, not a nested event loop; scratch folders stay with the open session and the next run removes the old ones. Spec §5 and §8 changed to match.
 - C0's warning about item 10 (a 10 ms dip at two punch-ins' join; notes merged by onset) stands for C3.
+
+### Phase C1a — 2026-09-26
+Built: `meson.build`: `dev_checks` = build type not starting with `release`; then `-DTONY_DEV_CHECKS` in `general_defines` and moc, `main/dev/DevChecks.cpp`, `TestDevChecks.h`. Runner: `Plan::ranges` (`punchInsOf()`), `keepSession`, `roundTrip` (window's `m_audioCheckRoundTrip`, read only in the `recordingStarted()` lambda), `abandon()`, public `analysing()` and `readTakeFile()`, no save question for a check's own session. `TakeLatency::startGap/startGapMeasured`. `MainWindow`: Record's action calls `recordPressed()`, which ignores presses while `audioCheckRunning()`; Record greyed then; `m_devChecks` (friend). `main/dev/DevChecks.{h,cpp}`: stages, `CheckResult`, `DevReport`, items 1 `latency_on_this_machine` and 2 `several_phrases_in_one_take`, `DevChecks.txt`, `nextScratchFolder()`. Dialog: checkbox, dev run, `setDevChecks()`, `setDevOptions()`. Tests: 6 in `TestAudioCheck` (~27 s), `TestDevChecks` 7 (~66 s).
+Choices / deviations:
+- Stage 1 ranges [6.3, 10.2] and [16.8, 21.2] s (sweeps 7.2/9.1, 17.7/20.1; 50 ms spare). Free: before 4.3 s (P = 1 s judging 3.1 s), 10.2–16.8 and 21.2–25 s, the held tones. A re-record starting at 17.9–19.2 s has its lead-in over B's first sweep and still judges its second.
+- A stage that fails or times out ends the run: `failure` names it ("Stage 2 of 2, "Save and reopen", did not finish within 60 s."), and every check whose data is missing is Skipped with that text. Checks are worked out at the end: item 2 needs stage 1 only, item 1 both.
+- Record goes through `recordPressed()`, not a guard in `record()`: the runner and `pollTakeProgress()` call `record()` during the check's take too, and it cannot tell them from a press.
+- After the reopen pitch and notes are restored, not analysed: compared by value with values rounded as `Event::toXml()` writes them; offsets to the frame. Save: `saveSessionToPath()` (a dialog only on failure).
+- A run's own round trip counts as `TakeLatency::measured`. The dev reference goes to `referenceDirectory()`, so a cancelled dev run leaves a session the next check replaces without asking.
+- `TestAudioCheck`'s fixture deletes each window's `DevChecks`: in a dev build its B4 dialog tests would carry on into them (the checkbox is on) and write `DevChecks.txt` into the log directory.
+The next phase must know:
+- **B3 bug fixed:** `getLocalFilename()` is the decoded cache copy (spec §11), so `nextReferencePath()` never kept the open reference: always `-1`, written over while open. `mainModelFile()` now.
+- On the fake with its true round trip every sweep lands at 0 frames; the fake's reported pair is 2.8 ms short, so a run ignoring its round trip fails item 1.
+- `latencyInUse()`'s reported pair differs before any file is open: store test fingerprints after opening one.
+- The watchdog answers "Session modified" with No; `QStandardPaths::setTestModeEnabled()` keeps references out of the test app's data directory.
+Left open: the app suite now takes about 7m40s; the dev checks add about 66 s, over spec §6's minute.

@@ -71,6 +71,21 @@ elif buildtype.startswith('debug')
   ]
 endif # get_option('buildtype')
 
+# The development checks (main/dev/, docs/calibrate-audio.md) are in
+# every build but a release one: debug, debugoptimized, plain, minsize
+# and custom alike.  Packages are release builds and have none of it.
+# moc has to see the flag too, for what is inside its #ifdefs
+dev_checks = not buildtype.startswith('release')
+dev_moc_args = []
+if dev_checks
+  general_defines += [
+    '-DTONY_DEV_CHECKS',
+  ]
+  dev_moc_args += [
+    '-DTONY_DEV_CHECKS',
+  ]
+endif
+
 svcore_moc_args = []
 feature_additional_libs = []
 feature_include_dirs = []
@@ -1125,15 +1140,28 @@ tony_core_moc_files = qt.preprocess(
   'main/SingingTakes.h',
 ])
 
-tony_app_moc_files = qt.preprocess(
-  moc_headers: [
+tony_app_moc_headers = [
   'main/MainWindow.h',
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
   'main/AudioCheckRunner.h',
   'main/CalibrateAudioDialog.h',
   'main/CoverageStrip.h',
-])
+]
+
+if dev_checks
+  tony_app_files += [
+    'main/dev/DevChecks.cpp',
+  ]
+  tony_app_moc_headers += [
+    'main/dev/DevChecks.h',
+  ]
+endif
+
+tony_app_moc_files = qt.preprocess(
+  moc_headers: tony_app_moc_headers,
+  moc_extra_arguments: dev_moc_args,
+)
 
 qt_resource_files = qt.preprocess(
   qresources: [
@@ -1393,13 +1421,23 @@ tony_core_test_exe = executable(
   win_subsystem: 'console'
 )
 
-tony_app_test_moc_files = qt.preprocess(
-  moc_headers: [
+tony_app_test_moc_headers = [
   'main/test/TestSingingDocument.h',
   'main/test/TestSingingAnalysis.h',
   'main/test/TestRecordWorkflow.h',
   'main/test/TestAudioCheck.h',
-])
+]
+
+if dev_checks
+  tony_app_test_moc_headers += [
+    'main/test/TestDevChecks.h',
+  ]
+endif
+
+tony_app_test_moc_files = qt.preprocess(
+  moc_headers: tony_app_test_moc_headers,
+  moc_extra_arguments: dev_moc_args,
+)
 
 tony_app_test_exe = executable(
   'test-tony-app',
