@@ -31,12 +31,16 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - Background music is not saved in the session; it is reloaded by hand.
 - An old session (before takes) loses its singing track without telling the user why.
 - Recording that starts before frame 0 of the reference.
-- **Lyrics are edited a word at a time**: no shifting of a line or of the whole song, no
+- **Lyrics are edited a word at a time, or all together**: the whole song can be shifted
+  (Shift-drag, Edit > Shift Lyrics...), but not one line or the words from one on; no
   splitting or merging of words, no editing of line breaks, no syllables (a file's
-  syllables are joined into their word). Not wanted for now. Lyrics that are all off by
-  the same amount, because the reference is not the recording they were timed to, can
-  only be moved by an LRC file's `[offset:]` tag. Import and Remove are not undoable, and
-  a new import replaces the lyrics, edits made in Tony included, without asking.
+  syllables are joined into their word). Not wanted for now. Import and Remove are not
+  undoable, and a new import replaces the lyrics, edits made in Tony included, without
+  asking.
+- **Shift-drag in the lyrics' box row is the editor's while edit mode is on**: in
+  Navigate mode it is also the pane's "Re-Analyse Area" gesture, which then works only
+  above the row. A shift is clamped at the first word reaching 0 and says so only by
+  the amount in the status bar (the dialog's) or by the words stopping (the drag's).
 - **TTML and LRC only**: no SRT or Moises JSON. Another format is another parser that
   `parseLyrics()` chooses.
 
@@ -87,7 +91,9 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   mouse button still held) removes the word as that step left it, which is not in the
   model, and adds the old one back beside the moved one. The word the drag made is still
   there, so the drag's own check does not see the change. There is no hook before an
-  undo to end the drag first.
+  undo to end the drag first. A Shift-drag sees any change and is dropped, but an undo
+  in the middle of one acts on words the drag has moved and the history does not know
+  about, so it can leave a word twice in the same way.
 - **The first click of a double-click on a word moves the playback cursor** there, as
   any click does; only the second is the editor's. Accepted for now.
 - **A double-click the pane handles itself** (edit mode off, or between words in edit

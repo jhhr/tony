@@ -16,7 +16,8 @@
 
 // Tier 2: what an edit of the lyrics may do, as numbers: which edge
 // the pointer is on, how far a dragged edge goes, where a new word
-// goes and which line it joins, and what typed text becomes. No window
+// goes and which line it joins, what typed text becomes, and how far
+// all the words shift together. No window
 // and no model: what the editor does with the answers is the app
 // suite's business.
 
@@ -115,6 +116,14 @@ private slots:
         QCOMPARE(LyricsEdit::newWordFrames(48000), frame_t(24000));
         QCOMPARE(LyricsEdit::minWordFrames(0), frame_t(0));
         QCOMPARE(LyricsEdit::newWordFrames(0), frame_t(0));
+
+        // A shift typed in seconds, earlier or later, three decimals
+        QCOMPARE(LyricsEdit::framesFor(0.2, 44100), frame_t(8820));
+        QCOMPARE(LyricsEdit::framesFor(-0.2, 44100), frame_t(-8820));
+        QCOMPARE(LyricsEdit::framesFor(-1.234, 48000), frame_t(-59232));
+        QCOMPARE(LyricsEdit::framesFor(0.001, 44100), frame_t(44));
+        QCOMPARE(LyricsEdit::framesFor(0.0, 44100), frame_t(0));
+        QCOMPARE(LyricsEdit::framesFor(1.0, -44100), frame_t(0));
     }
 
     // A box runs from the x of the word's start to the x of its end
@@ -719,6 +728,87 @@ private slots:
         QVERIFY(LyricsEdit::cleanText("   ").isEmpty());
         QVERIFY(LyricsEdit::cleanText("\t\n").isEmpty());
         QVERIFY(LyricsEdit::cleanText(QString("\x01\x02")).isEmpty());
+    }
+
+    // Decision 17: all the words together, later as far as asked, and
+    // earlier only until the first word starts at 0
+    void shift_clamp() {
+        const frame_t S = kSecond;
+        sv::EventVector words = { word(S, 2 * S), word(2 * S, 3 * S, 1.f),
+                                  word(5 * S, 6 * S, 2.f) };
+
+        QCOMPARE(LyricsEdit::clampShift(words, 0), frame_t(0));
+        QCOMPARE(LyricsEdit::clampShift(words, 8820), frame_t(8820));
+        QCOMPARE(LyricsEdit::clampShift(words, 100 * S), 100 * S);
+        QCOMPARE(LyricsEdit::clampShift(words, -8820), frame_t(-8820));
+        QCOMPARE(LyricsEdit::clampShift(words, -S), -S);
+        QCOMPARE(LyricsEdit::clampShift(words, -S - 1), -S);
+        QCOMPARE(LyricsEdit::clampShift(words, -10 * S), -S);
+
+        // The earliest start wherever it is in the vector, and not the
+        // first word's if another starts before it (one inside another)
+        sv::EventVector unordered = { word(3 * S, 4 * S), word(S / 2, S),
+                                      word(2 * S, 3 * S) };
+        QCOMPARE(LyricsEdit::clampShift(unordered, -S), -S / 2);
+        sv::EventVector inside = { word(S, 5 * S), word(S / 4, S / 2) };
+        QCOMPARE(LyricsEdit::clampShift(inside, -S), -S / 4);
+
+        // A first word at 0 goes nowhere earlier, but anywhere later
+        sv::EventVector atZero = { word(0, S), word(S, 2 * S) };
+        QCOMPARE(LyricsEdit::clampShift(atZero, -1), frame_t(0));
+        QCOMPARE(LyricsEdit::clampShift(atZero, -S), frame_t(0));
+        QCOMPARE(LyricsEdit::clampShift(atZero, 1), frame_t(1));
+
+        // A word before 0 already, which no parser makes, is not taken
+        // further back; later is still allowed
+        sv::EventVector before = { word(-100, S), word(S, 2 * S) };
+        QCOMPARE(LyricsEdit::clampShift(before, -S), frame_t(0));
+        QCOMPARE(LyricsEdit::clampShift(before, S), S);
+
+        // Nothing to move
+        QCOMPARE(LyricsEdit::clampShift({}, -S), frame_t(0));
+        QCOMPARE(LyricsEdit::clampShift({}, S), frame_t(0));
+    }
+
+    // Every word moved by the same amount, start and end: lengths, texts,
+    // lines and order kept, overlaps and gaps from the file as they were
+    void shifted_words() {
+        const frame_t S = kSecond;
+        sv::EventVector words = { word(S, 2 * S, 0.f, "Yksi"),
+                                  word(2 * S, 3 * S, 0.f, "kaksi"),
+                                  word(2 * S + 100, 4 * S, 1.f, "kolme"),
+                                  word(6 * S, 6 * S + 10, 2.f, "nelja") };
+
+        auto verifyMovedBy = [&](const sv::EventVector &moved, frame_t by) {
+            QCOMPARE(int(moved.size()), int(words.size()));
+            for (int i = 0; i < int(words.size()); ++i) {
+                QCOMPARE(moved[i].getFrame(), words[i].getFrame() + by);
+                QCOMPARE(endOf(moved[i]), endOf(words[i]) + by);
+                QCOMPARE(moved[i].getDuration(), words[i].getDuration());
+                QCOMPARE(moved[i].getLabel(), words[i].getLabel());
+                QCOMPARE(moved[i].getValue(), words[i].getValue());
+                QVERIFY2(i == 0 || !(moved[i] < moved[i - 1]),
+                         qPrintable(describe(moved[i])));
+            }
+        };
+
+        verifyMovedBy(LyricsEdit::shifted(words, 8820), 8820);
+        verifyMovedBy(LyricsEdit::shifted(words, -8820), -8820);
+        verifyMovedBy(LyricsEdit::shifted(words, 0), 0);
+        QCOMPARE(LyricsEdit::shifted(words, 0), words);
+
+        // Clamped: the first word lands on 0, the rest keep their places
+        // relative to it
+        sv::EventVector clamped = LyricsEdit::shifted(words, -5 * S);
+        verifyMovedBy(clamped, -S);
+        QCOMPARE(clamped[0].getFrame(), frame_t(0));
+        QCOMPARE(LyricsEdit::shifted(clamped, -S), clamped);
+
+        // There and back
+        QCOMPARE(LyricsEdit::shifted(LyricsEdit::shifted(words, 12345),
+                                     -12345), words);
+
+        QVERIFY(LyricsEdit::shifted({}, S).empty());
     }
 };
 

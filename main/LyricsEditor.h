@@ -44,17 +44,19 @@ class ChangeEventsCommand;
 /**
  * Edit mode for the lyrics (Edit > Edit Lyrics): the mouse in the box
  * row of the lyrics, along the bottom of their pane, moves a word's
- * start or end, changes its text on a double-click, and on a right
- * click offers a small menu to change or delete the word there, or to
- * add one in the space between words.
+ * start or end, with Shift held moves all the words together, changes
+ * a word's text on a double-click, and on a right click offers a small
+ * menu to change or delete the word there, or to add one in the space
+ * between words.
  *
  * The lyrics layer is never the pane's top layer, so the pane's tools
  * never reach it: this watches the pane's mouse events through an
  * event filter, which is on only while edit mode is.  Only what it acts
  * on is kept from the pane: a left press on an edge and the drag it
- * starts, a double-click on a word, a right press anywhere in the box
- * row, and moves with no button held in the box row, where the cursor
- * and the context help are this one's.  Everything else, a click
+ * starts, a left press with Shift held anywhere in the box row and the
+ * drag it starts, a double-click on a word, a right press anywhere in
+ * the box row, and moves with no button held in the box row, where the
+ * cursor and the context help are this one's.  Everything else, a click
  * anywhere to move the playback cursor included, goes to the pane as it
  * would without edit mode.
  *
@@ -62,7 +64,8 @@ class ChangeEventsCommand;
  * A drag edits the model as it goes, so the words move under the
  * pointer, and is one command on the undo history when the button is
  * let go, or nothing at all if the word is where it was.  A change of
- * text, an added word and a deleted one are a command each.
+ * text, an added word and a deleted one are a command each, and so is
+ * a shift of all the words, by a drag or by shiftLyrics().
  *
  * The layer and the model are found through LyricsTrack at every
  * event, and nothing of them is kept between drags: an import, a
@@ -90,8 +93,23 @@ public:
     void setEnabled(bool enabled);
     bool isEnabled() const { return m_enabled; }
 
-    /// True from the press on an edge to the release
+    /// True from the press that starts a drag to the release
     bool isDragging() const { return m_dragging; }
+
+    /// True while the drag is one of all the words (Shift was held at
+    /// its press), not of an edge
+    bool isShifting() const { return m_dragging && m_shifting; }
+
+    /**
+     * Move all the words of the lyrics in this model by this many
+     * seconds, negative for earlier, as far as LyricsEdit::clampShift()
+     * lets them go: one command, "Shift Lyrics".  Edit mode need not be
+     * on; a drag in progress is finished first.  The seconds they moved
+     * by, 0 if they did not move, the shift being 0 or clamped to 0, or
+     * if the model is no longer that of the lyrics: nothing is pushed
+     * then.  Not to be called from an undo or a redo.
+     */
+    double shiftLyrics(sv::ModelId model, double seconds);
 
     /// How near an edge, in logical pixels on either side, grabs it
     static constexpr int grabPixels = 6;
@@ -159,8 +177,11 @@ private:
 
     // The drag.  The words are those of the model at the press, and the
     // same ones go to LyricsEdit at every move: the limits of the edge
-    // come from where the word was then, so a drag back puts it back
+    // come from where the word was then, so a drag back puts it back.
+    // Whether it moves an edge or all the words is decided at the press,
+    // whatever the Shift key does after
     bool m_dragging;
+    bool m_shifting;
     sv::ModelId m_dragModel;
     sv::EventVector m_dragWords;
     int m_dragWord;
@@ -171,9 +192,15 @@ private:
     sv::Event m_dragCurrent;
     sv::ChangeEventsCommand *m_dragCommand;
 
-    // The pane's own cursor, while ours is shown over an edge
+    // A drag of all the words: they are as they were at the press, moved
+    // together, and the model holds them so.  They go into the model
+    // straight, with no command; the command is made at the release
+    sv::EventVector m_shiftCurrent;
+
+    // The pane's own cursor, while one of ours is shown, and ours
     bool m_cursorSet;
     QCursor m_savedCursor;
+    Qt::CursorShape m_cursorShape;
 
     // Whether the context help is ours
     bool m_helpShown;
@@ -219,6 +246,13 @@ private:
     void leaveRow();
 
     void dragTo(int x);
+    void shiftTo(int x);
+
+    // All the words out, then all the moved ones in, as one command:
+    // never one out and one in at a time, or a moved word could meet an
+    // original that is still there
+    void pushShift(sv::ModelId model, const sv::EventVector &from,
+                   const sv::EventVector &to);
 
     // Push the drag's command, if the word has moved
     void finishDrag();
@@ -227,7 +261,7 @@ private:
     // model has changed under the drag
     void abandonDrag();
 
-    void setEdgeCursor();
+    void setCursorShape(Qt::CursorShape);
     void restoreCursor();
     void showHelp(const QString &);
     void clearHelp();

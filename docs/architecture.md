@@ -290,6 +290,7 @@ tools act only on the top layer (`PlotLyrics` also calls itself not editable), s
 mode can reach the words. The editor is therefore an **event filter on the lyrics' pane**,
 installed only while Edit > Edit Lyrics is on. In the box row it keeps from the pane only
 what it acts on: a left press on an edge and the drag it starts, up to the release; a
+left press with Shift held anywhere in the row and the drag it starts; a
 double-click inside a word; a right press, for the words' menu; and moves with no button
 held, where the cursor and the context help are its own. Everything else reaches the pane
 as it would without edit mode, so a click still moves the playback cursor. Editing needs
@@ -307,7 +308,7 @@ would take the clicks meant for the cursor.
   command running, so nothing an undo or redo does may make `lyricsEditAllowed()` false:
   the lyrics' presence and visibility stay out of commands.
 - **One `ChangeEventsCommand` per edit** ("Move Word Start", "Move Word End", "Change Word
-  Text", "Add Word", "Delete Word"), holding the model's id and `Event` values, pushed
+  Text", "Add Word", "Delete Word", "Shift Lyrics"), holding the model's id and `Event` values, pushed
   done with `addCommand(command, false)`; `CommandHistory` marks the session modified, and
   the session saves the model as it is. A drag changes the model at every move, so that
   the word follows the pointer and the layer lays the words out again (svgui fork), and
@@ -343,6 +344,23 @@ would take the clicks meant for the cursor.
   when chosen.
 - Add Word goes at the **last** frame of the column clicked: the first can be inside the
   word before, whose end lies in the column after its box.
+- **Shifting all the words** (a Shift-drag in edit mode, or Edit > Shift Lyrics..., which
+  is to be had whenever `lyricsEditAllowed()` is, edit mode on or not): every start and
+  end moves by one amount, clamped by `LyricsEdit::clampShift()` so that the first word
+  does not go before frame 0; a shift that comes to 0 pushes nothing. What a press is,
+  an edge's drag or all the words', is decided at the press, whatever Shift does after.
+  The command takes **all the words out, then puts all the shifted ones in**: one out
+  and one in at a time, a shifted word could meet an original still in the model.
+  A Shift-drag must **not fill its command as it goes**, as an edge drag does:
+  `ChangeEventsCommand` folds an add and the remove of the same event only when the two
+  are next to each other, which they never are when all the words go out and come back
+  at each move, so the command would keep every word's every step and its undo would
+  replay them all. The drag moves the model itself, with no command, checking at each
+  move that the model holds exactly the words it last put there (anything else, and the
+  drag is dropped, as an edge drag is); at the release it puts the words back as they
+  were and pushes one command from the words at the press to the words at the release.
+  The dialog's shift, like the text question, looks the lyrics up again after the
+  dialog (the same model, editing still allowed) and finishes a drag in progress first.
 - Pane 0 of a reference has no context-help connection (only `newSession()` makes one),
   so the editor's help goes straight to the status bar, and the editor clears it itself
   when the pointer leaves the row.

@@ -23,12 +23,6 @@ using namespace sv;
 
 namespace {
 
-sv_frame_t framesFor(double seconds, sv_samplerate_t rate)
-{
-    if (rate <= 0) return 0;
-    return sv_frame_t(std::llround(seconds * rate));
-}
-
 // One past the box's last column.  A word too short to reach the next
 // column is still painted one column wide, and can be hit there
 int columnAfter(const LyricsEdit::Box &box)
@@ -47,6 +41,13 @@ bool isWord(const EventVector &words, int word)
 }
 
 } // namespace
+
+sv_frame_t
+LyricsEdit::framesFor(double seconds, sv_samplerate_t rate)
+{
+    if (rate <= 0) return 0;
+    return sv_frame_t(std::llround(seconds * rate));
+}
 
 sv_frame_t
 LyricsEdit::minWordFrames(sv_samplerate_t rate)
@@ -299,4 +300,33 @@ QString
 LyricsEdit::cleanText(const QString &typed)
 {
     return lyricsLabel(typed);
+}
+
+sv_frame_t
+LyricsEdit::clampShift(const EventVector &words, sv_frame_t wanted)
+{
+    if (words.empty()) return 0;
+
+    // The earliest start, wherever it is in the vector: the order of the
+    // words is not relied on
+    sv_frame_t earliest = words[0].getFrame();
+    for (const Event &w : words) earliest = std::min(earliest, w.getFrame());
+
+    // Back as far as frame 0, and not back at all for words that are
+    // before it already, so the answer is between 0 and wanted
+    const sv_frame_t lowest = std::min(sv_frame_t(0), -earliest);
+    return std::max(wanted, lowest);
+}
+
+EventVector
+LyricsEdit::shifted(const EventVector &words, sv_frame_t wanted)
+{
+    const sv_frame_t by = clampShift(words, wanted);
+
+    // One amount for all keeps every word's place among the others, and
+    // so the order the model sorts them in
+    EventVector moved;
+    moved.reserve(words.size());
+    for (const Event &w : words) moved.push_back(w.withFrame(w.getFrame() + by));
+    return moved;
 }

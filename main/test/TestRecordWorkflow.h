@@ -840,11 +840,12 @@ class TestRecordWorkflow : public QObject
     // first, then to the pane.  Not QTest::mouseMove, which does not
     // carry the buttons held
     void sendMouse(QEvent::Type type, QPoint pos, Qt::MouseButton button,
-                   Qt::MouseButtons buttons) {
+                   Qt::MouseButtons buttons,
+                   Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         sv::Pane *pane = pane0();
         QVERIFY(pane);
         QMouseEvent event(type, QPointF(pos), QPointF(pane->mapToGlobal(pos)),
-                          button, buttons, Qt::NoModifier);
+                          button, buttons, modifiers);
         QApplication::sendEvent(pane, &event);
     }
 
@@ -861,6 +862,20 @@ class TestRecordWorkflow : public QObject
         sendMouse(QEvent::MouseButtonRelease, pos, Qt::LeftButton, Qt::NoButton);
     }
 
+    // The same with Shift held
+    void shiftPressAt(QPoint pos) {
+        sendMouse(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton,
+                  Qt::ShiftModifier);
+    }
+    void shiftMoveHeldTo(QPoint pos) {
+        sendMouse(QEvent::MouseMove, pos, Qt::NoButton, Qt::LeftButton,
+                  Qt::ShiftModifier);
+    }
+    void shiftReleaseAt(QPoint pos) {
+        sendMouse(QEvent::MouseButtonRelease, pos, Qt::LeftButton,
+                  Qt::NoButton, Qt::ShiftModifier);
+    }
+
     // Press at one point, move to the other a few pixels at a time with
     // the button held, and let go there
     void dragFromTo(QPoint from, QPoint to) {
@@ -871,6 +886,27 @@ class TestRecordWorkflow : public QObject
                               from.y() + (to.y() - from.y()) * i / steps));
         }
         releaseAt(to);
+    }
+
+    // The same with Shift held throughout
+    void shiftDragFromTo(QPoint from, QPoint to) {
+        shiftPressAt(from);
+        int steps = std::max(1, std::abs(to.x() - from.x()) / 3);
+        for (int i = 1; i <= steps; ++i) {
+            shiftMoveHeldTo(QPoint(from.x() + (to.x() - from.x()) * i / steps,
+                                   from.y() + (to.y() - from.y()) * i / steps));
+        }
+        shiftReleaseAt(to);
+    }
+
+    // The words, every one moved by the same number of frames
+    static sv::EventVector shiftedBy(const sv::EventVector &words,
+                                     sv::sv_frame_t by) {
+        sv::EventVector moved;
+        for (const sv::Event &e : words) {
+            moved.push_back(e.withFrame(e.getFrame() + by));
+        }
+        return moved;
     }
 
     // A reference with the gapped lyrics on it, painted.  Yksi and kaksi
@@ -7447,23 +7483,45 @@ private slots:
         hoverAt(inRow(edge - 1));
         QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
         QCOMPARE(m_window->statusText(),
-                 QString("Drag to move the end of \"Yksi\""));
+                 QString("Drag to move the end of \"Yksi\", "
+                         "Shift-drag to move all the words"));
         hoverAt(inRow(edge + 2));
         QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
         QCOMPARE(m_window->statusText(),
-                 QString("Drag to move the start of \"kaksi\""));
+                 QString("Drag to move the start of \"kaksi\", "
+                         "Shift-drag to move all the words"));
 
         hoverAt(inRow(edge + 40));
         QCOMPARE(pane->cursor().shape(), own);
         QCOMPARE(m_window->statusText(),
                  QString("Double-click to change the text of \"kaksi\", "
-                         "right-click to delete it"));
+                         "right-click to delete it, "
+                         "Shift-drag to move all the words"));
         int gap = columnOf(endOf(lyricsWord("kaksi"))) + 20;
         hoverAt(inRow(gap));
         QCOMPARE(pane->cursor().shape(), own);
         QCOMPARE(m_window->statusText(),
                  QString("Right-click to add a word, "
-                         "drag a word's start or end to move it"));
+                         "drag a word's start or end to move it, "
+                         "Shift-drag to move all the words"));
+
+        // A closed hand through a drag of all the words (decision 19),
+        // from a word or from an edge, and the pane's own or the edge's
+        // back after
+        shiftPressAt(inRow(edge + 40));
+        QCOMPARE(pane->cursor().shape(), Qt::ClosedHandCursor);
+        shiftMoveHeldTo(inRow(edge + 50));
+        QCOMPARE(pane->cursor().shape(), Qt::ClosedHandCursor);
+        shiftReleaseAt(inRow(edge + 50));
+        QCOMPARE(pane->cursor().shape(), own);
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        edge = columnOf(lyricsWord("kaksi").getFrame());
+        shiftPressAt(inRow(edge));
+        QCOMPARE(pane->cursor().shape(), Qt::ClosedHandCursor);
+        shiftReleaseAt(inRow(edge));
+        QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
+        hoverAt(inRow(gap));
+        QCOMPARE(pane->cursor().shape(), own);
 
         hoverAt(inRow(edge));
         QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
@@ -8081,6 +8139,566 @@ private slots:
         QVERIFY(std::fabs(back[1].end - 0.9) > 0.05);
         QVERIFY(!m_window->isDocumentModified());
         QCOMPARE(lyricsEvents(), events);
+    }
+
+    // Shift held at the press, anywhere in the box row (in a word, in a
+    // gap, on an edge), a drag moves all the words together as it goes,
+    // starts and ends alike, and is one "Shift Lyrics" step when let go
+    // (decisions 17, 18a)
+    void lyrics_edit_shift_drag() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        QCOMPARE(int(before.size()), 3);
+
+        // Later, from inside a word, each move seen in the model at once
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+        shiftPressAt(inRow(inside));
+        QVERIFY(editor->isShifting());
+        for (int x = inside + 3; x <= inside + 30; x += 3) {
+            shiftMoveHeldTo(inRow(x));
+            QCOMPARE(lyricsEvents(), shiftedBy(before, framesBetween(inside, x)));
+        }
+        QCOMPARE(int(commands.count()), 0);
+        shiftReleaseAt(inRow(inside + 30));
+        QVERIFY(!editor->isDragging());
+        sv::EventVector later =
+            shiftedBy(before, framesBetween(inside, inside + 30));
+        QCOMPARE(lyricsEvents(), later);
+        QCOMPARE(int(commands.count()), 1);
+        QVERIFY(m_window->isDocumentModified());
+
+        // Earlier, from the gap between kaksi and kolme
+        int gap = columnOf(endOf(lyricsWord("kaksi"))) + 20;
+        shiftDragFromTo(inRow(gap), inRow(gap - 20));
+        sv::EventVector earlier = shiftedBy(later, framesBetween(gap, gap - 20));
+        QCOMPARE(lyricsEvents(), earlier);
+
+        // From the shared edge: all the words, not the one edge
+        int edge = columnOf(lyricsWord("kaksi").getFrame());
+        shiftDragFromTo(inRow(edge), inRow(edge + 25));
+        sv::EventVector fromEdge =
+            shiftedBy(earlier, framesBetween(edge, edge + 25));
+        QCOMPARE(lyricsEvents(), fromEdge);
+        QCOMPARE(int(commands.count()), 3);
+
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), earlier);
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), later);
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), later);
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), fromEdge);
+        QCOMPARE(redoOnce(), QString());
+
+        QVERIFY(m_window->playSource()->getModels().count
+                (m_window->lyrics()->getModelId()) == 0);
+        verifyPlaySourceClean();
+    }
+
+    // The first word stops at 0, however far the pointer goes, and the
+    // rest keep their places behind it; a drag past and back puts the
+    // words where the pointer is.  Already at 0, a drag earlier is no
+    // edit at all (decision 17)
+    void lyrics_edit_shift_drag_stops_at_zero() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        sv::sv_frame_t first = lyricsWord("Yksi").getFrame();
+        QVERIFY(first > 0);
+        int inside = columnOf(first) + 40;
+        QVERIFY2(framesBetween(inside, 20) < -first - 1000,
+                 "the pointer cannot go far enough left");
+
+        shiftPressAt(inRow(inside));
+        shiftMoveHeldTo(inRow(20));
+        QCOMPARE(lyricsEvents(), shiftedBy(before, -first));
+        shiftMoveHeldTo(inRow(inside - 10));
+        shiftReleaseAt(inRow(inside - 10));
+        QCOMPARE(lyricsEvents(),
+                 shiftedBy(before, framesBetween(inside, inside - 10)));
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+
+        shiftDragFromTo(inRow(inside), inRow(20));
+        sv::EventVector atZero = shiftedBy(before, -first);
+        QCOMPARE(lyricsEvents(), atZero);
+        QCOMPARE(lyricsWord("Yksi").getFrame(), sv::sv_frame_t(0));
+
+        // (An undo and a redo are commands executed as well)
+        m_window->discardModifications();
+        int pushed = int(commands.count());
+        int again = columnOf(0) + 40;
+        shiftDragFromTo(inRow(again), inRow(again - 30));
+        QCOMPARE(lyricsEvents(), atZero);
+        QCOMPARE(int(commands.count()), pushed);
+        QVERIFY(!m_window->isDocumentModified());
+
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // The one command of a long drag holds the words as they were at the
+    // press and as they are at the release, and nothing of the moves
+    // between.  CommandHistory does not show what a command holds, but
+    // the model says what is done to it: a word taken out is one signal,
+    // a word put in two, so the undo and the redo of a command of N words
+    // out and N in each give 3N at most, where a command that kept every
+    // move would replay all of them
+    void lyrics_edit_shift_drag_one_command() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        auto model = lyricsModel();
+        QVERIFY(model);
+        sv::EventVector before = lyricsEvents();
+        int words = int(before.size());
+
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+        shiftPressAt(inRow(inside));
+        for (int i = 0; i < 40; ++i) {
+            shiftMoveHeldTo(inRow(inside + (i % 2 ? 30 : -30) + i / 4));
+        }
+        shiftMoveHeldTo(inRow(inside + 17));
+        shiftReleaseAt(inRow(inside + 17));
+        sv::EventVector after =
+            shiftedBy(before, framesBetween(inside, inside + 17));
+        QCOMPARE(lyricsEvents(), after);
+
+        int changes = 0;
+        auto counted = [&changes]() { ++changes; };
+        auto within = connect(model.get(), &sv::Model::modelChangedWithin,
+                              this, counted);
+        auto whole = connect(model.get(), &sv::Model::modelChanged,
+                             this, counted);
+
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+        QVERIFY2(changes >= words && changes <= 3 * words,
+                 qPrintable(QString("the undo changed the model %1 times "
+                                    "for %2 words").arg(changes).arg(words)));
+        changes = 0;
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), after);
+        QVERIFY2(changes >= words && changes <= 3 * words,
+                 qPrintable(QString("the redo changed the model %1 times "
+                                    "for %2 words").arg(changes).arg(words)));
+        disconnect(within);
+        disconnect(whole);
+    }
+
+    // What a press is, an edge's or all the words', is decided at the
+    // press: a plain press on an edge moves that edge alone, Shift held
+    // or not after, and a Shift press moves all the words, Shift let go
+    // or not.  Pressed and let go, or dragged away and back: no edit
+    void lyrics_edit_shift_decided_at_the_press() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        sv::Event yksi = lyricsWord("Yksi");
+        sv::Event kaksi = lyricsWord("kaksi");
+        sv::Event kolme = lyricsWord("kolme");
+        int edge = columnOf(kaksi.getFrame());
+
+        pressAt(inRow(edge));
+        QVERIFY(editor->isDragging());
+        QVERIFY(!editor->isShifting());
+        shiftMoveHeldTo(inRow(edge + 20));
+        shiftReleaseAt(inRow(edge + 20));
+        QCOMPARE(lyricsWord("kaksi").getFrame(),
+                 kaksi.getFrame() + framesBetween(edge, edge + 20));
+        QCOMPARE(endOf(lyricsWord("kaksi")), endOf(kaksi));
+        QCOMPARE(lyricsWord("Yksi"), yksi);
+        QCOMPARE(lyricsWord("kolme"), kolme);
+        QCOMPARE(undoOnce(), QString("Move Word Start"));
+        QCOMPARE(lyricsEvents(), before);
+
+        shiftPressAt(inRow(edge));
+        QVERIFY(editor->isShifting());
+        moveHeldTo(inRow(edge + 20));
+        releaseAt(inRow(edge + 20));
+        QCOMPARE(lyricsEvents(),
+                 shiftedBy(before, framesBetween(edge, edge + 20)));
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+
+        // (An undo is a command executed as well)
+        m_window->discardModifications();
+        int pushed = int(commands.count());
+        int inside = edge + 40;
+        shiftPressAt(inRow(inside));
+        shiftReleaseAt(inRow(inside));
+        shiftPressAt(inRow(inside));
+        for (int x = inside; x <= inside + 30; x += 5) shiftMoveHeldTo(inRow(x));
+        QVERIFY(lyricsEvents() != before);
+        for (int x = inside + 30; x >= inside; x -= 5) shiftMoveHeldTo(inRow(x));
+        shiftReleaseAt(inRow(inside));
+        QVERIFY(!editor->isDragging());
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(int(commands.count()), pushed);
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // Edit mode off, a Shift press is the pane's as any press is
+    // (decision 19); edit mode on, so is one outside the box row
+    void lyrics_edit_shift_press_elsewhere_is_the_panes() {
+        makeWindow(FakeAudioIO::Config());
+        showEditableLyrics();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+
+        shiftPressAt(inRow(inside));
+        QVERIFY(!editor->isDragging());
+        shiftMoveHeldTo(inRow(inside + 30));
+        shiftReleaseAt(inRow(inside + 30));
+        QCOMPARE(lyricsEvents(), before);
+
+        switchLyricsEditingOn();
+        if (QTest::currentTestFailed()) return;
+        QPoint above(inside, m_row.top() - 8);
+        shiftPressAt(above);
+        QVERIFY(!editor->isDragging());
+        shiftMoveHeldTo(QPoint(inside + 30, above.y()));
+        shiftReleaseAt(QPoint(inside + 30, above.y()));
+        QCOMPARE(lyricsEvents(), before);
+
+        // The pane's Shift-drag outlines a region to analyse again
+        QTRY_VERIFY_WITH_TIMEOUT(!sv::ModelTransformerFactory::getInstance()
+                                 ->haveRunningTransformers(), 30000);
+        QVERIFY(undoOnce() != QString("Shift Lyrics"));
+    }
+
+    // Edit mode switched off in the middle of a drag of all the words:
+    // the drag ends as a release would, one step, and the rest of it is
+    // not an edit
+    void lyrics_edit_shift_off_in_the_middle_of_a_drag() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+        shiftPressAt(inRow(inside));
+        shiftMoveHeldTo(inRow(inside + 30));
+        sv::EventVector dragged = lyricsEvents();
+        QCOMPARE(dragged, shiftedBy(before, framesBetween(inside, inside + 30)));
+
+        m_window->editLyricsAction()->trigger();
+        QVERIFY(!editor->isEnabled());
+        QVERIFY(!editor->isDragging());
+        QVERIFY(m_window->isDocumentModified());
+
+        shiftMoveHeldTo(inRow(inside + 60));
+        shiftReleaseAt(inRow(inside + 60));
+        QCOMPARE(lyricsEvents(), dragged);
+
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), dragged);
+    }
+
+    // The words changed under a drag of them all, by something other
+    // than the drag: the drag ends, the model is left as that made it,
+    // and nothing goes on the history.  Removed in the middle likewise
+    void lyrics_edit_shift_words_change_under_a_drag() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+        shiftPressAt(inRow(inside));
+        shiftMoveHeldTo(inRow(inside + 20));
+        sv::Event kolme = lyricsWord("kolme");
+        replaceWord(kolme, kolme.withLabel("kolmas"));
+        sv::EventVector changed = lyricsEvents();
+        shiftMoveHeldTo(inRow(inside + 40));
+        QCOMPARE(lyricsEvents(), changed);
+        shiftReleaseAt(inRow(inside + 40));
+        QVERIFY(!editor->isDragging());
+        QCOMPARE(lyricsEvents(), changed);
+        QCOMPARE(undoOnce(), QString());
+
+        shiftPressAt(inRow(inside));
+        shiftMoveHeldTo(inRow(inside + 20));
+        m_window->removeLyricsAction()->trigger();
+        QVERIFY(!editor->isDragging());
+        QVERIFY(!editor->isEnabled());
+        shiftMoveHeldTo(inRow(inside + 40));
+        shiftReleaseAt(inRow(inside + 40));
+        QVERIFY(!m_window->lyrics()->isShown());
+        QCOMPARE(undoOnce(), QString());
+        verifyPlaySourceClean();
+    }
+
+    // Edit > Shift Lyrics...: all the words by the seconds typed, later or
+    // earlier, one step each, the status bar saying how far they went;
+    // the first word stops at 0, and a shift of 0, or one clamped to 0,
+    // or a cancel, is no edit at all (decisions 18b, 20).  Edit mode need
+    // not be on
+    void lyrics_edit_shift_by_number() {
+        makeWindow(FakeAudioIO::Config());
+        showEditableLyrics();
+        if (QTest::currentTestFailed()) return;
+        QAction *shift = m_window->shiftLyricsAction();
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        QVERIFY(shift->isEnabled());
+
+        m_window->answerLyricsShift(0.2);
+        shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 1);
+        sv::EventVector later = shiftedBy(before, 8820);
+        QCOMPARE(lyricsEvents(), later);
+        QCOMPARE(m_window->statusText(),
+                 QString("Shifted the lyrics 0.200 s later."));
+        QVERIFY(m_window->isDocumentModified());
+
+        m_window->answerLyricsShift(-0.05);
+        shift->trigger();
+        sv::EventVector earlier = shiftedBy(later, -2205);
+        QCOMPARE(lyricsEvents(), earlier);
+        QCOMPARE(m_window->statusText(),
+                 QString("Shifted the lyrics 0.050 s earlier."));
+        QCOMPARE(int(commands.count()), 2);
+
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), later);
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), earlier);
+
+        // Yksi starts at 0.35 s now: that far and no further
+        QCOMPARE(lyricsWord("Yksi").getFrame(), sv::sv_frame_t(15435));
+        m_window->answerLyricsShift(-5.0);
+        shift->trigger();
+        sv::EventVector atZero = shiftedBy(earlier, -15435);
+        QCOMPARE(lyricsEvents(), atZero);
+        QCOMPARE(m_window->statusText(),
+                 QString("Shifted the lyrics 0.350 s earlier."));
+
+        // Nothing to do: no step, and nothing said.  (An undo and a redo
+        // are commands executed as well)
+        int pushed = int(commands.count());
+        m_window->discardModifications();
+        m_window->setStatusText("before");
+        m_window->answerLyricsShift(-1.0);
+        m_window->answerLyricsShift(0.0);
+        m_window->answerLyricsShift(0.00001);
+        m_window->cancelLyricsShift();
+        for (int i = 0; i < 4; ++i) shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 7);
+        QCOMPARE(lyricsEvents(), atZero);
+        QCOMPARE(int(commands.count()), pushed);
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(m_window->statusText(), QString("before"));
+
+        // With edit mode on as well, which stays on
+        switchLyricsEditingOn();
+        if (QTest::currentTestFailed()) return;
+        m_window->answerLyricsShift(1.5);
+        shift->trigger();
+        QCOMPARE(lyricsEvents(), shiftedBy(atZero, 66150));
+        QVERIFY(m_window->lyricsEditor()->isEnabled());
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), atZero);
+    }
+
+    // To be had when editing is (lyricsEditAllowed()), edit mode on or
+    // not: not without lyrics, hidden ones, or once they are removed; and
+    // a trigger then asks nothing
+    void lyrics_edit_shift_needs_lyrics() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *shift = m_window->shiftLyricsAction();
+        QVERIFY(shift);
+        QVERIFY(!shift->isEnabled());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!shift->isEnabled());
+        m_window->answerLyricsShift(0.5);
+        shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 0);
+
+        QVERIFY(m_window->doImportLyricsFrom(writeLrc(gappedLyrics())));
+        QVERIFY(shift->isEnabled());
+        m_window->showLyricsAction()->trigger();
+        QVERIFY(!shift->isEnabled());
+        sv::EventVector before = lyricsEvents();
+        shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 0);
+        QCOMPARE(lyricsEvents(), before);
+        m_window->showLyricsAction()->trigger();
+        QVERIFY(shift->isEnabled());
+
+        m_window->removeLyricsAction()->trigger();
+        QVERIFY(!shift->isEnabled());
+        shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 0);
+    }
+
+    // Not while a take is recorded.  A drag of all the words going on when
+    // the take starts is finished first, and so is on the history before
+    // the take
+    void lyrics_edit_shift_off_while_recording() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        lyricsEditFixture(config);
+        if (QTest::currentTestFailed()) return;
+        QAction *shift = m_window->shiftLyricsAction();
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+        shiftPressAt(inRow(inside));
+        shiftMoveHeldTo(inRow(inside + 30));
+        sv::EventVector dragged = lyricsEvents();
+        QVERIFY(dragged != before);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!editor->isDragging());
+        QVERIFY(!shift->isEnabled());
+        m_window->answerLyricsShift(0.5);
+        shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 0);
+
+        shiftMoveHeldTo(inRow(inside + 60));
+        shiftReleaseAt(inRow(inside + 60));
+        QCOMPARE(lyricsEvents(), dragged);
+
+        QTest::qWait(300);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(shift->isEnabled(), 2000);
+
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(lyricsEvents(), before);
+    }
+
+    // The question has an event loop of its own: lyrics removed, hidden or
+    // imported again while it is open are not what the seconds were typed
+    // for, and nothing is shifted
+    void lyrics_edit_shift_lyrics_change_during_question() {
+        makeWindow(FakeAudioIO::Config());
+        showEditableLyrics();
+        if (QTest::currentTestFailed()) return;
+        QAction *shift = m_window->shiftLyricsAction();
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        QString file = writeLrc(gappedLyrics());
+        sv::EventVector before = lyricsEvents();
+
+        m_window->whileAskingLyricsShift([this, file]() {
+            QVERIFY(m_window->doImportLyricsFrom(file));
+        });
+        m_window->answerLyricsShift(0.3);
+        shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 1);
+        QCOMPARE(lyricsEvents(), before);
+
+        m_window->whileAskingLyricsShift([this]() {
+            m_window->showLyricsAction()->trigger();
+        });
+        m_window->answerLyricsShift(0.3);
+        shift->trigger();
+        QCOMPARE(lyricsEvents(), before);
+        m_window->showLyricsAction()->trigger();
+
+        m_window->whileAskingLyricsShift([this]() {
+            m_window->removeLyricsAction()->trigger();
+        });
+        m_window->answerLyricsShift(0.3);
+        shift->trigger();
+        QCOMPARE(m_window->lyricsShiftQuestions(), 3);
+        QVERIFY(!m_window->lyrics()->isShown());
+        QCOMPARE(int(commands.count()), 0);
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // The word at the cursor is found again as all the words move, by a
+    // drag and by a number
+    void lyrics_edit_shift_highlight_follows() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Event kaksi = lyricsWord("kaksi");
+        sv::Event kolme = lyricsWord("kolme");
+        sv::sv_frame_t gap = (endOf(kaksi) + kolme.getFrame()) / 2;
+        m_window->seekTo(gap);
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString(), 1000);
+
+        // About 0.29 s later: kaksi, 0.6 to 0.9 s, then covers 1.15 s
+        int inside = columnOf(kaksi.getFrame()) + 40;
+        shiftPressAt(inRow(inside));
+        shiftMoveHeldTo(inRow(inside + 100));
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString("kaksi"), 1000);
+        shiftReleaseAt(inRow(inside + 100));
+        QCOMPARE(highlightedWord(), QString("kaksi"));
+
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString(), 1000);
+
+        m_window->answerLyricsShift(0.3);
+        m_window->shiftLyricsAction()->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(highlightedWord(), QString("kaksi"), 1000);
+    }
+
+    // Export Lyrics after a shift writes the shifted times
+    void lyrics_edit_shift_then_export() {
+        makeWindow(FakeAudioIO::Config());
+        showEditableLyrics();
+        if (QTest::currentTestFailed()) return;
+        Lyrics was = lyricsFromEvents(lyricsEvents(), rate);
+
+        m_window->answerLyricsShift(0.25);
+        m_window->shiftLyricsAction()->trigger();
+        QCOMPARE(undoOnce(), QString("Shift Lyrics"));
+        QCOMPARE(redoOnce(), QString("Shift Lyrics"));
+
+        QString path = m_dir.filePath("shifted-lyrics.ttml");
+        m_window->setLyricsExportAnswer(path);
+        m_window->exportLyricsAction()->trigger();
+        QFile file(path);
+        QVERIFY2(file.open(QIODevice::ReadOnly), "nothing was written");
+        LyricsParseResult parsed = parseTtml(file.readAll());
+        QVERIFY2(parsed.error == "", qPrintable(parsed.error));
+
+        const QVector<LyricWord> &back = parsed.lyrics.words;
+        QCOMPARE(back.size(), was.words.size());
+        for (int i = 0; i < back.size(); ++i) {
+            QString what = QString("word %1, \"%2\"").arg(i)
+                .arg(was.words[i].text);
+            QVERIFY2(back[i].text == was.words[i].text,
+                     qPrintable(what + " came back as " + back[i].text));
+            QVERIFY2(back[i].line == was.words[i].line,
+                     qPrintable(what + ": another line"));
+            QVERIFY2(std::fabs(back[i].start - (was.words[i].start + 0.25))
+                     < 0.0005001, qPrintable(what + ": another start"));
+            QVERIFY2(std::fabs(back[i].end - (was.words[i].end + 0.25))
+                     < 0.0005001, qPrintable(what + ": another end"));
+        }
     }
 
     // Closing while pYIN is still running on the take (review finding

@@ -229,6 +229,7 @@ protected slots:
     virtual void removeLyrics();
     virtual void showLyricsToggled();
     virtual void editLyricsToggled();
+    virtual void shiftLyrics();
 
     virtual void editDisplayExtents();
 
@@ -434,6 +435,10 @@ protected:
     LyricsEditor  *m_lyricsEditor;
     QAction       *m_editLyricsAction;
 
+    // Edit > Shift Lyrics...: all the words earlier or later by a number
+    // of seconds.  To be had whenever editing is, edit mode on or not
+    QAction       *m_shiftLyricsAction;
+
     // The lyrics are there to be edited: shown, visible, and no take
     // being recorded (the singer is reading them)
     bool lyricsEditAllowed() const;
@@ -481,6 +486,11 @@ protected:
     // if the user cancelled.  The lyrics editor asks through this.
     // Overridden by the tests
     virtual bool askForLyricsWordText(QString &text, bool isNew);
+
+    // Ask how far to shift all the words of the lyrics, in seconds,
+    // negative for earlier: true with the seconds, false if the user
+    // cancelled.  Overridden by the tests
+    virtual bool askForLyricsShift(double &seconds);
 
     // --- The audio folder of the session (spec 6.4) ---
 

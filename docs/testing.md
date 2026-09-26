@@ -60,9 +60,10 @@ Windows path would start an escape in the C string.
   `TestRecordWorkflow`'s `take_analysis_covers_the_range_it_lost`,
   `range_analysis_torn_down_while_running`, `save_during_ranged_analysis`,
   `undo_during_analysis_then_redo` and `analyse_now_reanalyses_the_take`, and
-  `TestUiChecks`' `menus_follow_the_take_by_themselves`, where the analysis finishes
-  before the race they need can be set up. Which of those six fail changes from run to
-  run, and so can where: `undo_during_analysis_then_redo` fails
+  `TestUiChecks`' `menus_follow_the_take_by_themselves` and
+  `stop_then_close_the_window_at_once` (the latter nearly every time), where the analysis
+  finishes before the race they need can be set up. Which of those seven fail changes from
+  run to run, and so can where: `undo_during_analysis_then_redo` fails
   either before the undo, with no ranged analysis left running, or after the redo, with
   `analysedRangeStart()` already 0 — the same race.
 
@@ -105,6 +106,8 @@ Windows path would start an escape in the C string.
   `askForLyricsWordText()` takes a queue of answers (`answerWordText()`,
   `cancelWordText()`; none left is Cancel) and can run something while the question is
   open (`whileAskingWordText()`), as a real dialog's event loop lets anything happen.
+  `askForLyricsShift()` is answered the same way (`answerLyricsShift()`,
+  `cancelLyricsShift()`, `whileAskingLyricsShift()`).
   Anything new that asks the user needs such a virtual. `setRecordOverAskedInDialog()`
   lets the real dialog through instead, for a test that presses its buttons.
 - Fixture helpers: `makeWindow(config)`, `writeWav()`, `openReference()`, `startTake()` /
@@ -149,7 +152,8 @@ The rules of the edits themselves are tested without a window, in `TestLyricsEdi
 
 - **`QApplication::sendEvent()` to the pane** (`sendMouse()`, and `hoverAt()`,
   `pressAt()`, `moveHeldTo()`, `releaseAt()`, `dragFromTo()`, `doubleClickAt()`,
-  `rightPressAt()` on top of it): an event sent so goes to the pane's event filters first
+  `rightPressAt()` on top of it, and `shiftPressAt()` ... `shiftDragFromTo()` with Shift
+  held): an event sent so goes to the pane's event filters first
   and then to the pane, as real input does. Not `QTest::mouseMove`, which does not carry
   the buttons held. A double-click is sent as Qt makes one: a press and a release, then
   `MouseButtonDblClick` in place of the second press, and its release.
@@ -171,6 +175,8 @@ The rules of the edits themselves are tested without a window, in `TestLyricsEdi
   `cleanup()` fails it.
 - `lyricsModel()` changes the words straight in the model, as setup: no command, nothing
   marked modified.
+- A spy on `CommandHistory::commandExecuted()` counts undos and redos as well as pushes:
+  count pushes before any undo, or from a count taken after the last one.
 
 ### Setup that fails confusingly when it is missing
 

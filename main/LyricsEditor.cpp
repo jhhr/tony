@@ -44,6 +44,16 @@ pushDone(ChangeEventsCommand *command)
     }
 }
 
+// Straight in the model, with no command: all out, then all in, so that
+// no word put in meets one of those still to come out
+void
+replaceWords(RegionModel *model, const EventVector &from,
+             const EventVector &to)
+{
+    for (const Event &e : from) model->remove(e);
+    for (const Event &e : to) model->add(e);
+}
+
 }
 
 LyricsEditor::LyricsEditor(LyricsTrack *lyrics, QObject *parent) :
@@ -51,12 +61,14 @@ LyricsEditor::LyricsEditor(LyricsTrack *lyrics, QObject *parent) :
     m_lyrics(lyrics),
     m_enabled(false),
     m_dragging(false),
+    m_shifting(false),
     m_dragWord(-1),
     m_dragPart(LyricsEdit::Part::Nothing),
     m_dragEdgeFrame(0),
     m_dragPressFrame(0),
     m_dragCommand(nullptr),
     m_cursorSet(false),
+    m_cursorShape(Qt::ArrowCursor),
     m_helpShown(false)
 {
 }
@@ -66,6 +78,7 @@ LyricsEditor::~LyricsEditor()
     // Nothing is pushed from here: the history may be going as well
     abandonDrag();
     m_dragging = false;
+    m_shifting = false;
     restoreCursor();
     if (m_pane) m_pane->removeEventFilter(this);
 }
@@ -383,6 +396,21 @@ LyricsEditor::mousePressed(QMouseEvent *e)
     RegionLayer *layer = currentLayer();
     if (!layer || layer->getModel().isNone()) return false;
 
+    // Shift held: all the words, from anywhere in the row, an edge or a
+    // word or the space between.  A double-click with Shift held is a
+    // press here as well, as on an edge
+    if ((e->modifiers() & Qt::ShiftModifier) && !words.empty()) {
+        m_dragging = true;
+        m_shifting = true;
+        m_dragModel = layer->getModel();
+        m_dragWords = words;
+        m_shiftCurrent = words;
+        m_dragPressFrame = m_pane->getFrameForX(pos.x());
+        m_dragCommand = nullptr;
+        setCursorShape(Qt::ClosedHandCursor);
+        return true;
+    }
+
     if (!hit.isEdge()) {
 
         // A double-click in a word, away from its edges, is for its
@@ -398,6 +426,7 @@ LyricsEditor::mousePressed(QMouseEvent *e)
     }
 
     m_dragging = true;
+    m_shifting = false;
     m_dragModel = layer->getModel();
     m_dragWords = words;
     m_dragWord = hit.word;
@@ -414,7 +443,7 @@ LyricsEditor::mousePressed(QMouseEvent *e)
     // edit at all
     m_dragCommand = nullptr;
 
-    setEdgeCursor();
+    setCursorShape(Qt::SizeHorCursor);
     return true;
 }
 
@@ -465,23 +494,29 @@ LyricsEditor::hover(QPoint pos)
         return false;
     }
 
+    // Shift-drag moves all the words from anywhere in the row, which the
+    // help says wherever the pointer is
     if (hit.isEdge()) {
-        setEdgeCursor();
+        setCursorShape(Qt::SizeHorCursor);
         QString word = words[hit.word].getLabel();
         if (hit.part == LyricsEdit::Part::Start) {
-            showHelp(tr("Drag to move the start of \"%1\"").arg(word));
+            showHelp(tr("Drag to move the start of \"%1\", "
+                        "Shift-drag to move all the words").arg(word));
         } else {
-            showHelp(tr("Drag to move the end of \"%1\"").arg(word));
+            showHelp(tr("Drag to move the end of \"%1\", "
+                        "Shift-drag to move all the words").arg(word));
         }
     } else if (hit.part == LyricsEdit::Part::Inside) {
         restoreCursor();
         showHelp(tr("Double-click to change the text of \"%1\", "
-                    "right-click to delete it")
+                    "right-click to delete it, "
+                    "Shift-drag to move all the words")
                  .arg(words[hit.word].getLabel()));
     } else {
         restoreCursor();
         showHelp(tr("Right-click to add a word, "
-                    "drag a word's start or end to move it"));
+                    "drag a word's start or end to move it, "
+                    "Shift-drag to move all the words"));
     }
 
     // The row is ours while edit mode is on: the pane would only put its
@@ -503,6 +538,11 @@ void
 LyricsEditor::dragTo(int x)
 {
     if (!m_dragging || !m_pane || m_dragModel.isNone()) return;
+
+    if (m_shifting) {
+        shiftTo(x);
+        return;
+    }
 
     // The model can change under a drag: a keyboard undo that takes the
     // word away, or the lyrics removed or replaced.  The word being
@@ -544,10 +584,94 @@ LyricsEditor::dragTo(int x)
 }
 
 void
+LyricsEditor::shiftTo(int x)
+{
+    // As for an edge: if anything but this drag has changed the words,
+    // nothing it would do now is right
+    auto model = dragModel();
+    if (!model || model->getAllEvents() != m_shiftCurrent) {
+        abandonDrag();
+        return;
+    }
+
+    // As far as the pointer has moved, in time, from the words as they
+    // were at the press
+    sv_frame_t wanted = m_pane->getFrameForX(x) - m_dragPressFrame;
+    EventVector moved = LyricsEdit::shifted(m_dragWords, wanted);
+    if (moved == m_shiftCurrent) return;
+
+    // Straight in the model, so that the words follow the pointer.  A
+    // command filled at every move would keep every word's every step:
+    // ChangeEventsCommand folds an add and the remove of the same event
+    // only when they are next to each other, and all the words out and
+    // all in never are.  The one command is made at the release
+    replaceWords(model.get(), m_shiftCurrent, moved);
+    m_shiftCurrent = moved;
+}
+
+void
+LyricsEditor::pushShift(ModelId modelId, const EventVector &from,
+                        const EventVector &to)
+{
+    auto command = new ChangeEventsCommand
+        (modelId.untyped, tr("Shift Lyrics"));
+    for (const Event &e : from) command->remove(e);
+    for (const Event &e : to) command->add(e);
+    pushDone(command);
+}
+
+double
+LyricsEditor::shiftLyrics(ModelId modelId, double seconds)
+{
+    // A drag goes on the history before the shift, as it would if the
+    // button had been let go first
+    finishDrag();
+
+    RegionLayer *layer = m_lyrics ? m_lyrics->getLayer() : nullptr;
+    if (!layer || modelId.isNone() || layer->getModel() != modelId) {
+        return 0.0;
+    }
+    auto model = ModelById::getAs<RegionModel>(modelId);
+    if (!model) return 0.0;
+
+    sv_samplerate_t rate = model->getSampleRate();
+    EventVector words = model->getAllEvents();
+    sv_frame_t by = LyricsEdit::clampShift
+        (words, LyricsEdit::framesFor(seconds, rate));
+    if (by == 0) return 0.0;
+
+    pushShift(modelId, words, LyricsEdit::shifted(words, by));
+    return double(by) / rate;
+}
+
+void
 LyricsEditor::finishDrag()
 {
     if (!m_dragging) return;
     m_dragging = false;
+
+    if (m_shifting) {
+        m_shifting = false;
+        EventVector original = m_dragWords;
+        EventVector current = m_shiftCurrent;
+        m_dragWords.clear();
+        m_shiftCurrent.clear();
+
+        // Changed under the drag, or dragged away and back: nothing to
+        // put on the history
+        auto model = dragModel();
+        if (!model || model->getAllEvents() != current ||
+            current == original) {
+            return;
+        }
+
+        // The words back as they were, and then the one command that
+        // moves them, which holds the words at the press and the words
+        // at the release and nothing of the moves between
+        replaceWords(model.get(), current, original);
+        pushShift(m_dragModel, original, current);
+        return;
+    }
 
     ChangeEventsCommand *command = m_dragCommand;
     m_dragCommand = nullptr;
@@ -585,6 +709,7 @@ LyricsEditor::abandonDrag()
     delete m_dragCommand;
     m_dragCommand = nullptr;
     m_dragWords.clear();
+    m_shiftCurrent.clear();
 
     // The rest of the drag, up to the release, moves nothing, and is
     // still not the pane's: it never saw the press
@@ -592,14 +717,15 @@ LyricsEditor::abandonDrag()
 }
 
 void
-LyricsEditor::setEdgeCursor()
+LyricsEditor::setCursorShape(Qt::CursorShape shape)
 {
     if (!m_pane) return;
     if (!m_cursorSet) {
         m_savedCursor = m_pane->cursor();
         m_cursorSet = true;
     }
-    m_pane->setCursor(Qt::SizeHorCursor);
+    m_cursorShape = shape;
+    m_pane->setCursor(shape);
 }
 
 void
@@ -610,7 +736,7 @@ LyricsEditor::restoreCursor()
 
     // Unless the pane has put another of its own in the meantime, for a
     // change of tool say: that one stays
-    if (m_pane && m_pane->cursor().shape() == Qt::SizeHorCursor) {
+    if (m_pane && m_pane->cursor().shape() == m_cursorShape) {
         m_pane->setCursor(m_savedCursor);
     }
 }

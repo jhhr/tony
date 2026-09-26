@@ -169,6 +169,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_showLyrics(nullptr),
     m_lyricsEditor(nullptr),
     m_editLyricsAction(nullptr),
+    m_shiftLyricsAction(nullptr),
     m_takesMenu(nullptr),
     m_takeCombo(nullptr),
     m_newTakeAction(nullptr),
@@ -993,11 +994,20 @@ MainWindow::setupEditMenu()
     // No shortcut: it is not switched on and off in the middle of things
     m_editLyricsAction = new QAction(tr("Edit L&yrics"), this);
     m_editLyricsAction->setCheckable(true);
-    m_editLyricsAction->setStatusTip(tr("Edit the words of the lyrics along the bottom of the pane: drag a start or end, double-click a word to change its text, right-click to add or delete one"));
+    m_editLyricsAction->setStatusTip(tr("Edit the words of the lyrics along the bottom of the pane: drag a start or end, Shift-drag to move all the words, double-click a word to change its text, right-click to add or delete one"));
     m_editLyricsAction->setEnabled(false);
     connect(m_editLyricsAction, &QAction::triggered,
             this, &MainWindow::editLyricsToggled);
     menu->addAction(m_editLyricsAction);
+
+    // The same shift as a Shift-drag in edit mode, by a number: for an
+    // offset known beforehand, such as the lyrics exporter's
+    m_shiftLyricsAction = new QAction(tr("S&hift Lyrics..."), this);
+    m_shiftLyricsAction->setStatusTip(tr("Move all the words of the lyrics earlier or later by a number of seconds"));
+    m_shiftLyricsAction->setEnabled(false);
+    connect(m_shiftLyricsAction, &QAction::triggered,
+            this, &MainWindow::shiftLyrics);
+    menu->addAction(m_shiftLyricsAction);
 }
 
 void
@@ -2386,6 +2396,9 @@ MainWindow::updateMenuStates()
         m_editLyricsAction->setChecked
             (m_lyricsEditor && m_lyricsEditor->isEnabled());
     }
+    if (m_shiftLyricsAction) {
+        m_shiftLyricsAction->setEnabled(lyricsEditable);
+    }
 
     // The audio check records takes of its own, and keeps what it
     // measures for the devices it started on.  Record is shut after the
@@ -3691,6 +3704,22 @@ MainWindow::askForLyricsWordText(QString &text, bool isNew)
     return true;
 }
 
+bool
+MainWindow::askForLyricsShift(double &seconds)
+{
+    // Milliseconds are as fine as anyone can hear, and an hour is longer
+    // than any song
+    bool ok = false;
+    double typed = QInputDialog::getDouble
+        (this, tr("Shift Lyrics"),
+         tr("Move all the words by this many seconds\n"
+            "(negative: earlier, positive: later):"),
+         seconds, -3600.0, 3600.0, 3, &ok);
+    if (!ok) return false;
+    seconds = typed;
+    return true;
+}
+
 void
 MainWindow::exportLyrics()
 {
@@ -3814,6 +3843,37 @@ MainWindow::editLyricsToggled()
 {
     if (!m_editLyricsAction) return;
     setLyricsEditing(m_editLyricsAction->isChecked());
+}
+
+void
+MainWindow::shiftLyrics()
+{
+    if (!m_lyricsEditor || !lyricsEditAllowed()) return;
+    ModelId lyricsModel = m_lyrics->getModelId();
+
+    double seconds = 0.0;
+    if (!askForLyricsShift(seconds)) return;
+
+    // The dialog ran an event loop of its own, in which the lyrics may
+    // have gone, been hidden or replaced, or a take begun: then the
+    // offset typed is not for what is there now
+    if (!lyricsEditAllowed() || m_lyrics->getModelId() != lyricsModel) {
+        return;
+    }
+
+    // One command; a shift of 0, or one the start of the song leaves no
+    // room for, is none
+    double shifted = m_lyricsEditor->shiftLyrics(lyricsModel, seconds);
+    if (shifted == 0.0) return;
+
+    // Kept as the status message, as an import's is.  The amount is the
+    // one the words moved by, which is less than asked if the first word
+    // reached the start
+    QString amount = QString::number(std::abs(shifted), 'f', 3);
+    m_myStatusMessage = (shifted < 0.0 ?
+                         tr("Shifted the lyrics %1 s earlier.").arg(amount) :
+                         tr("Shifted the lyrics %1 s later.").arg(amount));
+    getStatusLabel()->setText(m_myStatusMessage);
 }
 
 void

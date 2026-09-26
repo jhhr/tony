@@ -26,7 +26,8 @@
 /**
  * What editing a word of the lyrics may do: which edge the pointer is
  * on, how far an edge can be dragged, where a new word goes and which
- * line it joins, and what a typed text becomes.
+ * line it joins, what a typed text becomes, and how far all the words
+ * can be shifted together.
  *
  * The words are the events of the lyrics' region model, in the order
  * the model gives them (by start): a word's start is its frame and its
@@ -45,9 +46,15 @@ namespace LyricsEdit
     constexpr double newWordSeconds = 0.5;
 
     /**
-     * Those two in frames at this rate, to the nearest frame, as
-     * lyricsToEvents() rounds times: 882 and 22050 frames at 44.1 kHz.
-     * 0 for a rate that is not positive.
+     * Seconds in frames at this rate, to the nearest frame, as
+     * lyricsToEvents() rounds times; negative seconds give negative
+     * frames.  0 for a rate that is not positive.
+     */
+    sv::sv_frame_t framesFor(double seconds, sv::sv_samplerate_t rate);
+
+    /**
+     * The two above in frames at this rate, as framesFor() gives them:
+     * 882 and 22050 frames at 44.1 kHz.
      */
     sv::sv_frame_t minWordFrames(sv::sv_samplerate_t rate);
     sv::sv_frame_t newWordFrames(sv::sv_samplerate_t rate);
@@ -208,6 +215,26 @@ namespace LyricsEdit
      * left, which the edit must refuse.
      */
     QString cleanText(const QString &typed);
+
+    /**
+     * How far all the words may move together, for a shift of wanted
+     * frames (negative: earlier): as far as wanted, except that the
+     * word starting earliest does not go back past frame 0.  Words that
+     * already start before frame 0, which no parser makes, do not go
+     * back at all.  No limit later.  0 with no words.
+     *
+     * The answer is always between 0 and wanted.
+     */
+    sv::sv_frame_t clampShift(const sv::EventVector &words,
+                              sv::sv_frame_t wanted);
+
+    /**
+     * The words, every one moved by clampShift(words, wanted), start
+     * and end alike: lengths, texts and lines are kept, and so is their
+     * order.
+     */
+    sv::EventVector shifted(const sv::EventVector &words,
+                            sv::sv_frame_t wanted);
 }
 
 #endif

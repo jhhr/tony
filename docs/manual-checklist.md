@@ -117,8 +117,8 @@ harm. On the fake: +0.0 ms at both places with `n = 0`, and +50.0 ms, failing, w
     eye and while playing, each box ends where the word does, and the highlight moves with
     the voice and goes off in the gaps. A word Moises split into syllables is one box;
     punctuation is on its word. All early or late by the same amount means the reference
-    is not the recording Moises timed (Tony cannot shift the whole song; an `[offset:]`
-    line added to an LRC file can). Compare with an LRC export of the same song, gap
+    is not the recording Moises timed, or the exporter's offset was not 0: Shift Lyrics
+    (section 4) moves them all. Compare with an LRC export of the same song, gap
     threshold low.
 9.  **Finnish text**: ä and ö come out right in the pane, and again after save and reopen.
 10. **Show Lyrics and Remove Lyrics**: hiding keeps the words for later, Remove takes them
@@ -177,6 +177,15 @@ harm. On the fake: +0.0 ms at both places with `n = 0`, and +50.0 ms, failing, w
 7.  **Drag smoothness**: with a whole song's words (hundreds) in view, and again while the
     reference plays, a drag follows the pointer without stutter and playback does not
     break up.
+8.  **Shifting the whole song**: on a real Moises file that is all early or late, with
+    Edit Lyrics on, Shift-drag anywhere in the row (on a word, an edge or a gap): the
+    cursor is a closed hand, all the words and the highlight follow the pointer, none
+    goes before the start of the song, and one Ctrl+Z takes the whole drag back. Is
+    lining them up by eye and ear while playing easy enough, and does a whole song's worth
+    move without stutter? Then Edit > Shift Lyrics... with a known offset (0.2 for an
+    export made with the exporter's default offset, -0.2 the other way): the words move
+    by that much, the status bar says how far and which way, and an Export writes the
+    shifted times. Is the dialog's wording clear about which sign is earlier?
 
 The questions the automated checks raised, and the facts they established for the
 decisions above, are in [open-points.md](open-points.md).

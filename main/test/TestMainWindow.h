@@ -241,8 +241,10 @@ public:
     QAction *removeLyricsAction() { return m_removeLyricsAction; }
     QAction *showLyricsAction() { return m_showLyrics; }
 
-    // Edit > Edit Lyrics, and the editor it switches on
+    // Edit > Edit Lyrics, and the editor it switches on; Edit > Shift
+    // Lyrics...
     QAction *editLyricsAction() { return m_editLyricsAction; }
+    QAction *shiftLyricsAction() { return m_shiftLyricsAction; }
     LyricsEditor *lyricsEditor() { return m_lyricsEditor; }
 
     // The file Import Lyrics asks for, answered from here: "" is Cancel
@@ -266,6 +268,13 @@ public:
     // Done while the next question is open, as anything can be while its
     // dialog runs an event loop
     void whileAskingWordText(std::function<void()> f) { m_whileAskingWordText = f; }
+
+    // The seconds Shift Lyrics asks for, answered from here in turn, as
+    // the texts are.  A question with no answer left is cancelled
+    void answerLyricsShift(double seconds) { m_shiftAnswers.push_back({true, seconds}); }
+    void cancelLyricsShift() { m_shiftAnswers.push_back({false, 0.0}); }
+    int lyricsShiftQuestions() const { return m_shiftQuestions; }
+    void whileAskingLyricsShift(std::function<void()> f) { m_whileAskingShift = f; }
 
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
         onRealtimePitchDetected(frame, hz);
@@ -334,6 +343,20 @@ protected:
         return true;
     }
 
+    bool askForLyricsShift(double &seconds) override {
+        ++m_shiftQuestions;
+        if (m_whileAskingShift) {
+            auto during = m_whileAskingShift;
+            m_whileAskingShift = nullptr;
+            during();
+        }
+        if (m_shiftAnswers.isEmpty()) return false;
+        auto answer = m_shiftAnswers.takeFirst();
+        if (!answer.first) return false;
+        seconds = answer.second;
+        return true;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -357,6 +380,9 @@ private:
     QString m_wordTextOffered;
     bool m_wordTextWasNew = false;
     std::function<void()> m_whileAskingWordText;
+    QList<QPair<bool, double>> m_shiftAnswers;
+    int m_shiftQuestions = 0;
+    std::function<void()> m_whileAskingShift;
 };
 
 #endif

@@ -60,8 +60,10 @@ orange pitch track to compare with it.
  * the lyrics can be corrected by ear, with the song there to listen to: with
    Edit -> Edit Lyrics on, drag the start or end of a word in its box,
    double-click a word to change its text, or right-click to delete a word or
-   add one between words. Each edit can be undone; the edits are saved with
-   the session, and Export Lyrics writes them
+   add one between words. Lyrics that are all early or late move together:
+   Shift-drag in the row, or Edit -> Shift Lyrics... by a number of seconds.
+   Each edit can be undone; the edits are saved with the session, and Export
+   Lyrics writes them
  * lyrics can be exported from Moises with the Moises-Lyric-Exporter browser
    extension. Set it to TTML, word by word, with the offset at 0 (otherwise
    every line is 0.2 s early, and Tony cannot tell): TTML gives every word
