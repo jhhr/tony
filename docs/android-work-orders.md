@@ -156,7 +156,7 @@ builds happen in the container.)
 - A3b — Tony as an APK (no audio): the test port. Built but for the APK itself: Gradle
   was blocked (`dl.google.com` refused); run `deploy/android/build-apk.sh` once it is
   allowed (see the log).
-- A4 — Touch gestures on the panes.
+- A4 — Touch gestures on the panes. Done.
 - A5 — Compact touch mode.
 - A6 — Oboe audio backend.
 - A7 — Android files, permission and lifecycle.
@@ -441,3 +441,28 @@ The next phase must know: logcat tag `Tony` has Tony's and svcore's cerr; SVDEBU
 to `files/log/sv-debug.log` (`adb shell run-as io.github.jhhr.tony cat ...`). Phone test:
 install; File > Open, pick audio: waveform, then pitch and notes; Play is off (no audio).
 Left open: saving and sessions through the picker (A7); `imported/` is never emptied.
+
+### Phase A4 — 2026-09-26
+Built: `main/TouchGestures` (tony_app; `MainWindow::paneAdded()` gives each pane one): pinch
+zooms the time axis about the fingers, two fingers scroll it, a 500 ms long press sends the
+pane a right press (its menu path). `main/PinchZoom` (tony_core): the wheel's zoom grid and
+limits for a pinch, with 2% hysteresis; View's x mapping made continuous. Tests:
+`TestPinchZoom` (core), `TestTouchGestures` (app; window shown, touch via QTest::touchEvent).
+Qt 6.11 (qapplication.cpp, qguiapplication.cpp): only an unaccepted touch event becomes mouse
+events, from its first finger; an unaccepted TouchBegin's points go to the first widget above
+that subscribes to a gesture: QScrollArea's viewport (PanGesture), which then takes the
+second finger too. So the pane subscribes to a gesture that recognises nothing; a lone finger
+stays unaccepted (Qt's mouse events, as before); the second finger's event reaches the pane
+with both points; from there events are accepted except the one lifting the first finger.
+Choices / deviations:
+- The first press is held until the finger moves past startDragDistance or lifts (then
+  replayed in order) or 500 ms pass: a long press or second finger leaves no drag, selection
+  or playhead move. A drag already going is ended by a release where the finger is.
+- The long-press menu opens under the finger, its first item Undo; QMenu takes a release
+  after 7 moves over an item as a choice. That finger's events are eaten on the menu until
+  it lifts, so the menu waits for a tap (a test shows the lift choosing it otherwise).
+- Vertical two-finger movement is ignored. The viewport's own pan gesture still scrolls the
+  pane stack vertically if it can, as before A4. Pinch starts at 2x startDragDistance.
+The next phase must know: touch tests need the window shown and a fresh device per test.
+Left open: not tried on a touch screen. Windows desktop touch (OS-made mouse events, its own
+press-and-hold right click) untested. For A8: architecture.md, testing.md, manual-checklist.
