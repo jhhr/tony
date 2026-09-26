@@ -28,9 +28,13 @@
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
+#include "AndroidStorage.h"
 #include "OboeAudioIO.h"
+#include <QFileDialog>
+#include <QGuiApplication>
 #include <QPermissions>
 #include <QStandardPaths>
+#include <QThread>
 #endif
 
 #include "framework/Document.h"
@@ -246,6 +250,15 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(m_audioDeviceCheck, &QTimer::timeout,
             this, &MainWindow::checkAudioDevice);
     m_audioDeviceCheck->start(250);
+
+    m_storage = new AndroidStorage(this);
+
+    m_suspendSaveTimer = new QTimer(this);
+    m_suspendSaveTimer->setInterval(250);
+    connect(m_suspendSaveTimer, &QTimer::timeout,
+            this, &MainWindow::saveWhenSuspended);
+    connect(qApp, &QGuiApplication::applicationStateChanged,
+            this, &MainWindow::applicationStateChanged);
 #endif
 
 #ifdef Q_OS_MAC
@@ -524,6 +537,9 @@ MainWindow::~MainWindow()
     m_coverageStrip = nullptr;
     delete m_analyser;
     delete m_keyReference;
+#ifdef Q_OS_ANDROID
+    delete m_storage;
+#endif
     Profiles::getInstance()->dump();
 }
 
@@ -2742,17 +2758,61 @@ MainWindow::getOpenFileName(FileFinder::FileType type)
     QString path = MainWindowBase::getOpenFileName(type);
     if (!path.startsWith("content:")) return path;
 
+    QString app = QApplication::applicationName();
+
     // The name the user knows the file by, which Qt asks the file's
     // provider for: the URI need not contain it
     QString name = QFileInfo(path).fileName();
+    bool session = (QFileInfo(name).suffix().toLower() == "ton");
 
-    // A session finds its audio and takes beside it, and the picker
-    // grants access to the one file picked and nothing next to it
-    if (QFileInfo(name).suffix().toLower() == "ton") {
-        QMessageBox::warning
-            (this, tr("Cannot open a session here"),
-             tr("<b>Sessions cannot be opened from the file picker yet</b><p>A session needs its audio and its takes folder beside it, and the picker lets %1 read the one file only. Open an audio file instead.")
-             .arg(QApplication::applicationName()));
+    // A file in the phone's own storage has a path, and with All files
+    // access that is what is opened, as on the desktop: a session finds
+    // its audio and takes folder beside it, and a session saved beside
+    // audio opened so finds the audio. Asked for with a session, which
+    // cannot do without it, and the first time with audio, which can
+    QString local = m_storage->pathFor(path);
+    if (local != "") {
+        if (!AndroidStorage::hasAllFilesAccess() &&
+            (session || !m_storage->hasAsked())) {
+            m_storage->ask
+                (session ?
+                 tr("A session keeps its audio and its takes folder beside "
+                    "it, and %1 opens and saves it there, where it is.")
+                 .arg(app) :
+                 tr("Audio opened where it is can have its session saved "
+                    "beside it. Otherwise %1 copies the audio into its own "
+                    "storage.").arg(app));
+        }
+        if (AndroidStorage::hasAllFilesAccess()) {
+            if (QFileInfo(local).isFile()) {
+                cerr << "MainWindow::getOpenFileName: opening " << path
+                     << " where it is, " << local << endl;
+                return local;
+            }
+            cerr << "MainWindow::getOpenFileName: " << path << " should be "
+                 << local << ", which is not there" << endl;
+        }
+    }
+
+    // A session read through the picker comes without the audio and
+    // takes beside it: the picker lets Tony read the one file only
+    if (session) {
+        if (local == "") {
+            QMessageBox::warning
+                (this, tr("Cannot open the session"),
+                 tr("<b>The session cannot be opened from here</b><p>A session needs its audio and its takes folder beside it, and from here (Downloads, or a cloud app such as Drive) %1 is given the one file only.</p><p>Keep sessions in a folder of the phone's own storage, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer, and open them by browsing to that folder in the picker.</p>")
+                 .arg(app));
+        } else if (!AndroidStorage::hasAllFilesAccess()) {
+            QMessageBox::warning
+                (this, tr("Cannot open the session"),
+                 tr("<b>%1 may not open the session where it is</b><p>A session needs its audio and its takes folder beside it, and %1 can read those only with All files access. Allow it when %1 asks, or in the phone's Settings, Apps, %1.</p>")
+                 .arg(app));
+        } else {
+            QMessageBox::warning
+                (this, tr("Cannot open the session"),
+                 tr("<b>The session was not found where it should be</b><p>%1 looked for it at \"%2\".</p>")
+                 .arg(app, local.toHtmlEscaped()));
+        }
         return "";
     }
 
@@ -2764,11 +2824,153 @@ MainWindow::getOpenFileName(FileFinder::FileType type)
         QMessageBox::critical
             (this, tr("Failed to open file"),
              tr("<b>File open failed</b><p>\"%1\" could not be copied into %2's own storage: %3")
-             .arg(name.toHtmlEscaped())
-             .arg(QApplication::applicationName())
-             .arg(error.toHtmlEscaped()));
+             .arg(name.toHtmlEscaped(), app, error.toHtmlEscaped()));
     }
     return copy;
+}
+
+QString
+MainWindow::getSaveFileName(FileFinder::FileType type)
+{
+    // Exported layers, audio and images go through svgui's dialog as
+    // before
+    if (type != FileFinder::SessionFile) {
+        return MainWindowBase::getSaveFileName(type);
+    }
+
+    QString app = QApplication::applicationName();
+
+    // Asked before the picker: without it there is nowhere a session can
+    // be saved, and the picker makes the document it is asked for
+    if (!AndroidStorage::hasAllFilesAccess() &&
+        !m_storage->ask(tr("A session keeps its audio and its takes folder "
+                           "beside it, and %1 saves it there, where it is.")
+                        .arg(app))) {
+        return "";
+    }
+
+    QFileDialog dialog(this, tr("Select a session file"));
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+
+    // The type of document the picker makes: Android knows nothing of
+    // .ton, and "*.ton" would come to this anyway
+    dialog.setMimeTypeFilters({ "application/octet-stream" });
+
+    // What the picker's name field starts with (EXTRA_TITLE). There is no
+    // default suffix: Qt adds that to the path of the URI, where it names
+    // another document
+    QString suggested =
+        AndroidFiles::suggestedSessionName(m_sessionFile, m_audioFile);
+    if (suggested != "") dialog.selectFile(suggested);
+
+    if (!dialog.exec()) return "";
+    QStringList selected = dialog.selectedFiles();
+    if (selected.empty() || selected[0] == "") return "";
+    QString picked = selected[0];
+
+    // The picker has made an empty document of that name by now
+    QString local = (picked.startsWith("content:") ?
+                     m_storage->pathFor(picked) : picked);
+    if (local == "") {
+        AndroidFiles::removeIfEmpty(picked);
+        QMessageBox::warning
+            (this, tr("Cannot save the session there"),
+             tr("<b>The session cannot be saved there</b><p>A session keeps its audio and its takes folder beside it, which %1 can write only in a folder of the phone's own storage, not in Downloads or through a cloud app.</p><p>Browse to a folder of the phone's own storage in the picker, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer.</p>")
+             .arg(app));
+        return "";
+    }
+
+    QString name = AndroidFiles::sessionFileName(QFileInfo(local).fileName());
+    if (name == "") {
+        AndroidFiles::removeIfEmpty(local);
+        QMessageBox::warning
+            (this, tr("No file name"),
+             tr("<b>The session was not saved</b><p>It needs a name: type one in the picker's name field.</p>"));
+        return "";
+    }
+
+    // Named without the extension, the document the picker made is not
+    // the one saved: the extension is added, as the desktop's dialog adds
+    // it
+    QString path = QFileInfo(local).dir().filePath(name);
+    if (path != local) AndroidFiles::removeIfEmpty(local);
+
+    // The picker makes an empty document, so one with something in it
+    // was there already, and the picker may not have asked
+    QFileInfo target(path);
+    if (target.exists() && target.size() > 0 &&
+        QMessageBox::question
+        (this, tr("File exists"),
+         tr("<b>File exists</b><p>The file \"%1\" already exists.\nDo you want to overwrite it?").arg(path),
+         QMessageBox::Ok, QMessageBox::Cancel) != QMessageBox::Ok) {
+        return "";
+    }
+
+    cerr << "MainWindow::getSaveFileName: the session goes to " << path
+         << " (picked as " << picked << ")" << endl;
+    return path;
+}
+
+void
+MainWindow::applicationStateChanged(Qt::ApplicationState state)
+{
+    if (state != Qt::ApplicationSuspended) return;
+
+    cerr << "MainWindow::applicationStateChanged: going into the "
+         << "background" << endl;
+
+    // A take keeps what was sung, through the Stop path of the Record
+    // button, as when the audio device fails (checkAudioDevice())
+    if (m_recordTarget && m_recordTarget->isRecording()) {
+        record();
+    } else if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+
+    // Only a session that has a file of its own: one never saved stays as
+    // it is, as there is no one to ask where it should go
+    if (m_sessionFile == "" || !m_documentModified) return;
+
+    m_suspendSavePath = m_sessionFile;
+    saveWhenSuspended();
+}
+
+void
+MainWindow::saveWhenSuspended()
+{
+    m_suspendSaveTimer->stop();
+
+    // Another session since, or saved since
+    if (m_suspendSavePath == "" || m_suspendSavePath != m_sessionFile ||
+        !m_documentModified) {
+        m_suspendSavePath = "";
+        return;
+    }
+
+    // Not in the middle of something that shows a box or the picker (the
+    // picker and the settings page send Tony into the background too),
+    // which may be about to save, or to decide not to
+    if (QThread::currentThread()->loopLevel() > 1) {
+        cerr << "MainWindow::saveWhenSuspended: a dialog is open; the "
+             << "session is not saved" << endl;
+        m_suspendSavePath = "";
+        return;
+    }
+
+    // Saving waits for the analysis of a take to be merged, which needs
+    // the event loop that Android is about to hold: the save is made
+    // once it is done, which is when Tony is back
+    if (m_analyser2 && m_analyser2->isAnalysingRange()) {
+        cerr << "MainWindow::saveWhenSuspended: the session is saved when "
+             << "the analysis of the take is done" << endl;
+        m_suspendSaveTimer->start();
+        return;
+    }
+
+    cerr << "MainWindow::saveWhenSuspended: saving " << m_sessionFile << endl;
+    m_suspendSavePath = "";
+    saveSession();
 }
 
 void
@@ -4833,7 +5035,7 @@ MainWindow::rebuildSingingTrackFromTake(const Coverage::Range &placed)
              tr("<b>The recording was added to the singing track, but it "
                 "could not be shown</b><p>%1</p><p>What is on screen is the "
                 "singing track as it was. The recording is in the take's "
-                "audio file, \"%2\".</p>").arg(error).arg(path),
+                "audio file, \"%2\".</p>").arg(error, path),
              QMessageBox::Ok);
         return false;
     }
@@ -5080,7 +5282,7 @@ MainWindow::eraseSingingInSelection()
              tr("<b>The singing was erased, but the result could not be "
                 "shown</b><p>%1</p><p>What is on screen is the singing track "
                 "as it was. The erased audio is in the take's audio file, "
-                "\"%2\".</p>").arg(showError).arg(path),
+                "\"%2\".</p>").arg(showError, path),
              QMessageBox::Ok);
     }
 
@@ -5631,7 +5833,7 @@ MainWindow::applyTakeState(SingingTakeCommand *command, const TakeState &state)
              tr("Failed to show the singing track"),
              tr("<b>The singing track could not be shown as it was</b>"
                 "<p>%1</p><p>The take's audio is in the file \"%2\".</p>")
-             .arg(error).arg(state.path),
+             .arg(error, state.path),
              QMessageBox::Ok);
     }
 
@@ -5915,7 +6117,7 @@ MainWindow::activateTake(bool warnIfNoAudio)
             (this,
              tr("Failed to open the take's audio"),
              tr("<b>The take \"%1\" is shown without its audio</b><p>%2</p>")
-             .arg(name).arg(error),
+             .arg(name, error),
              QMessageBox::Ok);
     }
 
@@ -6067,7 +6269,7 @@ MainWindow::duplicateTake()
     documentModified();
 
     emit activity(tr("Copied the take \"%1\" into \"%2\"")
-                  .arg(from).arg(name));
+                  .arg(from, name));
 }
 
 void
@@ -6113,7 +6315,7 @@ MainWindow::renameTake()
     documentModified();
 
     emit activity(tr("The take \"%1\" is called \"%2\" now")
-                  .arg(current).arg(name));
+                  .arg(current, name));
 }
 
 void
@@ -6552,6 +6754,10 @@ bool
 MainWindow::saveSessionToPath(QString path)
 {
     if (!saveSessionFile(path)) {
+#ifdef Q_OS_ANDROID
+        // Save As picked it, and the picker made it, empty
+        AndroidFiles::removeIfEmpty(path);
+#endif
         QMessageBox::critical(this, tr("Failed to save file"),
                               tr("Session file \"%1\" could not be saved.").arg(path));
         return false;
@@ -6586,6 +6792,10 @@ MainWindow::saveSessionAs()
     }
 
     if (!waitForInitialAnalysis()) {
+#ifdef Q_OS_ANDROID
+        // The picker made it, empty
+        AndroidFiles::removeIfEmpty(path);
+#endif
         QMessageBox::warning(this, tr("File not saved"),
                              tr("Wait cancelled: the session has not been saved."));
         return;
@@ -7733,14 +7943,14 @@ MainWindow::modelRegenerationFailed(QString layerName,
             (this,
              tr("Failed to regenerate layer"),
              tr("<b>Layer generation failed</b><p>Failed to regenerate derived layer \"%1\" using new data model as input.<p>The layer transform \"%2\" failed:<p>%3")
-             .arg(layerName).arg(transformName).arg(message),
+             .arg(layerName, transformName, message),
              QMessageBox::Ok);
     } else {
         QMessageBox::warning
             (this,
              tr("Failed to regenerate layer"),
              tr("<b>Layer generation failed</b><p>Failed to regenerate derived layer \"%1\" using new data model as input.<p>The layer transform \"%2\" failed.<p>No error information is available.")
-             .arg(layerName).arg(transformName),
+             .arg(layerName, transformName),
              QMessageBox::Ok);
     }
 }
@@ -7751,7 +7961,7 @@ MainWindow::modelRegenerationWarning(QString layerName,
                                      QString message)
 {
     QMessageBox::warning
-        (this, tr("Warning"), tr("<b>Warning when regenerating layer</b><p>When regenerating the derived layer \"%1\" using new data model as input:<p>%2").arg(layerName).arg(message), QMessageBox::Ok);
+        (this, tr("Warning"), tr("<b>Warning when regenerating layer</b><p>When regenerating the derived layer \"%1\" using new data model as input:<p>%2").arg(layerName, message), QMessageBox::Ok);
 }
 
 void

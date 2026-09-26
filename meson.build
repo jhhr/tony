@@ -1191,10 +1191,12 @@ tony_app_files = [
   'main/TakeCommands.cpp',
   'main/TakeLayers.cpp',
   'main/TouchGestures.cpp',
+  'main/TouchMenuStyle.cpp',
 ]
 
 if system == 'android'
   tony_app_files += [
+    'main/AndroidStorage.cpp',
     'main/OboeAudioIO.cpp',
   ]
 endif
@@ -1213,6 +1215,7 @@ tony_app_moc_files = qt.preprocess(
   'main/CompactLayout.h',
   'main/CoverageStrip.h',
   'main/TouchGestures.h',
+  'main/TouchMenuStyle.h',
 ])
 
 qt_resource_files = qt.preprocess(
@@ -1521,6 +1524,7 @@ if system != 'android'
     'main/test/TestRecordWorkflow.h',
     'main/test/TestTouchGestures.h',
     'main/test/TestCompactLayout.h',
+    'main/test/TestTouchMenuStyle.h',
   ])
 
   tony_app_test_exe = executable(

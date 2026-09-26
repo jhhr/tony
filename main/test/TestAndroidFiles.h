@@ -15,9 +15,12 @@
 #define TEST_ANDROID_FILES_H
 
 // Tier 1: the file work the Android build does at start (the Vamp plugin
-// links) and when a file is picked (the copy into app storage), done here
-// on plain files in a temporary directory. What only a phone has -- the
-// content:// URI, the installed library directory -- is not here.
+// links) and when a file is picked (the copy into app storage, the path
+// of a picked content:// URI, the names Save Session As suggests and
+// accepts), done here on plain files in a temporary directory and on
+// URIs written as Android writes them. What only a phone has -- a
+// provider behind the URI, the installed library directory -- is not
+// here.
 
 #include "../AndroidFiles.h"
 
@@ -30,6 +33,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QTemporaryDir>
+#include <QUrl>
 
 class TestAndroidFiles : public QObject
 {
@@ -166,6 +170,182 @@ private slots:
         QCOMPARE(AndroidFiles::safeFileName(""), QString("imported"));
         QCOMPARE(AndroidFiles::safeFileName("."), QString("imported"));
         QCOMPARE(AndroidFiles::safeFileName(".."), QString("imported"));
+    }
+
+    // --- A picked document's path ---
+
+    // As Android's Uri.toString() gives it, which QFileDialog then passes
+    // through QUrl: the string Tony gets from the picker. Tested in both
+    // forms, since QUrl decodes some of the id and not the rest
+    static QString pickedAsQtGivesIt(QString uri) {
+        return QUrl(uri).toString(QUrl::PreferLocalFile);
+    }
+
+    void a_document_in_the_phones_storage_has_its_path() {
+        QString root = "/storage/emulated/0";
+        QString uri = "content://com.android.externalstorage.documents/"
+            "document/primary%3AMusic%2Ftest.ton";
+
+        QCOMPARE(AndroidFiles::pathFromContentUri(uri, root),
+                 QString("/storage/emulated/0/Music/test.ton"));
+        QCOMPARE(AndroidFiles::pathFromContentUri(pickedAsQtGivesIt(uri), root),
+                 QString("/storage/emulated/0/Music/test.ton"));
+
+        // The root is the phone's, whatever it is
+        QCOMPARE(AndroidFiles::pathFromContentUri(uri, "/storage/emulated/10"),
+                 QString("/storage/emulated/10/Music/test.ton"));
+    }
+
+    void names_with_spaces_and_finnish_letters_are_decoded() {
+        QString root = "/storage/emulated/0";
+        // "Music/Laulut/Sävel äänessä 100%.ton", as Android encodes it
+        QString uri = "content://com.android.externalstorage.documents/"
+            "document/primary%3AMusic%2FLaulut%2FS%C3%A4vel%20%C3%A4%C3%A4ness"
+            "%C3%A4%20100%25.ton";
+        QString expected("/storage/emulated/0/Music/Laulut/"
+                         "Sävel äänessä 100%.ton");
+
+        QCOMPARE(AndroidFiles::pathFromContentUri(uri, root), expected);
+        QString given = pickedAsQtGivesIt(uri);
+        QCOMPARE(AndroidFiles::pathFromContentUri(given, root), expected);
+    }
+
+    void a_document_under_a_folder_grant_has_its_path() {
+        QString uri = "content://com.android.externalstorage.documents/"
+            "tree/primary%3ASync%2FSongs/document/"
+            "primary%3ASync%2FSongs%2FMy%20Song.ton";
+        QCOMPARE(AndroidFiles::pathFromContentUri(uri, "/storage/emulated/0"),
+                 QString("/storage/emulated/0/Sync/Songs/My Song.ton"));
+    }
+
+    void the_top_of_the_phones_storage_is_its_root() {
+        QString uri = "content://com.android.externalstorage.documents/"
+            "document/primary%3A";
+        QCOMPARE(AndroidFiles::pathFromContentUri(uri, "/storage/emulated/0/"),
+                 QString("/storage/emulated/0"));
+    }
+
+    void a_document_on_a_card_is_under_its_volume() {
+        QString uri = "content://com.android.externalstorage.documents/"
+            "document/1A2B-3C4D%3AMusic%2FSong.mp3";
+        QCOMPARE(AndroidFiles::pathFromContentUri(uri, "/storage/emulated/0"),
+                 QString("/storage/1A2B-3C4D/Music/Song.mp3"));
+    }
+
+    void a_download_with_a_raw_id_has_that_path() {
+        QString uri = "content://com.android.providers.downloads.documents/"
+            "document/raw%3A%2Fstorage%2Femulated%2F0%2FDownload%2FSong.mp3";
+        QCOMPARE(AndroidFiles::pathFromContentUri(uri, "/storage/emulated/0"),
+                 QString("/storage/emulated/0/Download/Song.mp3"));
+        QCOMPARE(AndroidFiles::pathFromContentUri(pickedAsQtGivesIt(uri),
+                                                  "/storage/emulated/0"),
+                 QString("/storage/emulated/0/Download/Song.mp3"));
+    }
+
+    void documents_elsewhere_have_no_path() {
+        QString root = "/storage/emulated/0";
+        QStringList none = {
+            // Google Drive, Dropbox: a cloud provider's own ids
+            "content://com.google.android.apps.docs.storage/document/"
+                "acc%3D1%3Bdoc%3Dencoded%3DabcDEF",
+            "content://com.dropbox.android.document/document/"
+                "%2FSongs%2Ftest.ton",
+            // The media provider and a download, by number
+            "content://com.android.providers.media.documents/document/audio%3A42",
+            "content://com.android.providers.downloads.documents/document/msf%3A1234",
+            "content://com.android.providers.downloads.documents/document/1234",
+            // A raw id that is not a path
+            "content://com.android.providers.downloads.documents/document/raw%3ASong.mp3",
+            // The external storage provider, but no volume Tony knows
+            "content://com.android.externalstorage.documents/document/home%3ADocuments",
+            "content://com.android.externalstorage.documents/document/Music%2Ftest.ton",
+            "content://com.android.externalstorage.documents/document/%3AMusic",
+            // Not a document
+            "content://com.android.externalstorage.documents/tree/primary%3AMusic",
+            "content://com.android.externalstorage.documents/root/primary",
+            // Not content:// at all
+            "/storage/emulated/0/Music/test.ton",
+            "file:///storage/emulated/0/Music/test.ton",
+            "",
+        };
+        for (QString uri : none) {
+            QCOMPARE(AndroidFiles::pathFromContentUri(uri, root), QString());
+        }
+
+        // Without the root there is nowhere to put primary's documents
+        QCOMPARE(AndroidFiles::pathFromContentUri
+                 ("content://com.android.externalstorage.documents/"
+                  "document/primary%3AMusic%2Ftest.ton", ""),
+                 QString());
+    }
+
+    void an_id_cannot_lead_out_of_its_volume() {
+        QString root = "/storage/emulated/0";
+        QCOMPARE(AndroidFiles::pathFromContentUri
+                 ("content://com.android.externalstorage.documents/"
+                  "document/primary%3A..%2F..%2F..%2Fdata%2Fx", root),
+                 QString());
+        QCOMPARE(AndroidFiles::pathFromContentUri
+                 ("content://com.android.externalstorage.documents/"
+                  "document/primary%3AMusic%2F..%2F..%2Fx", root),
+                 QString());
+        QCOMPARE(AndroidFiles::pathFromContentUri
+                 ("content://com.android.providers.downloads.documents/"
+                  "document/raw%3A%2Fstorage%2F..%2Fdata%2Fx", root),
+                 QString());
+    }
+
+    // --- The name Save Session As suggests and accepts ---
+
+    void the_suggested_name_is_the_sessions_or_the_references() {
+        QCOMPARE(AndroidFiles::suggestedSessionName
+                 ("/storage/emulated/0/Music/My Song.ton",
+                  "/storage/emulated/0/Music/Other.mp3"),
+                 QString("My Song.ton"));
+        QCOMPARE(AndroidFiles::suggestedSessionName
+                 ("", "/data/user/0/io.github.jhhr.tony/files/imported/"
+                  "Ääni v1.2.mp3"),
+                 QString("Ääni v1.2.ton"));
+        QCOMPARE(AndroidFiles::suggestedSessionName("", ""), QString());
+    }
+
+    void a_picked_name_without_an_extension_gets_one() {
+        QCOMPARE(AndroidFiles::sessionFileName("test.ton"), QString("test.ton"));
+        QCOMPARE(AndroidFiles::sessionFileName("test"), QString("test.ton"));
+        QCOMPARE(AndroidFiles::sessionFileName("My Song v1.2"),
+                 QString("My Song v1.2"));
+        QCOMPARE(AndroidFiles::sessionFileName("test (1).ton"),
+                 QString("test (1).ton"));
+    }
+
+    void a_picked_name_that_names_nothing_is_refused() {
+        QCOMPARE(AndroidFiles::sessionFileName(""), QString());
+        QCOMPARE(AndroidFiles::sessionFileName("   "), QString());
+        QCOMPARE(AndroidFiles::sessionFileName(".ton"), QString());
+        QCOMPARE(AndroidFiles::sessionFileName(" .ton"), QString());
+        QCOMPARE(AndroidFiles::sessionFileName("."), QString());
+        QCOMPARE(AndroidFiles::sessionFileName("..ton"), QString());
+        QCOMPARE(AndroidFiles::sessionFileName("(invalid)"), QString());
+    }
+
+    void only_an_empty_document_is_removed() {
+        QString dir = newDir("picked");
+
+        // What the picker leaves for a save that is not made there
+        QString empty = dir + "/test.ton";
+        QVERIFY(writeFile(empty, ""));
+        QVERIFY(AndroidFiles::removeIfEmpty(empty));
+        QVERIFY(!QFileInfo::exists(empty));
+
+        // A session that was there before is not to be touched
+        QString session = dir + "/Song.ton";
+        QVERIFY(writeFile(session, "BZh91AY&SY"));
+        QVERIFY(!AndroidFiles::removeIfEmpty(session));
+        QCOMPARE(readFile(session), QByteArray("BZh91AY&SY"));
+
+        QVERIFY(!AndroidFiles::removeIfEmpty(dir + "/not-there.ton"));
+        QVERIFY(!AndroidFiles::removeIfEmpty(newDir("folder")));
+        QVERIFY(!AndroidFiles::removeIfEmpty(""));
     }
 
     // --- The Vamp plugin links ---

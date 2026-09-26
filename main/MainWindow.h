@@ -33,6 +33,7 @@
 
 #ifdef Q_OS_ANDROID
 #include <QElapsedTimer>
+class AndroidStorage;
 #endif
 
 class QTimer;
@@ -909,9 +910,31 @@ protected:
 
 #ifdef Q_OS_ANDROID
     // Android's file picker gives content:// URIs, which svcore's readers
-    // cannot open: the file picked is copied into the app's own storage,
-    // and the copy's path returned
+    // cannot open. A file in the phone's own storage is opened where it
+    // is, by its path, once Tony has All files access (AndroidStorage),
+    // so that a session finds its audio and takes beside it. Other audio
+    // is copied into the app's own storage and the copy's path returned;
+    // other sessions are refused
     QString getOpenFileName(sv::FileFinder::FileType type) override;
+
+    // Save Session As: Tony's own picker, which suggests a name (svgui's
+    // suggests none), and then the path of the file picked in the phone's
+    // own storage, or nothing. The picker has made an empty document by
+    // then, which is removed if it is not to be the session. Other files
+    // are saved as before
+    QString getSaveFileName(sv::FileFinder::FileType type) override;
+    AndroidStorage *m_storage;
+
+    // Android sends Tony to the background: playback stops, a take being
+    // recorded is finished as Stop finishes it, and the session is saved
+    // as Save saves it, if it has a file of its own. Android holds Tony's
+    // event loop from the moment this returns until Tony is back, so
+    // nothing here may wait on it: a save that has to wait for the
+    // analysis of a take is made when that is done
+    void applicationStateChanged(Qt::ApplicationState state);
+    void saveWhenSuspended();
+    QTimer *m_suspendSaveTimer;
+    QString m_suspendSavePath;
 
     // The audio device is Oboe's (OboeAudioIO): bqaudioio has no
     // Android backend. Its input only once the microphone may be used

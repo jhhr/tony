@@ -198,6 +198,11 @@ log=$logs/tony-apk.log
 rm -f "$log"
 mkdir -p "$apk_dir"
 rm -f "$apk"
+# Gradle packages a debug APK incrementally, over its last one: a library
+# that changed is written anew and the space of the old one stays in the
+# file (7 MB each time Tony's own library changes). Without its last one
+# it writes the APK afresh
+rm -rf "$out/build/outputs/apk"
 
 attempt=1
 while true; do
@@ -273,10 +278,12 @@ echo "  zipalign: aligned for 16 KB pages"
 
 badging=$("$build_tools/aapt2" dump badging "$apk")
 echo "$badging" | grep -E "^package:|^application-label:|^sdkVersion:|^targetSdkVersion:|^uses-permission:" | sed 's/^/  /'
-if ! echo "$badging" | grep -q "name='android.permission.RECORD_AUDIO'"; then
-    echo "ERROR: the APK does not ask for RECORD_AUDIO" 1>&2
-    exit 1
-fi
+for permission in RECORD_AUDIO MANAGE_EXTERNAL_STORAGE; do
+    if ! echo "$badging" | grep -q "name='android.permission.$permission'"; then
+        echo "ERROR: the APK does not ask for $permission" 1>&2
+        exit 1
+    fi
+done
 manifest=$("$build_tools/aapt2" dump xmltree --file AndroidManifest.xml "$apk")
 if ! echo "$manifest" | grep -q 'screenOrientation.*=6'; then
     echo "ERROR: the activity is not sensorLandscape" 1>&2

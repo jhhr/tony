@@ -20,7 +20,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSaveFile>
+#include <QUrl>
 
 #include <vector>
 
@@ -69,8 +71,10 @@ AndroidFiles::linkVampPlugins(QString libraryDir,
                        << library << " (" << linkError
                        << "), so copied it" << endl;
             } else {
+                // One arg() for all: a path may hold a "%1" that a second
+                // arg() would fill
                 problems << QString("Cannot link or copy %1 to %2: %3")
-                    .arg(library).arg(link).arg(file.errorString());
+                    .arg(library, link, file.errorString());
                 SVCERR << "AndroidFiles: " << problems.back() << endl;
                 continue;
             }
@@ -91,8 +95,8 @@ AndroidFiles::checkVampPlugin(QString path)
     if (!handle) {
         const char *error = DLERROR();
         problem = QString("Cannot load %1: %2")
-            .arg(path)
-            .arg(QString::fromLocal8Bit(error ? error : "no reason given"));
+            .arg(path,
+                 QString::fromLocal8Bit(error ? error : "no reason given"));
     } else {
         if (!DLSYM(handle, "vampGetPluginDescriptor")) {
             problem = QString("%1 is not a Vamp plugin library").arg(path);
@@ -130,7 +134,7 @@ AndroidFiles::copyIn(QString source, QString name, QString dir,
     QSaveFile out(target);
     if (!out.open(QIODevice::WriteOnly)) {
         error = QString("cannot write %1: %2")
-            .arg(target).arg(out.errorString());
+            .arg(target, out.errorString());
         return "";
     }
 
@@ -148,7 +152,7 @@ AndroidFiles::copyIn(QString source, QString name, QString dir,
         if (n == 0) break;
         if (out.write(buffer.data(), n) != n) {
             error = QString("writing %1 failed: %2")
-                .arg(target).arg(out.errorString());
+                .arg(target, out.errorString());
             out.cancelWriting();
             return "";
         }
@@ -157,7 +161,7 @@ AndroidFiles::copyIn(QString source, QString name, QString dir,
 
     if (!out.commit()) {
         error = QString("writing %1 failed: %2")
-            .arg(target).arg(out.errorString());
+            .arg(target, out.errorString());
         return "";
     }
 
@@ -185,4 +189,120 @@ AndroidFiles::safeFileName(QString name)
         safe = "imported";
     }
     return safe;
+}
+
+// The path of relative under root, or "" if relative would lead out of
+// it: a provider's ids do not, but a URI is only a string
+static QString
+pathUnder(QString root, QString relative)
+{
+    if (!root.startsWith('/')) return "";
+    for (QString part : relative.split('/')) {
+        if (part == "..") return "";
+    }
+    return QDir::cleanPath(root + "/" + relative);
+}
+
+QString
+AndroidFiles::pathFromContentUri(QString uri, QString primaryRoot)
+{
+    const QString scheme("content://");
+    if (!uri.startsWith(scheme, Qt::CaseInsensitive)) return "";
+
+    // Nothing the picker gives has a query or a fragment
+    QString rest = uri.mid(scheme.size());
+    static const QRegularExpression queryOrFragment("[?#]");
+    int end = rest.indexOf(queryOrFragment);
+    if (end >= 0) rest = rest.left(end);
+
+    // Split before decoding: a '/' inside the id is %2F in every form of
+    // the URI, Android's and QUrl's, while spaces and letters such as 'ä'
+    // may come either way
+    QStringList parts = rest.split('/');
+    QString authority = parts.takeFirst();
+    for (QString &part : parts) {
+        part = QUrl::fromPercentEncoding(part.toUtf8());
+    }
+
+    QString id;
+    if (parts.size() == 2 && parts[0] == "document") {
+        id = parts[1];
+    } else if (parts.size() == 4 && parts[0] == "tree" &&
+               parts[2] == "document") {
+        id = parts[3];
+    } else {
+        return "";
+    }
+
+    if (authority == "com.android.externalstorage.documents") {
+
+        int colon = id.indexOf(':');
+        if (colon <= 0) return "";
+        QString volume = id.left(colon);
+        QString relative = id.mid(colon + 1);
+
+        if (volume == "primary") {
+            if (primaryRoot == "") return "";
+            return pathUnder(primaryRoot, relative);
+        }
+
+        // A card or USB drive is named by its file system's UUID, which is
+        // also its folder in /storage
+        static const QRegularExpression uuid("^[0-9A-Fa-f]+(-[0-9A-Fa-f]+)*$");
+        if (uuid.match(volume).hasMatch()) {
+            return pathUnder("/storage/" + volume, relative);
+        }
+        return "";
+    }
+
+    if (authority == "com.android.providers.downloads.documents") {
+        // Only these carry a path; the rest are numbers in a database
+        const QString raw("raw:/");
+        if (!id.startsWith(raw)) return "";
+        return pathUnder("/", id.mid(raw.size()));
+    }
+
+    return "";
+}
+
+QString
+AndroidFiles::suggestedSessionName(QString sessionPath, QString audioPath)
+{
+    QString from = (sessionPath != "" ? sessionPath : audioPath);
+    QString base = QFileInfo(from).completeBaseName();
+    if (base == "") return "";
+    return base + ".ton";
+}
+
+QString
+AndroidFiles::sessionFileName(QString picked)
+{
+    QString name = picked.trimmed();
+
+    // Android's storage names a document created with no name "(invalid)"
+    // (FileUtils.buildValidFatFilename())
+    if (name == "(invalid)") return "";
+
+    int dot = name.lastIndexOf('.');
+    if (dot < 0) return (name == "" ? QString() : name + ".ton");
+    if (name.left(dot).trimmed().count(QChar('.')) ==
+        name.left(dot).trimmed().size()) {
+        return ""; // ".ton", ".", "..ton" and the like
+    }
+    return name;
+}
+
+bool
+AndroidFiles::removeIfEmpty(QString path)
+{
+    QFileInfo info(path);
+    if (path == "" || !info.exists() || info.isDir() || info.size() != 0) {
+        return false;
+    }
+    if (!QFile::remove(path)) {
+        SVCERR << "AndroidFiles: could not remove the empty " << path << endl;
+        return false;
+    }
+    SVCERR << "AndroidFiles: removed the empty " << path << endl;
+    return true;
 }

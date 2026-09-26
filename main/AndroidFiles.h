@@ -72,6 +72,50 @@ public:
      * name that is empty or only dots becomes "imported".
      */
     static QString safeFileName(QString name);
+
+    /**
+     * The real path of the file a content:// URI from Android's file
+     * picker names, when it lies in the phone's own storage; "" for any
+     * other URI (a cloud provider's, the media provider's, a download
+     * known only by number), which has no path Tony could use.
+     *
+     * The external storage provider's documents, alone or under a folder
+     * grant (.../document/<id> and .../tree/<id>/document/<id>), have ids
+     * "primary:<path>", under the phone's own shared storage, whose root
+     * primaryRoot is (Environment.getExternalStorageDirectory(): normally
+     * /storage/emulated/0), and "<volume UUID>:<path>" on a card or USB
+     * drive, under /storage/<volume UUID>. The downloads provider names
+     * some files "raw:<absolute path>". The id is percent-encoded in the
+     * URI, and may be partly decoded in the string Qt hands over.
+     */
+    static QString pathFromContentUri(QString uri, QString primaryRoot);
+
+    /**
+     * The name Save Session As suggests on Android, where the system's
+     * picker suggests none of its own: the session's name if it has a
+     * file, else the reference audio's with the session extension, else
+     * "".
+     */
+    static QString suggestedSessionName(QString sessionPath,
+                                        QString audioPath);
+
+    /**
+     * The name to save a session under when the picker returned picked:
+     * with the session extension added if it has none, as the desktop's
+     * file dialog adds it; or "" for a name that names nothing (empty,
+     * only an extension, or the "(invalid)" Android's storage gives a
+     * document created with an empty name).
+     */
+    static QString sessionFileName(QString picked);
+
+    /**
+     * Removes the file at path if it is there and empty: the document the
+     * system's picker makes for a save, when the save is not going to be
+     * written there. A file with anything in it is left alone. path may
+     * be a content:// URI, which Qt's QFile removes through the file's
+     * provider. True if it removed one.
+     */
+    static bool removeIfEmpty(QString path);
 };
 
 #endif

@@ -3,11 +3,13 @@
     Tony's Android manifest: Qt 6.11's template
     (src/android/templates/AndroidManifest.xml in Qt for Android), which
     androiddeployqt fills in where it says "INSERT", with the package
-    name, the icon, RECORD_AUDIO and landscape orientation set here.
-    deploy/android/build-apk.sh gives androiddeployqt the folder this is
-    in, with the icon added from icons/.
+    name, the icon, RECORD_AUDIO, MANAGE_EXTERNAL_STORAGE and landscape
+    orientation set here. deploy/android/build-apk.sh gives
+    androiddeployqt the folder this is in, with the icon added from
+    icons/.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="io.github.jhhr.tony"
     android:installLocation="auto"
     android:versionCode="-- %%INSERT_VERSION_CODE%% --"
@@ -16,6 +18,12 @@
     <!-- For recording. androiddeployqt adds it only with Qt Multimedia,
          which Tony does not use -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- "All files access", asked for by AndroidStorage: sessions are
+         opened and saved where they are, in folders a sync app keeps in
+         step with a computer. Google Play restricts it, which is what
+         lint's ScopedStorage check says; Tony is installed by hand -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <!-- %%INSERT_FEATURES -->
     <supports-screens
         android:anyDensity="true"

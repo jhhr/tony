@@ -45,6 +45,7 @@
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
+#include "TouchMenuStyle.h"
 #include <QStandardPaths>
 #include <android/log.h>
 #include <cerrno>
@@ -297,6 +298,12 @@ main(int argc, char **argv)
     // background and vanish on a dark one. Stay light whatever the
     // system says.
     QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
+#endif
+
+#ifdef Q_OS_ANDROID
+    // Menus that scroll, by a finger dragged over them, rather than run
+    // off the screen. Before any widget is made, so that every menu has it
+    QApplication::setStyle(new TouchMenuStyle);
 #endif
 
     QApplication::setOrganizationName("sonic-visualiser");
