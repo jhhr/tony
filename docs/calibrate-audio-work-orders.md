@@ -194,7 +194,7 @@ coloured fringes on the scale's labels read as live dots in `TestUiChecks`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`).
 
 Also done: C1a (`4370131`), the merge of `default` (`c8b9585`), `test-tony-dev` (lead).
 
@@ -256,17 +256,41 @@ during a take; `main/test/FakeAudioIO.h`.
 
 ### C1c — Re-record and pre-roll stages; items 7, 12, 13, 14 (spec §4 rows 7, 12, 13, 14)
 
-To be refined by the lead after C1b. Outline:
+Read also: `main/dev/DevChecks.{h,cpp}` and `main/dev/TakeObserver.h`; `main/TakeDiff.h`;
+`main/TakeTiming.h` (`shouldStopAt()`, `countdownText`); in `main/MainWindow.cpp`
+`wantedPreRollFrames()`, `pollTakeProgress()` and the start of `record()`;
+`docs/recording.md` on pre-roll and Record into Selection; spec §4 rows 7, 12, 13, 14.
 
-- Before and after each punch-in: the take's samples from its file and its pitch and
-  notes, compared with `TakeDiff`.
-- New stages before "Save and reopen": re-record over one of stage 1's punch-ins, starting
-  inside it, so its lead-in plays over earlier material (items 7, 12, 14), with no
-  overwrite question for the check's takes; then a punch-in at P = 1 s with a 3 s
-  pre-roll for that plan (item 13: playback from 0, a shorter countdown, placement right).
-- Item 14 from the observer: the take stopped within 0.25 s plus one poll of the
-  selection's end; the coverage added is exactly the selection; no modal widget.
-- Items 1 and 2 then cover every punch-in of the run.
+- **Snapshots.** Before and after each punch-in of the new stages: the take's samples from
+  its file (`AudioCheckRunner::readTakeFile()`), its pitch and notes (by value, looked up
+  afresh), and its coverage. Compared with `TakeDiff`.
+- **Stage "Re-record"**, after "Fresh punch-ins": one runner run keeping the session, one
+  range starting inside stage 1's second punch-in ([16.8, 21.2] s) between 17.9 and 19.2 s
+  and ending by 21.2 s. Its 1 s lead-in then plays over the earlier punch-in's recorded
+  sweep at 17.7 s, and it still judges the sweep at 20.1 s (C1a's note). Items:
+  - **7** Placement as in items 1 and 2; outside the placed range the take's audio is
+    bit-identical (`audioOutside()`), and its pitch and notes are unchanged beyond
+    ± 0.25 s (`eventsOutside()`).
+  - **12** The lead-in: nothing before P changed (the same comparisons, their part before
+    P, reported apart), and C1b's output-in-the-gaps check over the lead-in's looks, which
+    now lie over take audio. **This is the case C1b could not show failing**: show it here.
+  - **14** The take stopped by itself: the frames recorded past what `shouldStopAt()`
+    needed, in seconds, within 0.25 s plus one poll of the take timer (100 ms); the
+    coverage added is exactly the selection; no modal widget seen during the take. The
+    check's takes always record into a selection, and `record()` asks the overwrite
+    question only when not (`end < 0`), so "no question" is watched, not arranged.
+- **Stage "Pre-roll near the start"**: one range from P = 1 s judging the sweep at 3.1 s,
+  with a pre-roll of 3 s for this plan only: a new `Plan` field, read where
+  `wantedPreRollFrames()` reads `kPreRollSeconds` today. Item **13**: playback ran from
+  frame 0 and never before it (the observer's cursor), the countdown began at 1 and not
+  3 (the observer's status text), placement right.
+- Items 1 and 2 then cover every punch-in of the run; say how their numbers read now.
+- **Tests** (`TestDevChecks`): the passing run gains the two stages (keep the whole run
+  under about 25 s on the fake). Failing cases, sharing runs where they can:
+  - the take audible during the re-record's lead-in (set its play parameters audible when
+    the runner reports `Recording` for that punch-in, from the test): items 4 and 12 fail;
+  - show failure by breaking the code for item 7 (e.g. the splice's fade beyond its range)
+    and item 13 (e.g. the pre-roll not clamped at 0), and undo by hand.
 
 ### C2 — Long song and joins; items 9, 10 (spec §4 rows 9, 10)
 
