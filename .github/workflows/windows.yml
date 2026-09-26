@@ -67,11 +67,15 @@ jobs:
         export MINGW_PREFIX=$(cygpath -m /mingw64)
         ninja -C build
 
+    # Tony's suites also write their results to files: here QTest's
+    # output to stdout does not reach meson's log
     - name: test
       id: test
       shell: msys2 {0}
       run: |
         export MINGW_PREFIX=$(cygpath -m /mingw64)
+        mkdir -p build/test-results
+        export TONY_TEST_LOG_DIR=$(cygpath -m "$PWD/build/test-results")
         meson test -C build --print-errorlogs --num-processes 1
     # meson shows at most the last 100 lines of a failing log, and one
     # test executable runs several QTest suites: name every failed test,
@@ -86,3 +90,12 @@ jobs:
              /^(FAIL!|XPASS|QFATAL)|Received signal/ { print; fail = 1; next }
              /^[A-Z!]+ *: / { fail = 0 }
              fail && /^   / { print }' build/meson-logs/testlog.txt
+        awk 'function show(line) {
+                 if (!shown) { print "suite: " FILENAME; shown = 1 }
+                 print line
+             }
+             FNR == 1 { shown = 0; fail = 0 }
+             /^Totals:/ { if ($0 !~ /, 0 failed/) show($0); next }
+             /^(FAIL!|XPASS|QFATAL)/ { show($0); fail = 1; next }
+             /^[A-Z!]+ *: / { fail = 0 }
+             fail && /^   / { show($0) }' build/test-results/*.txt
