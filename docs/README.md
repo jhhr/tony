@@ -22,3 +22,4 @@ methods, and they do not tell the story of fixed bugs.
 | [mobile-port.md](mobile-port.md) | Porting to a phone: decisions, what in the code any port depends on, Android against Sailfish OS |
 | [port-android.md](port-android.md), [port-sailfish.md](port-sailfish.md) | Platform facts with sources, the work, and the first test port for each |
 | [calibrate-audio.md](calibrate-audio.md) | Calibrate Audio, which measures the round trip through an earcup held to the mic, and the dev checks that settle the checklist's device items: what they do, what each verdict and check means, which numbers to send back, design, tests, decisions, open points, the user's runs |
+| [windows-shards.md](windows-shards.md) | Plan, built and proven on Linux, left to try on Windows: sharded test runs from Git Bash on Windows, each shard kept apart by an application name of its own |

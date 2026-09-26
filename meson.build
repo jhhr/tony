@@ -71,6 +71,11 @@ elif buildtype.startswith('debug')
   ]
 endif # get_option('buildtype')
 
+# Defines that only Tony's own code reads.  They go on Tony's targets
+# alone: general_defines reaches svcore too, and any change to it
+# recompiles the whole of svcore for nothing
+tony_defines = []
+
 # The development checks (main/dev/, docs/calibrate-audio.md) are in
 # every build but a release one: debug, debugoptimized, plain, minsize
 # and custom alike.  Packages are release builds and have none of it.
@@ -78,7 +83,7 @@ endif # get_option('buildtype')
 dev_checks = not buildtype.startswith('release')
 dev_moc_args = []
 if dev_checks
-  general_defines += [
+  tony_defines += [
     '-DTONY_DEV_CHECKS',
   ]
   dev_moc_args += [
@@ -1353,6 +1358,7 @@ tony_core_lib = static_library(
   cpp_args: [
     feature_defines,
     general_defines,
+    tony_defines,
   ],
 )
 
@@ -1377,6 +1383,7 @@ tony_app_lib = static_library(
   cpp_args: [
     feature_defines,
     general_defines,
+    tony_defines,
   ],
 )
 
@@ -1410,6 +1417,7 @@ if system == 'android'
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
     ],
     link_args: [
       feature_additional_libs,
@@ -1438,6 +1446,7 @@ else
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
     ],
     link_args: [
       feature_additional_libs,
@@ -1592,6 +1601,7 @@ if system != 'android'
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
       '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
     ],
     link_args: [
@@ -1639,6 +1649,7 @@ if system != 'android'
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
       '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
     ],
     link_args: [
@@ -1681,6 +1692,7 @@ if system != 'android'
       cpp_args: [
         feature_defines,
         general_defines,
+        tony_defines,
       ],
       link_args: [
         feature_additional_libs,
