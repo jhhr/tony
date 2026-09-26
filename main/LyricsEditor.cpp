@@ -22,10 +22,29 @@
 #include "data/model/EventCommands.h"
 #include "widgets/CommandHistory.h"
 
+#include <QAction>
 #include <QEvent>
+#include <QMenu>
 #include <QMouseEvent>
 
+#include <algorithm>
+
 using namespace sv;
+
+namespace {
+
+// An edit that is done already, as the command was filled, goes on the
+// history as it is.  CommandHistory marks the session modified
+void
+pushDone(ChangeEventsCommand *command)
+{
+    command = command->finish();
+    if (command) {
+        CommandHistory::getInstance()->addCommand(command, false);
+    }
+}
+
+}
 
 LyricsEditor::LyricsEditor(LyricsTrack *lyrics, QObject *parent) :
     QObject(parent),
@@ -93,9 +112,21 @@ LyricsEditor::dragModel() const
     return ModelById::getAs<RegionModel>(m_dragModel);
 }
 
+std::shared_ptr<RegionModel>
+LyricsEditor::editedModel(ModelId id) const
+{
+    // Edit mode gone off, or other lyrics than the ones the edit began
+    // in: an import or a new session in the meantime
+    RegionLayer *layer = currentLayer();
+    if (!m_enabled || !layer || id.isNone() || layer->getModel() != id) {
+        return {};
+    }
+    return ModelById::getAs<RegionModel>(id);
+}
+
 bool
-LyricsEditor::hitAt(QPoint pos, LyricsEdit::Hit &hit,
-                    EventVector &words) const
+LyricsEditor::wordsAt(QPoint pos, EventVector &words,
+                      LyricsEdit::Boxes &boxes) const
 {
     // Hidden lyrics keep the box row they were last painted with, which
     // is not there to be clicked
@@ -112,9 +143,191 @@ LyricsEditor::hitAt(QPoint pos, LyricsEdit::Hit &hit,
 
     words = model->getAllEvents();
     Pane *pane = m_pane;
-    LyricsEdit::Boxes boxes = LyricsEdit::boxesFor
+    boxes = LyricsEdit::boxesFor
         (words, [pane](sv_frame_t frame) { return pane->getXForFrame(frame); });
+    return true;
+}
+
+bool
+LyricsEditor::hitAt(QPoint pos, LyricsEdit::Hit &hit,
+                    EventVector &words) const
+{
+    LyricsEdit::Boxes boxes;
+    if (!wordsAt(pos, words, boxes)) return false;
     hit = LyricsEdit::hitTest(boxes, pos.x(), grabPixels);
+    return true;
+}
+
+std::vector<LyricsEditor::MenuEntry>
+LyricsEditor::menuEntriesAt(QPoint pos) const
+{
+    std::vector<MenuEntry> entries;
+    if (!m_enabled || m_dragging) return entries;
+
+    EventVector words;
+    LyricsEdit::Boxes boxes;
+    if (!wordsAt(pos, words, boxes)) return entries;
+
+    ModelId modelId = currentLayer()->getModel();
+    auto model = ModelById::getAs<RegionModel>(modelId);
+    if (!model) return entries;
+
+    // On a word, anywhere in its box, near its edges too: the menu is for
+    // the word the pointer is on
+    int word = LyricsEdit::wordAt(boxes, pos.x());
+    if (word >= 0) {
+        MenuEntry edit;
+        edit.text = tr("Edit Word Text...");
+        edit.enabled = true;
+        edit.operation = MenuEntry::Operation::EditText;
+        edit.model = modelId;
+        edit.word = words[word];
+        entries.push_back(edit);
+
+        MenuEntry remove = edit;
+        remove.text = tr("Delete Word");
+        remove.operation = MenuEntry::Operation::DeleteWord;
+        entries.push_back(remove);
+        return entries;
+    }
+
+    // Between words, at the last frame the pointer's column shows.  Its
+    // first can be inside the word before: that word's end is somewhere
+    // in the column just after its box
+    sv_frame_t frame = std::max(m_pane->getFrameForX(pos.x()),
+                                m_pane->getFrameForX(pos.x() + 1) - 1);
+    LyricsEdit::Span span;
+
+    MenuEntry add;
+    add.text = tr("Add Word...");
+    add.enabled = LyricsEdit::newWordSpan(words, frame,
+                                          model->getSampleRate(), span);
+    add.operation = MenuEntry::Operation::AddWord;
+    add.model = modelId;
+    add.frame = frame;
+    entries.push_back(add);
+    return entries;
+}
+
+void
+LyricsEditor::choose(const MenuEntry &entry)
+{
+    if (!entry.enabled || m_dragging) return;
+
+    switch (entry.operation) {
+    case MenuEntry::Operation::EditText:
+        editText(entry.model, entry.word);
+        break;
+    case MenuEntry::Operation::DeleteWord:
+        deleteWord(entry.model, entry.word);
+        break;
+    case MenuEntry::Operation::AddWord:
+        addWord(entry.model, entry.frame);
+        break;
+    }
+}
+
+void
+LyricsEditor::editText(ModelId modelId, Event word)
+{
+    if (!m_askText) return;
+    {
+        auto model = editedModel(modelId);
+        if (!model || !model->containsEvent(word)) return;
+    }
+
+    QString text = word.getLabel();
+    if (!m_askText(text, false)) return;
+
+    // The question had an event loop of its own, and the lyrics may have
+    // gone, or the word been changed, meanwhile: then this edit is of
+    // something that is not there
+    auto model = editedModel(modelId);
+    if (!model || !model->containsEvent(word)) return;
+
+    // Nothing left of the text is refused, and the word stays as it was:
+    // Delete Word is for deleting it
+    QString cleaned = LyricsEdit::cleanText(text);
+    if (cleaned == "" || cleaned == word.getLabel()) return;
+
+    auto command = new ChangeEventsCommand
+        (modelId.untyped, tr("Change Word Text"));
+    command->remove(word);
+    command->add(word.withLabel(cleaned));
+    pushDone(command);
+}
+
+void
+LyricsEditor::deleteWord(ModelId modelId, Event word)
+{
+    auto model = editedModel(modelId);
+    if (!model || !model->containsEvent(word)) return;
+
+    auto command = new ChangeEventsCommand
+        (modelId.untyped, tr("Delete Word"));
+    command->remove(word);
+    pushDone(command);
+}
+
+void
+LyricsEditor::addWord(ModelId modelId, sv_frame_t frame)
+{
+    if (!m_askText) return;
+    {
+        auto model = editedModel(modelId);
+        LyricsEdit::Span span;
+        if (!model ||
+            !LyricsEdit::newWordSpan(model->getAllEvents(), frame,
+                                     model->getSampleRate(), span)) {
+            return;
+        }
+    }
+
+    QString text;
+    if (!m_askText(text, true)) return;
+    QString cleaned = LyricsEdit::cleanText(text);
+    if (cleaned == "") return;
+
+    // Where the word goes, and the line it joins, from the words as they
+    // are after the question, which may not be as they were before it
+    auto model = editedModel(modelId);
+    if (!model) return;
+    EventVector words = model->getAllEvents();
+    LyricsEdit::Span span;
+    if (!LyricsEdit::newWordSpan(words, frame, model->getSampleRate(), span)) {
+        return;
+    }
+    float line = LyricsEdit::newWordLine(words, span);
+
+    // The layer draws the word bold if it is the first of its line now
+    auto command = new ChangeEventsCommand
+        (modelId.untyped, tr("Add Word"));
+    command->add(Event(span.start, line, span.duration(), cleaned));
+    pushDone(command);
+}
+
+bool
+LyricsEditor::showMenu(QPoint pos)
+{
+    std::vector<MenuEntry> entries = menuEntriesAt(pos);
+    if (entries.empty()) return false;
+
+    // As the pane does for its own menu
+    clearHelp();
+
+    // Shown and left to run by itself, as Tony's own menu is: the entry
+    // chosen is done from the menu's event handling, and its question
+    // is not asked from inside the pane's.  Deleted once it is hidden,
+    // after the entry chosen is done
+    QMenu *menu = new QMenu(m_pane);
+    connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
+    for (const MenuEntry &entry : entries) {
+        QAction *action = menu->addAction(entry.text);
+        action->setEnabled(entry.enabled);
+        connect(action, &QAction::triggered, this,
+                [this, entry]() { choose(entry); });
+    }
+    menu->popup(m_pane->mapToGlobal(pos));
     return true;
 }
 
@@ -154,15 +367,35 @@ LyricsEditor::mousePressed(QMouseEvent *e)
     // menu with our button still held
     if (m_dragging) return true;
 
+    QPoint pos = e->position().toPoint();
+
+    // A right press in the row is for the words' menu, and never reaches
+    // the pane, which would open its own as well.  Outside the row it is
+    // the pane's, and so is its menu
+    if (e->button() == Qt::RightButton) return showMenu(pos);
+
     if (e->button() != Qt::LeftButton) return false;
 
-    QPoint pos = e->position().toPoint();
     LyricsEdit::Hit hit;
     EventVector words;
-    if (!hitAt(pos, hit, words) || !hit.isEdge()) return false;
+    if (!hitAt(pos, hit, words)) return false;
 
     RegionLayer *layer = currentLayer();
     if (!layer || layer->getModel().isNone()) return false;
+
+    if (!hit.isEdge()) {
+
+        // A double-click in a word, away from its edges, is for its
+        // text.  The pane has had the first click of it, and moves the
+        // playback cursor there as for any click: it never sees the
+        // second, which would have called that off
+        if (e->type() == QEvent::MouseButtonDblClick &&
+            hit.part == LyricsEdit::Part::Inside) {
+            editText(layer->getModel(), words[hit.word]);
+            return true;
+        }
+        return false;
+    }
 
     m_dragging = true;
     m_dragModel = layer->getModel();
@@ -240,9 +473,15 @@ LyricsEditor::hover(QPoint pos)
         } else {
             showHelp(tr("Drag to move the end of \"%1\"").arg(word));
         }
+    } else if (hit.part == LyricsEdit::Part::Inside) {
+        restoreCursor();
+        showHelp(tr("Double-click to change the text of \"%1\", "
+                    "right-click to delete it")
+                 .arg(words[hit.word].getLabel()));
     } else {
         restoreCursor();
-        showHelp(tr("Drag a word's start or end to move it"));
+        showHelp(tr("Right-click to add a word, "
+                    "drag a word's start or end to move it"));
     }
 
     // The row is ours while edit mode is on: the pane would only put its

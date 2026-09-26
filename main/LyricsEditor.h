@@ -27,7 +27,9 @@
 #include <QPointer>
 #include <QString>
 
+#include <functional>
 #include <memory>
+#include <vector>
 
 class QMouseEvent;
 class LyricsTrack;
@@ -42,25 +44,32 @@ class ChangeEventsCommand;
 /**
  * Edit mode for the lyrics (Edit > Edit Lyrics): the mouse in the box
  * row of the lyrics, along the bottom of their pane, moves a word's
- * start or end.
+ * start or end, changes its text on a double-click, and on a right
+ * click offers a small menu to change or delete the word there, or to
+ * add one in the space between words.
  *
  * The lyrics layer is never the pane's top layer, so the pane's tools
  * never reach it: this watches the pane's mouse events through an
  * event filter, which is on only while edit mode is.  Only what it acts
  * on is kept from the pane: a left press on an edge and the drag it
- * starts, and moves with no button held in the box row, where the
- * cursor and the context help are this one's.  Everything else, a
- * click anywhere to move the playback cursor included, goes to the pane
- * as it would without edit mode.
+ * starts, a double-click on a word, a right press anywhere in the box
+ * row, and moves with no button held in the box row, where the cursor
+ * and the context help are this one's.  Everything else, a click
+ * anywhere to move the playback cursor included, goes to the pane as it
+ * would without edit mode.
  *
  * What an edit may do is LyricsEdit's to say; this does as it says.
  * A drag edits the model as it goes, so the words move under the
  * pointer, and is one command on the undo history when the button is
- * let go, or nothing at all if the word is where it was.
+ * let go, or nothing at all if the word is where it was.  A change of
+ * text, an added word and a deleted one are a command each.
  *
  * The layer and the model are found through LyricsTrack at every
  * event, and nothing of them is kept between drags: an import, a
- * remove or another session can replace them at any time.
+ * remove or another session can replace them at any time.  For the
+ * same reason a menu entry holds the word as a value, and the word is
+ * looked for again when the entry is chosen and again once its text
+ * has been asked for.
  *
  * Like the lyrics track itself, MainWindow owns it and only wires it.
  */
@@ -86,6 +95,53 @@ public:
 
     /// How near an edge, in logical pixels on either side, grabs it
     static constexpr int grabPixels = 6;
+
+    /**
+     * How a word's text is asked for: given the text the word has ("" for
+     * a new word), true with the text the user gave in its place, false
+     * if they cancelled.  MainWindow asks with a dialog, whose event loop
+     * runs while the question is open.  With none set, no text is changed
+     * and no word added.
+     */
+    typedef std::function<bool(QString &text, bool isNew)> TextQuestion;
+    void setTextQuestion(TextQuestion question) { m_askText = question; }
+
+    /**
+     * One entry of the menu a right press in the box row opens.  Values
+     * only: the word as it was when the menu was made, and the model it
+     * was in, which choose() looks for again.
+     */
+    struct MenuEntry {
+        enum class Operation { EditText, DeleteWord, AddWord };
+
+        QString text;
+        bool enabled = false;
+        Operation operation = Operation::EditText;
+        sv::ModelId model;
+
+        /// EditText, DeleteWord: the word the pointer was on
+        sv::Event word;
+
+        /// AddWord: the frame the new word goes at
+        sv::sv_frame_t frame = 0;
+    };
+
+    /**
+     * The entries of the menu for a right press at this point of the
+     * pane, in the order shown: on a word "Edit Word Text..." and "Delete
+     * Word", elsewhere in the box row "Add Word...", disabled where
+     * there is no room for a word.  None if the point is not in the box
+     * row, or edit mode is off: the press is then the pane's.
+     */
+    std::vector<MenuEntry> menuEntriesAt(QPoint pos) const;
+
+    /**
+     * Do what an entry says, as choosing it in the menu does: nothing
+     * if it is disabled, if edit mode is off, or if the lyrics have
+     * changed so that its word is not there as it was.  The text is
+     * asked for first, where the entry needs one.
+     */
+    void choose(const MenuEntry &entry);
 
 signals:
     /// What the mouse does where the pointer is, "" when that is over
@@ -127,10 +183,31 @@ private:
     sv::RegionLayer *currentLayer() const;
     std::shared_ptr<sv::RegionModel> dragModel() const;
 
-    // What the pointer is on, if it is in the box row: false if it is
-    // not, or there are no lyrics on show.  The words are the model's now
+    TextQuestion m_askText;
+
+    // The words and their boxes, if the point is in the box row: false
+    // if it is not, or there are no lyrics on show.  The words are the
+    // model's now
+    bool wordsAt(QPoint pos, sv::EventVector &words,
+                 LyricsEdit::Boxes &boxes) const;
+
+    // What the pointer is on, if it is in the box row, as wordsAt()
     bool hitAt(QPoint pos, LyricsEdit::Hit &hit,
                sv::EventVector &words) const;
+
+    // The lyrics' model, if it is this one and is still being edited
+    std::shared_ptr<sv::RegionModel> editedModel(sv::ModelId) const;
+
+    // The three edits.  Each looks for its word in the model again, asks
+    // for a text where it needs one, and looks again after the question,
+    // whose event loop may have let anything happen
+    void editText(sv::ModelId model, sv::Event word);
+    void deleteWord(sv::ModelId model, sv::Event word);
+    void addWord(sv::ModelId model, sv::sv_frame_t frame);
+
+    // The menu of menuEntriesAt(), shown at this point.  False if there
+    // is none there
+    bool showMenu(QPoint pos);
 
     bool mousePressed(QMouseEvent *);
     bool mouseMoved(QMouseEvent *);

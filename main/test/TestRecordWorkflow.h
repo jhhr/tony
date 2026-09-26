@@ -74,6 +74,7 @@
 #include <QComboBox>
 #include <QFile>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -82,6 +83,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <vector>
 
 /**
@@ -243,6 +245,19 @@ public:
     int lyricsExportQuestions() const { return m_lyricsExportQuestions; }
     QString lyricsExportSuggestion() const { return m_lyricsExportSuggestion; }
 
+    // The texts the lyrics editor asks for, answered from here in turn.
+    // A question with no answer left is cancelled
+    void answerWordText(QString text) { m_wordTextAnswers.push_back({true, text}); }
+    void cancelWordText() { m_wordTextAnswers.push_back({false, QString()}); }
+    int wordTextQuestions() const { return m_wordTextQuestions; }
+    int wordTextAnswersLeft() const { return int(m_wordTextAnswers.size()); }
+    // The text the last question offered, and whether it was for a new word
+    QString wordTextOffered() const { return m_wordTextOffered; }
+    bool wordTextWasNew() const { return m_wordTextWasNew; }
+    // Done while the next question is open, as anything can be while its
+    // dialog runs an event loop
+    void whileAskingWordText(std::function<void()> f) { m_whileAskingWordText = f; }
+
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
         onRealtimePitchDetected(frame, hz);
     }
@@ -287,6 +302,22 @@ protected:
         return m_lyricsExportAnswer;
     }
 
+    bool askForLyricsWordText(QString &text, bool isNew) override {
+        ++m_wordTextQuestions;
+        m_wordTextOffered = text;
+        m_wordTextWasNew = isNew;
+        if (m_whileAskingWordText) {
+            auto during = m_whileAskingWordText;
+            m_whileAskingWordText = nullptr;
+            during();
+        }
+        if (m_wordTextAnswers.isEmpty()) return false;
+        auto answer = m_wordTextAnswers.takeFirst();
+        if (!answer.first) return false;
+        text = answer.second;
+        return true;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -303,6 +334,11 @@ private:
     QString m_lyricsExportAnswer;
     int m_lyricsExportQuestions = 0;
     QString m_lyricsExportSuggestion;
+    QList<QPair<bool, QString>> m_wordTextAnswers;
+    int m_wordTextQuestions = 0;
+    QString m_wordTextOffered;
+    bool m_wordTextWasNew = false;
+    std::function<void()> m_whileAskingWordText;
 };
 
 class TestRecordWorkflow : public QObject
@@ -1139,6 +1175,89 @@ class TestRecordWorkflow : public QObject
     }
 
     QPoint inRow(int x) { return QPoint(x, m_row.center().y()); }
+
+    // A double-click as Qt gives it: a press and a release, then the
+    // second press as the double-click, and its release
+    void doubleClickAt(QPoint pos) {
+        pressAt(pos);
+        releaseAt(pos);
+        sendMouse(QEvent::MouseButtonDblClick, pos, Qt::LeftButton,
+                  Qt::LeftButton);
+        releaseAt(pos);
+    }
+
+    void rightPressAt(QPoint pos) {
+        sendMouse(QEvent::MouseButtonPress, pos, Qt::RightButton,
+                  Qt::RightButton);
+    }
+
+    // The texts of the entries of the words' menu at a point, with a "-"
+    // in front of a disabled one; none where the menu would not open
+    QStringList menuAt(QPoint pos) {
+        QStringList texts;
+        for (const auto &e : m_window->lyricsEditor()->menuEntriesAt(pos)) {
+            texts << (e.enabled ? "" : "-") + e.text;
+        }
+        return texts;
+    }
+
+    // The entry of the words' menu at a point with this text, chosen as a
+    // click on it chooses it; false if there is none
+    bool chooseAt(QPoint pos, QString text) {
+        for (const auto &e : m_window->lyricsEditor()->menuEntriesAt(pos)) {
+            if (e.text == text) {
+                m_window->lyricsEditor()->choose(e);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // The words' menu the editor has popped up over pane 0, if it is on
+    // show
+    QMenu *wordsMenu() {
+        for (QMenu *menu : pane0()->findChildren<QMenu *>()) {
+            if (menu->isVisible()) return menu;
+        }
+        return nullptr;
+    }
+
+    static QStringList actionTexts(QMenu *menu) {
+        QStringList texts;
+        if (menu) for (QAction *a : menu->actions()) texts << a->text();
+        return texts;
+    }
+
+    // Close every menu on show, the words' and Tony's own: both are
+    // popped up, with no event loop of their own to end.  How many
+    int closeMenus() {
+        int n = 0;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            QMenu *menu = qobject_cast<QMenu *>(w);
+            if (menu && menu->isVisible()) {
+                menu->close();
+                ++n;
+            }
+        }
+        return n;
+    }
+
+    // The lyrics' model, to change the words straight in it, as a test's
+    // setup: no command, and nothing marked modified
+    std::shared_ptr<sv::RegionModel> lyricsModel() {
+        return sv::ModelById::getAs<sv::RegionModel>
+            (m_window->lyrics()->getModelId());
+    }
+
+    // One word in the model replaced by another, and the pane painted
+    // again: the editor goes by the boxes as painted
+    void replaceWord(const sv::Event &from, const sv::Event &to) {
+        auto model = lyricsModel();
+        QVERIFY(model && model->containsEvent(from));
+        model->remove(from);
+        model->add(to);
+        m_row = lyricsBoxRow();
+    }
 
     // Every key of the settings, with its value, in the form the test
     // messages show
@@ -6849,6 +6968,14 @@ private slots:
         QCOMPARE(lyricsEvents(), before);
         QVERIFY(!m_window->isDocumentModified());
         QCOMPARE(undoOnce(), QString());
+
+        // and a double-click on a word asks nothing.  The pane's own may
+        // open the edit dialog of the pitch point there, which the
+        // watchdog closes
+        doubleClickAt(inRow(columnOf(lyricsWord("kaksi").getFrame()) + 40));
+        takeDialogs();
+        QCOMPARE(m_window->wordTextQuestions(), 0);
+        QCOMPARE(lyricsEvents(), before);
     }
 
     // Yksi's end and kaksi's start are one edge on screen.  The column
@@ -7309,7 +7436,14 @@ private slots:
         hoverAt(inRow(edge + 40));
         QCOMPARE(pane->cursor().shape(), own);
         QCOMPARE(m_window->statusText(),
-                 QString("Drag a word's start or end to move it"));
+                 QString("Double-click to change the text of \"kaksi\", "
+                         "right-click to delete it"));
+        int gap = columnOf(endOf(lyricsWord("kaksi"))) + 20;
+        hoverAt(inRow(gap));
+        QCOMPARE(pane->cursor().shape(), own);
+        QCOMPARE(m_window->statusText(),
+                 QString("Right-click to add a word, "
+                         "drag a word's start or end to move it"));
 
         hoverAt(inRow(edge));
         QCOMPARE(pane->cursor().shape(), Qt::SizeHorCursor);
@@ -7373,8 +7507,560 @@ private slots:
         releaseAt(inRow(edge + 20));
         QCOMPARE(lyricsWord("kolme").getFrame(),
                  kolme.getFrame() + framesBetween(edge, edge + 20));
+        QCOMPARE(m_window->wordTextQuestions(), 0);
         QCOMPARE(undoOnce(), QString("Move Word Start"));
         QCOMPARE(undoOnce(), QString());
+    }
+
+    // A double-click on a word, away from its edges, asks for its text
+    // and changes it, and nothing else of the word: one step on the
+    // history (decisions 8, 12).  A double-click between words is the
+    // pane's, and asks nothing
+    void lyrics_edit_text_by_double_click() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        sv::Event kaksi = lyricsWord("kaksi");
+        int inside = columnOf(kaksi.getFrame()) + 40;
+
+        m_window->answerWordText("kaksikko");
+        doubleClickAt(inRow(inside));
+        QCOMPARE(m_window->wordTextQuestions(), 1);
+        QCOMPARE(m_window->wordTextOffered(), QString("kaksi"));
+        QVERIFY(!m_window->wordTextWasNew());
+        QCOMPARE(lyricsWord("kaksikko"), kaksi.withLabel("kaksikko"));
+        QCOMPARE(lyricsWord("kaksi").getFrame(), sv::sv_frame_t(-1));
+        QCOMPARE(int(lyricsEvents().size()), 3);
+        QCOMPARE(int(commands.count()), 1);
+        QVERIFY(m_window->isDocumentModified());
+        sv::EventVector changed = lyricsEvents();
+
+        QCOMPARE(undoOnce(), QString("Change Word Text"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+        QCOMPARE(redoOnce(), QString("Change Word Text"));
+        QCOMPARE(lyricsEvents(), changed);
+
+        // The menu's Edit Word Text... is the same edit
+        m_window->discardModifications();
+        m_window->answerWordText("kaksi");
+        QVERIFY(chooseAt(inRow(inside), "Edit Word Text..."));
+        QCOMPARE(m_window->wordTextQuestions(), 2);
+        QCOMPARE(m_window->wordTextOffered(), QString("kaksikko"));
+        QCOMPARE(lyricsEvents(), before);
+        QVERIFY(m_window->isDocumentModified());
+        QCOMPARE(undoOnce(), QString("Change Word Text"));
+        QCOMPARE(lyricsEvents(), changed);
+
+        // Last, as the pane's double-click moves the view.  It may open
+        // the edit dialog of the pitch point there, which the watchdog
+        // closes
+        int gap = columnOf(endOf(kaksi)) + 20;
+        doubleClickAt(inRow(gap));
+        takeDialogs();
+        QCOMPARE(m_window->wordTextQuestions(), 2);
+        QCOMPARE(lyricsEvents(), changed);
+    }
+
+    // Cancelled, nothing left of the text once cleaned, or the same text:
+    // the word stays as it was, and nothing goes on the history
+    // (decision 11).  A new word likewise is not added
+    void lyrics_edit_text_refused() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+
+        m_window->cancelWordText();
+        m_window->answerWordText("");
+        m_window->answerWordText("   ");
+        m_window->answerWordText(QString("\t") + QChar(0x07) + " \r\n");
+        m_window->answerWordText(" kaksi\t");
+        for (int i = 1; i <= 5; ++i) {
+            doubleClickAt(inRow(inside));
+            QCOMPARE(m_window->wordTextQuestions(), i);
+            QCOMPARE(lyricsEvents(), before);
+        }
+
+        m_window->cancelWordText();
+        QVERIFY(chooseAt(inRow(inside), "Edit Word Text..."));
+        QCOMPARE(m_window->wordTextQuestions(), 6);
+
+        int gap = columnOf(endOf(lyricsWord("kaksi"))) + 20;
+        m_window->cancelWordText();
+        m_window->answerWordText(QString(" ") + QChar(0x7F) + "\t");
+        QVERIFY(chooseAt(inRow(gap), "Add Word..."));
+        QVERIFY(chooseAt(inRow(gap), "Add Word..."));
+        QCOMPARE(m_window->wordTextQuestions(), 8);
+        QVERIFY(m_window->wordTextWasNew());
+        QCOMPARE(m_window->wordTextOffered(), QString());
+
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(int(commands.count()), 0);
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // The text is cleaned as the parsers clean a label: control
+    // characters out, a tab a space, blanks at the ends trimmed, at most
+    // 200 characters (decision 11)
+    void lyrics_edit_text_cleaned() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Event kaksi = lyricsWord("kaksi");
+        int inside = columnOf(kaksi.getFrame()) + 40;
+
+        m_window->answerWordText(QString("  kak") + QChar(0x07) +
+                                 "si\tvaan \r\n");
+        doubleClickAt(inRow(inside));
+        QCOMPARE(lyricsWord("kaksi vaan"), kaksi.withLabel("kaksi vaan"));
+
+        m_window->answerWordText(QString(250, QChar('a')));
+        doubleClickAt(inRow(inside));
+        QCOMPARE(lyricsWord(QString(200, QChar('a'))),
+                 kaksi.withLabel(QString(200, QChar('a'))));
+
+        int gap = columnOf(endOf(kaksi)) + 20;
+        m_window->answerWordText(QString(" ja") + QChar(0x7F) + "\t");
+        QVERIFY(chooseAt(inRow(gap), "Add Word..."));
+        QVERIFY(lyricsWord("ja").getFrame() >= 0);
+        QCOMPARE(int(lyricsEvents().size()), 4);
+
+        QCOMPARE(undoOnce(), QString("Add Word"));
+        QCOMPARE(undoOnce(), QString("Change Word Text"));
+        QCOMPARE(undoOnce(), QString("Change Word Text"));
+        QCOMPARE(lyricsWord("kaksi"), kaksi);
+    }
+
+    // The menu at a point: on a word, anywhere in its box, its edges as
+    // well, the word's two entries; between words Add Word..., disabled
+    // left of frame 0; outside the box row, or with edit mode off, none
+    // (decision 8)
+    void lyrics_edit_menu_entries() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::Event yksi = lyricsWord("Yksi");
+        sv::Event kaksi = lyricsWord("kaksi");
+        sv::Event kolme = lyricsWord("kolme");
+        const QStringList onWord = { "Edit Word Text...", "Delete Word" };
+        const QStringList add = { "Add Word..." };
+
+        int start = columnOf(kaksi.getFrame());
+        int last = columnOf(endOf(kaksi)) - 1;
+        for (int x : { start, start + 2, start + 40, last - 2, last }) {
+            QCOMPARE(menuAt(inRow(x)), onWord);
+            auto entries = editor->menuEntriesAt(inRow(x));
+            QCOMPARE(entries[0].word, kaksi);
+            QCOMPARE(entries[1].word, kaksi);
+        }
+        QCOMPARE(menuAt(inRow(start - 1)), onWord);
+        QCOMPARE(editor->menuEntriesAt(inRow(start - 1))[0].word, yksi);
+
+        // Between words.  The first column after kaksi's box shows the
+        // end of kaksi too, and where it starts is inside kaksi: a new word
+        // goes after it all the same
+        int after = columnOf(endOf(kaksi));
+        int before = columnOf(kolme.getFrame()) - 1;
+        QVERIFY2(pane0()->getFrameForX(after) < endOf(kaksi),
+                 "the column after kaksi starts after kaksi's end: "
+                 "the case of this test is not set up");
+        for (int x : { after, after + 2, (after + before) / 2, before }) {
+            QCOMPARE(menuAt(inRow(x)), add);
+        }
+        QCOMPARE(menuAt(inRow(columnOf(endOf(kolme)) + 50)), add);
+        QCOMPARE(menuAt(inRow(columnOf(0) - 5)), QStringList{ "-Add Word..." });
+
+        QVERIFY(menuAt(QPoint(start + 40, m_row.top() - 3)).isEmpty());
+        QVERIFY(menuAt(QPoint(start + 40, m_row.bottom() + 3)).isEmpty());
+        m_window->editLyricsAction()->trigger();
+        QVERIFY(!editor->isEnabled());
+        QVERIFY(menuAt(inRow(start + 40)).isEmpty());
+        QVERIFY(menuAt(inRow(after)).isEmpty());
+    }
+
+    // A right press in the box row pops the words' menu up, and the pane
+    // never sees it, so Tony's own menu stays shut; the entries of the
+    // menu shown do what they say.  Outside the row, or with edit mode
+    // off, the press is the pane's, and opens Tony's menu
+    void lyrics_edit_right_press() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QSignalSpy panes(pane0(), &sv::Pane::rightButtonMenuRequested);
+        sv::Event kolme = lyricsWord("kolme");
+        int inside = columnOf(kolme.getFrame()) + 40;
+
+        rightPressAt(inRow(inside));
+        QCOMPARE(int(panes.count()), 0);
+        QMenu *menu = wordsMenu();
+        QVERIFY2(menu, "the words' menu is not on show");
+        QCOMPARE(actionTexts(menu),
+                 (QStringList{ "Edit Word Text...", "Delete Word" }));
+        menu->actions()[1]->trigger();
+        QCOMPARE(lyricsWord("kolme").getFrame(), sv::sv_frame_t(-1));
+        QCOMPARE(int(lyricsEvents().size()), 2);
+        QCOMPARE(closeMenus(), 1);
+        QCOMPARE(undoOnce(), QString("Delete Word"));
+        QCOMPARE(lyricsWord("kolme"), kolme);
+
+        int gap = columnOf(kolme.getFrame()) - 20;
+        rightPressAt(inRow(gap));
+        QCOMPARE(int(panes.count()), 0);
+        menu = wordsMenu();
+        QVERIFY2(menu, "the words' menu is not on show");
+        QCOMPARE(actionTexts(menu), QStringList{ "Add Word..." });
+        QVERIFY(menu->actions()[0]->isEnabled());
+        m_window->answerWordText("ja");
+        menu->actions()[0]->trigger();
+        QCOMPARE(m_window->wordTextQuestions(), 1);
+        QVERIFY(lyricsWord("ja").getFrame() >= 0);
+        QCOMPARE(closeMenus(), 1);
+        QCOMPARE(undoOnce(), QString("Add Word"));
+
+        // Above the row, where the pane's menu is
+        rightPressAt(QPoint(inside, m_row.top() - 8));
+        QCOMPARE(int(panes.count()), 1);
+        QVERIFY(!wordsMenu());
+        QCOMPARE(closeMenus(), 1);
+
+        m_window->editLyricsAction()->trigger();
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+        rightPressAt(inRow(inside));
+        QCOMPARE(int(panes.count()), 2);
+        QVERIFY(!wordsMenu());
+        QCOMPARE(closeMenus(), 1);
+        QCOMPARE(lyricsWord("kolme"), kolme);
+    }
+
+    // Add Word... puts the word at the click: 0.5 s long, or up to the
+    // next word, back into the gap as far as that makes it longer
+    // (decision 9), and on the line of the nearer neighbour (decision 10)
+    void lyrics_edit_add_word() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        sv::Event kaksi = lyricsWord("kaksi");
+        sv::Event kolme = lyricsWord("kolme");
+        QVERIFY(kaksi.getValue() != kolme.getValue());
+        QCOMPARE(kolme.getFrame() - endOf(kaksi), LyricsEdit::newWordFrames(rate));
+
+        // The gap is 0.5 s, and the word fills it wherever the click is.
+        // Its neighbours are as near as each other, and the word before
+        // gives it its line
+        m_window->answerWordText("ja");
+        QVERIFY(chooseAt(inRow(columnOf(kolme.getFrame()) - 20), "Add Word..."));
+        QCOMPARE(m_window->wordTextQuestions(), 1);
+        QVERIFY(m_window->wordTextWasNew());
+        QCOMPARE(m_window->wordTextOffered(), QString());
+        QCOMPARE(lyricsWord("ja"),
+                 sv::Event(endOf(kaksi), kaksi.getValue(),
+                           kolme.getFrame() - endOf(kaksi), "ja"));
+        QCOMPARE(int(lyricsEvents().size()), 4);
+        QCOMPARE(int(commands.count()), 1);
+        QVERIFY(m_window->isDocumentModified());
+        sv::EventVector added = lyricsEvents();
+
+        QCOMPARE(undoOnce(), QString("Add Word"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(redoOnce(), QString("Add Word"));
+        QCOMPARE(lyricsEvents(), added);
+        QCOMPARE(undoOnce(), QString("Add Word"));
+
+        // kaksi 0.2 s shorter, for a wider gap.  Near kolme, the word is
+        // moved back from it to be 0.5 s long, takes its line and is the
+        // line's first word now, which the layer draws bold
+        sv::Event shorter = kaksi.withDuration
+            (kaksi.getDuration() - sv::sv_frame_t(0.2 * rate));
+        replaceWord(kaksi, shorter);
+        if (QTest::currentTestFailed()) return;
+        m_window->answerWordText("ja");
+        QVERIFY(chooseAt(inRow(columnOf(kolme.getFrame()) - 5), "Add Word..."));
+        sv::Event ja = lyricsWord("ja");
+        QCOMPARE(endOf(ja), kolme.getFrame());
+        QCOMPARE(ja.getDuration(), LyricsEdit::newWordFrames(rate));
+        QCOMPARE(ja.getValue(), kolme.getValue());
+        Lyrics now = lyricsFromEvents(lyricsEvents(), rate);
+        QCOMPARE(now.words.size(), 4);
+        QCOMPARE(now.words[1].text, QString("kaksi"));
+        QCOMPARE(now.words[2].text, QString("ja"));
+        QVERIFY(now.words[2].line != now.words[1].line);
+        QCOMPARE(now.words[3].line, now.words[2].line);
+        QCOMPARE(undoOnce(), QString("Add Word"));
+
+        // Near kaksi: at the click, 0.5 s long, on kaksi's line
+        int x = columnOf(endOf(shorter)) + 10;
+        m_window->answerWordText("ja");
+        QVERIFY(chooseAt(inRow(x), "Add Word..."));
+        ja = lyricsWord("ja");
+        QCOMPARE(columnOf(ja.getFrame()), x);
+        QCOMPARE(ja.getDuration(), LyricsEdit::newWordFrames(rate));
+        QCOMPARE(ja.getValue(), kaksi.getValue());
+        QCOMPARE(undoOnce(), QString("Add Word"));
+        QCOMPARE(m_window->wordTextQuestions(), 3);
+    }
+
+    // Before the first word the gap runs from frame 0, and a word that
+    // would be too long for it is cut to fit; after the last word there
+    // is no limit.  Each takes the line of its one neighbour
+    void lyrics_edit_add_word_at_either_end() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::EventVector before = lyricsEvents();
+        sv::Event yksi = lyricsWord("Yksi");
+        sv::Event kolme = lyricsWord("kolme");
+        QVERIFY(yksi.getFrame() < LyricsEdit::newWordFrames(rate));
+
+        m_window->answerWordText("Nyt");
+        QVERIFY(chooseAt(inRow(columnOf(yksi.getFrame() / 2)), "Add Word..."));
+        QCOMPARE(lyricsWord("Nyt"),
+                 sv::Event(0, yksi.getValue(), yksi.getFrame(), "Nyt"));
+        QCOMPARE(lyricsFromEvents(lyricsEvents(), rate).words[0].text,
+                 QString("Nyt"));
+
+        int after = columnOf(endOf(kolme)) + 20;
+        m_window->answerWordText("loppu");
+        QVERIFY(chooseAt(inRow(after), "Add Word..."));
+        sv::Event loppu = lyricsWord("loppu");
+        QCOMPARE(columnOf(loppu.getFrame()), after);
+        QCOMPARE(loppu.getDuration(), LyricsEdit::newWordFrames(rate));
+        QCOMPARE(loppu.getValue(), kolme.getValue());
+        QCOMPARE(int(lyricsEvents().size()), 5);
+
+        QCOMPARE(undoOnce(), QString("Add Word"));
+        QCOMPARE(undoOnce(), QString("Add Word"));
+        QCOMPARE(lyricsEvents(), before);
+        verifyPlaySourceClean();
+    }
+
+    // No room: a gap under 20 ms.  The entry is there, disabled, and
+    // chosen asks nothing; a gap of 20 ms is room.  Room taken after the
+    // menu was made, or while the text is asked for: nothing is added
+    void lyrics_edit_add_word_needs_room() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::Event kaksi = lyricsWord("kaksi");
+        sv::Event kolme = lyricsWord("kolme");
+        sv::sv_frame_t minimum = LyricsEdit::minWordFrames(rate);
+
+        sv::Event narrow = kaksi.withDuration
+            (kolme.getFrame() - (minimum - 1) - kaksi.getFrame());
+        replaceWord(kaksi, narrow);
+        if (QTest::currentTestFailed()) return;
+        int x = columnOf(endOf(narrow)) + 1;
+        QVERIFY(x < columnOf(kolme.getFrame()));
+        sv::EventVector before = lyricsEvents();
+        QCOMPARE(menuAt(inRow(x)), QStringList{ "-Add Word..." });
+        m_window->answerWordText("ei");
+        QVERIFY(chooseAt(inRow(x), "Add Word..."));
+        QCOMPARE(m_window->wordTextQuestions(), 0);
+        QCOMPARE(lyricsEvents(), before);
+
+        sv::Event fits = narrow.withDuration(narrow.getDuration() - 1);
+        replaceWord(narrow, fits);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(menuAt(inRow(x)), QStringList{ "Add Word..." });
+        QVERIFY(chooseAt(inRow(x), "Add Word..."));
+        QCOMPARE(m_window->wordTextQuestions(), 1);
+        QCOMPARE(lyricsWord("ei"),
+                 sv::Event(endOf(fits), kaksi.getValue(), minimum, "ei"));
+        QCOMPARE(undoOnce(), QString("Add Word"));
+
+        // The menu made, and the gap closed before its entry is chosen
+        auto entries = editor->menuEntriesAt(inRow(x));
+        QCOMPARE(int(entries.size()), 1);
+        QVERIFY(entries[0].enabled);
+        sv::Event closed = fits.withDuration(kolme.getFrame() - fits.getFrame());
+        replaceWord(fits, closed);
+        if (QTest::currentTestFailed()) return;
+        before = lyricsEvents();
+        m_window->answerWordText("ei");
+        editor->choose(entries[0]);
+        QCOMPARE(m_window->wordTextQuestions(), 1);
+        QCOMPARE(lyricsEvents(), before);
+
+        // and closed while the text is asked for
+        replaceWord(closed, fits);
+        if (QTest::currentTestFailed()) return;
+        m_window->whileAskingWordText([this, fits, closed]() {
+            replaceWord(fits, closed);
+        });
+        editor->choose(entries[0]);
+        QCOMPARE(m_window->wordTextQuestions(), 2);
+        QCOMPARE(m_window->wordTextAnswersLeft(), 0);
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(undoOnce(), QString());
+    }
+
+    // Delete Word takes the word away: the only word of its line, and so
+    // the line; then every word, after which Add Word still adds one.
+    // Undone, each comes back as it was
+    void lyrics_edit_delete_word() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+        sv::EventVector before = lyricsEvents();
+        sv::Event kolme = lyricsWord("kolme");
+        QCOMPARE(lyricsFromEvents(before, rate).lineCount(), 2);
+        int inside = columnOf(kolme.getFrame()) + 40;
+
+        QVERIFY(chooseAt(inRow(inside), "Delete Word"));
+        QCOMPARE(m_window->wordTextQuestions(), 0);
+        QCOMPARE(lyricsWord("kolme").getFrame(), sv::sv_frame_t(-1));
+        QCOMPARE(int(lyricsEvents().size()), 2);
+        QCOMPARE(lyricsFromEvents(lyricsEvents(), rate).lineCount(), 1);
+        QCOMPARE(int(commands.count()), 1);
+        QVERIFY(m_window->isDocumentModified());
+        sv::EventVector deleted = lyricsEvents();
+
+        QCOMPARE(undoOnce(), QString("Delete Word"));
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(redoOnce(), QString("Delete Word"));
+        QCOMPARE(lyricsEvents(), deleted);
+
+        QVERIFY(chooseAt(inRow(columnOf(lyricsWord("Yksi").getFrame()) + 30),
+                         "Delete Word"));
+        QVERIFY(chooseAt(inRow(columnOf(lyricsWord("kaksi").getFrame()) + 30),
+                         "Delete Word"));
+        QVERIFY(lyricsEvents().empty());
+        QVERIFY(m_window->lyrics()->isShown());
+        QVERIFY(m_window->lyricsEditor()->isEnabled());
+        m_row = lyricsBoxRow();
+        QCOMPARE(menuAt(inRow(inside)), QStringList{ "Add Word..." });
+        m_window->answerWordText("uusi");
+        QVERIFY(chooseAt(inRow(inside), "Add Word..."));
+        QCOMPARE(lyricsWord("uusi").getValue(), 0.f);
+        QCOMPARE(lyricsWord("uusi").getDuration(), LyricsEdit::newWordFrames(rate));
+
+        QCOMPARE(undoOnce(), QString("Add Word"));
+        QCOMPARE(undoOnce(), QString("Delete Word"));
+        QCOMPARE(undoOnce(), QString("Delete Word"));
+        QCOMPARE(undoOnce(), QString("Delete Word"));
+        QCOMPARE(lyricsEvents(), before);
+    }
+
+    // The question runs an event loop of its own, and anything can
+    // happen while it is open: the word changed by an undo, edit mode
+    // switched off, the lyrics removed.  The answer then changes nothing,
+    // and nothing is pushed over what is on the history
+    void lyrics_edit_words_change_during_question() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        LyricsEditor *editor = m_window->lyricsEditor();
+        sv::EventVector before = lyricsEvents();
+        int inside = columnOf(lyricsWord("kaksi").getFrame()) + 40;
+
+        m_window->answerWordText("kaksikko");
+        doubleClickAt(inRow(inside));
+        sv::EventVector changed = lyricsEvents();
+        QVERIFY(changed != before);
+
+        m_window->whileAskingWordText([this]() { undoOnce(); });
+        m_window->answerWordText("kaksikkoko");
+        doubleClickAt(inRow(inside));
+        QCOMPARE(m_window->wordTextQuestions(), 2);
+        QCOMPARE(lyricsEvents(), before);
+        QCOMPARE(redoOnce(), QString("Change Word Text"));
+        QCOMPARE(lyricsEvents(), changed);
+        QCOMPARE(redoOnce(), QString());
+
+        // Deleted while its menu entry asks
+        m_window->whileAskingWordText([this, inside]() {
+            chooseAt(inRow(inside), "Delete Word");
+        });
+        m_window->answerWordText("kaksi");
+        QVERIFY(chooseAt(inRow(inside), "Edit Word Text..."));
+        QCOMPARE(m_window->wordTextQuestions(), 3);
+        QCOMPARE(lyricsWord("kaksikko").getFrame(), sv::sv_frame_t(-1));
+        QCOMPARE(int(lyricsEvents().size()), 2);
+        QCOMPARE(undoOnce(), QString("Delete Word"));
+        QCOMPARE(lyricsEvents(), changed);
+
+        m_window->whileAskingWordText([this]() {
+            m_window->editLyricsAction()->trigger();
+        });
+        m_window->answerWordText("kaksi");
+        doubleClickAt(inRow(inside));
+        QCOMPARE(m_window->wordTextQuestions(), 4);
+        QVERIFY(!editor->isEnabled());
+        QCOMPARE(lyricsEvents(), changed);
+        switchLyricsEditingOn();
+        if (QTest::currentTestFailed()) return;
+
+        int gap = columnOf(endOf(lyricsWord("kaksikko"))) + 20;
+        m_window->whileAskingWordText([this]() {
+            m_window->removeLyricsAction()->trigger();
+        });
+        m_window->answerWordText("ja");
+        QVERIFY(chooseAt(inRow(gap), "Add Word..."));
+        QCOMPARE(m_window->wordTextQuestions(), 5);
+        QVERIFY(!m_window->lyrics()->isShown());
+        QVERIFY(!editor->isEnabled());
+
+        // On top of the history, the first change, whose model has gone
+        QCOMPARE(undoOnce(), QString("Change Word Text"));
+        verifyPlaySourceClean();
+    }
+
+    // Export Lyrics after edits writes the words as edited: a text
+    // changed, an end moved, a word added on the line of the word after
+    // it, and a word deleted
+    void lyrics_edit_export_writes_edits() {
+        lyricsEditFixture();
+        if (QTest::currentTestFailed()) return;
+        sv::Event yksi = lyricsWord("Yksi");
+        sv::Event kolme = lyricsWord("kolme");
+
+        m_window->answerWordText("Yksin");
+        doubleClickAt(inRow(columnOf(yksi.getFrame()) + 30));
+        int end = columnOf(endOf(lyricsWord("kaksi"))) - 1;
+        dragFromTo(inRow(end), inRow(end - 30));
+        m_window->answerWordText("ja");
+        QVERIFY(chooseAt(inRow(columnOf(kolme.getFrame()) - 5), "Add Word..."));
+        QVERIFY(chooseAt(inRow(columnOf(kolme.getFrame()) + 40), "Delete Word"));
+        QCOMPARE(undoOnce(), QString("Delete Word"));
+        QCOMPARE(redoOnce(), QString("Delete Word"));
+
+        sv::EventVector events = lyricsEvents();
+        Lyrics now = lyricsFromEvents(events, rate);
+        QStringList texts;
+        for (const LyricWord &w : now.words) texts << w.text;
+        QCOMPARE(texts, (QStringList{ "Yksin", "kaksi", "ja" }));
+        QCOMPARE(now.words[2].line, 1);
+
+        m_window->discardModifications();
+        QString path = m_dir.filePath("edited-lyrics.ttml");
+        m_window->setLyricsExportAnswer(path);
+        m_window->exportLyricsAction()->trigger();
+        QFile file(path);
+        QVERIFY2(file.open(QIODevice::ReadOnly), "nothing was written");
+        LyricsParseResult parsed = parseTtml(file.readAll());
+        QVERIFY2(parsed.error == "", qPrintable(parsed.error));
+
+        const QVector<LyricWord> &back = parsed.lyrics.words;
+        QCOMPARE(back.size(), now.words.size());
+        for (int i = 0; i < back.size(); ++i) {
+            QString what = QString("word %1, \"%2\"").arg(i)
+                .arg(now.words[i].text);
+            QVERIFY2(back[i].text == now.words[i].text,
+                     qPrintable(what + " came back as " + back[i].text));
+            QVERIFY2(back[i].line == now.words[i].line,
+                     qPrintable(what + ": another line"));
+            QVERIFY2(std::fabs(back[i].start - now.words[i].start) < 0.0005001,
+                     qPrintable(what + ": another start"));
+            QVERIFY2(std::fabs(back[i].end - now.words[i].end) < 0.0005001,
+                     qPrintable(what + ": another end"));
+        }
+        QVERIFY(std::fabs(back[1].end - 0.9) > 0.05);
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(lyricsEvents(), events);
     }
 
     // Closing while pYIN is still running on the take (review finding

@@ -412,6 +412,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_lyricsEditor = new LyricsEditor(m_lyrics, this);
     connect(m_lyricsEditor, &LyricsEditor::contextHelpChanged,
             this, &MainWindow::contextHelpChanged);
+    m_lyricsEditor->setTextQuestion([this](QString &text, bool isNew) {
+        return askForLyricsWordText(text, isNew);
+    });
 
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
@@ -937,7 +940,7 @@ MainWindow::setupEditMenu()
     // No shortcut: it is not switched on and off in the middle of things
     m_editLyricsAction = new QAction(tr("Edit L&yrics"), this);
     m_editLyricsAction->setCheckable(true);
-    m_editLyricsAction->setStatusTip(tr("Drag the start or end of a word of the lyrics, along the bottom of the pane, to move it"));
+    m_editLyricsAction->setStatusTip(tr("Edit the words of the lyrics along the bottom of the pane: drag a start or end, double-click a word to change its text, right-click to add or delete one"));
     m_editLyricsAction->setEnabled(false);
     connect(m_editLyricsAction, &QAction::triggered,
             this, &MainWindow::editLyricsToggled);
@@ -3552,6 +3555,19 @@ MainWindow::askForLyricsExportFile(QString suggested)
     return QFileDialog::getSaveFileName
         (this, tr("Export Lyrics"), suggested,
          tr("TTML lyrics (*.ttml)") + ";;" + tr("All files (*)"));
+}
+
+bool
+MainWindow::askForLyricsWordText(QString &text, bool isNew)
+{
+    bool ok = false;
+    QString typed = QInputDialog::getText
+        (this, isNew ? tr("Add Word") : tr("Edit Word Text"),
+         isNew ? tr("Text of the new word:") : tr("Text of the word:"),
+         QLineEdit::Normal, text, &ok);
+    if (!ok) return false;
+    text = typed;
+    return true;
 }
 
 void

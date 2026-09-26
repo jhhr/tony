@@ -377,10 +377,10 @@ protected:
     QAction       *m_showLyrics;
 
     // Edit > Edit Lyrics: the mouse moves the words' starts and ends in
-    // the lyrics' box row while it is on.  Off, and not to be had,
-    // without lyrics on show or while a take is being recorded, which
-    // updateMenuStates() sees to; and off after an import, which
-    // importLyricsFrom() sees to
+    // the lyrics' box row while it is on, and changes, adds and deletes
+    // words there.  Off, and not to be had, without lyrics on show or
+    // while a take is being recorded, which updateMenuStates() sees to;
+    // and off after an import, which importLyricsFrom() sees to
     LyricsEditor  *m_lyricsEditor;
     QAction       *m_editLyricsAction;
 
@@ -425,6 +425,12 @@ protected:
     // Ask where to export the lyrics to, offering the suggested path;
     // "" if the user cancelled.  Overridden by the tests
     virtual QString askForLyricsExportFile(QString suggested);
+
+    // Ask for the text of a word of the lyrics, offering the one it has
+    // ("" for a new word): true with the text typed in its place, false
+    // if the user cancelled.  The lyrics editor asks through this.
+    // Overridden by the tests
+    virtual bool askForLyricsWordText(QString &text, bool isNew);
 
     // --- The audio folder of the session (spec 6.4) ---
 
