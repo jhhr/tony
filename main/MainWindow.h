@@ -879,6 +879,13 @@ protected:
     // what the singer sang would be left unanalysed.
     Coverage::Range m_takeAnalysisRange;
 
+    // For the tests (TestMainWindow::holdTakeAnalysis()): every singing
+    // analyser made while this is set holds the result of its ranged
+    // analysis unmerged (Analyser::setHoldRangedMerge()).  Here and not
+    // only in the Analyser because a recording, an undo or a redo makes
+    // the analyser again before it starts the analysis to be held.
+    bool m_holdTakeAnalysis;
+
     // Round-trip hardware latency (the figure the audio check measured,
     // or else output + input as the device reports them, in frames of the
     // recording; see roundTripAt()) stored when a singing-track recording

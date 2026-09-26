@@ -109,6 +109,21 @@ public:
     sv::sv_frame_t analysedRangeStart() { return m_takeAnalysisRange.start; }
     sv::sv_frame_t analysedRangeEnd() { return m_takeAnalysisRange.end; }
 
+    // A test of something done while the take is being analysed holds
+    // the analysis from before Stop: on a fast machine pYIN over a short
+    // take is finished and merged before Stop returns.  Held, the result
+    // waits unmerged, and analysingRange() stays true, through any number
+    // of turns of the event loop and of analysers made again, until it is
+    // released.  Release before waiting for the analysis to finish
+    void holdTakeAnalysis() {
+        m_holdTakeAnalysis = true;
+        if (m_analyser2) m_analyser2->setHoldRangedMerge(true);
+    }
+    void releaseTakeAnalysis() {
+        m_holdTakeAnalysis = false;
+        if (m_analyser2) m_analyser2->setHoldRangedMerge(false);
+    }
+
     // Save As, with the file name given here instead of by a dialog: the
     // session's own file is set, so that what is recorded next goes into
     // its takes folder

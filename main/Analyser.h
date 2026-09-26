@@ -237,6 +237,17 @@ public:
     void cancelRangedAnalysis() { discardRangedAnalysis(); }
 
     /**
+     * For the tests: while held, a ranged analysis that has finished is
+     * left unmerged, and isAnalysingRange() stays true, just as while
+     * pYIN is still running.  Releasing merges a run that finished
+     * while held.  A test that does something during the analysis of a
+     * take needs the run still there when it does it, and pYIN over
+     * less than a second of audio can finish, on a fast machine, before
+     * analyseRange() has even returned.  Off unless a test sets it.
+     */
+    void setHoldRangedMerge(bool hold);
+
+    /**
      * What the last ranged merge took out of and put into the pitch
      * track and the notes.  Reversing these two changes undoes the
      * merge, which is how the recording that asked for it is made
@@ -399,6 +410,9 @@ protected:
     // run stamped past it.  The near edge needs no such flag -- a run
     // cannot stamp anything before its own first two hops anyway
     bool m_rangedClippedEnd;
+
+    // See setHoldRangedMerge()
+    bool m_holdRangedMerge;
 
     // What the last merge did, for the undo command of the recording
     // that asked for the analysis (see getRangedPitchChange())

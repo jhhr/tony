@@ -205,6 +205,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_currentRecordingModelId(),
     m_recordingLayer(nullptr),
     m_rebuildingTakeAudio(false),
+    m_holdTakeAnalysis(false),
     m_recordingLatencyFrames(0),
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
@@ -3439,6 +3440,7 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
 
     // Create the secondary analyser with the singing-track colour scheme
     m_analyser2 = new Analyser(Analyser::SecondaryColors);
+    m_analyser2->setHoldRangedMerge(m_holdTakeAnalysis);
 
     connect(m_analyser2, SIGNAL(layersChanged()),
             this, SLOT(updateLayerStatuses()));

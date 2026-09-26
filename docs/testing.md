@@ -161,6 +161,18 @@ it; the marker goes in the commit that fixes it. There are none at present.
 - A take's analysis lands in two steps, `rangedAnalysisMerged()` then
   `initialAnalysisCompleted()`. Read results after the merge (`analysingRange()` false),
   not after some other signal that happens to come at about the same time.
+- **A test of something done while a take is being analysed holds that analysis**:
+  `TestMainWindow::holdTakeAnalysis()` before Stop (or Analyse Now), and
+  `releaseTakeAnalysis()` where the race is over. On a fast machine pYIN over a take
+  under a second long is finished and merged before Stop returns, and such a test fails
+  there with "the race was not set up" while passing on a slower one. Held, the finished
+  result waits unmerged and `analysingRange()` stays true through turns of the event
+  loop; the hold stays on for every run started until the release, through undo, redo
+  and the analyser being made again (`Analyser::setHoldRangedMerge()`). Release before
+  anything that waits for the analysis (`analysed()`), or the wait times out; a save
+  waits by itself, so a test of that releases from a zero-time timer set just before
+  it, which runs inside the save's wait. The hold does not hold pYIN's thread: whether
+  that is still running at a teardown depends on the machine and its load, as below.
 - The status bar is written by three base-class timers; a test that reads it must go
   through what `showTakeCountdown()` controls.
 - Deleting a derived layer does not stop its transform; only

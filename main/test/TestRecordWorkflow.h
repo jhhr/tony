@@ -1661,13 +1661,13 @@ private slots:
 
         // Stop splices the recording in and asks for the analysis of the
         // range it went into.  The range is read here, while that run is
-        // still going: it is remembered only until the merge, so a run that
-        // finishes before the splice call returns never records one at all
+        // held: it is remembered only until the merge
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
-        if (m_window->analysingRange()) {
-            QCOMPARE(m_window->analysedRangeStart(), P);
-        }
+        QVERIFY(m_window->analysingRange());
+        QCOMPARE(m_window->analysedRangeStart(), P);
+        m_window->releaseTakeAnalysis();
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
         // The analysis of the take was not thrown away and run again: the
@@ -1725,7 +1725,9 @@ private slots:
         QTest::qWait(900);
 
         // Stop splices the recording in and starts the analysis of the
-        // range it went into there and then
+        // range it went into there and then.  Held, so that it is still
+        // unmerged when the second take stops, however quick the machine
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(m_window->analysingRange(),
@@ -1735,20 +1737,16 @@ private slots:
         sv::sv_frame_t firstEnd = m_window->analysedRangeEnd();
         QVERIFY(firstEnd > sv::sv_frame_t(0.7 * rate));
 
-        // A second take in a gap, recorded without letting the event
-        // loop run: the result of a ranged analysis is merged from a
-        // queued call, so the first one cannot have finished by the time
-        // this one stops, however quick the machine is. (The device
-        // records from a thread of its own, and the record target's ring
-        // buffer holds ten seconds.)
+        // A second take in a gap, with the first range's analysis still
+        // held through it
         const sv::sv_frame_t P = sv::sv_frame_t(3.0 * rate);
         m_window->seekTo(P);
         startTake();
         if (QTest::currentTestFailed()) return;
-        QThread::msleep(250);
+        QTest::qWait(250);
         QVERIFY2(m_window->analysingRange(),
-                 "the first range's analysis finished before the second take "
-                 "stopped: something ran the event loop");
+                 "the first range's analysis was merged before the second "
+                 "take stopped, although it was held");
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
 
@@ -1757,6 +1755,7 @@ private slots:
         QCOMPARE(m_window->analysedRangeStart(), sv::sv_frame_t(0));
         QVERIFY(m_window->analysedRangeEnd() > P);
 
+        m_window->releaseTakeAnalysis();
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
         auto events = pitchEvents(m_window->analyser2());
         QVERIFY2(!eventsBetween(events, 0, firstEnd).empty(),
@@ -1770,7 +1769,10 @@ private slots:
     // The models the analysis of a recorded range is to be merged into,
     // torn down while it is still running: by another singing track, and
     // by the session going. A regression guard for the area this fork has
-    // crashed in before -- a crash is the failure.
+    // crashed in before -- a crash is the failure.  The analysis is held,
+    // so its run is there, unmerged, when they go, however quick the
+    // machine.  Whether pYIN's thread is still going then as well depends
+    // on the machine and its load: run it under load to check.
     void range_analysis_torn_down_while_running() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);
@@ -1781,6 +1783,7 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(900);
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY2(m_window->analysingRange(),
                  "the race was not set up: nothing was being analysed after "
@@ -1788,6 +1791,7 @@ private slots:
 
         // Another singing track over it
         m_window->loadSingingTrack(writeWav(tone(lowHz, 1.0)));
+        m_window->releaseTakeAnalysis();
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
         QVERIFY(!m_window->analysingRange());
         verifyPlaySourceClean();
@@ -1798,10 +1802,12 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(700);
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(m_window->analysingRange());
 
         m_window->doCloseSession();
+        m_window->releaseTakeAnalysis();
         QVERIFY(!m_window->analyser2());
         QVERIFY(!m_window->takes()->haveTake());
         QCOMPARE(m_window->paneStack()->getPaneCount(), 0);
@@ -2405,6 +2411,9 @@ private slots:
     // middle of its pYIN, which is the area this fork has crashed in
     // before; cancelAnalyses() is what keeps it safe. A regression guard,
     // not a new behaviour: run it under load, a crash is the failure.
+    // The analysis is held, so that it is unmerged when the second take
+    // stops however quick the machine; whether its thread is still going
+    // then as well depends on the machine and its load.
     void rerecord_during_analysis() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 4.0);
@@ -2418,19 +2427,29 @@ private slots:
 
         // Stop splices the recording in and starts the analysis of the
         // result there and then
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(sv::ModelTransformerFactory::getInstance()
                  ->haveRunningTransformers(),
                  "the race was not set up: no analysis was running when the "
                  "second take started");
+        QVERIFY(m_window->analysingRange());
         QString first = m_window->takes()->getAudioPath();
         QVERIFY(!first.isEmpty());
 
         // In a gap, so nothing is asked
         m_window->seekTo(sv::sv_frame_t(1.5 * rate));
-        take(500);
+        startTake();
         if (QTest::currentTestFailed()) return;
+        QTest::qWait(500);
+        QVERIFY2(m_window->analysingRange(),
+                 "the first take's analysis was over before the second one "
+                 "stopped");
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        m_window->releaseTakeAnalysis();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
         QCOMPARE(m_window->recordOverQuestions(), 0);
 
         QVERIFY(m_window->analyser2());
@@ -2702,6 +2721,9 @@ private slots:
         for (const auto &e : model->getAllEvents()) model->remove(e);
         QVERIFY(pitchEvents(pitch).empty());
 
+        // Held, so that the range is still there to be read however quick
+        // the run: it is remembered only until the merge
+        m_window->holdTakeAnalysis();
         m_window->doAnalyseNow();
 
         // One run over the span of the coverage, not one per range
@@ -2709,6 +2731,7 @@ private slots:
         QCOMPARE(m_window->analysedRangeStart(), ranges[0].start);
         QCOMPARE(m_window->analysedRangeEnd(), ranges[1].end);
 
+        m_window->releaseTakeAnalysis();
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
@@ -3909,11 +3932,13 @@ private slots:
         QVERIFY(!before.pitch.empty());
 
         // Stop splices the recording in and starts the analysis of it
-        // there and then
+        // there and then.  Held, so that it is still running when Undo is
+        // pressed, and the redo's run when its range is read
         m_window->seekTo(sv::sv_frame_t(2.0 * rate));
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(700);
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(m_window->analysingRange(),
@@ -3936,8 +3961,10 @@ private slots:
         // Redo: the range is analysed again, and this time the result
         // reaches the take's pitch track
         QCOMPARE(redoOnce(), QString("Record Singing"));
+        QVERIFY(m_window->analysingRange());
         QCOMPARE(m_window->analysedRangeStart(), analysedStart);
         QCOMPARE(m_window->analysedRangeEnd(), analysedEnd);
+        m_window->releaseTakeAnalysis();
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
         auto ranges = m_window->takes()->getCoverage().getRanges();
@@ -5270,12 +5297,18 @@ private slots:
         QTest::qWait(700);
 
         // Stop splices the recording in and starts the analysis of it there
-        // and then, so it is running when the session is saved
+        // and then, so it is running when the session is saved.  Held, and
+        // released from the first turn of the event loop, which is the
+        // save's own wait: the merge can only come while the save waits
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(m_window->analysingRange(),
                  "the test shows nothing: no analysis was running when the "
                  "session was saved");
+        QTimer::singleShot(0, m_window, [this]() {
+            m_window->releaseTakeAnalysis();
+        });
 
         QString session = m_dir.filePath("mid-analysis.ton");
         QVERIFY(m_window->saveSessionFile(session));
@@ -5526,7 +5559,10 @@ private slots:
     // thread ("Timers cannot be stopped from another thread") and the
     // process dies with an access violation soon after. A regression
     // shows up as a crash of the whole test program, and not reliably:
-    // run it under load to check.
+    // run it under load to check.  The analysis is held, so that its run
+    // is there, unmerged, at the close however quick the machine; whether
+    // its thread is still going then as well depends on the machine and
+    // its load.
     void close_session_during_analysis() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);
@@ -5541,13 +5577,16 @@ private slots:
         // Stop splices the recording into the take and starts the analysis
         // of the result there and then, so it is running when the session
         // is closed. Otherwise this test shows nothing
+        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(sv::ModelTransformerFactory::getInstance()
                  ->haveRunningTransformers(),
                  "the race was not set up: no analysis was running when "
                  "the session was about to be closed");
+        QVERIFY(m_window->analysingRange());
         m_window->doCloseSession();
+        m_window->releaseTakeAnalysis();
 
         QVERIFY(!m_window->analyser2());
         QCOMPARE(m_window->paneStack()->getPaneCount(), 0);
