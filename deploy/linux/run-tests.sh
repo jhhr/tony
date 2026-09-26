@@ -14,13 +14,15 @@
 # shard of every suite (TONY_TEST_SHARD, main/test/RunSuite.h), and adds
 # up what they report. The app suite spends nearly all of its time
 # waiting on FakeAudioIO, which plays in real time: on the cloud
-# container's 4 cores, 8 processes run it in about a minute instead of
-# six, and the load stays under 2.
+# container's 4 cores, 8 processes run it in a minute and a half instead
+# of eight, and the load stays under 2.
 #
-# Each process has a log directory and XDG directories of its own. The
-# suites keep QSettings per user, and processes sharing the file would
-# read each other's settings. On Windows QSettings is the registry, which
-# XDG_CONFIG_HOME does not move: this is for Linux.
+# Each process has a log directory, a HOME and XDG directories of its own.
+# The suites keep QSettings per user, and processes sharing the file
+# would read and clear each other's settings; a suite that turns on
+# QStandardPaths' test mode keeps them in $HOME/.qttest, which the XDG
+# variables do not move. On Windows QSettings is the registry, which
+# neither moves: this is for Linux.
 #
 # Usage, from anywhere:
 #   deploy/linux/run-tests.sh [-j N] [BUILD_DIR] EXECUTABLE
@@ -69,10 +71,10 @@ mkdir -p "$out"
 start=$SECONDS
 for i in $(seq 0 $((jobs - 1))); do
     dir=$out/$i
-    mkdir -p "$dir/xdg/config" "$dir/xdg/data" "$dir/xdg/cache"
+    mkdir -p "$dir/home" "$dir/xdg/config" "$dir/xdg/data" "$dir/xdg/cache"
     (
         cd "$build" &&
-            TONY_TEST_SHARD=$i/$jobs TONY_TEST_LOG_DIR=$dir \
+            TONY_TEST_SHARD=$i/$jobs TONY_TEST_LOG_DIR=$dir HOME=$dir/home \
             XDG_CONFIG_HOME=$dir/xdg/config XDG_DATA_HOME=$dir/xdg/data \
             XDG_CACHE_HOME=$dir/xdg/cache \
             "./$exe" > "$dir/stdout.log" 2>&1
