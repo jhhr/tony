@@ -17,9 +17,6 @@
 #include "TestRecordWorkflow.h"
 #include "TestUiChecks.h"
 #include "TestAudioCheck.h"
-#ifdef TONY_DEV_CHECKS
-#include "TestDevChecks.h"
-#endif
 
 #include "RunSuite.h"
 
@@ -103,14 +100,6 @@ int main(int argc, char *argv[])
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }
-
-#ifdef TONY_DEV_CHECKS
-    {
-        TestDevChecks t;
-        if (runSuite(&t, argc, argv)) ++good;
-        else ++bad;
-    }
-#endif
 
     (void)good;
 

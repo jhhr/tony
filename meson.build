@@ -1432,12 +1432,6 @@ tony_app_test_moc_headers = [
   'main/test/TestAudioCheck.h',
 ]
 
-if dev_checks
-  tony_app_test_moc_headers += [
-    'main/test/TestDevChecks.h',
-  ]
-endif
-
 tony_app_test_moc_files = qt.preprocess(
   moc_headers: tony_app_test_moc_headers,
   moc_extra_arguments: dev_moc_args,
@@ -1503,6 +1497,47 @@ test('tony-app', tony_app_test_exe,
      depends: pyin_plugin,
      timeout: 900,
      env: [ 'QT_QPA_PLATFORM=offscreen' ])
+
+# The development checks' suite, only where the checks are built. Its
+# own executable: every test records takes in real time, and it is run
+# when a change touches what the checks drive (AGENTS.md)
+if dev_checks
+  tony_dev_test_moc_files = qt.preprocess(
+    moc_headers: [
+    'main/test/TestDevChecks.h',
+    ],
+    moc_extra_arguments: dev_moc_args,
+  )
+
+  tony_dev_test_exe = executable(
+    'test-tony-dev',
+    tony_dev_test_moc_files,
+    'main/test/tony-dev-test.cpp',
+    dependencies: [
+      tony_app_dep,
+      tony_core_dep,
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      os_dep,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
+
+  test('tony-dev', tony_dev_test_exe,
+       depends: pyin_plugin,
+       timeout: 900,
+       env: [ 'QT_QPA_PLATFORM=offscreen' ])
+endif
 
 test('svcore-base', svcore_base_test_exe)
 test('svcore-system', svcore_system_test_exe)
