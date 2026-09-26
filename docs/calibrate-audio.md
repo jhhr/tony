@@ -114,7 +114,17 @@ song comes back through Recent Files.
 **The reference** (`LatencyCheck`). Each event is a linear sweep from 1 to 8 kHz, 200 ms,
 with 10 ms raised-cosine edges and a −12 dBFS peak; 0.1 s of silence; a tone of 0.8 s at
 196, 220.5, 245 or 294 Hz in turn (a whole number of samples per period at 44.1 kHz, or
-pYIN reports a subharmonic: [testing.md](testing.md)); silence to the next event. Linear
+pYIN reports a subharmonic: [testing.md](testing.md)); silence to the next event. Each tone
+is voice-like, with the same peak: its pitch and every harmonic up to 4 kHz, the n-th at
+1/n, in Newman's phases (so that they do not pile up into a sawtooth's edge, which item 10
+would read as a step), with a vibrato of ±10 cents at 5.5 Hz. The harmonics are for a
+phone's speaker, or an earbud held to the microphone, which give out almost nothing at the
+pitch itself: the pure tones never reached pYIN or the live tracker there, while the
+sweeps did; the pitch is found from the harmonics' common period, the fundamental there or
+not. The vibrato is for pYIN: a tone that repeats exactly repeats at two and three periods
+as well as at one, pYIN weighs those alike, and it took a subharmonic for some tones, pure
+or not. Their partials from 1 kHz up are in the sweep's band; they come after the sweep, 40
+dB under it at the finder's output, and change nothing it finds. Linear
 rather than exponential: its spectrum is flat, so its matched filter gives the narrowest
 peak, and the harmonics a small speaker adds to an exponential sweep match the sweep itself
 shifted 67 and 106 ms earlier, where the earliest-peak rule looks. The spacings from sweep to
@@ -334,6 +344,13 @@ Item 10 does not judge placement: items 1 and 2 do. Item 14 works out what the t
 from the round trip, start gap, lead-in and range itself, not with `TakeTiming`, whose
 margin is part of what it checks.
 
+**Pitch that is not there.** When the take has no pitch where a check compares it (as on a
+phone whose speaker played none of the tones), the pitch part of items 1, 7, 9 and 12, and
+item 10's pitch, note and "outside" parts, are **not judged**: the message says so, and the
+verdict is the other parts', so the check can read Pass (§10). A pitch track that is there
+and changed, or has a hole at the join, is judged and fails as before. Item 3 fails with no
+dots: that is what it checks.
+
 **How items 4 and 12 read the output.** A look's output level is the loudest sample handed
 to the device since the look before. It is placed on the reference's timeline from the
 frames received, since each callback takes in a block of input and then hands out a block
@@ -490,7 +507,8 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
 **For the user to decide:**
 
 - **"Not judged" reads Pass.** Items 4 and 12 pass when their gap part could not be judged
-  (no look lay in a gap), with a message that says so; the Totals line then overstates.
+  (no look lay in a gap), and items 1, 7, 9, 10 and 12 when the take had no pitch where
+  they compare it (§7), with a message that says so; the Totals line then overstates.
   Whether that should count otherwise (Measured, say) is not decided.
 - **The thresholds**, all starting values, from the report files of real runs (§8).
 

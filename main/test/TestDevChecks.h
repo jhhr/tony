@@ -776,6 +776,12 @@ private slots:
         QCOMPARE(lastReportLine(),
                  QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
 
+        // The take had pitch wherever a check compares it: every part was
+        // judged (dev_checks_without_pitch() has the other way)
+        for (const CheckResult &c : m_report.checks) {
+            QVERIFY2(!c.message.contains("not judged"), describe(c.item));
+        }
+
         QVERIFY(m_report.sessionPath != "");
         QCOMPARE(m_window->sessionFile(), m_report.sessionPath);
         QVERIFY2(TakesFile::isInFolder(scratchDirectory(), m_report.sessionPath),
@@ -872,6 +878,76 @@ private slots:
         QCOMPARE(lastReportLine(),
                  QString("Totals: %1 passed, %2 failed, 1 measured, 1 skipped")
                  .arg(dotsPass ? 5 : 4).arg(dotsPass ? 4 : 5));
+    }
+
+    // A room as loud as the reference (white noise at -19 dBFS RMS on the
+    // input, a take long): the finder still finds every sweep where it
+    // is, but neither pYIN nor the live tracker finds any pitch, as on
+    // the phone whose speaker played none of the tones. The parts of
+    // items 1, 7, 9, 10 and 12 that compare pitch have nothing to judge
+    // and say so, and the verdict is the rest's, which pass; item 3,
+    // whose whole point is the dots, fails
+    void dev_checks_without_pitch() {
+        FakeAudioIO::Config config = loopback();
+        config.input = TestSignals::whiteNoise(int(12 * rate), 1, 0.2);
+        makeWindow(config);
+
+        runDevChecks(roundTrip / rate);
+        if (QTest::currentTestFailed()) return;
+
+        for (const QString &line : reportText().split('\n')) {
+            qDebug().noquote() << "report:" << line;
+        }
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (int item : { 1, 7, 9, 10, 12 }) {
+            const CheckResult *c = check(item);
+            QVERIFY2(c && c->verdict == CheckResult::Verdict::Pass &&
+                     c->message.contains("not judged"), describe(item));
+        }
+        QVERIFY2(check(1)->message.contains("gives the same offsets. Its "
+                                            "pitch and notes after reopening "
+                                            "were not judged: "), describe(1));
+        QVERIFY2(check(9)->message.contains("The take's pitch outside the "
+                                            "punch-ins was not judged: "),
+                 describe(9));
+        for (QString part : { QString("pitch: not judged, "),
+                              QString("note: not judged, "),
+                              QString("outside: the take's pitch and notes "
+                                      "not judged, ") }) {
+            QVERIFY2(check(10)->message.contains(part), describe(10));
+        }
+        QVERIFY2(check(10)->message.startsWith("Two punch-ins meeting at "
+                                               "28.70 s, in the middle of a "
+                                               "held tone, left no step in "
+                                               "the samples there, and passed "
+                                               "every part that could be "
+                                               "judged."), describe(10));
+        for (int item : { 7, 12 }) {
+            QVERIFY2(check(item)->message.contains
+                     ("audio is the same bit for bit") &&
+                     check(item)->message.contains
+                     ("Its pitch and notes ") &&
+                     check(item)->message.contains
+                     (" were not judged: the take had no pitch there to "
+                      "compare."), describe(item));
+        }
+        // What the lead-in played was judged, and the pitch was not
+        QVERIFY2(check(12)->message.contains("Tony played nothing where the "
+                                             "reference is silent. Its pitch "
+                                             "and notes before the punch-in "
+                                             "were not judged"), describe(12));
+
+        // Nothing to judge elsewhere either, and nothing wrong
+        for (int item : { 2, 4, 13, 14 }) {
+            const CheckResult *c = check(item);
+            QVERIFY2(c && c->verdict == CheckResult::Verdict::Pass &&
+                     !c->message.contains("not judged"), describe(item));
+        }
+        QVERIFY2(check(3) && check(3)->verdict == CheckResult::Verdict::Fail,
+                 describe(3));
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 9 passed, 1 failed, 1 measured, 0 skipped"));
     }
 
     // The loopback heard a second time, 50 ms later at half the level, as

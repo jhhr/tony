@@ -190,7 +190,7 @@ builds happen in the container.)
 - A12c — The Calibrate Audio dialog: small, and out of the way while a check runs. Done.
 - A12b — The dev run on the phone. Done.
 - A13 — Fixes from the dev runs on the phone: idle input latency, a stream disconnected
-  while idle, tones a phone can play, pitch that cannot be judged.
+  while idle, tones a phone can play, pitch that cannot be judged. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -1221,3 +1221,28 @@ Tests seen failing: phone run at HEAD (item 14); loop level ignored; report text
 For A8: calibrate-audio.md §7 (limits on a phone, items 5 and 14, the header), §8, §10.
 Left open: not on a phone. Leaving Tony during a run (power key, a call) still ends it wrongly;
 a user's own long take has no screen kept on.
+
+### Phase A13 — 2026-09-26
+Built: `OboeAudioIO`: each duplex callback reads all the input there is (`Engine::readInput()`
+over FullDuplexStream's, which reads only what the output asks, so a backlog from a held-up
+callback stayed for the whole run; own buffer, input capacity); a latency reading with more
+input waiting than the output buffer and two input bursts is refused, the figures kept, and
+logged ("the input was N frames ... behind as the device stopped"); suspend() logs a callback
+that read more than that at once. resume(): ErrorDisconnected reopens both streams (fresh
+Engine and ErrorFlag, `openStreams()`/`measureOnceOpen()` split from the constructor, the
+route found again), measures, starts; any other failure as before. `StreamLatency::
+inputFramesToRead()`, `inputKeptUp()` (core, tested). `LatencyCheck`: tones with harmonics to
+4 kHz at 1/n, Newman's phases, vibrato ±10 cents at 5.5 Hz, peak -12 dBFS from one period's
+waveform (rate-independent). DevChecks: items 1, 7, 9, 12's pitch parts and item 10's pitch,
+note and outside parts say "not judged" with no pitch there, verdict from the rest; "oboe" in
+the header's drivers on Android. calibrate-audio.md §3, §7, §10.
+Choices / deviations:
+- Mechanism of the 244 ms not found in the code (callbacks held up after Stop is the guess);
+  read-all fixes it if so, the guard keeps any such reading out whatever the cause.
+- Vibrato not asked for: exact periodic tones tie pYIN's P, 2P, 3P; subharmonics seen for
+  the old sines too (294 as 73.5 Hz). Item 1's reopen comparison done like 7, 9, 10, 12.
+Tests seen failing: old sines (harmonics test, YIN and pYIN rows); no vibrato (pYIN rows);
+FullDuplexStream's read rule; guard always true; item 7's old verdict (`dev_checks_without_pitch`).
+For A8: testing.md (exactly periodic tones tie in pYIN even at whole periods), recording.md
+"Latency" (Oboe: readings refused with a backlog; the reopen on ErrorDisconnected).
+Left open: not on a phone; the calibrated figure may move by up to a burst (2 ms) with read-all.
