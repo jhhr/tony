@@ -206,7 +206,10 @@ pathUnder(QString root, QString relative)
     for (QString part : relative.split('/')) {
         if (part == "..") return "";
     }
-    return QDir::cleanPath(root + "/" + relative);
+    // One slash between them, also under "/": on Windows cleanPath()
+    // keeps a leading "//", the start of a network path
+    if (!root.endsWith('/')) root += '/';
+    return QDir::cleanPath(root + relative);
 }
 
 static const QString externalStorageProvider
