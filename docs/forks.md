@@ -25,7 +25,13 @@ library over a workaround in `main/`.
    which reaches the fork branch when the Tony branch is merged. Commit messages there
    follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
-   upstream sonic-visualiser — do not push there.
+   upstream sonic-visualiser — do not push there. In a cloud session the checkouts are
+   `container-setup.sh`'s, whose `origin` is the fork. There a push, even of a new branch,
+   is refused (HTTP 403) unless the fork is attached to the session: attach it with the
+   session's add-repository tool, with push access, and push from the checkout that is
+   there. Do not start the session with the forks selected instead: a session with several
+   repositories runs no repository's SessionStart hook, so the background build does not
+   start.
 3. Put the new commit hash in `repoint-lock.json` as that library's `pin`, and commit that
    in Tony together with the code that needs it.
 4. A sub-agent that was told to work only in `main/` does not edit a fork: it reports
