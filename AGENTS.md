@@ -56,7 +56,7 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   that lack it fail, so the exit status is only meaningful for a run with no names.
 - Run named tests while working; run **both whole suites** before calling anything done.
 - `test-tony-dev.exe` (development builds only) holds the development checks' suite,
-  about five minutes of real-time takes. Run it as well, whole, when a change touches
+  about seven minutes of real-time takes. Run it as well, whole, when a change touches
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
