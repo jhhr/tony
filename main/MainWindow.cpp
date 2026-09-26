@@ -28,6 +28,8 @@
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
+#include "OboeAudioIO.h"
+#include <QPermissions>
 #include <QStandardPaths>
 #endif
 
@@ -237,6 +239,14 @@ MainWindow::MainWindow(AudioMode audioMode,
             m_recordingStartGapMeasured = (gap > 0 ? gap : 0);
         });
     }
+
+#ifdef Q_OS_ANDROID
+    m_audioDeviceReopens = 0;
+    m_audioDeviceCheck = new QTimer(this);
+    connect(m_audioDeviceCheck, &QTimer::timeout,
+            this, &MainWindow::checkAudioDevice);
+    m_audioDeviceCheck->start(250);
+#endif
 
 #ifdef Q_OS_MAC
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 2, 0))
@@ -2760,6 +2770,124 @@ MainWindow::getOpenFileName(FileFinder::FileType type)
     }
     return copy;
 }
+
+void
+MainWindow::createAudioIO()
+{
+    if (m_playTarget || m_audioIO) return;
+    if (m_audioMode == AUDIO_NONE) return;
+
+    breakfastquay::ApplicationPlaybackSource *source =
+        m_playSource->getApplicationPlaybackSource();
+    std::string error;
+
+    // As MainWindowBase's: input and output once recording has been
+    // asked for, else the output alone, and the output alone too if
+    // there is no input to be had. Nor is there before the microphone
+    // may be used, which record() asks for first
+    if (m_audioMode == AUDIO_PLAYBACK_AND_RECORD && m_recordTarget &&
+        microphoneAllowed()) {
+        OboeAudioIO *io = new OboeAudioIO(m_recordTarget, source);
+        if (io->isOK()) {
+            m_audioIO = io;
+        } else {
+            error = io->getStartupError();
+            delete io;
+        }
+    }
+
+    if (!m_audioIO) {
+        OboeAudioIO *io = new OboeAudioIO(nullptr, source);
+        if (io->isOK()) {
+            m_playTarget = io;
+        } else {
+            error = io->getStartupError();
+            delete io;
+        }
+    }
+
+    if (m_audioIO) {
+        m_audioIO->suspend();
+        m_playSource->setSystemPlaybackTarget(m_audioIO);
+    } else if (m_playTarget) {
+        m_playTarget->suspend();
+        m_playSource->setSystemPlaybackTarget(m_playTarget);
+    } else {
+        emit hideSplash();
+        QMessageBox::warning
+            (this, tr("Couldn't open audio device"),
+             tr("<b>No audio available</b><p>%1</p><p>Audio playback and recording will not be available.</p>")
+             .arg(QString::fromStdString(error).toHtmlEscaped()));
+    }
+}
+
+bool
+MainWindow::microphoneAllowed() const
+{
+    return qApp->checkPermission(QMicrophonePermission()) ==
+        Qt::PermissionStatus::Granted;
+}
+
+void
+MainWindow::askForMicrophone()
+{
+    qApp->requestPermission
+        (QMicrophonePermission(), this,
+         [this](const QPermission &permission) {
+             if (permission.status() == Qt::PermissionStatus::Granted) {
+                 // The press of Record that asked, answered at last
+                 if (microphoneAllowed()) record();
+                 return;
+             }
+             QMessageBox::information
+                 (this, tr("Microphone not allowed"),
+                  tr("<b>Recording needs the microphone</b><p>%1 may not use the microphone, so it can play but not record.</p><p>To allow it, open the phone's Settings, then Apps, %1, Permissions, Microphone.</p>")
+                  .arg(QApplication::applicationName()));
+         });
+}
+
+void
+MainWindow::checkAudioDevice()
+{
+    breakfastquay::SystemPlaybackTarget *device = m_audioIO;
+    if (!device) device = m_playTarget;
+    OboeAudioIO *io = dynamic_cast<OboeAudioIO *>(device);
+    if (!io || !io->hasFailed()) return;
+
+    // Whatever was going on stops. A take keeps what was sung, through
+    // the Stop path of the Record button
+    if (m_recordTarget && m_recordTarget->isRecording()) {
+        record();
+    } else if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+
+    // Reopened up to three times in ten seconds, as a headset can move
+    // the output and then the input. More is a device that fails as
+    // soon as it is open: it is left closed rather than opened over and
+    // over, and the next Record or file opened tries again
+    if (!m_audioDeviceReopened.isValid() ||
+        m_audioDeviceReopened.elapsed() > 10000) {
+        m_audioDeviceReopened.start();
+        m_audioDeviceReopens = 0;
+    }
+    if (++m_audioDeviceReopens > 3) {
+        cerr << "MainWindow::checkAudioDevice: the audio device keeps "
+             << "failing; closing it" << endl;
+        m_audioDeviceReopened.invalidate();
+        deleteAudioIO();
+        updateMenuStates();
+        QMessageBox::warning
+            (this, tr("Audio device failed"),
+             tr("<b>The audio device stopped working</b><p>It failed again each time it was opened. Recording, or opening a file, will try to open it again.</p>"));
+        return;
+    }
+
+    cerr << "MainWindow::checkAudioDevice: the audio device failed or "
+         << "went away; opening it again" << endl;
+    recreateAudioIO();
+    updateMenuStates();
+}
 #endif
 
 void
@@ -3942,6 +4070,16 @@ MainWindow::record()
         MainWindowBase::record();
         return;
     }
+
+#ifdef Q_OS_ANDROID
+    // The microphone is asked for when it is first needed, and the
+    // answer comes later: the take is started then, from the top
+    if (!microphoneAllowed()) {
+        if (m_recordAction) m_recordAction->setChecked(false);
+        askForMicrophone();
+        return;
+    }
+#endif
 
     // If a reference track is already loaded, record the microphone input
     // into the singing track rather than replacing the whole session.  We

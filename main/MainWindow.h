@@ -31,6 +31,10 @@
 
 #include "data/model/SparseTimeValueModel.h"
 
+#ifdef Q_OS_ANDROID
+#include <QElapsedTimer>
+#endif
+
 class QTimer;
 class QComboBox;
 class QActionGroup;
@@ -908,6 +912,22 @@ protected:
     // cannot open: the file picked is copied into the app's own storage,
     // and the copy's path returned
     QString getOpenFileName(sv::FileFinder::FileType type) override;
+
+    // The audio device is Oboe's (OboeAudioIO): bqaudioio has no
+    // Android backend. Its input only once the microphone may be used
+    void createAudioIO() override;
+
+    // The microphone is asked for when Record is first pressed, and the
+    // take is started once it is given
+    bool microphoneAllowed() const;
+    void askForMicrophone();
+
+    // A device that goes away (headphones in or out) leaves the device
+    // failed: looked for on a timer, and the device opened afresh
+    void checkAudioDevice();
+    QTimer *m_audioDeviceCheck;
+    QElapsedTimer m_audioDeviceReopened;
+    int m_audioDeviceReopens;
 #endif
 
     // A session must not be saved in the middle of the analysis of a

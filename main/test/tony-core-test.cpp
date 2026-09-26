@@ -17,6 +17,7 @@
 #include "TestLatencyShift.h"
 #include "TestCoverage.h"
 #include "TestPinchZoom.h"
+#include "TestStreamLatency.h"
 #include "TestTakeAudio.h"
 #include "TestTakeEvents.h"
 #include "TestSingingTakes.h"
@@ -78,6 +79,12 @@ int main(int argc, char *argv[])
 
     {
         TestPinchZoom t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestStreamLatency t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

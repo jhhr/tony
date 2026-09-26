@@ -498,6 +498,8 @@ elif system == 'android'
   mad_dep = dependency('mad', version: '>= 0.15.0', static: true)
   id3tag_dep = dependency('id3tag', version: '>= 0.15.0', static: true)
   opus_dep = dependency('opusfile', static: true)
+  # The audio device: bqaudioio has no Android backend (main/OboeAudioIO)
+  oboe_dep = dependency('oboe', static: true)
 
   feature_dependencies = [
     vamphostsdk_dep,
@@ -511,6 +513,7 @@ elif system == 'android'
     mad_dep,
     id3tag_dep,
     opus_dep,
+    oboe_dep,
   ]
 
   feature_defines = [
@@ -1170,6 +1173,7 @@ tony_core_files = [
   'main/PinchZoom.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
+  'main/StreamLatency.cpp',
   'main/TakeAudio.cpp',
   'main/TakeEvents.cpp',
   'main/TakesFile.cpp',
@@ -1188,6 +1192,12 @@ tony_app_files = [
   'main/TakeLayers.cpp',
   'main/TouchGestures.cpp',
 ]
+
+if system == 'android'
+  tony_app_files += [
+    'main/OboeAudioIO.cpp',
+  ]
+endif
 
 tony_core_moc_files = qt.preprocess(
   moc_headers: [
@@ -1471,6 +1481,7 @@ if system != 'android'
     'main/test/TestLatencyShift.h',
     'main/test/TestCoverage.h',
     'main/test/TestPinchZoom.h',
+    'main/test/TestStreamLatency.h',
     'main/test/TestTakeAudio.h',
     'main/test/TestTakeEvents.h',
     'main/test/TestSingingTakes.h',

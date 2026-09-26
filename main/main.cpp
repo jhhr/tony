@@ -327,11 +327,6 @@ main(int argc, char **argv)
 
     if (args.contains("--no-audio")) audioOutput = false;
 
-#ifdef Q_OS_ANDROID
-    // There is no audio backend for Android yet
-    audioOutput = false;
-#endif
-
     if (args.contains("--no-sonification")) sonification = false;
 
     if (args.contains("--no-spectrogram")) spectrogram = false;
