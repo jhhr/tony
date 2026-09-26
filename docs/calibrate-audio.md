@@ -442,10 +442,10 @@ below). In order:
    fork, fails where the device runs only at its mixer's rate), and Calibrate Audio
    measures such a device, and keeps its figure, like any other. It came first because
    WASAPI opens at the Windows mixer's rate, usually 48 kHz.
-2. **A `bqaudioio` fork**, `jhhr/bqaudioio` (created 2026-09-26; the remote `jhhr` in
-   `bqaudioio/`). Nothing uses it yet: `repoint-project.json` still takes bqaudioio from
-   sourcehut, and nothing is pinned to the fork. For choosing the host API, WASAPI's
-   automatic rate conversion, and a `suggestedLatency` that can be set.
+2. **A `bqaudioio` fork**, `jhhr/bqaudioio`, pinned: an implementation per Windows host
+   API, WASAPI's automatic rate conversion, and a `suggestedLatency` that can be set
+   ([forks.md](forks.md#bqaudioio)). Done; the plan from here on is in
+   [audio-drivers.md](audio-drivers.md).
 3. **A driver type in Tony**: MME, DirectSound or WASAPI; the device menus list that type's
    devices only (today every host API's are listed, and `getDeviceIndex()` takes the first
    name that matches, which is MME's); the stored round trip kept per type.
@@ -501,8 +501,9 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
 - The calibration's result page does not give the microphone's channel or the noise floor:
   nothing in the calibration measures them (item 5 of the dev run finds the channel).
 - Windows' audio enhancements, echo cancellation or noise suppression can take the sweeps
-  out, and Tony cannot ask for raw capture (bqaudioio is upstream, and MME has no raw
-  mode): NoSignal and Fading tell the user to turn them off.
+  out, and Tony does not ask for raw capture (MME has no raw mode, and the bqaudioio
+  fork does not ask WASAPI for its own): NoSignal and Fading tell the user to turn them
+  off.
 - Not in the dev run, of what the retired `test-tony-device` did: a take with no lead-in
   and not into a selection, stopped by hand; "no dialog" over every take (item 14 watches
   stages 3 and 4); with no device at all, the "Couldn't open audio device" warning once for
@@ -596,7 +597,9 @@ and the dev checks".
 
 So that later work does not derive them again.
 
-- **bqaudioio's `PortAudioIO`** (upstream, not a fork):
+- **bqaudioio's `PortAudioIO`**, as upstream has it and the fork's `port` still does
+  (the fork's per-host-API implementations and settable latency:
+  [audio-drivers.md](audio-drivers.md)):
   - one duplex `Pa_OpenStream`, `suggestedLatency = 0.2`, no host-API stream info;
   - input goes to the record target **before** output is asked for, in the same callback;
   - `suspend()`/`resume()` are `Pa_StopStream`/`Pa_StartStream`. `MainWindowBase::stop()`

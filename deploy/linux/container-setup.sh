@@ -149,9 +149,7 @@ done
 # carry, and a conversion back to Mercurial does not reproduce it. Each
 # pin was matched to a mirror commit by hand, by date and message:
 #
-# - bqaudioio 017ab3ed3a33 is the merge of toggle-record-in-io into
-#   default: the mirror's "Merge from branch toggle-record-in-io".
-# - The other pins were taken by upstream Tony's "Update Repoint
+# - The pins were taken by upstream Tony's "Update Repoint
 #   locations and revisions" (2024-06-25). For each, the commit is the
 #   last one on the mirror's master before that date, and Sonic
 #   Visualiser's repoint-lock.json took the same Mercurial pin shortly
@@ -168,7 +166,6 @@ done
 
 mirror_commit() {
     case "$1 $2" in
-        "bqaudioio 017ab3ed3a33")      echo 7ab6de96b44d2f0c8ce58a16ce1a9831724dd29f ;;
         "dataquay 79623fb778da")       echo 2dbf1bed112c1a7eaaf43335abbe5ddb5c03d0ff ;;
         "bqvec 291cde50db9d")          echo ddfcd1716576c6bb44218c5f5696bf24a248960a ;;
         "bqfft d41a117b8cbe")          echo 68dc4c5735c1e0da099e8473fc4562acf2895cb8 ;;
@@ -194,6 +191,12 @@ checkout() {
             echo "  $name: WARNING: has local changes and is not at $short; left alone"
             warnings=1
             return
+        fi
+        # A library that has moved, as bqaudioio did from its mirror to
+        # the fork, is fetched from where it is now
+        if [ "$(git -C "$name" remote get-url origin 2>/dev/null)" != "$url" ]; then
+            echo "  $name: origin is now $url"
+            git -C "$name" remote set-url origin "$url"
         fi
         if ! git -C "$name" cat-file -e "$commit^{commit}" 2>/dev/null; then
             echo "  $name: fetching from $url"

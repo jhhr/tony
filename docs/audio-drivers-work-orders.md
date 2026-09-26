@@ -88,6 +88,14 @@ spec was silent; anything fragile, unfinished, or needed from a library.
   reference's handled (A1: the recording resampled before the splice, `TakeTiming`
   converting; A11: the cursor keeps the reference's pace).
 - All three suites green, sharded and in one process each. No expected failures left.
+- W1 and W2 are done (the spec's §6). bqaudioio is the fork, at its `feat/wasapi`: the
+  implementations `mme`, `directsound` and `wasapi` exist **on Windows only**; on Linux
+  `AudioFactory::getImplementationNames()` is as before (`pulse`, `port`, `jack`). So a
+  test of anything that lists or chooses a driver cannot get the list from the factory
+  here: give `MainWindow` a virtual that returns it, as `createAudioIO()` is virtual for
+  `FakeAudioIO`, and have `TestMainWindow` override it.
+- `AudioFactory::setSuggestedLatency(seconds)` exists (0 or less: the default, 0.2 s),
+  for streams opened after the call.
 
 ## 4. Work orders
 
@@ -116,3 +124,12 @@ figure and checks again with it.
 ## 5. Log
 
 Capped at 25 lines per entry. Newest last.
+
+**W1** (agent; lead reviewed and committed). The rate-mismatch verdict went; two 48 kHz
+tests (measure, then place with the kept figure), both seen failing with the mismatch
+blocking put back, and the second with the kept figure turned into frames at the
+session's rate. A 48 kHz check measures about 1.1 ms over the fake's delay: bqaudioio's
+`ResamplerWrapper` holds that back, unreported, and a real device has it too.
+
+**W2** (lead). The fork as the spec's §4; pinned. Tony's build unchanged on Linux; the
+suites green against the fork.

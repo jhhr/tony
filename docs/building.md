@@ -94,7 +94,7 @@ echo "exit:$?" >> tmp/build.log
 # Building on Linux
 
 For a cloud session: Ubuntu 24.04, 4 cores, 16 GB, root, no sound card, and no Windows.
-repoint does not run there, and hg.sr.ht, where six of the libraries live, cannot be
+repoint does not run there, and hg.sr.ht, where five of the libraries live, cannot be
 reached. Three scripts in `deploy/linux/` do the work:
 
 - **`cloud-environment.sh` is the cloud environment's setup script.** Its text is pasted

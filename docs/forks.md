@@ -10,12 +10,9 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 | `svgui/` | `jhhr/svgui` `tony-customizations` | See below. |
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
+| `bqaudioio/` | `jhhr/bqaudioio` `master` | See below. Upstream is Mercurial on sourcehut; the fork started from its GitHub mirror. |
 
-`pyin/` and the rest are upstream and must stay untouched. `bqaudioio/` too, for now: a
-fork of it, `jhhr/bqaudioio`, was created on 2026-09-26 for the lower-latency driver work
-([open-points.md](open-points.md)), and the checkout has it as the remote `jhhr`, but
-`repoint-project.json` still takes bqaudioio from sourcehut and nothing is pinned to the
-fork. It joins the table when that work first pins it.
+`pyin/` and the rest are upstream and must stay untouched.
 
 ## Changing a fork
 
@@ -174,6 +171,26 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `ViewManager::setPlotScale()` / `plotScaleChanged()` is Tony's View > Plot Size; each
   view drops its cache on a change. On a hi-DPI desktop (ratio 2) this doubles points and
   notes, and thickens the pens of every layer drawn through a `ViewProxy`.
+
+### bqaudioio
+
+The driver project ([audio-drivers.md](audio-drivers.md)), on the fork branch
+`feat/wasapi`:
+
+- **An implementation per Windows host API.** `mme`, `directsound` and `wasapi` are
+  PortAudio restricted to that host API: their device lists hold its devices only, and
+  with no device named its own default devices are used. `port` is as upstream has it:
+  every host API's devices, the first whose name matches, and PortAudio's default
+  devices. The three are reported only on Windows and only where PortAudio has the host
+  API; asking for them elsewhere would initialise PortAudio for nothing.
+- **WASAPI converts rates.** A WASAPI device opens with `paWinWasapiAutoConvert`: in shared
+  mode each side runs at its own mixer's rate, and the stream opens at the output's. The
+  header comes from PortAudio (`pa_win_wasapi.h`, found with `__has_include`).
+- **A settable latency.** `AudioFactory::setSuggestedLatency()` sets what both sides ask
+  for, for the streams opened after; 0.2 s, upstream's fixed figure, when unset.
+
+Only the Windows cross-compile (MinGW-w64 against PortAudio 19.7.0's headers) and the
+user's PC see the Windows part; Linux builds none of it.
 
 ## Known defects in the forks, not fixed
 

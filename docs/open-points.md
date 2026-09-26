@@ -33,14 +33,12 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 ## Not built
 
-- **A lower-latency driver**, the next project (the user's decision, 2026-09-26): first
-  the device-rate fix (a take recorded at 48 kHz is placed frame for frame into the
-  44.1 kHz session; convert when it is spliced), then a `bqaudioio` fork for choosing the
-  host API, WASAPI's rate conversion and a settable `suggestedLatency` (`jhhr/bqaudioio`
-  exists, the remote `jhhr` in `bqaudioio/`, not pinned yet: [forks.md](forks.md)), then a
-  driver type in Tony with the stored round trip per type, then Calibrate Audio and a dev
-  run on each type. MME stays the default until a run shows another better
-  ([calibrate-audio.md](calibrate-audio.md), §10).
+- **A lower-latency driver**, being built on `feat/wasapi`
+  ([audio-drivers.md](audio-drivers.md)). Done: a device at 48 kHz is placed and
+  calibrated like one at 44.1 kHz, and the pinned `bqaudioio` fork has an implementation
+  per Windows host API, WASAPI's rate conversion and a settable latency. Next: a driver
+  menu in Tony, then Calibrate Audio and a dev run on each driver. MME stays the default
+  until a run shows another better.
 - Showing two takes at once, or any comparison of takes other than switching.
 - Singing track gain and pan are not saved in the session.
 - Background music is not saved in the session; it is reloaded by hand.

@@ -117,7 +117,15 @@ Each leaves the tree building and all three suites green, committed and pushed t
 
 ## 6. State
 
-- Nothing built yet.
+- **W1 Done.** Calibrate Audio judges a device at 48 kHz like any other and keeps its
+  figure; its details name both rates. Left: before a device's first take, the menu line,
+  Forget Measured Latency and the dialog look the figure up at the session's rate, so on a
+  48 kHz device they show the driver's figure although a 48 kHz one is kept (takes use the
+  kept one). A fix needs the device's rate before the first take (svapp).
+- **W2 Done.** `jhhr/bqaudioio` `feat/wasapi`, pinned; `repoint-project.json` takes it from
+  the fork, and `container-setup.sh` moves a checkout made from the mirror over to it.
+  Compiled for Linux in Tony's build and cross-compiled for Windows; run on no device yet
+  (the container has none).
 
 ## 7. Open
 
