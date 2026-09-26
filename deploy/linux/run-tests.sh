@@ -17,17 +17,19 @@
 # container's 4 cores, 8 processes run it in a minute and a half instead
 # of eight, and the load stays under 2.
 #
-# Each process has a log directory, a HOME and XDG directories of its own.
-# The suites keep QSettings per user, and processes sharing the file
-# would read and clear each other's settings; a suite that turns on
-# QStandardPaths' test mode keeps them in $HOME/.qttest, which the XDG
-# variables do not move. On Windows QSettings is the registry, which
-# neither moves: this is for Linux.
+# Each process has a log directory of its own, and runs under an
+# application name of its own (shardApplicationName(),
+# main/test/RunSuite.h). The name keeps its settings, data location and
+# svcore temp directory apart from the other processes', on Linux and on
+# Windows alike, so they all share the user's HOME. The script runs from
+# Git Bash on Windows too, with the environment AGENTS.md gives and
+# executable names with .exe.
 #
 # Usage, from anywhere:
 #   deploy/linux/run-tests.sh [-j N] [BUILD_DIR] EXECUTABLE
 #
 #   deploy/linux/run-tests.sh test-tony-app
+#   deploy/linux/run-tests.sh -j 6 build_mingw test-tony-app.exe
 #
 # N defaults to twice the number of cores, BUILD_DIR to build. The
 # results are in tmp/tl/EXECUTABLE/SHARD/SUITE.txt; the summary gives
@@ -71,12 +73,10 @@ mkdir -p "$out"
 start=$SECONDS
 for i in $(seq 0 $((jobs - 1))); do
     dir=$out/$i
-    mkdir -p "$dir/home" "$dir/xdg/config" "$dir/xdg/data" "$dir/xdg/cache"
+    mkdir -p "$dir"
     (
         cd "$build" &&
-            TONY_TEST_SHARD=$i/$jobs TONY_TEST_LOG_DIR=$dir HOME=$dir/home \
-            XDG_CONFIG_HOME=$dir/xdg/config XDG_DATA_HOME=$dir/xdg/data \
-            XDG_CACHE_HOME=$dir/xdg/cache \
+            TONY_TEST_SHARD=$i/$jobs TONY_TEST_LOG_DIR=$dir \
             "./$exe" > "$dir/stdout.log" 2>&1
         echo $? > "$dir/exit"
     ) &

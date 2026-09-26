@@ -149,10 +149,16 @@ namespace LatencyCheck
     /// ends before the next sweep
     Layout devLayout(sv::sv_samplerate_t rate = kReferenceRate);
 
-    /// 4 minutes of events at the calibration spacings, over and over.
-    /// No more than eleven spacings can differ by 0.1 s inside 1.6 to
-    /// 2.6 s, so here any eleven in a row do
-    Layout longLayout(sv::sv_samplerate_t rate = kReferenceRate);
+    /// How long the long layout is unless asked otherwise: a song
+    constexpr double kLongSeconds = 240.0;
+
+    /// 4 minutes, or the length given, of events at the calibration
+    /// spacings, over and over, as many as end in time for the silence
+    /// the calibration layout ends with.  No more than eleven spacings
+    /// can differ by 0.1 s inside 1.6 to 2.6 s, so here any eleven in a
+    /// row do.  A shorter one is the start of the 4-minute one
+    Layout longLayout(sv::sv_samplerate_t rate = kReferenceRate,
+                      double seconds = kLongSeconds);
 
     /// One sweep at the given rate, as the reference has it
     std::vector<float> sweep(sv::sv_samplerate_t rate);

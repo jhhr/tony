@@ -93,10 +93,11 @@ struct AudioCheckResult
  * any take, which is what is being measured.
  *
  * The takes are recorded with Record into Selection, Play Reference
- * While Recording and a pre-roll of kPreRollSeconds, whatever the
- * toolbar says: MainWindow::record() and the rest consult an override
- * the runner sets for each of its takes, since the toolbar's toggles
- * write the user's settings.  A punch-in's range is made the selection
+ * While Recording and the plan's pre-roll (kPreRollSeconds unless it
+ * says otherwise), whatever the toolbar says: MainWindow::record() and
+ * the rest consult an override the runner sets for each of its takes,
+ * since the toolbar's toggles write the user's settings.  A punch-in's
+ * range is made the selection
  * (the previous one cleared, then this one selected: "Select" steps in
  * the history, as when the user selects), and record() is called; the
  * take stops itself at the end of the selection, through the same path
@@ -127,7 +128,7 @@ class AudioCheckRunner : public QObject
     Q_OBJECT
 
 public:
-    /// The lead-in of the check's takes
+    /// The lead-in of the check's takes, unless the plan asks for another
     static constexpr double kPreRollSeconds = 1.0;
 
     /// How often the runner looks at how a step is going
@@ -139,6 +140,15 @@ public:
     static constexpr int kReferenceTimeoutMs = 60000;
     static constexpr int kTakeAnalysisTimeoutMs = 30000;
     static constexpr int kTakeStopTimeoutMs = 10000;
+
+    /// How long past its own length (lead-in and range) a take may go
+    /// without a single frame from the device before the run says the
+    /// device delivered no input.  Not sooner: a stream that is only slow
+    /// to start (a Bluetooth headset switching to its microphone, say)
+    /// delivers its first block within a second or two, and a device
+    /// that has sent nothing for the whole length of the take plus this
+    /// has recorded none of it anyway
+    static constexpr int kNoInputTimeoutMs = 2000;
 
     /// What a run records
     struct Plan {
@@ -170,8 +180,13 @@ public:
         /// stored, and the window goes on saying it uses its own
         double roundTrip;
 
+        /// The pre-roll this run's takes ask for, in seconds.  As the
+        /// user's does, it gets shorter near the start of the song
+        /// (TakeTiming::preRollBefore())
+        double preRoll;
+
         Plan() : punchIns(0), eventsEach(0), keepSession(false),
-                 roundTrip(-1.0) { }
+                 roundTrip(-1.0), preRoll(kPreRollSeconds) { }
     };
 
     /// The steps of a run, in order; the last two come once for each
@@ -237,8 +252,9 @@ public:
     /**
      * Begin a run.  False, with nothing started, if one is running
      * already, if a take is being recorded, if the plan's punch-ins
-     * cannot be recorded (punchInsOf()), or if it keeps the session and
-     * there is none.  Otherwise finished() comes once, at the end,
+     * cannot be recorded (punchInsOf()), if its pre-roll is negative, or
+     * if it keeps the session and there is none.  Otherwise finished()
+     * comes once, at the end,
      * however the run ends.
      *
      * A run that replaces the session asks the user whether to save it
@@ -314,6 +330,13 @@ private:
 
     QElapsedTimer m_stepClock;
     qint64 m_stepLimitMs;
+
+    /// The length of the take being recorded, lead-in and range, in ms
+    qint64 m_takeMs;
+
+    /// The take has gone kNoInputTimeoutMs past its length with not one
+    /// frame from the device
+    bool deliveredNothing() const;
 
     void poll();
     void openReference();

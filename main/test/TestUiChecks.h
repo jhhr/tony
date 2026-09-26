@@ -151,11 +151,8 @@ class TestUiChecks : public QObject
         QVERIFY(m_window->recordTarget()->isRecording());
     }
 
-    // Not before the take has some audio in it: see TestRecordWorkflow's
     void stopTake() {
         QVERIFY(m_window->recordTarget()->isRecording());
-        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->getFramesReceived()
-                                 >= sv::sv_frame_t(0.1 * rate), 5000);
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
@@ -1146,6 +1143,10 @@ private slots:
         QVERIFY(!select->isEnabled());
         m_window->clearSelections();
 
+        // The merge of the take's analysis is held until the menus have
+        // been looked at: pYIN may analyse the range before Stop returns
+        m_window->holdRangedMerges(true);
+
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(200);
@@ -1159,18 +1160,15 @@ private slots:
         QTest::qWait(600);
 
         // Stop, and the moment after it: the recorded range is being
-        // analysed, and erasing would throw that away.  Held, so that the
-        // moment is there however quick the machine
-        m_window->holdTakeAnalysis();
+        // analysed, and erasing would throw that away
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(m_window->analysingRange());
         QVERIFY2(!erase->isEnabled(),
                  "Erase can be used while the take is being analysed");
 
-        // ... and everything back, by itself: the release does nothing
-        // but let the merge happen
-        m_window->releaseTakeAnalysis();
+        // ... and everything back, by itself
+        m_window->holdRangedMerges(false);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
         QTRY_VERIFY2(erase->isEnabled(),
                      "Erase did not come back after the analysis");
@@ -1424,10 +1422,7 @@ private slots:
     }
 
     // Checklist: stop a take and close the window at once: no crash.
-    // Closed and deleted while the take is still being analysed.  The
-    // analysis is held, so that its run is there, unmerged, when the
-    // window goes, however quick the machine; whether pYIN's thread is
-    // still going then as well depends on the machine and its load
+    // Closed and deleted while the take is still being analysed
     void stop_then_close_the_window_at_once() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 4.0);
@@ -1436,10 +1431,13 @@ private slots:
         openReference(writeWav(tone(lowHz, 3.0)));
         if (QTest::currentTestFailed()) return;
 
+        // Held, so that the merge is still to come when the window goes,
+        // however quickly pYIN analyses the range
+        m_window->holdRangedMerges(true);
+
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(1000);
-        m_window->holdTakeAnalysis();
         m_window->doRecord();
         QVERIFY(m_window->analysingRange());
 

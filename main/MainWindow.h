@@ -65,6 +65,9 @@ class MainWindow : public sv::MainWindowBase
     // The development checks save and reopen the session, and read the
     // take's pitch and notes; see DevChecks
     friend class DevChecks;
+    // What the development checks see of a take, only looking; see
+    // TakeObserver
+    friend class TakeObserver;
 #endif
 
 public:
@@ -962,13 +965,6 @@ protected:
     // what the singer sang would be left unanalysed.
     Coverage::Range m_takeAnalysisRange;
 
-    // For the tests (TestMainWindow::holdTakeAnalysis()): every singing
-    // analyser made while this is set holds the result of its ranged
-    // analysis unmerged (Analyser::setHoldRangedMerge()).  Here and not
-    // only in the Analyser because a recording, an undo or a redo makes
-    // the analyser again before it starts the analysis to be held.
-    bool m_holdTakeAnalysis;
-
     // Round-trip hardware latency (the figure the audio check measured,
     // or else output + input as the device reports them, in frames of the
     // recording; see roundTripAt()) stored when a singing-track recording
@@ -1001,9 +997,9 @@ protected:
 
     // The audio check, and the override it sets for each take of its
     // own: Record into Selection, Play Reference While Recording and a
-    // pre-roll of AudioCheckRunner::kPreRollSeconds, whatever the toolbar
-    // says.  Not by setting the toggles, which write the user's settings.
-    // record(), recordingStarted() and wantedPreRollFrames() consult it
+    // pre-roll of its own, whatever the toolbar says.  Not by setting the
+    // toggles, which write the user's settings.  record(),
+    // recordingStarted() and wantedPreRollFrames() consult it
     AudioCheckRunner *m_audioCheck;
     bool m_audioCheckTakes;
 
@@ -1012,6 +1008,10 @@ protected:
     // (AudioCheckRunner::Plan::roundTrip); negative when it brings none.
     // Read with m_audioCheckTakes, and never by latencyInUse()
     double m_audioCheckRoundTrip;
+
+    // The pre-roll the check's takes ask for, in seconds
+    // (AudioCheckRunner::Plan::preRoll).  Read with m_audioCheckTakes
+    double m_audioCheckPreRoll;
 
 #ifdef TONY_DEV_CHECKS
     // The development checks, which drive the audio check and the

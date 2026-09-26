@@ -11,7 +11,11 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
 
-`pyin/` and the rest are upstream and must stay untouched.
+`pyin/` and the rest are upstream and must stay untouched. `bqaudioio/` too, for now: a
+fork of it, `jhhr/bqaudioio`, was created on 2026-09-26 for the lower-latency driver work
+([open-points.md](open-points.md)), and the checkout has it as the remote `jhhr`, but
+`repoint-project.json` still takes bqaudioio from sourcehut and nothing is pinned to the
+fork. It joins the table when that work first pins it.
 
 ## Changing a fork
 
@@ -161,12 +165,19 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 ## Known defects in the forks, not fixed
 
 - `svapp/audio/AudioCallbackRecordTarget.cpp` connects to `SIGNAL(aboutToBeDeleted())`,
-  which the model class does not have, so its `modelAboutToBeDeleted()` never runs. The
+  which the model class does not have, so its `modelAboutToBeDeleted()` never runs, and
+  every take logs "No such signal sv::WritableWaveFileModel::aboutToBeDeleted()", on any
+  Qt: expected in test logs, not a new fault. The
   signal to use would be `Document::modelAboutToBeReleased(ModelId)`. Tony avoids the
   consequence by stopping the recording and releasing the model in a fixed order (see
   [recording.md](recording.md)); whether `m_model` can dangle otherwise was not looked into.
 - The play-start callback is passed the frames actually got, not the requested block size.
 - `View::removeLayer()` does not disconnect `layerMeasurementRectsChanged`.
+- `svcore/base/PlayParameterRepository.cpp` keeps its play parameters in a `std::map` with
+  no lock, which the audio fill thread reads (`AudioGenerator::mixModel()` through
+  `getPlayParameters()`) while the GUI thread adds and removes playables. Seen once as a
+  crash of `test-tony-app` in the fill thread, in a sharded run whose processes shared
+  their settings; not seen otherwise.
 
 ## Changes that would tidy Tony up but were not made
 

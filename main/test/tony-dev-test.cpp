@@ -42,10 +42,13 @@ int main(int argc, char *argv[])
     }
 
     // Names distinct from the application's, so that nothing here reads
-    // or writes the user's real Tony settings
+    // or writes the user's real Tony settings, and a shard's distinct
+    // from the other shards', so that shards running at once keep apart
     QApplication app(argc, argv);
     app.setOrganizationName("tony-tests");
-    app.setApplicationName("test-tony-dev");
+    app.setApplicationName(shardApplicationName
+                           ("test-tony-dev",
+                            qEnvironmentVariable("TONY_TEST_SHARD")));
 
     // Text in shades of grey, as in test-tony-app
     QFont font = QApplication::font();

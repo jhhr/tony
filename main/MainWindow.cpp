@@ -218,7 +218,6 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_currentRecordingModelId(),
     m_recordingLayer(nullptr),
     m_rebuildingTakeAudio(false),
-    m_holdTakeAnalysis(false),
     m_recordingLatencyFrames(0),
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
@@ -227,6 +226,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioCheck(nullptr),
     m_audioCheckTakes(false),
     m_audioCheckRoundTrip(-1.0),
+    m_audioCheckPreRoll(AudioCheckRunner::kPreRollSeconds),
 #ifdef TONY_DEV_CHECKS
     m_devChecks(nullptr),
 #endif
@@ -3908,7 +3908,6 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
 
     // Create the secondary analyser with the singing-track colour scheme
     m_analyser2 = new Analyser(Analyser::SecondaryColors);
-    m_analyser2->setHoldRangedMerge(m_holdTakeAnalysis);
 
     connect(m_analyser2, SIGNAL(layersChanged()),
             this, SLOT(updateLayerStatuses()));
@@ -5088,7 +5087,7 @@ MainWindow::wantedPreRollFrames() const
     double seconds = 0.0;
     if (m_audioCheckTakes) {
         // The audio check's takes have a lead-in of their own
-        seconds = AudioCheckRunner::kPreRollSeconds;
+        seconds = m_audioCheckPreRoll;
     } else {
         if (!m_preRoll || !m_preRoll->isChecked()) return 0;
         QSettings settings;

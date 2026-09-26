@@ -28,7 +28,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-tony-device.exe > tmp/build.log 2>&1
+ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -78,11 +78,18 @@ echo "exit:$?" >> tmp/build.log
   include directories for `opus`, `sord-0`, `serd-0`.
 - `-DHAVE_MEDIAFOUNDATION` with `-lmfplat -lmfreadwrite -lmfuuid -lpropsys`; needs the
   `bqaudiostream` fork.
-- `tony_core` / `tony_app` static libraries and the two test executables; see
+- `tony_core` / `tony_app` static libraries and the test executables; see
   [architecture.md](architecture.md) for what goes where. A new source file goes into
   `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
   only if it declares `Q_OBJECT`.
-- Windows headers define `near` and `far` as macros. Do not use them as identifiers.
+- Any build type but `release` (`build.bat`'s is `debugoptimized`) is a development build:
+  `-DTONY_DEV_CHECKS` for the compiler and for moc, `main/dev/` compiled into `tony_app`,
+  and `test-tony-dev` built. `meson.build`'s default and the CI workflows use `release`,
+  which has none of it. After a change to how the dev checks are wired in, set up a
+  `release` build directory and build it: it must compile with no `main/dev/` file
+  ([calibrate-audio.md](calibrate-audio.md), §6).
+- Windows headers define macros named `near` and `far` (empty), `min`, `max`, `ERROR`, `IN`
+  and `OUT`. Do not use them as identifiers: a build on Linux does not catch it.
 - The macOS SDK's `MacTypes.h` declares `normal`, `bold`, `italic`, `underline`,
   `outline`, `shadow`, `condense` and `extend` in the global namespace. A function of one
   of those names, even in an anonymous namespace, makes each unqualified call to it
@@ -152,9 +159,9 @@ Measured on 2026-09-26:
 | Full build, nothing in ccache | 6.6 minutes: 1570 CPU-seconds, nearly all compiling |
 | Full build, everything in ccache | 4 to 6 seconds |
 | A session's first build, with the setup script's ccache | 3.7 minutes, in the background |
-| Linking `tony`, `test-tony-core`, `test-tony-app` and `test-tony-device` | 3 s with mold, 12 s with GNU ld |
+| Linking `tony` and the three test executables | 3 s with mold, 12 s with GNU ld |
 | App suite | 550 s in one process, 95 s in eight |
-| Development checks' suite | 69 s in one process, 18 s in eight |
+| Development checks' suite | 223 s in one process, 68 s in eight |
 
 Why each part is as it is:
 

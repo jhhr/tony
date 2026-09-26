@@ -1160,9 +1160,11 @@ tony_app_moc_headers = [
 if dev_checks
   tony_app_files += [
     'main/dev/DevChecks.cpp',
+    'main/dev/TakeObserver.cpp',
   ]
   tony_app_moc_headers += [
     'main/dev/DevChecks.h',
+    'main/dev/TakeObserver.h',
   ]
 endif
 
@@ -1479,46 +1481,11 @@ tony_app_test_exe = executable(
   win_subsystem: 'console'
 )
 
-# The checks that need a real audio device, with its microphone hearing
-# its speakers. Built with the rest, run only by hand: not a meson test
-tony_device_test_moc_files = qt.preprocess(
-  moc_headers: [
-  'main/test/TestRealDevice.h',
-])
-
-tony_device_test_exe = executable(
-  'test-tony-device',
-  tony_device_test_moc_files,
-  'main/test/tony-device-check.cpp',
-  dependencies: [
-    tony_app_dep,
-    tony_core_dep,
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    os_dep,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
 test('tony-core', tony_core_test_exe)
-# QTEST_FUNCTION_TIMEOUT as long as meson's own timeout: Qt 6.4's watchdog
-# can miss the end of a quick test function and time out whichever one
-# is running five minutes later, so a suite longer than that fails at
-# random, and the process then hangs until meson kills it
 test('tony-app', tony_app_test_exe,
      depends: pyin_plugin,
      timeout: 900,
-     env: [ 'QT_QPA_PLATFORM=offscreen', 'QTEST_FUNCTION_TIMEOUT=900000' ])
+     env: [ 'QT_QPA_PLATFORM=offscreen' ])
 
 # The development checks' suite, only where the checks are built. Its
 # own executable: every test records takes in real time, and it is run
@@ -1558,7 +1525,7 @@ if dev_checks
   test('tony-dev', tony_dev_test_exe,
        depends: pyin_plugin,
        timeout: 900,
-       env: [ 'QT_QPA_PLATFORM=offscreen', 'QTEST_FUNCTION_TIMEOUT=900000' ])
+       env: [ 'QT_QPA_PLATFORM=offscreen' ])
 endif
 
 test('svcore-base', svcore_base_test_exe)

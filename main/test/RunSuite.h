@@ -51,6 +51,50 @@ shardFunctions(const QObject *suite, int shard, int count)
 }
 
 /**
+ * Read a value of TONY_TEST_SHARD, "i/n". True only for two whole
+ * numbers with 0 <= i < n, which are then set in \a shard and \a count.
+ * runSuite() and shardApplicationName() both read the value through
+ * this, so that they cannot disagree on what is a shard.
+ */
+inline bool
+parseShard(const QString &value, int &shard, int &count)
+{
+    QStringList parts = value.split('/');
+    if (parts.size() != 2) {
+        return false;
+    }
+    bool iok = false, nok = false;
+    int i = parts[0].toInt(&iok);
+    int n = parts[1].toInt(&nok);
+    if (!iok || !nok || n < 1 || i < 0 || i >= n) {
+        return false;
+    }
+    shard = i;
+    count = n;
+    return true;
+}
+
+/**
+ * The application name for a process of the test executable \a base
+ * that runs the shard \a shard (the value of TONY_TEST_SHARD):
+ * "<base>-shard<i>of<n>", or \a base itself for no value or one that
+ * is not a shard. Settings, QStandardPaths' data location and svcore's
+ * temp directory and log are all keyed by the application name, and on
+ * Windows, where they are the registry and known folders, no
+ * environment variable moves them: so the name is all that keeps shards
+ * running at once from clearing each other's settings and files.
+ */
+inline QString
+shardApplicationName(const QString &base, const QString &shard)
+{
+    int i = 0, n = 0;
+    if (!parseShard(shard, i, n)) {
+        return base;
+    }
+    return QString("%1-shard%2of%3").arg(base).arg(i).arg(n);
+}
+
+/**
  * Run one suite with the command-line arguments given. If the
  * environment variable TONY_TEST_LOG_DIR is set, the suite's results
  * are also written to <dir>/<SuiteClassName>.txt. A single "-o file"
@@ -61,6 +105,8 @@ shardFunctions(const QObject *suite, int shard, int count)
  * whole suite between them in about 1/n of the time: most tests wait
  * on a fake device playing in real time. A suite with nothing in the
  * shard is not run. Not for use with test names on the command line.
+ * The mains give each shard an application name of its own:
+ * shardApplicationName().
  */
 inline bool
 runSuite(QObject *suite, int argc, char *argv[])
@@ -71,10 +117,8 @@ runSuite(QObject *suite, int argc, char *argv[])
     }
     QString shard = qEnvironmentVariable("TONY_TEST_SHARD");
     if (shard != "") {
-        QStringList parts = shard.split('/');
-        int n = (parts.size() == 2 ? parts[1].toInt() : 0);
-        int i = (parts.size() == 2 ? parts[0].toInt() : -1);
-        if (n < 1 || i < 0 || i >= n) {
+        int i = 0, n = 0;
+        if (!parseShard(shard, i, n)) {
             qWarning("TONY_TEST_SHARD must be i/n with 0 <= i < n, not \"%s\"",
                      qPrintable(shard));
             return false;
@@ -91,6 +135,15 @@ runSuite(QObject *suite, int argc, char *argv[])
             (QString("%1.txt").arg(suite->metaObject()->className()));
         args << "-o" << (file + ",txt") << "-o" << "-,txt";
     }
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+    // Qt 6.4's watchdog, meant to end a test function that runs for five
+    // minutes, can time the whole suite instead: it ended TestRecordWorkflow
+    // 300 s after the suite began, one second into a test that passes.
+    // That suite runs for longer, so on that Qt the limit goes beyond it
+    if (qEnvironmentVariableIsEmpty("QTEST_FUNCTION_TIMEOUT")) {
+        qputenv("QTEST_FUNCTION_TIMEOUT", "1800000");
+    }
+#endif
     return QTest::qExec(suite, args) == 0;
 }
 

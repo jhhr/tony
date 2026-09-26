@@ -1039,6 +1039,85 @@ private slots:
                             .arg(describeNotes(now)).arg(to).arg(wasEnd)));
     }
 
+    void ranged_join_inside_a_note_data() {
+        QTest::addColumn<bool>("sameNote");
+        QTest::newRow("the same note going on") << true;
+        QTest::newRow("a new note from the join") << false;
+    }
+
+    void ranged_join_inside_a_note() {
+        // Two punch-ins meeting at J, as MainWindow analyses them: the
+        // first's range alone, its coverage ending at J, then the second's
+        // with the coverage grown to take it in. The second's run starts
+        // half a second before J, inside the first's note, so the note it
+        // finds there begins before the merge window. When the singer
+        // holds the note through J, that is the first's note going on, and
+        // the two are one. When a different note begins at J, they are two:
+        // the first's note must not be carried on over the new one
+        QFETCH(bool, sameNote);
+
+        std::vector<float> data;
+        appendSilence(data, 0.2);
+        auto held = tone(singingHz, 1.3);            // 0.2 to 1.5 s
+        data.insert(data.end(), held.begin(), held.end());
+        auto then = tone(sameNote ? singingHz : referenceHz, 1.3);
+        data.insert(data.end(), then.begin(), then.end()); // to 2.8 s
+        appendSilence(data, 0.3);
+
+        const sv::sv_frame_t P = frameAt(0.5), J = frameAt(1.5),
+            E = frameAt(2.5);
+        sv::sv_frame_t wFrom, wTo;
+        mergeWindow(J, E, P, E, wFrom, wTo);
+        QVERIFY(wFrom > P && wFrom < J);
+
+        Analyser analyser(Analyser::SecondaryColors);
+        setUpEmpty(analyser, addSingingModel(data));
+        if (QTest::currentTestFailed()) return;
+
+        QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+        QCOMPARE(analyser.analyseRange(P, J, P, J), QString());
+        waitForRange(analyser, done);
+        if (QTest::currentTestFailed()) return;
+
+        // The first punch-in's note, running from near P to J
+        sv::EventVector first = noteEvents(analyser);
+        QVERIFY2(first.size() == 1 &&
+                 std::abs(first[0].getFrame() - P) <= 4 * hop &&
+                 std::abs(first[0].getFrame() + first[0].getDuration() - J)
+                 <= 4 * hop, qPrintable("first: " + describeNotes(first)));
+
+        done.clear();
+        QCOMPARE(analyser.analyseRange(J, E, P, E), QString());
+        waitForRange(analyser, done);
+        if (QTest::currentTestFailed()) return;
+
+        sv::EventVector now = noteEvents(analyser);
+        QString what = QString("the first punch-in's note %1 and the second's "
+                               "(merge window %2 to %3) became %4")
+            .arg(describeNotes(first)).arg(wFrom).arg(wTo)
+            .arg(describeNotes(now));
+
+        // The first's note keeps its onset and pitch either way
+        QVERIFY2(!now.empty() && now[0].getFrame() == first[0].getFrame() &&
+                 now[0].getValue() == first[0].getValue(), qPrintable(what));
+        sv::sv_frame_t end = now[0].getFrame() + now[0].getDuration();
+
+        if (sameNote) {
+            // and runs on through J to the end of the coverage
+            QVERIFY2(now.size() == 1 && std::abs(end - E) <= 4 * hop,
+                     qPrintable(what));
+        } else {
+            // and still ends at J, where the new note begins, sung at its
+            // own pitch
+            QVERIFY2(now.size() == 2 && std::abs(end - J) <= 4 * hop &&
+                     now[1].getFrame() >= end &&
+                     std::abs(now[1].getFrame() - J) <= 4 * hop &&
+                     std::abs(TestSignals::centsBetween
+                              (now[1].getValue(), referenceHz)) < 50.0,
+                     qPrintable(what));
+        }
+    }
+
     void ranged_at_the_edge_of_coverage() {
         // Where the caller's coverage limit clips an edge of the run there
         // is nothing beyond it but silence and no context worth keeping,
