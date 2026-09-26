@@ -47,6 +47,24 @@ AndroidStorage::hasAllFilesAccess()
 }
 
 QString
+AndroidStorage::versionName()
+{
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid()) return "";
+    QJniObject manager = context.callObjectMethod
+        ("getPackageManager", "()Landroid/content/pm/PackageManager;");
+    QJniObject package = context.callObjectMethod
+        ("getPackageName", "()Ljava/lang/String;");
+    if (!manager.isValid() || !package.isValid()) return "";
+    QJniObject info = manager.callObjectMethod
+        ("getPackageInfo",
+         "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+         package.object<jstring>(), jint(0));
+    if (!info.isValid()) return "";
+    return info.getObjectField<jstring>("versionName").toString();
+}
+
+QString
 AndroidStorage::primaryRoot()
 {
     QJniObject directory = QJniObject::callStaticObjectMethod

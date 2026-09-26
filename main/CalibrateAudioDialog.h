@@ -15,6 +15,7 @@
 #ifndef TONY_CALIBRATE_AUDIO_DIALOG_H
 #define TONY_CALIBRATE_AUDIO_DIALOG_H
 
+#include "AudioCheckIndicator.h"
 #include "AudioCheckRunner.h"
 #include "LatencyCalibration.h"
 
@@ -25,11 +26,14 @@ class QCheckBox;
 #endif
 
 #include <QDialog>
+#include <QPointer>
 
 class MainWindow;
+class QHBoxLayout;
 class QLabel;
 class QProgressBar;
 class QPushButton;
+class QScrollArea;
 class QStackedWidget;
 
 /**
@@ -48,7 +52,17 @@ class QStackedWidget;
  * take.  Closing it while its check runs cancels the check, since
  * nothing else would show how the run ended.
  *
- * The window owns it, and makes it the first time it is asked for.
+ * Small, to fit a phone held in landscape: never larger than the part
+ * of the window clear of the phone's bars, the pages' text scrolling
+ * where it is longer, and centred in that part when it is shown.  While
+ * its check runs it is smaller still: it hides, and its indicator (a
+ * bar and a line of text in the window's status bar) says how far the
+ * check has got, out of the way of the takes being drawn.  A tap on the
+ * indicator brings it back on the progress page, with Cancel and Make
+ * Small; when the run ends it comes back by itself, with the result.
+ *
+ * The window owns it, and makes it the first time it is asked for; it
+ * puts the indicator in its status bar.
  *
  * In development builds the instructions page has a checkbox, on by
  * default and not remembered, to carry on into the dev checks
@@ -78,6 +92,25 @@ public:
 
     /// Whether Use this latency is offered, and not yet pressed
     bool canUseLatency() const;
+
+    /// What the dialog becomes while its check runs, for the window's
+    /// status bar.  Hidden until then; the dialog deletes it
+    AudioCheckIndicator *indicator() const { return m_indicator; }
+
+    /// Whether the dialog is small: its check running, the dialog hidden
+    /// and the indicator on show
+    bool isCollapsed() const { return m_collapsed; }
+
+    /// The width the dialog takes when the window has room, in average
+    /// characters of its font: about half a phone's width in landscape
+    static const int preferredWidth = 64;
+
+    /// The result as plain text, under a line saying when, and in
+    /// development builds the dev checks' report file after it, whole,
+    /// if they wrote one: what Copy puts on the clipboard and Save
+    /// Report... saves.  On a phone that file is where only Tony can
+    /// read it
+    QString reportText() const;
 
     /// What a check started here records: the calibration
     /// (AudioCheckRunner::calibrationPlan()) unless set otherwise, as
@@ -109,8 +142,17 @@ public slots:
     /// check is running
     void present();
 
-    /// Start, and Check Again
+    /// Start, and Check Again.  The dialog goes small once the check
+    /// has started
     void startCheck();
+
+    /// Make Small: while its check runs, the dialog hides and its
+    /// indicator shows how far the check has got
+    void collapse();
+
+    /// The dialog on show again, and its indicator hidden: a tap on the
+    /// indicator, and the end of a run
+    void expand();
 
     /// Cancel: the run ends, and how it ended is the result shown.  In
     /// its dev checks, they end, and the calibration is shown with them
@@ -118,6 +160,16 @@ public slots:
 
     /// Keep the round trip the check measured, for the devices it ran on
     void useLatency();
+
+    /// The result page's Copy: reportText() on the clipboard, which on a
+    /// phone is how selected text would be copied, and cannot
+    void copyReport();
+
+#ifdef Q_OS_ANDROID
+    /// The result page's Save Report...: reportText() through the save
+    /// picker, as Help > Save Log... saves the log
+    void saveReport();
+#endif
 
     /// The result page for this result
     void showResult(const AudioCheckResult &result);
@@ -142,18 +194,31 @@ private:
     double m_expectedSeconds;
     int m_shownPermille;
 
+    /// Small while the check runs
+    bool m_collapsed;
+    QPointer<AudioCheckIndicator> m_indicator;
+
     QStackedWidget *m_pages;
     QLabel *m_instructions;
+    QScrollArea *m_instructionsArea;
     QLabel *m_step;
     QProgressBar *m_bar;
     QLabel *m_timeLeft;
     QLabel *m_resultText;
+    QScrollArea *m_resultArea;
 
+    QHBoxLayout *m_buttons;
+    QRect m_fitted;
     QPushButton *m_startButton;
     QPushButton *m_cancelButton;
+    QPushButton *m_smallButton;
     QPushButton *m_useButton;
     QPushButton *m_againButton;
     QPushButton *m_closeButton;
+    QPushButton *m_copyButton;
+#ifdef Q_OS_ANDROID
+    QPushButton *m_saveButton;
+#endif
 
     void runnerProgress(const AudioCheckRunner::Progress &progress);
     void runnerFinished(const AudioCheckResult &result);
@@ -162,6 +227,26 @@ private:
 
     /// The result page for m_result as it stands
     void showResultPage();
+
+    /// The end of a run this dialog started: the result page, on show
+    void runEnded();
+
+    /// The indicator's line and bar (-1 for one that says only that
+    /// something is going on)
+    void indicate(QString text, int permille);
+
+    /// Sized for the page on show, within windowArea(), and placed there:
+    /// centred if the dialog is about to be shown, else kept where it is
+    void fitToWindow();
+
+    /// The part of the screen the dialog may cover: the window, less its
+    /// safe area margins (a phone's bars and camera cutout), within the
+    /// screen's available geometry; the screen's, while the window is
+    /// not on show
+    QRect windowArea() const;
+
+    /// The dialog's height at width, all of the page's text on show
+    int heightFor(int width) const;
 
     QString instructionsHtml() const;
     QString resultHtml() const;
@@ -189,6 +274,10 @@ private:
     void devFinished(const DevReport &report);
 
     QString devHtml() const;
+
+    /// The dev checks' report file as it is, under a line naming it, for
+    /// reportText(); "" if they wrote none
+    QString devReportText() const;
 #endif
 
     /// Seconds in milliseconds, for reading: tenths below 10 ms, where

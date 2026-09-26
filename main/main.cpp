@@ -359,9 +359,15 @@ main(int argc, char **argv)
 
 #ifdef Q_OS_ANDROID
     keepSystemLogInFile(AndroidStorage::logPath());
-    cerr << "Tony " << TONY_VERSION << " on Android API "
-         << QNativeInterface::QAndroidApplication::sdkVersion()
-         << ", Qt " << qVersion() << endl;
+    {
+        // The package's version name carries the commit (build-apk.sh)
+        QString installed = AndroidStorage::versionName();
+        cerr << "Tony " << (installed != "" ? installed.toStdString() :
+                            std::string(TONY_VERSION))
+             << " on Android API "
+             << QNativeInterface::QAndroidApplication::sdkVersion()
+             << ", Qt " << qVersion() << endl;
+    }
 #endif
 
     QStringList pluginProblems = setupTonyVampPath();

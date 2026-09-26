@@ -40,6 +40,16 @@ QString encoded(QString name)
     return name;
 }
 
+// The other way
+QString decoded(QString name)
+{
+    name.replace("%7C", "|");
+    name.replace("%5C", "\\");
+    name.replace("%2F", "/");
+    name.replace("%25", "%");
+    return name;
+}
+
 QString devicesGroup(const Key &key)
 {
     return encoded(key.implementation) + "|" +
@@ -82,6 +92,42 @@ currentKey(QSettings &settings, sv_samplerate_t recordingRate)
     return key;
 }
 
+Key
+routeKey(const AudioRoute::Route &route, sv_samplerate_t rate)
+{
+    Key key;
+    key.implementation = route.driver;
+    key.playbackDevice = AudioRoute::deviceName(route.output);
+    if (route.hasInput) {
+        key.recordDevice = AudioRoute::deviceName(route.input);
+    }
+    key.rate = rate;
+    return key;
+}
+
+bool
+onlyRecordDevice(QSettings &settings, const Key &key, QString &recordDevice)
+{
+    // The groups of the driver and playback device, whatever the record
+    // device: their names as devicesGroup() makes them, up to the record
+    // device's, which is encoded and so holds no "|"
+    const QString prefix = encoded(key.implementation) + "|" +
+        encoded(key.playbackDevice) + "|";
+    QStringList found;
+    settings.beginGroup(settingsGroup);
+    for (const QString &group : settings.childGroups()) {
+        if (!group.startsWith(prefix)) continue;
+        settings.beginGroup(group);
+        const bool atRate = settings.childGroups().contains(rateGroup(key));
+        settings.endGroup();
+        if (atRate) found.push_back(decoded(group.mid(prefix.size())));
+    }
+    settings.endGroup();
+    if (found.size() != 1) return false;
+    recordDevice = found.front();
+    return true;
+}
+
 void
 store(QSettings &settings, const Key &key, const Figure &figure)
 {
@@ -94,6 +140,15 @@ store(QSettings &settings, const Key &key, const Figure &figure)
                       figure.date.toUTC().toString(Qt::ISODateWithMs));
     settings.setValue("reportedOutput", number(figure.reportedOutput));
     settings.setValue("reportedInput", number(figure.reportedInput));
+    // Only for a device that describes its streams, so that the desktop's
+    // figures are kept as they always were
+    if (figure.outputStreams != "" || figure.inputStreams != "") {
+        settings.setValue("outputStreams", figure.outputStreams);
+        settings.setValue("inputStreams", figure.inputStreams);
+    } else {
+        settings.remove("outputStreams");
+        settings.remove("inputStreams");
+    }
     settings.endGroup();
     settings.endGroup();
     settings.endGroup();
@@ -113,6 +168,8 @@ load(QSettings &settings, const Key &key, Figure &figure)
                                    Qt::ISODateWithMs);
     f.reportedOutput = numberFrom(settings.value("reportedOutput"));
     f.reportedInput = numberFrom(settings.value("reportedInput"));
+    f.outputStreams = settings.value("outputStreams").toString();
+    f.inputStreams = settings.value("inputStreams").toString();
     settings.endGroup();
     settings.endGroup();
     settings.endGroup();
@@ -139,8 +196,19 @@ forget(QSettings &settings, const Key &key)
 }
 
 bool
-isStale(const Figure &figure, double reportedOutput, double reportedInput)
+isStale(const Figure &figure, double reportedOutput, double reportedInput,
+        const QString &outputStreams, const QString &inputStreams)
 {
+    // Oboe's latencies come from timestamps and move by several ms from
+    // one start of the same streams to the next (5.2 then 8.4 then 4.4 ms
+    // out on the phone first tried), which the 1 ms below would take for
+    // new buffers at every take.  What the round trip depends on there is
+    // how the streams were opened: MMAP or not, exclusive or shared,
+    // their burst and buffer
+    if (outputStreams != "" || inputStreams != "") {
+        return (outputStreams != "" && outputStreams != figure.outputStreams) ||
+            (inputStreams != "" && inputStreams != figure.inputStreams);
+    }
     return std::fabs(figure.reportedOutput - reportedOutput) >
         kStaleToleranceSeconds ||
         std::fabs(figure.reportedInput - reportedInput) >
@@ -159,12 +227,14 @@ sourceName(Source source)
 
 InUse
 roundTripInUse(const Figure *stored,
-               double reportedOutput, double reportedInput)
+               double reportedOutput, double reportedInput,
+               const QString &outputStreams, const QString &inputStreams)
 {
     InUse inUse;
     inUse.reportedOutput = reportedOutput;
     inUse.reportedInput = reportedInput;
-    if (stored && !isStale(*stored, reportedOutput, reportedInput)) {
+    if (stored && !isStale(*stored, reportedOutput, reportedInput,
+                           outputStreams, inputStreams)) {
         inUse.source = Source::Measured;
         inUse.roundTrip = stored->roundTrip;
         inUse.date = stored->date;

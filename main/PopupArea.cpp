@@ -64,6 +64,17 @@ PopupArea::fit(QRect rect, QRect usable)
     return rect;
 }
 
+QRect
+PopupArea::place(QSize size, QRect usable, QPoint topLeft, bool centre)
+{
+    QRect rect(topLeft, size);
+    if (centre && usable.isValid()) {
+        rect.moveTopLeft(QPoint(usable.left() + (usable.width() - size.width()) / 2,
+                                usable.top() + (usable.height() - size.height()) / 2));
+    }
+    return fit(rect, usable);
+}
+
 int
 PopupArea::pixels(double mm, double dotsPerInch)
 {

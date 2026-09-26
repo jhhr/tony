@@ -71,6 +71,11 @@ elif buildtype.startswith('debug')
   ]
 endif # get_option('buildtype')
 
+# Defines that only Tony's own code reads.  They go on Tony's targets
+# alone: general_defines reaches svcore too, and any change to it
+# recompiles the whole of svcore for nothing
+tony_defines = []
+
 # The development checks (main/dev/, docs/calibrate-audio.md) are in
 # every build but a release one: debug, debugoptimized, plain, minsize
 # and custom alike.  Packages are release builds and have none of it.
@@ -78,7 +83,7 @@ endif # get_option('buildtype')
 dev_checks = not buildtype.startswith('release')
 dev_moc_args = []
 if dev_checks
-  general_defines += [
+  tony_defines += [
     '-DTONY_DEV_CHECKS',
   ]
   dev_moc_args += [
@@ -1186,6 +1191,7 @@ tony_entry_files = [
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
   'main/AndroidFiles.cpp',
+  'main/AudioRoute.cpp',
   'main/AudioDriverSettings.cpp',
   'main/Coverage.cpp',
   'main/DecodedPcm.cpp',
@@ -1220,6 +1226,7 @@ endif
 
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
+  'main/AudioCheckIndicator.cpp',
   'main/AudioCheckRunner.cpp',
   'main/AudioDriverMenus.cpp',
   'main/CalibrateAudioDialog.cpp',
@@ -1227,6 +1234,7 @@ tony_app_files = [
   'main/CoverageStrip.cpp',
   'main/LyricsTrack.cpp',
   'main/LyricsEditor.cpp',
+  'main/LyricsSize.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
@@ -1240,6 +1248,7 @@ tony_app_files = [
 
 if system == 'android'
   tony_app_files += [
+    'main/AndroidScreen.cpp',
     'main/AndroidStorage.cpp',
     'main/OboeAudioIO.cpp',
   ]
@@ -1255,6 +1264,7 @@ tony_app_moc_headers = [
   'main/MainWindow.h',
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
+  'main/AudioCheckIndicator.h',
   'main/AudioCheckRunner.h',
   'main/AudioDriverMenus.h',
   'main/CalibrateAudioDialog.h',
@@ -1262,6 +1272,7 @@ tony_app_moc_headers = [
   'main/CoverageStrip.h',
   'main/LyricsTrack.h',
   'main/LyricsEditor.h',
+  'main/LyricsSize.h',
   'main/PlotSize.h',
   'main/TouchGestures.h',
   'main/TouchMenuStyle.h',
@@ -1351,6 +1362,7 @@ tony_core_lib = static_library(
   cpp_args: [
     feature_defines,
     general_defines,
+    tony_defines,
   ],
 )
 
@@ -1375,6 +1387,7 @@ tony_app_lib = static_library(
   cpp_args: [
     feature_defines,
     general_defines,
+    tony_defines,
   ],
 )
 
@@ -1408,6 +1421,7 @@ if system == 'android'
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
     ],
     link_args: [
       feature_additional_libs,
@@ -1436,6 +1450,7 @@ else
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
     ],
     link_args: [
       feature_additional_libs,
@@ -1591,6 +1606,7 @@ if system != 'android'
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
       '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
     ],
     link_args: [
@@ -1638,6 +1654,7 @@ if system != 'android'
     cpp_args: [
       feature_defines,
       general_defines,
+      tony_defines,
       '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
     ],
     link_args: [
@@ -1680,6 +1697,7 @@ if system != 'android'
       cpp_args: [
         feature_defines,
         general_defines,
+        tony_defines,
       ],
       link_args: [
         feature_additional_libs,

@@ -18,12 +18,23 @@ jobs:
     - name: make
       run: ninja -C build
     - name: test
-      run: meson test -C build
-    - name: deploy-app
+      id: test
+      run: meson test -C build --print-errorlogs --num-processes 1
+    # meson shows at most the last 100 lines of a failing log, and one
+    # test executable runs several QTest suites: name every failed test,
+    # with the lines QTest indents under it (compared values, where it
+    # failed) and the totals of each suite that failed
+    - name: test-failures
+      if: failure() && steps.test.outcome == 'failure'
       run: |
-        ls -lR /usr/local/opt
-        QTDIR=/usr/local/opt/qt6 ./deploy/macos/deploy.sh "Tony"
+        awk '/^test:/ { print; next }
+             /^Totals:/ { if ($0 !~ /, 0 failed/) print; next }
+             /^(FAIL!|XPASS|QFATAL)|Received signal/ { print; fail = 1; next }
+             /^[A-Z!]+ *: / { fail = 0 }
+             fail && /^   / { print }' build/meson-logs/testlog.txt
+    # No app bundle: the packaging scripts in deploy/osx are qmake's,
+    # and this build makes none. The app it does build has to start
     - name: check
       run: |
-        otool -L ./"Tony.app/Contents/MacOS/Tony"
-        ./"Tony.app/Contents/MacOS/Tony" --version
+        otool -L build/tony
+        build/tony --version

@@ -31,12 +31,12 @@ from sh. A Linux cloud session builds otherwise: see the end of this section.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 ```
 
 - Only `mingw64/bin` on PATH (never `/c/msys64/usr/bin`); always set `MINGW_PREFIX`,
-  spelled exactly so; always `-j 3`; always log to a file and never pipe ninja; targets
+  spelled exactly so; always `-j 4`; always log to a file and never pipe ninja; targets
   need `.exe`. The reasons are in [docs/building.md](docs/building.md).
 - Incremental builds take under a minute, a few minutes after `MainWindow.cpp`; a clean
   build up to 30 minutes. If `cc1plus.exe` runs out of memory, run the command again.
@@ -46,7 +46,7 @@ Run tests from `build_mingw/` with the same environment:
 ```sh
 mkdir -p ../tmp/tl
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "exit:$?"
-TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~10 min, real time
+TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~12 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ```
@@ -60,7 +60,7 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
-- Give the app suite a tool timeout of 15 minutes, or run it in the background.
+- Give the app suite a tool timeout of 20 minutes, or run it in the background.
 
 In a **Linux cloud session** the commands are others. The session's hook has started a
 build into `build/` in the background; run `deploy/linux/cloud-session.sh wait` before the

@@ -20,6 +20,7 @@
 #include "Analyser.h"
 #include "CompactLayout.h"
 #include "PlotSize.h"
+#include "LyricsSize.h"
 #include "AudioCheckRunner.h"
 #include "AudioDriverMenus.h"
 #include "AudioDriverSettings.h"
@@ -168,6 +169,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_overview(0),
     m_compactLayout(nullptr),
     m_plotSize(nullptr),
+    m_lyricsSize(nullptr),
     m_playAction(nullptr),
     m_recordAction(nullptr),
     m_zoomInAction(nullptr),
@@ -521,6 +523,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     // Before the menus: their switches are in the View menu
     m_compactLayout = new CompactLayout(this);
     m_plotSize = new PlotSize(m_viewManager, this);
+    m_lyricsSize = new LyricsSize(this);
+    m_lyrics->setTextScale(m_lyricsSize->getTextScale());
+    connect(m_lyricsSize, &LyricsSize::textScaleChanged,
+            m_lyrics, &LyricsTrack::setTextScale);
 
     setupMenus();
     setupToolbars();
@@ -1168,6 +1174,8 @@ MainWindow::setupViewMenu()
     menu->addAction(m_compactLayout->getAction());
     QMenu *plotSizeMenu = menu->addMenu(tr("Plot &Size"));
     plotSizeMenu->addActions(m_plotSize->getActions());
+    QMenu *lyricsSizeMenu = menu->addMenu(tr("Lyrics Si&ze"));
+    lyricsSizeMenu->addActions(m_lyricsSize->getActions());
     // Enabled and checked in updateLayerStatuses().  Not "Show &Lyrics":
     // Peek Left has the L
     m_showLyrics = new QAction(tr("Show L&yrics"), this);
@@ -3297,13 +3305,23 @@ MainWindow::saveLog()
         return;
     }
 
-    QFileDialog dialog(this, tr("Save the log"));
+    saveTextThroughPicker(this, log, tr("Save the log"),
+                          QString("tony-log-%1.txt")
+                          .arg(QDateTime::currentDateTime()
+                               .toString("yyyyMMdd-HHmmss")),
+                          tr("log"));
+}
+
+void
+MainWindow::saveTextThroughPicker(QWidget *parent, const QByteArray &text,
+                                  QString title, QString suggestedName,
+                                  QString what)
+{
+    QFileDialog dialog(parent, title);
     dialog.setAcceptMode(QFileDialog::AcceptSave);
     dialog.setFileMode(QFileDialog::AnyFile);
     dialog.setMimeTypeFilters({ "text/plain" });
-    dialog.selectFile(QString("tony-log-%1.txt")
-                      .arg(QDateTime::currentDateTime()
-                           .toString("yyyyMMdd-HHmmss")));
+    dialog.selectFile(suggestedName);
     if (!dialog.exec()) return;
     QList<QUrl> urls = dialog.selectedUrls();
     if (urls.empty() || urls[0].isEmpty()) return;
@@ -3325,9 +3343,9 @@ MainWindow::saveLog()
         // written now; "w" if the provider will not take that, which for
         // the new, empty document the picker made comes to the same
         if (!document.open(target, "wt", error)) {
-            cerr << "MainWindow::saveLog: " << target << " could not be "
-                 << "opened with \"wt\": " << error << "; trying \"w\""
-                 << endl;
+            cerr << "MainWindow::saveTextThroughPicker: " << target
+                 << " could not be opened with \"wt\": " << error
+                 << "; trying \"w\"" << endl;
             QString again;
             if (!document.open(target, "w", again)) error = again;
         }
@@ -3338,7 +3356,7 @@ MainWindow::saveLog()
         }
     }
 
-    bool written = opened && out.write(log) == log.size() && out.flush();
+    bool written = opened && out.write(text) == text.size() && out.flush();
     if (opened && !written) error = out.errorString();
     if (opened) out.close();
 
@@ -3353,18 +3371,18 @@ MainWindow::saveLog()
     }
 
     if (!written) {
-        cerr << "MainWindow::saveLog: could not write " << target << ": "
-             << error << endl;
+        cerr << "MainWindow::saveTextThroughPicker: could not write the "
+             << what << " to " << target << ": " << error << endl;
         QMessageBox::critical
-            (this, tr("Failed to save the log"),
-             tr("<b>The log was not saved</b><p>%1</p>")
-             .arg(error.toHtmlEscaped()) + pickDetails(target, "", ""));
+            (parent, tr("Failed to save the %1").arg(what),
+             tr("<b>The %1 was not saved</b><p>%2</p>")
+             .arg(what, error.toHtmlEscaped()) + pickDetails(target, "", ""));
         return;
     }
 
     if (urls[0].isLocalFile()) {
-        cerr << "MainWindow::saveLog: saved " << log.size() << " bytes to "
-             << target << endl;
+        cerr << "MainWindow::saveTextThroughPicker: saved the " << what
+             << ", " << text.size() << " bytes, to " << target << endl;
         return;
     }
 
@@ -3379,13 +3397,14 @@ MainWindow::saveLog()
     for (int attempt = 1; ; ++attempt) {
         sizeError = "";
         saved = AndroidFiles::savedSize
-            (log.size(), AndroidStorage::sizeOf(target, sizeError));
+            (text.size(), AndroidStorage::sizeOf(target, sizeError));
         if (!saved.differs() || attempt == 10) break;
         QThread::msleep(100);
     }
 
-    cerr << "MainWindow::saveLog: wrote " << saved.written << " bytes to "
-         << target << "; the file behind the descriptor held " << inFile
+    cerr << "MainWindow::saveTextThroughPicker: wrote the " << what << ", "
+         << saved.written << " bytes, to " << target
+         << "; the file behind the descriptor held " << inFile
          << " before the close; ";
     if (saved.known()) {
         cerr << "its provider says the document holds " << saved.held
@@ -3398,9 +3417,9 @@ MainWindow::saveLog()
 
     if (saved.differs()) {
         QMessageBox::warning
-            (this, tr("The log may be incomplete"),
-             tr("<b>The log may not have been saved whole</b><p>%1 bytes were written to it, and the app that keeps it says it holds %2.</p>")
-             .arg(saved.written).arg(saved.held)
+            (parent, tr("The %1 may be incomplete").arg(what),
+             tr("<b>The %1 may not have been saved whole</b><p>%2 bytes were written to it, and the app that keeps it says it holds %3.</p>")
+             .arg(what).arg(saved.written).arg(saved.held)
              + pickDetails(target, "", ""));
     }
 }
@@ -3645,14 +3664,14 @@ MainWindow::microphoneAllowed() const
 }
 
 void
-MainWindow::askForMicrophone()
+MainWindow::askForMicrophone(std::function<void()> granted)
 {
     qApp->requestPermission
         (QMicrophonePermission(), this,
-         [this](const QPermission &permission) {
+         [this, granted](const QPermission &permission) {
              if (permission.status() == Qt::PermissionStatus::Granted) {
-                 // The press of Record that asked, answered at last
-                 if (microphoneAllowed()) record();
+                 // What asked, answered at last
+                 if (microphoneAllowed() && granted) granted();
                  return;
              }
              QMessageBox::information
@@ -3703,6 +3722,8 @@ MainWindow::checkAudioDevice()
          << "went away; opening it again" << endl;
     recreateAudioIO();
     updateMenuStates();
+    // Another route, perhaps, with a figure of its own or none
+    updateLatencyMenuLine();
 }
 #endif
 
@@ -5303,7 +5324,7 @@ MainWindow::record()
     // answer comes later: the take is started then, from the top
     if (!microphoneAllowed()) {
         if (m_recordAction) m_recordAction->setChecked(false);
-        askForMicrophone();
+        askForMicrophone([this]() { record(); });
         return;
     }
 #endif
@@ -5769,6 +5790,7 @@ MainWindow::recordingStarted()
                 (inUse.source == LatencyCalibration::Source::Measured);
             m_takeLatency.startGap = m_recordingStartGapEstimate;
             m_takeLatency.startGapMeasured = false;
+            deviceRoute(m_takeLatency.route);
             cerr << "MainWindow::recordingStarted: round trip " << roundTrip
                  << " frames at " << recordingRate << " Hz ("
                  << inUse.roundTrip * 1000.0 << " ms), ";
@@ -5779,6 +5801,9 @@ MainWindow::recordingStarted()
                 if (inUse.source == LatencyCalibration::Source::Measured) {
                     cerr << " on "
                          << inUse.date.toString(Qt::ISODate).toStdString();
+                } else if (inUse.stale && m_takeLatency.route.driver != "") {
+                    cerr << ": the measured one is stale, the streams were "
+                         << "opened otherwise";
                 } else if (inUse.stale) {
                     cerr << ": the measured one is stale, the device reports "
                          << "other latencies now";
@@ -5866,18 +5891,67 @@ MainWindow::roundTripAt(sv_samplerate_t recordingRate) const
         LatencyCalibration::reportedSeconds
         (m_recordTarget->getSystemRecordLatency(), recordingRate) : 0.0;
 
+    // A device that knows its route is judged by how it opened its
+    // streams, not by the latencies it reports (LatencyCalibration)
+    AudioRoute::Route route;
+    deviceRoute(route);
+
     QSettings settings;
     LatencyCalibration::Figure figure;
     bool stored = LatencyCalibration::load
-        (settings, LatencyCalibration::currentKey(settings, recordingRate),
-         figure);
+        (settings, latencyKey(recordingRate), figure);
     return LatencyCalibration::roundTripInUse
-        (stored ? &figure : nullptr, output, input);
+        (stored ? &figure : nullptr, output, input,
+         route.outputStreams, route.inputStreams);
+}
+
+bool
+MainWindow::deviceRoute(AudioRoute::Route &route) const
+{
+    route = AudioRoute::Route();
+    breakfastquay::SystemPlaybackTarget *device = m_audioIO;
+    if (!device) device = m_playTarget;
+    auto reporter = dynamic_cast<const AudioRouteReporter *>(device);
+    if (!reporter) return false;
+    route = reporter->getAudioRoute();
+    return route.driver != "";
+}
+
+AudioRoute::Route
+MainWindow::audioRoute() const
+{
+    AudioRoute::Route route;
+    deviceRoute(route);
+    return route;
+}
+
+LatencyCalibration::Key
+MainWindow::latencyKey(sv_samplerate_t rate) const
+{
+    QSettings settings;
+    AudioRoute::Route route;
+    if (!deviceRoute(route)) {
+        return LatencyCalibration::currentKey(settings, rate);
+    }
+
+    // Opened for playback only, as the device is on a phone until the
+    // first take, it cannot say which input it will record from: the one
+    // a figure is kept with for this output, if only one is.  How the
+    // input will open is not known either, and is not compared
+    LatencyCalibration::Key key = LatencyCalibration::routeKey(route, rate);
+    if (!route.hasInput) {
+        LatencyCalibration::onlyRecordDevice(settings, key, key.recordDevice);
+    }
+    return key;
 }
 
 sv_samplerate_t
 MainWindow::expectedRecordingRate() const
 {
+    // A device that knows its route knows its rate as soon as it is open,
+    // and records at it (OboeAudioIO opens its input at its output's)
+    AudioRoute::Route route;
+    if (deviceRoute(route) && route.rate > 0) return route.rate;
     return m_lastRecordingRate > 0 ? m_lastRecordingRate : sessionRate();
 }
 
@@ -5898,6 +5972,8 @@ MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
     figure.date = QDateTime::currentDateTimeUtc();
     figure.reportedOutput = result.reportedOutputLatency;
     figure.reportedInput = result.reportedInputLatency;
+    figure.outputStreams = result.route.outputStreams;
+    figure.inputStreams = result.route.inputStreams;
 
     // Under the devices the check ran on, which the Preferences may no
     // longer name: the result can be on show long after the run
@@ -5909,8 +5985,13 @@ MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
     cerr << "MainWindow::storeMeasuredLatency: round trip "
          << figure.roundTrip * 1000.0 << " ms at " << key.rate
          << " Hz, the device reporting " << figure.reportedOutput * 1000.0
-         << " ms out and " << figure.reportedInput * 1000.0 << " ms in"
-         << endl;
+         << " ms out and " << figure.reportedInput * 1000.0 << " ms in";
+    if (result.route.driver != "") {
+        cerr << "; for the route " << key.playbackDevice << " | "
+             << key.recordDevice << ", its streams: output "
+             << figure.outputStreams << "; input " << figure.inputStreams;
+    }
+    cerr << endl;
     updateLatencyMenuLine();
     return true;
 }
@@ -5920,8 +6001,7 @@ MainWindow::forgetMeasuredLatency()
 {
     QSettings settings;
     LatencyCalibration::forget
-        (settings, LatencyCalibration::currentKey(settings,
-                                                  expectedRecordingRate()));
+        (settings, latencyKey(expectedRecordingRate()));
     cerr << "MainWindow::forgetMeasuredLatency: at "
          << expectedRecordingRate() << " Hz" << endl;
     updateLatencyMenuLine();
@@ -5949,6 +6029,10 @@ MainWindow::calibrateAudio()
 #ifdef TONY_DEV_CHECKS
         m_calibrateAudioDialog->setDevChecks(m_devChecks);
 #endif
+        // Where the dialog goes while its check runs: the right end of
+        // the status bar, a corner the panes never reach, clear of the
+        // status line at its left
+        statusBar()->addPermanentWidget(m_calibrateAudioDialog->indicator());
     }
     m_calibrateAudioDialog->present();
 }

@@ -33,6 +33,7 @@
 #include "view/ViewManager.h"
 #include "widgets/LevelPanToolButton.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -206,11 +207,10 @@ AudioCheckRunner::start(const Plan &plan)
     m_reported = Progress();
 
     // The devices the takes will be recorded on.  The window's device
-    // menus are shut while the run lasts; the rate comes with the takes
-    {
-        QSettings settings;
-        m_result.key = LatencyCalibration::currentKey(settings, 0);
-    }
+    // menus are shut while the run lasts; the rate comes with the takes,
+    // and so does the route of a device that reports one, which may open
+    // its input only for the first of them
+    m_result.key = m_window->latencyKey(0);
     m_punchIns = punchIns;
     m_starts.clear();
     m_ends.clear();
@@ -284,6 +284,15 @@ AudioCheckRunner::poll()
 
     case Step::AnalysingReference:
         if (!analysing(m_window->m_analyser)) {
+            // How fast this machine analyses, for the limits in the
+            // header.  A session kept has its analysis done already
+            if (!m_plan.keepSession) {
+                cerr << "AudioCheckRunner: the reference, "
+                     << double(m_plan.layout.length) / m_plan.layout.rate
+                     << " s, was analysed in "
+                     << double(m_stepClock.elapsed()) / 1000.0 << " s"
+                     << endl;
+            }
             startPunchIn();
         } else if (stepTimedOut()) {
             end(tr("The test reference was not analysed in time."));
@@ -312,6 +321,10 @@ AudioCheckRunner::poll()
         // Not needed for the judgement, which reads the take's audio: it
         // keeps pYIN's load out of the timing of the next take
         if (!analysing(m_window->m_analyser2)) {
+            // From the take stopped to its pitch and notes merged
+            cerr << "AudioCheckRunner: punch-in " << (m_punchIn + 1)
+                 << " was analysed in "
+                 << double(m_stepClock.elapsed()) / 1000.0 << " s" << endl;
             if (++m_punchIn < int(m_starts.size())) {
                 startPunchIn();
             } else {
@@ -455,6 +468,17 @@ AudioCheckRunner::startPunchIn()
         return;
     }
 
+#ifdef Q_OS_ANDROID
+    // Without the microphone, record() would ask for it and start a take
+    // of its own once it is given, long after this run had ended.  The
+    // dialog asks for it before it starts a check
+    if (!m_window->microphoneAllowed()) {
+        end(tr("%1 may not use the microphone. Allow it, and check again.")
+            .arg(QCoreApplication::applicationName()));
+        return;
+    }
+#endif
+
     const sv_frame_t from = m_starts[m_punchIn];
     const sv_frame_t to = m_ends[m_punchIn];
     const Step step = m_step;
@@ -523,6 +547,16 @@ AudioCheckRunner::judge()
     if (error != "") {
         end(error);
         return;
+    }
+
+    // Each punch-in was placed with the round trip in use when it started,
+    // which on a phone moves from one to the next with what Oboe measured
+    // (the reported pair; a stored figure does not move): judgeTake()
+    // takes that out
+    for (int i = 0; i < int(m_punchIns.size()) &&
+             i < int(m_result.takes.size()); ++i) {
+        const TakeLatency &t = m_result.takes[i];
+        m_punchIns[i].placedWith = t.recordingSeconds(t.roundTrip);
     }
 
     m_result.summary = LatencyCheck::judgeTake
@@ -701,6 +735,11 @@ AudioCheckRunner::end(QString failure)
         m_result.reportedInputLatency = first.reportedInput;
         m_result.recordingRate = first.recordingRate;
         m_result.key.rate = first.recordingRate;
+        if (first.route.driver != "") {
+            m_result.route = first.route;
+            m_result.key = LatencyCalibration::routeKey
+                (first.route, first.recordingRate);
+        }
     }
     if (failure == "") {
         m_result.calibratedRoundTrip = LatencyCheck::calibratedRoundTrip

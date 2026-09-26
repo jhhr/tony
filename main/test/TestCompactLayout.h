@@ -24,6 +24,7 @@
 #include "../MainWindow.h"
 #include "../Analyser.h"
 #include "../CompactLayout.h"
+#include "../LyricsTrack.h"
 
 #include "version.h"
 
@@ -63,6 +64,7 @@ public:
     QWidget *overview() { return m_overview; }
     SingingTakes *takes() { return m_takes; }
     sv::ViewManager *viewManager() { return m_viewManager; }
+    LyricsTrack *lyrics() { return m_lyrics; }
     Analyser *analyser() { return m_analyser; }
 
     // What the compact toolbar should hold, in order, but for the take
@@ -446,6 +448,17 @@ private slots:
         }
         QVERIFY(haveSwitch);
 
+        // Playback > Calibrate Audio among them, on show: the device menus
+        // are hidden, not the check
+        QAction *calibrate = nullptr;
+        for (QAction *action: menus) {
+            for (QAction *item: action->menu()->actions()) {
+                if (item->text() == "&Calibrate Audio...") calibrate = item;
+            }
+        }
+        QVERIFY(calibrate);
+        QVERIFY(calibrate->isVisible());
+
         // A tap opens it (and a timer closes it again)
         bool checked = false, shown = false;
         QTimer timer;
@@ -724,6 +737,46 @@ private slots:
         openWindow();
         if (QTest::currentTestFailed()) return;
         QCOMPARE(m_window->viewManager()->getPlotScale(), 2.0);
+    }
+
+    // View > Lyrics Size (LyricsSize): the same, for the scale the
+    // lyrics track gives its layer
+    void lyrics_size_in_the_view_menu() {
+        QSettings().remove("MainWindow/lyricssize");
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        QMenu *lyricsSize = nullptr;
+        for (QAction *menu: m_window->menuBar()->actions()) {
+            if (!menu->menu() || !menu->menu()->actions()
+                .contains(m_window->compact()->getAction())) continue;
+            for (QAction *action: menu->menu()->actions()) {
+                if (action->menu() && action->text() == "Lyrics Si&ze") {
+                    lyricsSize = action->menu();
+                }
+            }
+        }
+        QVERIFY(lyricsSize);
+
+        QStringList texts, checked;
+        for (QAction *action: lyricsSize->actions()) {
+            texts << action->text();
+            if (action->isChecked()) checked << action->text();
+        }
+        QCOMPARE(texts, QStringList({ "35%", "50%", "65%", "80%", "100%" }));
+        QCOMPARE(checked, QStringList({ "100%" })); // 50% on Android
+        QCOMPARE(m_window->lyrics()->getTextScale(), 1.0);
+
+        lyricsSize->actions().at(1)->trigger();
+        QCOMPARE(m_window->lyrics()->getTextScale(), 0.5);
+
+        m_window->doCloseSession();
+        delete m_window;
+        m_window = nullptr;
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->lyrics()->getTextScale(), 0.5);
+        QSettings().remove("MainWindow/lyricssize");
     }
 };
 

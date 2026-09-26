@@ -24,6 +24,7 @@
 #include "TestSignals.h"
 
 #include "../Analyser.h"
+#include "../LatencyCheck.h"
 
 #include "framework/Document.h"
 #include "framework/SVFileReader.h"
@@ -37,6 +38,7 @@
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
+#include "transform/ModelTransformerFactory.h"
 #include "base/PlayParameters.h"
 
 #include <QObject>
@@ -174,6 +176,14 @@ class TestSingingAnalysis : public QObject
         QVERIFY(analyser.getLayer(Analyser::Notes));
         QVERIFY2(done.count() > 0 || done.wait(30000),
                  "pYIN did not complete within 30 seconds");
+
+        // and for the transform to be gone. The first notice at 100 comes
+        // from one of the two outputs, and the other's can still be
+        // queued behind it: a test would count that as a second
+        // initialAnalysisCompleted(), long after pYIN finished. The
+        // factory lets a transform go only after its notices are in
+        QTRY_VERIFY_WITH_TIMEOUT(!sv::ModelTransformerFactory::getInstance()
+                                 ->haveRunningTransformers(), 30000);
     }
 
     sv::ModelId addSingingModel(const std::vector<float> &data) {
@@ -440,6 +450,87 @@ private slots:
         QVERIFY2(std::abs(cents) < 10.0,
                  qPrintable(QString("median %1 Hz is %2 cents from the reference")
                             .arg(median).arg(cents)));
+    }
+
+    // Calibrate Audio's reference, its first four events (one tone at
+    // each pitch): as generated; with the tones' fundamentals taken out,
+    // quiet and with a room's noise; and as a phone's speaker, or an
+    // earbud held to the microphone, plays it, nothing much below 1 kHz,
+    // in a room. pYIN finds each tone's pitch all the same, and not an
+    // octave or two off, over the tone less a tenth of a second at each
+    // end
+    void reference_tones_found_without_their_fundamental_data() {
+        QTest::addColumn<bool>("withoutFundamental");
+        QTest::addColumn<double>("highPassHz");
+        QTest::addColumn<double>("noise");
+        QTest::newRow("as generated") << false << 0.0 << 0.0;
+        QTest::newRow("no fundamental") << true << 0.0 << 0.0;
+        QTest::newRow("no fundamental, in a room") << true << 0.0 << 0.001;
+        QTest::newRow("small speaker, in a room") << false << 1000.0 << 0.003;
+    }
+
+    void reference_tones_found_without_their_fundamental() {
+        QFETCH(bool, withoutFundamental);
+        QFETCH(double, highPassHz);
+        QFETCH(double, noise);
+
+        LatencyCheck::Layout layout = LatencyCheck::calibrationLayout(rate);
+        layout.length = layout.events[4].sweepStart;
+        layout.events.resize(4);
+        std::vector<float> x = LatencyCheck::generate(layout);
+        std::set<double> pitches;
+        for (const LatencyCheck::Event &e : layout.events) {
+            pitches.insert(e.toneHz);
+        }
+        QCOMPARE(int(pitches.size()), 4);
+        if (withoutFundamental) {
+            for (double hz : pitches) {
+                x = TestSignals::withoutFundamental(x, rate, hz);
+            }
+        }
+        if (highPassHz > 0.0) {
+            // 24 dB an octave: at the tones' pitches 30 to 50 dB down
+            x = TestSignals::highPassed(TestSignals::highPassed
+                                        (x, rate, highPassHz),
+                                        rate, highPassHz);
+        }
+        if (noise > 0.0) {
+            // White, at -65 dBFS RMS for 0.001, as the dev checks' fake
+            // room has it
+            const std::vector<float> room =
+                TestSignals::whiteNoise(int(x.size()), 1, noise);
+            for (size_t i = 0; i < x.size(); ++i) x[i] += room[i];
+        }
+
+        Analyser analyser(Analyser::SecondaryColors);
+        analyse(analyser, addSingingModel(x));
+        if (QTest::currentTestFailed()) return;
+        const sv::EventVector events = pitchEvents(analyser);
+
+        for (const LatencyCheck::Event &e : layout.events) {
+            const sv::sv_frame_t from = e.toneStart + frameAt(0.1);
+            const sv::sv_frame_t to = e.toneStart + e.toneLength - frameAt(0.1);
+            sv::EventVector on;
+            int close = 0;
+            for (const sv::Event &p : events) {
+                if (p.getFrame() < from || p.getFrame() >= to) continue;
+                on.push_back(p);
+                if (std::abs(TestSignals::centsBetween(p.getValue(),
+                                                       e.toneHz)) < 50.0) {
+                    ++close;
+                }
+            }
+            const int hops = int((to - from) / hop);
+            const double median = medianHz(on);
+            QVERIFY2(int(on.size()) >= hops * 9 / 10 &&
+                     close >= int(on.size()) * 95 / 100 &&
+                     std::abs(TestSignals::centsBetween(median, e.toneHz)) < 10.0,
+                     qPrintable(QString("the tone at %1 Hz: %2 pitch events "
+                                        "of %3 hops, %4 within 50 cents, the "
+                                        "median %5 Hz")
+                                .arg(e.toneHz).arg(on.size()).arg(hops)
+                                .arg(close).arg(median)));
+        }
     }
 
     void shift_aligns_onset() {

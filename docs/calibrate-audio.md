@@ -51,8 +51,14 @@ Audacity's measurements) was a separate report, not kept in the repository.
 While a check runs, Record and both device submenus are disabled as well.
 
 **The dialog** is not modal: the check's session is in the window and can be looked at
-meanwhile. Closing the dialog while its check runs cancels the check, since nothing else
-would show how the run ended. Three pages:
+meanwhile. It is as small as its page allows and fits the window less a phone's bars, its
+text scrolling. **Once a check starts it hides**, and `AudioCheckIndicator`, a bar and one
+line of status at the right end of the status bar, clear of the pane, stands in for it; a
+tap or click brings back the progress page, which has **Make Small** as well as Cancel, and
+the end of the run brings the dialog back on the result page. Closing the dialog while its
+check runs cancels the check, since nothing else would show how the run ended. On Android
+its text is 85 % of the phone's font, its buttons finger-sized, and it scrolls with one
+finger. Three pages:
 
 1. **Instructions:** one earcup against the microphone, off your ears; a moderate volume
    and a quiet room; the driver, the output and input devices and the latency in use; how
@@ -110,7 +116,17 @@ song comes back through Recent Files.
 **The reference** (`LatencyCheck`). Each event is a linear sweep from 1 to 8 kHz, 200 ms,
 with 10 ms raised-cosine edges and a −12 dBFS peak; 0.1 s of silence; a tone of 0.8 s at
 196, 220.5, 245 or 294 Hz in turn (a whole number of samples per period at 44.1 kHz, or
-pYIN reports a subharmonic: [testing.md](testing.md)); silence to the next event. Linear
+pYIN reports a subharmonic: [testing.md](testing.md)); silence to the next event. Each tone
+is voice-like, with the same peak: its pitch and every harmonic up to 4 kHz, the n-th at
+1/n, in Newman's phases (so that they do not pile up into a sawtooth's edge, which item 10
+would read as a step), with a vibrato of ±10 cents at 5.5 Hz. The harmonics are for a
+phone's speaker, or an earbud held to the microphone, which give out almost nothing at the
+pitch itself: the pure tones never reached pYIN or the live tracker there, while the
+sweeps did; the pitch is found from the harmonics' common period, the fundamental there or
+not. The vibrato is for pYIN: a tone that repeats exactly repeats at two and three periods
+as well as at one, pYIN weighs those alike, and it took a subharmonic for some tones, pure
+or not. Their partials from 1 kHz up are in the sweep's band; they come after the sweep, 40
+dB under it at the finder's output, and change nothing it finds. Linear
 rather than exponential: its spectrum is flat, so its matched filter gives the narrowest
 peak, and the harmonics a small speaker adds to an exponential sweep match the sweep itself
 shifted 67 and 106 ms earlier, where the earliest-peak rule looks. The spacings from sweep to
@@ -204,6 +220,18 @@ changed and the round trip with them, and takes go back to the reported pair unt
 check is run again. A stale figure is not deleted: it applies again if the driver goes back
 to its old buffers.
 
+**On Android** there are no device settings: `OboeAudioIO` opens whatever route the phone
+has, and reports it (`AudioRoute`: each device's type and product name from
+`AudioManager`, and how each stream was opened). The key is then `oboe` and the two
+devices' type and product name, not their ids, which a headset changes each time it is
+plugged in; so the speaker, a wired headset and a Bluetooth one each keep a figure. Before
+the first take only the output is open, and the key takes the one input stored for it, if
+there is exactly one. Oboe's latencies come from timestamps and move by several ms between
+starts, so on a route a figure is stale when a stream it describes was **opened
+otherwise** (API, MMAP, sharing and performance mode, burst, buffer, capacity, input
+preset), not when the reported pair moves. For the same reason the check counts each
+punch-in as placed with the first one's round trip (`LatencyCheck::PunchIn::placedWith`).
+
 At every take, `MainWindow::roundTripAt()` gives the stored figure for the devices and the
 recording's rate if there is one and it is not stale, else the reported sum, each reported
 latency converted to seconds at the rate it is counted in. Then it is turned into frames of
@@ -280,7 +308,11 @@ Why so:
   1.5 s from either end of the tone, further than item 10 looks around it.
 
 A stage has 4 minutes (the reopen 1 minute), a backstop behind the runner's own limits,
-which end a run first and give their reason. A stage that fails ends the run; the checks are
+which end a run first and give their reason. On Android the runner's analysis limits, and
+so these, are four times as long (`AudioCheckRunner::kAnalysisTimeFactor`: a phone core
+is several times slower, and no phone had been timed; the runner logs how long each
+analysis took), and the screen is kept on from Start to the end of the run, since a phone
+that sleeps puts Tony in the background and ends the take. A stage that fails ends the run; the checks are
 then worked out from the stages it got through, and the rest are Skipped with the reason.
 
 A **`TakeObserver`** watches every punch-in from its Recording step until its analysis is
@@ -318,6 +350,13 @@ margin is part of what it checks; each in seconds at its own rate, since the raw
 recording, the round trip and the start gap count the device's frames and the lead-in and
 range the reference's. Added up as frames, they read a take on a 48 kHz device about 8 % of
 its lead-in and range too long, 0.34 and 0.36 s for stages 4 and 3, and fail it.
+
+**Pitch that is not there.** When the take has no pitch where a check compares it (as on a
+phone whose speaker played none of the tones), the pitch part of items 1, 7, 9 and 12, and
+item 10's pitch, note and "outside" parts, are **not judged**: the message says so, and the
+verdict is the other parts', so the check can read Pass (§10). A pitch track that is there
+and changed, or has a hole at the join, is judged and fails as before. Item 3 fails with no
+dots: that is what it checks.
 
 **How items 4 and 12 read the output.** A look's output level is the loudest sample handed
 to the device since the look before. It is placed on the reference's timeline from the
@@ -357,8 +396,10 @@ session open then does not use.
 
 ## 8. What to send back
 
-After a run on a new machine or device: the result page's text (select it all and copy)
-and the whole `DevChecks.txt`. What the numbers decide:
+After a run on a new machine or device: the result page's text and the whole
+`DevChecks.txt`. **Copy** on the result page takes both (the report is appended to the
+page's text), and on Android **Save Report...** saves them through the file picker, since a
+phone keeps `DevChecks.txt` where only Tony can read it. What the numbers decide:
 
 - **The round trip measured against the driver's, and where each punch-in landed:** how
   wrong the driver is, and how far the offset moves from one take to the next (the
@@ -475,7 +516,8 @@ a dip, below).
 **For the user to decide:**
 
 - **"Not judged" reads Pass.** Items 4 and 12 pass when their gap part could not be judged
-  (no look lay in a gap), with a message that says so; the Totals line then overstates.
+  (no look lay in a gap), and items 1, 7, 9, 10 and 12 when the take had no pitch where
+  they compare it (§7), with a message that says so; the Totals line then overstates.
   Whether that should count otherwise (Measured, say) is not decided.
 - **The thresholds**, all starting values, from the report files of real runs (§8).
 

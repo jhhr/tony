@@ -115,6 +115,11 @@ public:
     // (main.cpp), which Help > Save Log... saves a copy of (LogFile)
     static QString logPath();
 
+    // The installed package's version name, which build-apk.sh makes the
+    // version and the commit it was built from: the log's first line
+    // says which build ran.  "" if Android does not say
+    static QString versionName();
+
     // Asks for All files access: why, in a box, and then the system's
     // settings page for it; back from there, checks again. True if Tony
     // has it now

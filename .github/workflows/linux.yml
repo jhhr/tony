@@ -5,21 +5,21 @@ on: [push, pull_request]
 jobs:
   build:
 
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v2
     - name: install-packages
       run: |
         sudo apt-get update
-        sudo apt-get install build-essential libbz2-dev libfftw3-dev libfishsound1-dev libid3tag0-dev liblo-dev liblrdf0-dev libmad0-dev liboggz2-dev libopus-dev libopusfile-dev libpulse-dev libsamplerate-dev libsndfile-dev libsord-dev libxml2-utils portaudio19-dev qt6-base-dev qt6-pdf-dev qt6-base-dev-tools libqt6svg6-dev raptor2-utils git mercurial autoconf automake libtool smlnj capnproto libcapnp-dev ninja-build libglib2.0-dev libboost-all-dev
+        sudo apt-get install build-essential libbz2-dev libfftw3-dev libfishsound1-dev libid3tag0-dev liblo-dev liblrdf0-dev libmad0-dev liboggz2-dev libopus-dev libopusfile-dev libpulse-dev libsamplerate0-dev libsndfile1-dev libsord-dev libxml2-utils portaudio19-dev qt6-base-dev qt6-pdf-dev qt6-base-dev-tools qt6-svg-dev raptor2-utils git mercurial autoconf automake libtool smlnj capnproto libcapnp-dev ninja-build libglib2.0-dev libboost-all-dev
     - name: install-meson
       run: |
         mkdir -p tmp/meson
         cd tmp/meson
         wget https://github.com/mesonbuild/meson/releases/download/1.3.1/meson-1.3.1.tar.gz
         tar xvf meson-1.3.1.tar.gz
-        sudo ln -s $(pwd)/meson-1.3.1/meson.py /usr/bin/meson
+        sudo ln -sf $(pwd)/meson-1.3.1/meson.py /usr/bin/meson
     - name: install-rubberband
       run: |
         mkdir -p tmp/rubberband
@@ -33,10 +33,21 @@ jobs:
     - name: repoint
       run: ./repoint install
     - name: configure
-      run: |
-        qtchooser -install qt6 $(which qmake6)
-        QT_SELECT=qt6 meson setup build --buildtype release
+      run: meson setup build --buildtype release
     - name: make
       run: ninja -C build
     - name: test
-      run: meson test -C build
+      id: test
+      run: meson test -C build --print-errorlogs --num-processes 1
+    # meson shows at most the last 100 lines of a failing log, and one
+    # test executable runs several QTest suites: name every failed test,
+    # with the lines QTest indents under it (compared values, where it
+    # failed) and the totals of each suite that failed
+    - name: test-failures
+      if: failure() && steps.test.outcome == 'failure'
+      run: |
+        awk '/^test:/ { print; next }
+             /^Totals:/ { if ($0 !~ /, 0 failed/) print; next }
+             /^(FAIL!|XPASS|QFATAL)|Received signal/ { print; fail = 1; next }
+             /^[A-Z!]+ *: / { fail = 0 }
+             fail && /^   / { print }' build/meson-logs/testlog.txt

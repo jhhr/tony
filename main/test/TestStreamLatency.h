@@ -204,6 +204,32 @@ private slots:
         e = StreamLatency::guess(-1, -1);
         QCOMPARE(e.roundTrip(), 0);
     }
+
+    // A callback reads all the input there is, up to its room, and at
+    // least what the output asks for; after a stall of 244 ms, as on the
+    // phone, all of it at once, where FullDuplexStream would read 96
+    // frames a callback and never catch up
+    void a_callback_reads_all_the_input_there_is() {
+        QCOMPARE(StreamLatency::inputFramesToRead(96, 11424, 11520), 11424);
+        QCOMPARE(StreamLatency::inputFramesToRead(96, 20000, 11520), 11520);
+        QCOMPARE(StreamLatency::inputFramesToRead(96, 192, 11520), 192);
+        QCOMPARE(StreamLatency::inputFramesToRead(96, 0, 11520), 96);
+        QCOMPARE(StreamLatency::inputFramesToRead(96, 40, 11520), 96);
+        QCOMPARE(StreamLatency::inputFramesToRead(96, 500, 0), 0);
+    }
+
+    // What a callback that keeps up leaves waiting is the output's buffer
+    // and two input bursts at most, on the phone's streams 192 and 96: a
+    // reading with the input's whole buffer waiting is refused
+    void a_reading_is_used_only_while_the_input_keeps_up() {
+        QVERIFY(StreamLatency::inputKeptUp(0, 192, 96));
+        QVERIFY(StreamLatency::inputKeptUp(170, 192, 96));
+        QVERIFY(StreamLatency::inputKeptUp(384, 192, 96));
+        QVERIFY(!StreamLatency::inputKeptUp(385, 192, 96));
+        QVERIFY(!StreamLatency::inputKeptUp(11424, 192, 96));
+        QVERIFY(StreamLatency::inputKeptUp(0, -1, -1));
+        QVERIFY(!StreamLatency::inputKeptUp(1, 0, 0));
+    }
 };
 
 #endif

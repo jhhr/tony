@@ -56,7 +56,9 @@ another branch builds something the lock file does not say.
 **repoint does not run on the development machine** (it needs an SML compiler and none is
 installed). The checkouts are managed with plain git, and `repoint-project.json` /
 `repoint-lock.json` are edited by hand. Keep the lock file's pins equal to what is checked
-out: CI and anyone else's checkout get exactly what the lock file says.
+out: CI and anyone else's checkout get exactly what the lock file says. Keep its final
+newline too: `repoint install` writes the file afresh, with one, and without it CI's tree
+counts as changed (the APK's version then says `+`).
 
 **Searching**: ripgrep-based search tools skip these directories because they are
 gitignored. Pass the directory as the search path explicitly, or use `grep -rn` in Bash.
@@ -118,7 +120,10 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   line (where the value changes) is bold. The font (`getLyricsFontPixelSize()`) is twice
   the view's at the least, up to four times, and never more than an eighth of the view's
   height; it grows with the **square root** of the zoom, so that zooming in gives the
-  words room (their boxes grow with the zoom itself). No vertical scale, no feature
+  words room (their boxes grow with the zoom itself). `setLyricsTextScale()` (branch
+  `feat/tonyandroid`) draws the words at a share of that: View > Lyrics Size
+  (`LyricsSize`, 50 % by default on Android, where the desktop's size left room for only a
+  few words); each new size is written to the log. No vertical scale, no feature
   description, and not editable by the pane's tools: Tony's `LyricsEditor` edits the
   model itself.
   `setHighlightFrame()` draws the region at that frame in amber (the latest to start, where
@@ -213,6 +218,11 @@ A `bqaudioio/` cloned from the mirror before the fork was pinned does not have t
   [recording.md](recording.md)); whether `m_model` can dangle otherwise was not looked into.
 - The play-start callback is passed the frames actually got, not the requested block size.
 - `View::removeLayer()` does not disconnect `layerMeasurementRectsChanged`.
+- `svcore/base/PlayParameterRepository.cpp` keeps its play parameters in a `std::map` with
+  no lock, which the audio fill thread reads (`AudioGenerator::mixModel()` through
+  `getPlayParameters()`) while the GUI thread adds and removes playables. Seen once as a
+  crash of `test-tony-app` in the fill thread, in a sharded run whose processes shared
+  their settings; not seen otherwise.
 
 ## Changes that would tidy Tony up but were not made
 

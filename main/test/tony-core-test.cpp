@@ -55,10 +55,13 @@ int main(int argc, char *argv[])
     svSystemSpecificInitialisation();
 
     // Names distinct from the application's, so that nothing here reads
-    // or writes the user's real Tony settings
+    // or writes the user's real Tony settings, and a shard's distinct
+    // from the other shards', so that shards running at once keep apart
     QCoreApplication app(argc, argv);
     app.setOrganizationName("tony-tests");
-    app.setApplicationName("test-tony-core");
+    app.setApplicationName(shardApplicationName
+                           ("test-tony-core",
+                            qEnvironmentVariable("TONY_TEST_SHARD")));
 
     {
         TestAndroidFiles t;

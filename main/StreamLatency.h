@@ -95,6 +95,29 @@ namespace StreamLatency
      * holds, and one burst of input.
      */
     Estimate guess(int outputBufferFrames, int inputBurstFrames);
+
+    /**
+     * How many input frames a full-duplex callback reads, when the
+     * output asks for "asked" and the input has "available" waiting:
+     * all of them, as far as "room" goes, and never fewer than asked
+     * (a read takes no more than there is).  Oboe's FullDuplexStream
+     * reads only as many as the output asks for, so input that piles up
+     * while the callbacks are held up stays piled up for as long as the
+     * streams run, the input that much later all the while.
+     */
+    int inputFramesToRead(int asked, int available, int room);
+
+    /**
+     * Whether an input with backlogFrames waiting to be read was being
+     * read as it came in: a callback that keeps up leaves no more than
+     * the output's buffer and a couple of input bursts between one read
+     * and the next.  A latency read with more waiting is how far behind
+     * the reading was, not the device's, and is not to be used: on a
+     * phone the input stood at its whole buffer (11424 frames, 244 ms)
+     * once a take had stopped, against 100 to 190 frames during one.
+     */
+    bool inputKeptUp(int backlogFrames, int outputBufferFrames,
+                     int inputBurstFrames);
 }
 
 #endif

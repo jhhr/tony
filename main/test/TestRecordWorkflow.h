@@ -473,6 +473,22 @@ class TestRecordWorkflow : public QObject
         return matching;
     }
 
+    // As dialogsMatching(), for message boxes with this title as well.
+    // Not on macOS, which shows no title on a message box, and Qt keeps
+    // none there: the text alone must tell the box apart
+    QStringList messagesMatching(QString title, QString text) {
+        QStringList matching;
+        for (const QString &dialog : dialogsMatching(text)) {
+#ifdef Q_OS_MACOS
+            Q_UNUSED(title);
+            matching.push_back(dialog);
+#else
+            if (dialog.startsWith(title + ": ")) matching.push_back(dialog);
+#endif
+        }
+        return matching;
+    }
+
     // Audio in the session besides the reference: one model per take that
     // is on show, and nothing left over from a session load
     int audioModelsBesidesReference() {
@@ -2635,13 +2651,13 @@ private slots:
 
         // Stop splices the recording in and asks for the analysis of the
         // range it went into.  The range is read here, while that run is
-        // still going: it is remembered only until the merge, so a run that
-        // finishes before the splice call returns never records one at all
+        // held: it is remembered only until the merge
+        m_window->holdRangedMerges(true);
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
-        if (m_window->analysingRange()) {
-            QCOMPARE(m_window->analysedRangeStart(), P);
-        }
+        QVERIFY(m_window->analysingRange());
+        QCOMPARE(m_window->analysedRangeStart(), P);
+        m_window->holdRangedMerges(false);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
         // The analysis of the take was not thrown away and run again: the
@@ -3474,6 +3490,9 @@ private slots:
     // middle of its pYIN, which is the area this fork has crashed in
     // before; cancelAnalyses() is what keeps it safe. A regression guard,
     // not a new behaviour: run it under load, a crash is the failure.
+    // The analysis is held, so that it is unmerged when the second take
+    // stops however quick the machine; whether its thread is still going
+    // then as well depends on the machine and its load.
     void rerecord_during_analysis() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 4.0);
@@ -3487,19 +3506,29 @@ private slots:
 
         // Stop splices the recording in and starts the analysis of the
         // result there and then
+        m_window->holdRangedMerges(true);
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(sv::ModelTransformerFactory::getInstance()
                  ->haveRunningTransformers(),
                  "the race was not set up: no analysis was running when the "
                  "second take started");
+        QVERIFY(m_window->analysingRange());
         QString first = m_window->takes()->getAudioPath();
         QVERIFY(!first.isEmpty());
 
         // In a gap, so nothing is asked
         m_window->seekTo(sv::sv_frame_t(1.5 * rate));
-        take(500);
+        startTake();
         if (QTest::currentTestFailed()) return;
+        QTest::qWait(500);
+        QVERIFY2(m_window->analysingRange(),
+                 "the first take's analysis was over before the second one "
+                 "stopped");
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        m_window->holdRangedMerges(false);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
         QCOMPARE(m_window->recordOverQuestions(), 0);
 
         QVERIFY(m_window->analyser2());
@@ -3771,6 +3800,9 @@ private slots:
         for (const auto &e : model->getAllEvents()) model->remove(e);
         QVERIFY(pitchEvents(pitch).empty());
 
+        // Held, so that the range is still there to be read however quick
+        // the run: it is remembered only until the merge
+        m_window->holdRangedMerges(true);
         m_window->doAnalyseNow();
 
         // One run over the span of the coverage, not one per range
@@ -3778,6 +3810,7 @@ private slots:
         QCOMPARE(m_window->analysedRangeStart(), ranges[0].start);
         QCOMPARE(m_window->analysedRangeEnd(), ranges[1].end);
 
+        m_window->holdRangedMerges(false);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
@@ -4978,11 +5011,13 @@ private slots:
         QVERIFY(!before.pitch.empty());
 
         // Stop splices the recording in and starts the analysis of it
-        // there and then
+        // there and then.  Held, so that it is still running when Undo is
+        // pressed, and the redo's run when its range is read
         m_window->seekTo(sv::sv_frame_t(2.0 * rate));
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(700);
+        m_window->holdRangedMerges(true);
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(m_window->analysingRange(),
@@ -5005,8 +5040,10 @@ private slots:
         // Redo: the range is analysed again, and this time the result
         // reaches the take's pitch track
         QCOMPARE(redoOnce(), QString("Record Singing"));
+        QVERIFY(m_window->analysingRange());
         QCOMPARE(m_window->analysedRangeStart(), analysedStart);
         QCOMPARE(m_window->analysedRangeEnd(), analysedEnd);
+        m_window->holdRangedMerges(false);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
 
         auto ranges = m_window->takes()->getCoverage().getRanges();
@@ -6024,7 +6061,9 @@ private slots:
         m_window->discardModifications();
         QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
                  MainWindow::FileOpenSucceeded);
-        QCOMPARE(dialogsMatching("Incomplete session loaded").size(), 1);
+        QCOMPARE(messagesMatching("Incomplete session loaded",
+                                  "referred to by the original session "
+                                  "file could not be loaded").size(), 1);
         QVERIFY2(m_window->isSessionIncomplete(),
                  "the session is not known to have loaded incomplete");
 
@@ -6085,7 +6124,9 @@ private slots:
 
         reopenSession(session);
         if (QTest::currentTestFailed()) return;
-        QCOMPARE(dialogsMatching("Incomplete session loaded").size(), 1);
+        QCOMPARE(messagesMatching("Incomplete session loaded",
+                                  "referred to by the original session "
+                                  "file could not be loaded").size(), 1);
         QVERIFY(m_window->isSessionIncomplete());
         QCOMPARE(m_window->sessionFile(), QString());
         m_window->markModified();
@@ -7020,7 +7061,8 @@ private slots:
         for (const auto &f : failures) {
             QVERIFY2(!m_window->doImportLyricsFrom(f.first),
                      qPrintable(f.first));
-            QStringList dialogs = dialogsMatching("Could not import lyrics");
+            QStringList dialogs =
+                messagesMatching("Could not import lyrics", f.second);
             QCOMPARE(dialogs.size(), 1);
             QVERIFY2(dialogs[0].contains(f.second), qPrintable(dialogs[0]));
             QVERIFY(!lyrics->isShown());
@@ -7035,7 +7077,8 @@ private slots:
         m_window->discardModifications();
 
         QVERIFY(!m_window->doImportLyricsFrom(untimed));
-        QCOMPARE(dialogsMatching("Could not import lyrics").size(), 1);
+        QCOMPARE(messagesMatching("Could not import lyrics",
+                                  "No timed lyrics were found").size(), 1);
         QVERIFY(lyrics->getModelId() == model);
         QCOMPARE(lyricsEvents(), events);
         QCOMPARE(lyricsLayersInDocument(), 1);
@@ -7308,7 +7351,8 @@ private slots:
         for (QString path : { noFolder, folder }) {
             m_window->setLyricsExportAnswer(path);
             m_window->exportLyricsAction()->trigger();
-            QStringList dialogs = dialogsMatching("Could not export lyrics");
+            QStringList dialogs =
+                messagesMatching("Could not export lyrics", path);
             QCOMPARE(dialogs.size(), 1);
             QVERIFY2(dialogs[0].contains(path), qPrintable(dialogs[0]));
             QCOMPARE(m_window->statusText(), status);
@@ -9483,7 +9527,10 @@ private slots:
     // thread ("Timers cannot be stopped from another thread") and the
     // process dies with an access violation soon after. A regression
     // shows up as a crash of the whole test program, and not reliably:
-    // run it under load to check.
+    // run it under load to check.  The analysis is held, so that its run
+    // is there, unmerged, at the close however quick the machine; whether
+    // its thread is still going then as well depends on the machine and
+    // its load.
     void close_session_during_analysis() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);
@@ -9498,13 +9545,16 @@ private slots:
         // Stop splices the recording into the take and starts the analysis
         // of the result there and then, so it is running when the session
         // is closed. Otherwise this test shows nothing
+        m_window->holdRangedMerges(true);
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY2(sv::ModelTransformerFactory::getInstance()
                  ->haveRunningTransformers(),
                  "the race was not set up: no analysis was running when "
                  "the session was about to be closed");
+        QVERIFY(m_window->analysingRange());
         m_window->doCloseSession();
+        m_window->holdRangedMerges(false);
 
         QVERIFY(!m_window->analyser2());
         QCOMPARE(m_window->paneStack()->getPaneCount(), 0);

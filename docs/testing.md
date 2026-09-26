@@ -7,8 +7,8 @@ commands are in [AGENTS.md](../AGENTS.md).
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
 | `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 10 minutes in one process, a minute and a half in eight (measured 2026-09-26 on Linux), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
-| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 5 minutes in one process, one in eight (2026-09-26, Linux): each test records a dev run's takes, or part of them, in real time |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 12 minutes on Windows; on Linux about 10 in one process, a minute and a half in eight (measured 2026-09-26), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
+| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 5 minutes in one process, under two in eight (2026-09-26, Linux): each test records a dev run's takes, or part of them, in real time |
 
 `meson test` / `build.bat test` runs these three (`test-tony-dev` where it is built) plus
 four svcore suites. No suite uses the
@@ -28,9 +28,9 @@ it when a change touches what the development checks drive (see
   `pyin_plugin` because nothing else builds `pyin.dll`. Build `pyin.dll` (`pyin.so` on
   Linux) too when running by hand after a clean: without it every test that waits for an
   analysis hangs until QtTest's five-minute watchdog aborts the run.
-- The mains set the organisation/application names to `tony-tests` / `test-tony-*` and
-  every suite works in a `QTemporaryDir`, so the user's QSettings and record directory
-  are never touched.
+- The mains set the organisation/application names to `tony-tests` / `test-tony-*` (a
+  shard's name with a suffix of its own, see "Running") and every suite works in a
+  `QTemporaryDir`, so the user's QSettings and record directory are never touched.
 - `Tony.exe` links both libraries with `link_whole:`. A new source file that is in neither
   `tony_core_files` nor `tony_app_files` is invisible to the tests.
 - `build_mingw/meson-logs/testlog.txt` contains a dump of the whole inherited environment.
@@ -65,11 +65,18 @@ Windows path would start an escape in the C string.
   not run. The app suite nearly only waits on `FakeAudioIO`'s real-time clock, so n
   processes at once take about 1/n of the time: on four cores the load stayed under 2 with
   eight, and reached 3.5 with twelve. `deploy/linux/run-tests.sh` starts them and adds up
-  their results. Each process needs a `HOME` and XDG directories of its own: the suites'
-  QSettings are per user, and processes sharing them clear each other's settings.
-  `TestDevChecks` turns on `QStandardPaths`' test mode, which keeps them in `~/.qttest`
-  whatever the XDG variables say. On Windows QSettings is the registry, so the script is
-  for Linux. Do not combine shards with test names on the command line.
+  their results. Processes running at once must not share settings: the suites clear and
+  rewrite them, and would do it under each other. So each shard runs under an application
+  name of its own, `<base>-shard<i>of<n>` (`RunSuite.h`), and its settings, data location,
+  svcore temp directory and log are all keyed by that name, in `QStandardPaths`' test mode
+  too. That holds on Linux and Windows alike (on Windows they are the registry and known
+  folders, which no environment variable moves), so every process shares the user's
+  `HOME`; each shard leaves a settings file and a data folder of its own, one per `i` and
+  `n`. The script is written to run from Git Bash on Windows too, with the environment
+  AGENTS.md gives and executable names with `.exe`. It has not run there yet, and how many
+  processes suit that machine is not measured
+  ([windows-shards.md](windows-shards.md#on-the-windows-machine-after-the-merge)). Do not
+  combine shards with test names on the command line.
 - A sharded run is a whole run of the suites, but the tests that share a process are other
   ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
   run the one-process run as well. It also loads the machine more: built against Ubuntu's
@@ -78,16 +85,10 @@ Windows path would start an escape in the C string.
   and passed with `-j 4`. Judge a failure of it there by running it alone. So too the dev
   checks' item 14, whose allowance is one look of the take timer: in eight processes a
   take once stopped 0.400 s past its selection against 0.385 s allowed, and passed alone.
-- **On Linux some tests fail whatever the change.** With the Qt of the cloud setup,
-  conda-forge's 6.11 ([building.md](building.md#building-on-linux)), only
-  `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and
-  `in_folder`, which test Windows paths (`C:\...`, case-insensitive). Built against
-  Ubuntu's Qt 6.4 instead, `TestRecordWorkflow`'s `undo_during_analysis_then_redo` and
-  `analyse_now_reanalyses_the_take` failed now and then, where the analysis finished
-  before the race they need could be set up: before the undo, with no ranged analysis
-  left running, or after the redo, with `analysedRangeStart()` already 0. Since
-  `analyseRange()` looks at completion from the event loop ("Timing and races") that
-  should not happen, but they have not been run on Qt 6.4 since.
+- **On Linux no test is expected to fail** in a one-process run, with Ubuntu's Qt 6.4 as
+  with conda-forge's 6.11 ([building.md](building.md#building-on-linux)). `TestTakesFile`
+  checks Windows paths (`C:\...`, case-insensitive) on Windows only, and the tests that
+  race the analysis of a take hold its merge ("Timing and races").
 - **Qt 6.4's watchdog times the whole suite**, not one test function: with
   `QTEST_FUNCTION_TIMEOUT=20000` it ended `TestRecordWorkflow` 20 s after the suite began,
   2.5 s into a test. That suite runs for longer than the five-minute default, so
@@ -95,6 +96,19 @@ Windows path would start an escape in the C string.
   After such a fatal error the executable does not exit: it spins, or waits for the gdb
   that Qt starts for a backtrace. A run that has written nothing for minutes has
   stopped; kill it.
+- **Qt 6.4 takes a finger's press for a double click** whenever the press before it, on
+  any device, was with the same button and nothing has moved since: it compares the
+  press's time with its own. A touch test that ended on a tap made the next test's first
+  finger a double click, and the pane opened an item's edit dialog. `TestTouchGestures`'
+  `openWindow()` moves the mouse away first on that Qt; a new suite that touches needs
+  the same.
+- CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
+  suite at a time. When a run fails, its `test-failures` step lists each failed test with
+  the lines QTest indents under it, from meson's full log.
+- **CI's macOS runs timers and sleeps late**: a 20 ms `QTimer` fired every 60 to 67 ms and
+  a 5.8 ms sleep took about 30. A test that needs something to have happened a number of
+  times waits for it (`QTRY_*`), and one that checks what was timed checks it against its
+  own clock, not against the interval asked for.
 
 ## Design principles
 
@@ -168,7 +182,8 @@ Windows path would start an escape in the C string.
   below.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
-  dialogs a test does expect.
+  dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
+  title macOS does not keep, so that there its text alone must tell it apart.
 - `analysed()` waits for analysis completion, no running transformers **and** no ranged
   run. `snapshotTake()`, `verifyStripMatchesTake()`, `takeLayers()`.
 - `TestSignals.h`: sine, sawtooth, seeded noise, comparison in cents.

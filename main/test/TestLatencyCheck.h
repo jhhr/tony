@@ -23,6 +23,8 @@
 
 #include "TestSignals.h"
 
+#include "bqfft/FFT.h"
+
 #include <QObject>
 #include <QtTest>
 
@@ -275,15 +277,12 @@ private slots:
             QCOMPARE(e.toneStart - e.sweepStart, framesOf(0.3));
             QCOMPARE(peakOf(x, e.sweepStart + sweepLength, e.toneStart), 0.0);
 
-            // A whole number of samples per period at 44.1 kHz, and
-            // that pitch in the samples
+            // A whole number of samples per period at 44.1 kHz, on
+            // average; that pitch in the samples is
+            // generator_tones_have_their_harmonics()'s
             QCOMPARE(e.toneLength, framesOf(0.8));
             const double period = kRate / e.toneHz;
             QCOMPARE(period, std::round(period));
-            const int tone = crossings(x, e.toneStart, e.toneStart + e.toneLength);
-            const double cycles = e.toneHz * double(e.toneLength) / kRate;
-            QVERIFY2(std::fabs(tone - 2.0 * cycles) <= 2.0,
-                     qPrintable(QString("%1 at %2 Hz").arg(tone).arg(e.toneHz)));
             pitches.insert(e.toneHz);
 
             silentFrom = e.toneStart + e.toneLength;
@@ -392,6 +391,81 @@ private slots:
                  LatencyCheck::longLayout(kRate, 60.0).events.size() + 1);
     }
 
+    // Each tone is its pitch and every harmonic up to 4 kHz, the n-th at
+    // 1/n of the pitch's amplitude, and nothing above; its pitch swings
+    // with the vibrato about the tone's, and no further. Read from the
+    // spectrum of the tone's middle, each harmonic's power summed over
+    // the band half way to its neighbours, which holds the vibrato's
+    // sidebands
+    void generator_tones_have_their_harmonics() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const samples_t x = LatencyCheck::generate(layout);
+        const int size = 32768; // 0.74 s: the tone less its fades
+        const double binHz = kRate / size;
+        breakfastquay::FFT fft(size);
+
+        std::set<double> seen;
+        for (const LatencyCheck::Event &e : layout.events) {
+            if (!seen.insert(e.toneHz).second) continue;
+            const frame_t from = e.toneStart + (e.toneLength - size) / 2;
+            std::vector<double> in(size), re(size / 2 + 1), im(size / 2 + 1);
+            for (int i = 0; i < size; ++i) {
+                const double hann =
+                    0.5 - 0.5 * std::cos(2.0 * TestSignals::kPi * i / size);
+                in[i] = hann * x[from + i];
+            }
+            fft.forward(in.data(), re.data(), im.data());
+
+            // Power, and power-weighted frequency and its square, over the
+            // band about harmonic h
+            auto band = [&](int h, double &mean, double &spread) {
+                const int lo = int(std::ceil((h - 0.5) * e.toneHz / binHz));
+                const int hi = int(std::floor((h + 0.5) * e.toneHz / binHz));
+                double power = 0.0, f = 0.0, ff = 0.0;
+                for (int k = lo; k <= hi && k <= size / 2; ++k) {
+                    const double p = re[k] * re[k] + im[k] * im[k];
+                    power += p;
+                    f += p * k * binHz;
+                    ff += p * k * binHz * k * binHz;
+                }
+                mean = (power > 0.0 ? f / power : 0.0);
+                spread = (power > 0.0 ?
+                          std::sqrt(std::max(0.0, ff / power - mean * mean))
+                          : 0.0);
+                return power;
+            };
+
+            double mean = 0.0, spread = 0.0;
+            const double fundamental = band(1, mean, spread);
+            QVERIFY(fundamental > 0.0);
+            const double swingHz = e.toneHz *
+                (std::pow(2.0, LatencyCheck::kVibratoCents / 1200.0) - 1.0);
+            QVERIFY2(std::fabs(TestSignals::centsBetween(mean, e.toneHz)) < 0.5 &&
+                     spread < swingHz + 2.0 * binHz,
+                     qPrintable(QString("at %1 Hz: the fundamental's power "
+                                        "centred on %2 Hz, spread %3 Hz, "
+                                        "against a swing of %4 Hz")
+                                .arg(e.toneHz).arg(mean).arg(spread)
+                                .arg(swingHz)));
+
+            const int top = int(LatencyCheck::kToneTopHz / e.toneHz);
+            QVERIFY2(top >= 13, qPrintable(QString::number(top)));
+            for (int h = 2; h * e.toneHz <= 2.0 * LatencyCheck::kToneTopHz;
+                 ++h) {
+                const double ratio = std::sqrt(band(h, mean, spread) /
+                                               fundamental);
+                const bool wanted = (h <= top);
+                QVERIFY2(wanted ? std::fabs(ratio * h - 1.0) < 0.02
+                                : ratio < 1e-3,
+                         qPrintable(QString("at %1 Hz, harmonic %2: %3 of "
+                                            "the fundamental, not %4")
+                                    .arg(e.toneHz).arg(h).arg(ratio)
+                                    .arg(wanted ? 1.0 / h : 0.0)));
+            }
+        }
+        QCOMPARE(seen, (std::set<double> { 196.0, 220.5, 245.0, 294.0 }));
+    }
+
     // Every sweep and every tone peaks at -12 dBFS, and nothing is louder
     void generator_peaks_at_minus_12_dbfs() {
         const LatencyCheck::Layout layout = LatencyCheck::devLayout();
@@ -419,6 +493,11 @@ private slots:
             QCOMPARE(a.errorFrames, frame_t(0));
             QVERIFY2(std::fabs(a.errorSeconds) < 1e-9, describe(a).constData());
             QVERIFY2(std::fabs(a.levelDb) < 0.01, describe(a).constData());
+            // The tones' partials in the sweep's band, which the finder
+            // hears a few tenths of a second after it, are well under
+            // what an echo would have to be
+            QVERIFY2(a.secondLevelDb < -(LatencyCheck::kEchoMaxBelowDb + 5.0),
+                     describe(a).constData());
         }
     }
 
@@ -1065,6 +1144,54 @@ private slots:
         QVERIFY(LatencyCheck::punchInsFor(layout, 7, 2).empty());
         QVERIFY(LatencyCheck::punchInsFor(layout, 1, 13).empty());
         QVERIFY(LatencyCheck::punchInsFor(layout, 0, 2).empty());
+    }
+
+    // Punch-ins placed with different round trips, as on a phone, whose
+    // reported latencies move from one stream start to the next (Oboe
+    // measures them each time), through a path whose round trip stays
+    // 0.12 s. Each lands late by what its round trip fell short: 20, 12,
+    // 17 and 9 ms. Counted as if placed with the first one's, they agree:
+    // Ok, and the round trip calibrated from the first one's is the
+    // path's. Not told how they were placed, the placing looks like the
+    // device moving: 11 ms apart, Unsteady, and 5.5 ms short
+    void judge_punch_ins_placed_differently() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const samples_t reference = LatencyCheck::generate(layout);
+        const double roundTrip = 0.120;
+        const double used[] = { 0.100, 0.108, 0.103, 0.111 };
+
+        punchins_t punchIns = fourPunchIns();
+        std::vector<frame_t> shifts;
+        for (int p = 0; p < 4; ++p) {
+            shifts.push_back(framesOf(roundTrip - used[p]));
+        }
+        const samples_t take = spliced(reference, kRate, punchIns, shifts);
+
+        LatencyCheck::TakeSummary s = judge(layout, take, kRate, punchIns);
+        QCOMPARE(s.found, 7);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Unsteady,
+                 describe(s).constData());
+        QVERIFY2(std::fabs(LatencyCheck::calibratedRoundTrip
+                           (used[0], s.medianOffset) - roundTrip) > 0.005,
+                 describe(s).constData());
+
+        for (int p = 0; p < 4; ++p) punchIns[p].placedWith = used[p];
+        s = judge(layout, take, kRate, punchIns);
+        QCOMPARE(s.found, 7);
+        QVERIFY2(s.verdict == LatencyCheck::Verdict::Ok, describe(s).constData());
+        QVERIFY2(s.spread < 1.5 / kRate && s.slopeResidual < 1.5 / kRate,
+                 describe(s).constData());
+        QVERIFY2(std::fabs(LatencyCheck::calibratedRoundTrip
+                           (used[0], s.medianOffset) - roundTrip) < 1.0 / kRate,
+                 describe(s).constData());
+
+        // Where each landed is kept as it was
+        for (int p = 0; p < 4; ++p) {
+            QVERIFY2(std::fabs(s.punchIns[p].medianOffset -
+                               shifts[p] / kRate) < 1e-9,
+                     describe(s).constData());
+            QCOMPARE(s.punchIns[p].range.placedWith, used[p]);
+        }
     }
 
     // The calibration's arithmetic. A take that landed late was placed

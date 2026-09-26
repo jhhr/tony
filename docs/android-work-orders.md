@@ -160,8 +160,8 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 
 Order: A0, A1, A2, A3a, A3b, then A4 and A5 while the user tries the APK on the phone. A6
 needs the result of that phone test. A8 is last. (Since 2026-09-25 `download.qt.io` and
-`dl.google.com` are reachable from the container. GitHub workflows are turned off: all
-builds happen in the container.)
+`dl.google.com` are reachable from the container. The builds happen in the container;
+since 2026-09-26 `.github/workflows/android.yml` builds the APK on CI as well.)
 
 - A0 — Desktop build and tests in the container. Done.
 - A1 — Sample rate: a device that is not at 44.1 kHz. Done.
@@ -181,6 +181,21 @@ builds happen in the container.)
 - A10 — Plot elements sized for the screen. Done.
 - A11 — Fixes from the fifth phone test: the cursor at a 48 kHz device, Save Log. Done.
 - A4c — Vertical zoom keeps the pitch in view. Done.
+- (Lead, 2026-09-26: lyrics at 65 % on Android, svgui `setLyricsTextScale()`; `feat/wasapi`
+  merged in for Calibrate Audio at 48 kHz.)
+- A12 — Calibrate Audio on the phone. Done (the dialog's size and layout left to A12c, by the
+  lead's change of scope).
+- (Lead, 2026-09-26: View > Lyrics Size, 35-100 %, 50 % by default on Android; the
+  size drawn is logged.)
+- A12c — The Calibrate Audio dialog: small, and out of the way while a check runs. Done.
+- A12b — The dev run on the phone. Done.
+- A13 — Fixes from the dev runs on the phone: idle input latency, a stream disconnected
+  while idle, tones a phone can play, pitch that cannot be judged. Done.
+- (Lead, 2026-09-26, from the fourth dev run, which ran the build before A13: the input
+  latency read 23219 frames, more than the input buffer holds, so what inflates it is input
+  lost to overruns, not input waiting. `OboeAudioIO` refuses a reading after an input
+  overrun (`getXRunCount()`), which A13's guard on waiting input did not see; the log's
+  first line gives the installed version name, with its commit.)
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -584,6 +599,147 @@ when zooming in."
   staying in view as the range narrows.
 - Not asked, so not built: following the pitch vertically during playback, a "fit the
   pitch" action. Say in the report if either looks needed.
+
+### A12 — Calibrate Audio on the phone
+
+The user (2026-09-26): the calibration and dev-check framework that came from `default`
+"should be developed for Android too, to set the latency variables and perform the
+hardware dev-test for my phone too". It is described in `docs/calibrate-audio.md` (read
+sections 1, 2, 5, 9 and 10; the rest as needed). This phase: Playback > Calibrate Audio on
+the phone, up to a stored, usable figure that places takes. A12b: the dev run.
+
+Known before starting:
+
+- **48 kHz**: `feat/wasapi`'s fix is merged: a device at another rate than the reference
+  is measured like any other. Check the phone's path through it (Oboe records at 48 kHz
+  only).
+- **The key** (`LatencyCalibration::currentKey()`) is the driver and the playback and
+  record devices as the Preferences name them. On Android `OboeAudioIO` opens whatever
+  route the phone has (speaker, wired or USB headset, Bluetooth; A6), and none of that is
+  in the settings: one figure would serve every route, and a Bluetooth route is 100-200 ms
+  longer than the speaker's. The key must name the route Oboe opened (the output and input
+  device: AAudio's device id, and its type and product name from `AudioManager`), so that
+  each route is calibrated and used on its own. A6 reopens the device when the route
+  changes: the menu line follows.
+- **Staleness**: a stored figure is stale when a reported latency differs by more than
+  1 ms from what was reported when it was measured. Oboe's latencies come from timestamps
+  and move between starts: the fifth phone test's log has output 252 then 401 frames
+  (5.2 then 8.4 ms), input 134, 154 and 222 frames. With 1 ms every figure would be stale
+  at the next take. On Android the fingerprint should be what the stream was opened with
+  (MMAP or not, sharing and performance mode, burst, buffer size and capacity, the
+  devices), or a tolerance the measurements justify: choose, and test it in `tony_core`.
+- **The dialog on a phone**: reachable in the compact layout; fits a landscape phone
+  (about 923 x 411 logical px, the log's "popups within ... of 923x411"), touch-sized
+  buttons, text that scrolls; the result's text copyable, and on Android a **Save
+  Report...** through the picker as Help > Save Log... writes (share that code rather than
+  copy it; A11's `AndroidStorage::Document`).
+- **Instructions for a phone**: the loopback is an earcup of wired headphones held to the
+  phone's microphone, or the phone's own speaker and microphone in a quiet room. A headset
+  with a microphone of its own moves the input to it; say which input and output are in use
+  (the route) on the instructions page. Android's input processing: Tony opens the input
+  with the VoicePerformance preset (A6); say if the check sees anything that suggests echo
+  cancellation or noise suppression.
+- Timeouts that assume a desktop's speed (`AudioCheckRunner`'s 60 s for the reference's
+  analysis, 30 s for a take's): the calibration reference is short; say whether they hold
+  on a phone several times slower, and scale them if not.
+
+Tests on the desktop as far as they go (the fake device at 48 kHz, the key and staleness
+rules in core); the JNI for the route compiles only for Android. Say what the phone test
+should do and send back.
+
+### A12c — The Calibrate Audio dialog: small, and out of the way while a check runs
+
+The user's phone test of Calibrate Audio (2026-09-26, the APK before A12): the text could
+be selected but not copied (A12 added Copy); "the calibrate modal is too large and the
+buttons on the bottom are off screen. The modals ought to be resized much smaller. Using
+a smaller font-size would be acceptable too. I noticed this on desktop too ... the modal
+blocks the view of the test happening. The modal could be made very small, just a small
+progress bar and small status text could be shown in the corner. Tapping that could expand
+to allow canceling an ongoing test so that possibility doesn't go away. Once the test
+finishes the modal would expand again. This kind of change would be done for both desktop
+and Android but it's mainly for Android."
+
+- **Smaller**: every page of `CalibrateAudioDialog` fits a landscape phone (the log's
+  923 x 411 logical px, less the safe area margins 58,24,48,0) with all its buttons on
+  screen; text that does not fit scrolls. A smaller font on Android is acceptable. The
+  desktop dialog gets smaller too; keep it readable.
+- **Out of the way during a check**: when a check starts, the dialog collapses to a small
+  indicator in a corner of the window (a progress bar and one line of status: the step,
+  the punch-in, the time left) that does not cover the pane where the takes are drawn.
+  Tapping or clicking it expands the dialog to the progress page, with Cancel, and a way
+  back to small. When the check ends (done, failed or cancelled), the dialog expands by
+  itself to the result page. The dev run (A12b) will use the same progress page and
+  indicator for its stages.
+- **Behaviour kept**: not modal; closing it while a check runs cancels the check; Copy,
+  Save Report..., Use this latency, Check Again; the instructions and result texts A12
+  wrote. A12 changed the dialog only by adding Copy and Save Report... on the result page,
+  the phone instructions, NoSignal and Fading advice for a phone, a "Streams:" row, and
+  asking for the microphone before Start.
+- **The other dialogs**: open each of Tony's other dialogs in a window of the phone's size
+  with the compact layout (message boxes, the take name question, Edit Display Extents,
+  the lyrics dialogs, Preferences) and list in the report which do not fit. Fix only the
+  generic cause, if there is one (a font or margin that the compact layout could set for
+  all dialogs); the rest is for the user to choose.
+- Tests: the pages' sizes against a phone-sized window; collapse at the start, expand on
+  a tap and at the end, Cancel reachable while collapsed by expanding; closing still
+  cancels.
+
+### A12b — The dev run on the phone
+
+After A12: the dev checks (`main/dev/`, compiled in the Android build, which is
+`debugoptimized`) run after a usable calibration on the phone and their report reaches the
+user. Read `docs/calibrate-audio.md` sections 6 to 8.
+
+- The report, `DevChecks.txt` in the application data directory, cannot be reached on a
+  phone: the result page's Save Report... (A12) saves it as well, or with the calibration's
+  text, and the log names where it is.
+- Timeouts that assume a desktop (the long song's 240 s reference analysed within 60 s,
+  4 minutes a stage): scale them for a phone from what a phone takes (the log's pYIN
+  times, if any, or a margin stated in the report).
+- Go through the stages and checks for what differs on a phone: one input channel (item
+  5), the output and input levels through `OboeAudioIO`, the save and reopen of stage 6 in
+  the application data directory, anything that opens a dialog or a picker, the scratch
+  folders.
+- Tests on the desktop where the change is not Android-only; `test-tony-dev` whole.
+
+### A13 — Fixes from the dev runs on the phone
+
+Three dev runs on the user's Pixel 9a (2026-09-26), Bluetooth earphones (WF-1000XM6, A2DP)
+for output and the phone's microphone for input, an earbud held to the microphone. The
+calibration was steady (276 ms measured, 12 of 12 sweeps, punch-ins within 2.4 ms, spread
+1.9 ms); items 4, 13 and 14 passed; 5 Measured. Faults, from the reports and the log:
+
+- **Idle input latency.** After a take stops, `OboeAudioIO` reports input latencies of
+  11691-11752 frames (244 ms), against 100-190 frames during a take: nothing reads the input
+  while not recording, and its buffer (11424 of 11520 frames) fills. That figure went into
+  the dev report's header ("Record latency reported") and into the next take's round trip
+  ("round trip 12098 frames at 48000 Hz (252.044 ms), reported"): a take on a route with
+  no measured figure, started after an idle spell, would be placed 244 ms off. Measure the
+  latency only while the input is being read, or keep reading and discarding it while not
+  recording (say which, and why).
+- **A stream disconnected while idle.** Three times the first take after an idle spell
+  logged `OboeAudioIO: failed to start: ErrorDisconnected`; the take recorded 0 frames
+  ("nothing to use"), and only then did `checkAudioDevice` reopen the device. `resume()`
+  should reopen the streams and start again at once when a start fails because they were
+  disconnected, logged, so that the take (or playback) goes ahead.
+- **Tones a phone can play.** No run found pitch on the reference's tones: 0-4 live dots a
+  punch-in, all on sweeps; `mergeRangedAnalysis: 0 pitch event(s)` for every punch-in; even
+  with the input peak at -12.7 dBFS. The tones are pure sines at 196-262 Hz
+  (`LatencyCheck`), and an in-ear earbud without the seal of an ear canal, like a phone's
+  speaker, gives out almost no bass: the sweeps, which reach higher, come through; the
+  tones do not. Give the tones harmonics (a voice-like spectrum), so that their period is
+  there even when the fundamental is lost; keep their pitches, timing and level; the sweeps
+  and the calibration's measurement unchanged. pYIN and the live tracker must still find the
+  fundamental (tests with the fundamental filtered out).
+- **Pitch that cannot be judged.** Items 7, 9, 10 and 12 failed with "the take had no pitch
+  outside the range to compare" while their audio parts passed. A part that has nothing to
+  judge says so ("not judged: ..."), and the verdict comes from the rest, as items 4 and 12
+  already do with their gaps ([calibrate-audio.md](calibrate-audio.md) section 10). Item 3
+  keeps failing when no dots appear: that is what it checks.
+- **Small**: the report's "Audio drivers built in:" is empty on Android; it should name Oboe.
+
+Not changed without the user's word: the ±2 ms of items 1 and 2 (the runs had +3.2, +2.3 and
++2.4 ms with Bluetooth).
 
 ### A8 — Documentation pass
 
@@ -998,3 +1154,100 @@ fingers when nothing is on show; the singing counted); narrows/widens/diagonal n
 pitch. Pitch checks allow for the whole-Hz range (~3 px at a bottom near 40 Hz).
 Tests seen failing: anchor off (5); no pull (3 app, 2 core); singing not gathered; dormancy
 ignored (2). Left open: not on a phone; no follow in playback, no "fit the pitch" action.
+
+### Phase A12 — 2026-09-26
+Built: `AudioRoute` (core): a route's devices (AudioDeviceInfo id, type, product name), its
+rate and how each stream opened; `AudioRouteReporter`, which `OboeAudioIO` (JNI:
+`AudioManager.getDevices()`, matched by `getDeviceId()`) and the tests' fake implement.
+`LatencyCalibration`: `routeKey()` ("oboe", type and product name, never the id: a headset
+gets a new one at each plug-in), `onlyRecordDevice()` (a phone is output-only until its first
+take), a figure's `outputStreams`/`inputStreams`. `MainWindow::latencyKey()`,
+`audioRoute()`; the runner keys a result by its first take's route (`TakeLatency::route`).
+Staleness on a route: stale only if a stream it describes opened otherwise (API, MMAP,
+sharing, mode, burst, buffer and capacity, preset); reported latencies ignored (they moved
+4 ms take to take). Desktop: key and 1 ms rule as they were. `PunchIn::placedWith`:
+`judgeTake()` counts each punch-in as if placed with the first's round trip; Oboe's reported
+pair moves per start, which made the spread and the calibrated figure wrong. Dialog: Copy
+(all platforms), Save Report... (Android, `saveTextThroughPicker()`, Save Log's code), the
+route and the phone's loopback on the instructions, a phone's advice for NoSignal/Fading, a
+Streams row; Start asks for the microphone first (the runner refuses a take without it: the
+permission's answer would otherwise start a take of the user's after the check had ended).
+Not changed: the dialog's size and layout (A12c), the timeouts (26 s reference ~1.3 s here,
+a punch-in ~0.6 s: 60 s and 30 s leave 5-10x for a slower phone).
+Tests seen failing: placement not counted (core Unsteady, app Unsteady 10 ms); streams not
+passed (a route's figure unused once reported latency moved).
+For A8: calibrate-audio.md §5 (route key, streams rule), recording.md "Latency", §3 judging.
+Left open: none of it on a phone; which input an output-only device will open is a guess.
+
+### Phase A12c — 2026-09-26
+Built: `CalibrateAudioDialog` sized by `fitToWindow()` at each page and show: 64 average
+characters wide (wider if the buttons need it), as tall as the page's text, never more than
+`windowArea()` (the window less its safe area margins, within the screen), centred there when
+shown (`PopupArea::place()`, core, tested), kept where it is when on show. The texts in scroll
+areas that report the text's height for a width; the stack is not asked (it gives the tallest
+page's). Android: font at 85 %, buttons 3/4 of a finger high, one-finger scroll (QScroller),
+the result not selectable (Copy). `AudioCheckIndicator` (app): a bar and one elided line
+("Recording punch-in 2 of 4, 25 s left", "Dev checks, stage 1 of 6: ..."); `MainWindow::
+calibrateAudio()` puts it at the right end of the status bar. A started check collapses the
+dialog to it; a tap expands to the progress page (Make Small, Cancel); the run's end expands.
+Choices: the corner is the status bar's right end: the pane fills all between toolbar and status
+bar, the status line (countdown, sung note) is at the left; it grows the bar (a phone: 2/3 of a
+finger), covers nothing. Closing still cancels, but a small dialog is hidden: expand first.
+Dialogs at 817x387, compact, fonts 12/15/17 px: message boxes, take name, Open Location, Edit
+Display Extents, lyrics word and shift fit. What's New does not (minimum 520x450 scaled by font,
+~624x540 at a phone's); About at 17 px (537x393); Key Reference is sized from the screen
+(600x274 here) but has no parent (placed by Qt). No Preferences dialog. No generic cause: none
+fixed.
+Tests seen failing: fit off (fits_a_phone); no collapse (3); no expand at the end (from_the_menu).
+For A8: calibrate-audio.md §2 (small, Make Small, not selectable on Android), §9, §11.
+Left open: not on a phone (the font, the finger scroll, the dialog's place under the bars).
+
+### Phase A12b — 2026-09-26
+Built: `CalibrateAudioDialog::reportText()` (Copy, and Save Report... on Android) ends with
+DevChecks.txt whole when a dev run wrote one; Save Report... then suggests
+`tony-dev-checks-<time>.txt` and logs the report's path; on Android the result page says Copy
+and Save Report... take it. `AudioCheckRunner::kAnalysisTimeFactor` (1; 4 on Android) scales
+the reference's and a take's analysis limits (60/30 s; 240/120 s); `DevChecks`' stage limit is
+the runner's reference limit, two take limits and 2 min (240 s; 600 s), the reopen 60 s x the
+factor. The runner logs every analysis's time ("the reference, 240 s, was analysed in ...").
+`AndroidScreen::keepOn()` (Android; FLAG_KEEP_SCREEN_ON on Android's main thread) from the
+dialog's Start to the run's end. Item 5: one input channel is Measured, "the device records one
+input channel". Item 14: past the selection's end worked out in seconds, device frames by the
+device's rate, lead-in and range by the session's; `TakeObserver` counts an event loop deeper
+than its start as a dialog. DevChecks.txt names the route's driver and streams.
+`FakeAudioIO::Config::inputChannels`. Tests: `dev_checks_on_a_phone` (48 kHz, 1 in 2 out, a
+route; through the dialog: calibration, then the dev run with a 60 s long song),
+`dev_checks_see_a_dialog_qt_does_not_draw`.
+Found: at 48 kHz item 14 failed every take by ~0.35 s (reference frames taken as the device's).
+A screen going off (no touch for minutes) suspends Tony: the take is stopped and the loop held.
+Android's own dialogs (message boxes, picker) are no active modal widget (A7): item 14 missed them.
+Margin: the 240 s long song took ~10 s here; a phone 3-6x slower, 30-60 s; 240 s is 4x that.
+Tests seen failing: phone run at HEAD (item 14); loop level ignored; report text without the file.
+For A8: calibrate-audio.md §7 (limits on a phone, items 5 and 14, the header), §8, §10.
+Left open: not on a phone. Leaving Tony during a run (power key, a call) still ends it wrongly;
+a user's own long take has no screen kept on.
+
+### Phase A13 — 2026-09-26
+Built: `OboeAudioIO`: each duplex callback reads all the input there is (`Engine::readInput()`
+over FullDuplexStream's, which reads only what the output asks, so a backlog from a held-up
+callback stayed for the whole run; own buffer, input capacity); a latency reading with more
+input waiting than the output buffer and two input bursts is refused, the figures kept, and
+logged ("the input was N frames ... behind as the device stopped"); suspend() logs a callback
+that read more than that at once. resume(): ErrorDisconnected reopens both streams (fresh
+Engine and ErrorFlag, `openStreams()`/`measureOnceOpen()` split from the constructor, the
+route found again), measures, starts; any other failure as before. `StreamLatency::
+inputFramesToRead()`, `inputKeptUp()` (core, tested). `LatencyCheck`: tones with harmonics to
+4 kHz at 1/n, Newman's phases, vibrato ±10 cents at 5.5 Hz, peak -12 dBFS from one period's
+waveform (rate-independent). DevChecks: items 1, 7, 9, 12's pitch parts and item 10's pitch,
+note and outside parts say "not judged" with no pitch there, verdict from the rest; "oboe" in
+the header's drivers on Android. calibrate-audio.md §3, §7, §10.
+Choices / deviations:
+- Mechanism of the 244 ms not found in the code (callbacks held up after Stop is the guess);
+  read-all fixes it if so, the guard keeps any such reading out whatever the cause.
+- Vibrato not asked for: exact periodic tones tie pYIN's P, 2P, 3P; subharmonics seen for
+  the old sines too (294 as 73.5 Hz). Item 1's reopen comparison done like 7, 9, 10, 12.
+Tests seen failing: old sines (harmonics test, YIN and pYIN rows); no vibrato (pYIN rows);
+FullDuplexStream's read rule; guard always true; item 7's old verdict (`dev_checks_without_pitch`).
+For A8: testing.md (exactly periodic tones tie in pYIN even at whole periods), recording.md
+"Latency" (Oboe: readings refused with a backlog; the reopen on ErrorDisconnected).
+Left open: not on a phone; the calibrated figure may move by up to a burst (2 ms) with read-all.

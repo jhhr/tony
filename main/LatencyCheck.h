@@ -74,6 +74,36 @@ namespace LatencyCheck
     constexpr double kHeldToneSeconds = 3.0;
 
     /**
+     * Each tone is its pitch and the harmonics above it up to this, the
+     * n-th at 1/n of the fundamental's amplitude (-6 dB an octave, as a
+     * voice or a sawtooth has them).  A phone's speaker, or an earbud
+     * held to the microphone without an ear canal to seal it, gives out
+     * almost nothing at the tones' pitches: a pure tone there reached
+     * neither pYIN nor the live tracker on a phone, while the sweeps
+     * came through.  The harmonics come through too, and together they
+     * repeat at the pitch's period, which is what both find, with the
+     * fundamental or without it.  Their phases are Newman's, so that
+     * they do not pile up into the sharp edge a sawtooth has: item 10
+     * of the dev checks reads an edge that sharp as a step.  Only the
+     * part from 1 kHz up is in the sweep's band, and it comes after the
+     * sweep and 35 dB or more under it at the finder's output
+     */
+    constexpr double kToneTopHz = 4000.0;
+
+    /**
+     * And a slight vibrato, as a voice has: the pitch swings this far
+     * either way, this often, about the tone's pitch.  A tone that
+     * repeats exactly repeats at two and three periods as exactly as at
+     * one, and pYIN weighs those alike: it took a subharmonic for some
+     * tones (294 Hz as 73.5, 245 as 81.7), pure or with harmonics, and
+     * which ones changed with the noise added.  Swinging, the waveform
+     * drifts further from itself the more periods on, and the period is
+     * the best match again (TestSingingAnalysis)
+     */
+    constexpr double kVibratoCents = 10.0;
+    constexpr double kVibratoHz = 5.5;
+
+    /**
      * The finder's thresholds.  Starting values: the report of every
      * real run gives the numbers they are to be tuned from.
      */
@@ -102,7 +132,8 @@ namespace LatencyCheck
 
     /**
      * One event of the reference, in frames of its layout's rate: a
-     * sweep, a pause, a tone, then silence until the next event.
+     * sweep, a pause, a tone, then silence until the next event.  An
+     * event whose toneHz is not above 0 has silence for its tone.
      */
     struct Event {
         sv::sv_frame_t sweepStart;
@@ -134,7 +165,8 @@ namespace LatencyCheck
      * (kSearchSeconds).  The tones take turns at 196, 220.5, 245 and
      * 294 Hz: a whole number of samples per period at 44.1 kHz, which
      * pYIN needs to report the pitch rather than a subharmonic
-     * (docs/testing.md).
+     * (docs/testing.md), on average: with their harmonics (kToneTopHz)
+     * and a vibrato (kVibratoCents).
      *
      * All three give their events the same times in seconds at any
      * rate, so a reference made at another rate is the same reference.
@@ -329,8 +361,12 @@ namespace LatencyCheck
         double start;
         double end;
 
-        PunchIn() : start(0), end(0) { }
-        PunchIn(double s, double e) : start(s), end(e) { }
+        /// The round trip the punch-in was placed with, in seconds, if
+        /// known; see judgeTake()
+        double placedWith;
+
+        PunchIn() : start(0), end(0), placedWith(0) { }
+        PunchIn(double s, double e) : start(s), end(e), placedWith(0) { }
     };
 
     /// One judged event: which of the layout's, in which punch-in, and
@@ -382,7 +418,10 @@ namespace LatencyCheck
 
         /// Across punch-ins, over those with an event found: the
         /// median of their median offsets, which weighs every take
-        /// alike, and the largest minus the smallest of them
+        /// alike, and the largest minus the smallest of them.  Each
+        /// counted as if its punch-in had been placed with the first
+        /// one's round trip (PunchIn::placedWith): what is left is how
+        /// the device moved, not how the placing did
         double medianOffset;
         double spread;
 
@@ -426,6 +465,15 @@ namespace LatencyCheck
      * events were found, and also when none was, judged or not: there
      * is then nothing to measure.  Unsteady and Scattered look at the
      * spread across punch-ins and within each, whichever is larger.
+     *
+     * Punch-ins placed with different round trips (a device whose
+     * reported latencies move between starts, as Oboe's do) land that
+     * much apart for that reason alone: across punch-ins, each one's
+     * offset is taken as if it had been placed with the first one's
+     * round trip, so that calibratedRoundTrip() of the first one's and
+     * the median offset is the round trip the device had, and the
+     * spread and the line are its own.  Each PunchInResult keeps where
+     * its punch-in landed.
      */
     TakeSummary judgeTake(const Layout &layout,
                           const float *take, sv::sv_frame_t count,

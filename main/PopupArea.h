@@ -63,6 +63,15 @@ public:
     static QRect fit(QRect rect, QRect usable);
 
     /**
+     * Where a dialog of size goes inside usable: centred in it when it
+     * is being shown afresh (centre), else where topLeft puts it, as the
+     * user may have moved it; and then fit() into usable. Qt centres a
+     * dialog over its parent inside the screen's available geometry,
+     * which on a phone takes in the system bars.
+     */
+    static QRect place(QSize size, QRect usable, QPoint topLeft, bool centre);
+
+    /**
      * A length in pixels: mm millimetres at dotsPerInch.
      */
     static int pixels(double mm, double dotsPerInch);
