@@ -142,7 +142,7 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 
 ## 5. Phases
 
-Order: A0, A1, A2, A3, then A4 and A5 while the user tries the APK on the phone. A6
+Order: A0, A1, A2, A3a, A3b, then A4 and A5 while the user tries the APK on the phone. A6
 needs the result of that phone test. A8 is last. (Since 2026-09-25 `download.qt.io` and
 `dl.google.com` are reachable from the container. GitHub workflows are turned off: all
 builds happen in the container.)
@@ -150,7 +150,8 @@ builds happen in the container.)
 - A0 — Desktop build and tests in the container. Done.
 - A1 — Sample rate: a device that is not at 44.1 kHz. Done.
 - A2 — Android toolchain and C libraries. Done.
-- A3 — Tony as an APK (no audio): the test port.
+- A3a — Tony builds for Android.
+- A3b — Tony as an APK (no audio): the test port.
 - A4 — Touch gestures on the panes.
 - A5 — Compact touch mode.
 - A6 — Oboe audio backend.
@@ -219,17 +220,40 @@ tests".
 - The toolchain is installed into the container (outside the repo, e.g. under `/opt`), so
   that A3 can iterate locally.
 
-### A3 — Tony as an APK, without audio: the test port
+### A3a — Tony builds for Android
+
+Read: [port-android.md](port-android.md) "Qt for Android", "Build and packaging";
+[mobile-port.md](mobile-port.md) "Build and tests"; [forks.md](forks.md) "Changing a fork";
+the A2 log entry.
+
+- Route (a) from section 3: an `android` branch in `meson.build` (today an unknown system
+  is an error), the cross file from A2 plus whatever Tony needs on top (Qt's tools), and
+  Tony built as the shared library `libTony_arm64-v8a.so` that Qt for Android loads, with
+  `main` exported. The test executables are not built for Android.
+- A script, `deploy/android/build-tony.sh`, that configures and builds it into its own
+  build directory (not `build/`).
+- The pYIN and CHP plugins cross-compiled as well; how they are packaged is A3b's.
+- Fixes needed for Android in the fork directories (`svcore/`, `svgui/`, `svapp/`,
+  `bqaudiostream/`) may be made there this once, smallest possible, guarded for Android
+  where they would change anything elsewhere, uncommitted, and listed in the report; the
+  lead commits and pushes them. The upstream libraries (`bqaudioio/`, `bqvec/`,
+  `dataquay/`, `vamp-plugin-sdk/`, `checker/`, `pyin/`, ...) stay untouched: work around
+  in `meson.build`, or report.
+- The desktop build and suites unchanged and green.
+- Result: the library links; `readelf` shows it exports `main` and needs nothing outside
+  the NDK's system libraries and Qt's.
+
+### A3b — Tony as an APK, without audio: the test port
 
 Read: [port-android.md](port-android.md) all of "Platform facts" and "Test port";
-[mobile-port.md](mobile-port.md) "The pYIN plugin", "The window", "Build and tests".
+[mobile-port.md](mobile-port.md) "The pYIN plugin", "The window".
 
-- Route (a) from section 3: an `android` branch in `meson.build`, an NDK cross file, Tony
-  built as `libTony_arm64-v8a.so`, a script that writes the deployment JSON and runs
-  androiddeployqt, a custom `AndroidManifest.xml` (with `RECORD_AUDIO` for later).
+- A script that writes the deployment JSON (A2 left a model written by Qt's CMake in
+  `/opt/android/logs/android-check-deployment-settings.json`) and runs androiddeployqt; a
+  custom `AndroidManifest.xml` (with `RECORD_AUDIO` for later).
 - Audio: `AUDIO_NONE` under `Q_OS_ANDROID` for now.
 - The menu bar: exclude `Q_OS_ANDROID` from the `Q_OS_LINUX` `setNativeMenuBar(false)`
-  only if the ⋮ options menu works better on a phone; otherwise keep the in-window bar and
+  only if the options menu works better on a phone; otherwise keep the in-window bar and
   say why.
 - pYIN found on the phone: `libpyin.so` naming plus legacy packaging, or linking it in.
   The log must show "Setting VAMP_PATH to ...".
@@ -264,7 +288,7 @@ Read: [mobile-port.md](mobile-port.md) "The window", "Work common to both ports"
 
 ### A6 — Oboe audio backend
 
-After the user's phone test of A3. Detailed when it starts.
+After the user's phone test of A3b. Detailed when it starts.
 
 ### A7 — Android files, permission and lifecycle
 
