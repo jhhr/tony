@@ -194,6 +194,11 @@ it draws is judged by pixels:
   about (246, 126, 114) there: `isSinging()` takes both. Bright orange is the reference's
   pitch candidates, which a selection makes.
 - Record puts the view back on the take's position: work out x positions again after it.
+- What the Edit tool does is decided by where the pointer last hovered over a note
+  (`FlexiNoteLayer::mouseMoveEvent()`): near its top a drag moves the note, near its bottom
+  a click splits it, and before any hover a drag moves and a click does nothing. `hover()`
+  sends that move to the pane; `QTest::mouseMove()` with no button held moves the
+  platform's cursor instead.
 - A drag of a note re-analyses the pitch under it. The candidates arrive when that
   transform finishes, and one of them may go into the pitch track, so judge only once
   `haveRunningTransformers()` is false. The drag may leave more than one entry in the undo

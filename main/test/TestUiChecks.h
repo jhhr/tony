@@ -36,6 +36,7 @@
 #include "view/PaneStack.h"
 #include "layer/Layer.h"
 #include "layer/ColourDatabase.h"
+#include "layer/CoordinateScale.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
 #include "data/model/RegionModel.h"
@@ -59,6 +60,7 @@
 #include <QImage>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QScreen>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -322,6 +324,20 @@ class TestUiChecks : public QObject
         QVERIFY(QTest::qWaitForWindowActive(m_window));
         QTest::keySequence(m_window, keys);
         QCoreApplication::processEvents();
+    }
+
+    // The pointer over pane 0 with no button held. Where it was last over
+    // a note decides what the Edit tool does to that note: near its top a
+    // drag moves it, near its bottom a click splits it, and with the
+    // pointer never over a note a drag moves it. Sent to the pane itself:
+    // QTest::mouseMove() with no button held moves the platform's cursor
+    // instead, which the offscreen platform need not pass on
+    void hover(QPoint pos) {
+        sv::Pane *pane = pane0();
+        QMouseEvent move(QEvent::MouseMove, QPointF(pos),
+                         QPointF(pane->mapToGlobal(pos)),
+                         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(pane, &move);
     }
 
     // A drag across pane 0 with the left button, in ten steps
@@ -872,6 +888,78 @@ private slots:
         }
         qInfo("%d of the gestures with the edit tool edited the take's note",
               noteEdits);
+        press(QKeySequence("1"));
+    }
+
+    // The Edit tool gives a take's note it has changed the pitch of the
+    // take's own pitch track there, not that of the first pitch track in
+    // the pane, which is the reference's: a split gives each half the
+    // pitch sung in it, a drag the note where it is let go
+    void edited_take_notes_keep_the_take_pitch() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(frames(0.5));
+        take(1500);
+        if (QTest::currentTestFailed()) return;
+        m_window->clearSelections();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        showSeconds(0.0, 3.0);
+
+        sv::Pane *pane = pane0();
+        sv::Layer *layer = m_window->analyser2()->getLayer(Analyser::Notes);
+        QVERIFY(layer);
+        auto notes = [&]() {
+            auto model = sv::ModelById::getAs<sv::NoteModel>(layer->getModel());
+            return model ? model->getAllEvents() : sv::EventVector();
+        };
+        auto verifySung = [&](QString what) {
+            sv::EventVector events = notes();
+            QVERIFY2(!events.empty(),
+                     qPrintable(what + " left the take no notes"));
+            for (const sv::Event &e : events) {
+                double cents = 1200.0 * std::log2(e.getValue() / highHz);
+                QVERIFY2(std::fabs(cents) < 50.0,
+                         qPrintable(QString("after %1 a note of the take is "
+                                            "at %2 Hz, not at the %3 Hz sung "
+                                            "(the reference is at %4 Hz)")
+                                    .arg(what).arg(e.getValue())
+                                    .arg(highHz).arg(lowHz)));
+            }
+        };
+
+        const sv::EventVector original = notes();
+        QCOMPARE(int(original.size()), 1);
+        const sv::Event note = original[0];
+        const int x = pane->getXForFrame(note.getFrame() + frames(0.3));
+        const int noteY = pane->getEffectiveVerticalExtentsForLayer(layer)
+            .getCoordForValueRounded(pane, note.getValue());
+
+        press(QKeySequence("2"));
+
+        hover(QPoint(x, noteY + 4));
+        QTest::mouseClick(pane, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(x, noteY + 4));
+        QCOMPARE(int(notes().size()), 2);
+        verifySung("a split");
+        if (QTest::currentTestFailed()) return;
+        press(QKeySequence(tr("Ctrl+Z")));
+        QVERIFY2(notes() == original, "undo did not take the split back");
+
+        hover(QPoint(x, noteY - 4));
+        drag(QPoint(x, noteY - 4), QPoint(x + 60, noteY - 4));
+        // The drag re-analyses the pitch under the note
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        QVERIFY2(notes() != original, "the drag did not move the note");
+        verifySung("a drag");
         press(QKeySequence("1"));
     }
 

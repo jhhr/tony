@@ -74,6 +74,10 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `plotStyle` attribute.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
+- `FlexiNoteLayer::getAssociatedPitchModel()`, which the note tools set a note's pitch
+  from, takes the pitch track with the same source model as the notes, and the first in
+  the view only when there is none. With the reference first in the pane, an edited
+  take's note otherwise took the reference's pitch.
 - `Pane::setWorkModel()` / `getWorkModel()`: which model's extents are blocked off at the
   ends of the pane (a pale wash and a line), and whose duration, title and alignment are
   reported. The scan that chooses one now skips layers dormant in that pane. Tony's pane
