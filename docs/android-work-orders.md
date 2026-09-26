@@ -160,8 +160,8 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 
 Order: A0, A1, A2, A3a, A3b, then A4 and A5 while the user tries the APK on the phone. A6
 needs the result of that phone test. A8 is last. (Since 2026-09-25 `download.qt.io` and
-`dl.google.com` are reachable from the container. GitHub workflows are turned off: all
-builds happen in the container.)
+`dl.google.com` are reachable from the container. The builds happen in the container;
+since 2026-09-26 `.github/workflows/android.yml` builds the APK on CI as well.)
 
 - A0 — Desktop build and tests in the container. Done.
 - A1 — Sample rate: a device that is not at 44.1 kHz. Done.
