@@ -71,8 +71,8 @@ public:
 
     /**
      * The same, from in, open for reading: on Android a file descriptor
-     * the file's provider gave (AndroidStorage::openDocument()), which
-     * may be a pipe. sourceName says where it came from, for the log.
+     * the file's provider gave (AndroidStorage::Document), which may be
+     * a pipe. sourceName says where it came from, for the log.
      */
     static QString copyIn(QIODevice &in, QString sourceName, QString name,
                           QString dir, QString &error);
@@ -198,6 +198,21 @@ public:
      * provider. True if it removed one.
      */
     static bool removeIfEmpty(QString path);
+
+    /**
+     * What a document holds after a save through its provider, against
+     * what was written to it: Save Log says both in the log, and tells
+     * the user when they differ. held is the document's _size column as
+     * ContentResolver.query() gives it, "" for a null: a provider that
+     * gives no size says nothing either way.
+     */
+    struct SavedSize {
+        qint64 written = 0;
+        qint64 held = -1;       // -1: the provider gives no size
+        bool known() const { return held >= 0; }
+        bool differs() const { return known() && held != written; }
+    };
+    static SavedSize savedSize(qint64 written, QString held);
 };
 
 #endif

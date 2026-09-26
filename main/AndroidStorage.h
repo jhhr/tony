@@ -16,6 +16,7 @@
 #define TONY_ANDROID_STORAGE_H
 
 #include <QCoreApplication>
+#include <QJniObject>
 #include <QString>
 
 class QWidget;
@@ -57,12 +58,54 @@ public:
     // gives none
     static QString displayName(QString uri);
 
-    // A file descriptor for the document at uri, open to read ("r") or
-    // write ("w"), which the caller closes (QFile's AutoCloseHandle); -1
-    // on failure, with error saying why. Called here rather than through
-    // QFile, whose content file engine rebuilds the URI, differently for
-    // names with parentheses, and then has no grant for it
-    static int openDocument(QString uri, QString mode, QString &error);
+    /**
+     * A document opened through its provider, from the URI as Android
+     * wrote it: not through QFile, whose content file engine rebuilds
+     * the URI, differently for names with parentheses, and then has no
+     * grant for it. fd() is read or written as it is (QFile's
+     * DontCloseHandle) and stays the provider's ParcelFileDescriptor's:
+     * close() closes it through that, which is what tells a provider
+     * that watches for the close (MediaStore behind Downloads, a cloud
+     * app) that Tony has finished with the document. A descriptor taken
+     * from it instead (detachFd()) tells the provider so at once, before
+     * anything is written, and a provider may then keep nothing.
+     */
+    class Document
+    {
+    public:
+        Document();
+        // Closes the document if it is still open
+        ~Document();
+
+        // Opens the document at uri to read ("r") or write ("wt", which
+        // leaves only what is written now); false on failure, with error
+        // saying why
+        bool open(QString uri, QString mode, QString &error);
+
+        bool isOpen() const { return m_fd >= 0; }
+        int fd() const { return m_fd; }
+
+        // The size of the file behind the descriptor, as fstat() gives
+        // it; -1 for a pipe, which a provider may give instead of a file
+        qint64 fileSize() const;
+
+        // Closes the document through its provider. False if that failed,
+        // or if the provider has said through a pipe that it went wrong
+        // at its end, with error saying why
+        bool close(QString &error);
+
+    private:
+        QJniObject m_descriptor;
+        int m_fd;
+
+        Document(const Document &) = delete;
+        Document &operator=(const Document &) = delete;
+    };
+
+    // The size of the document at uri as its provider gives it (its
+    // _size column): "" if it gives none, or could not be asked, with
+    // error saying why (see AndroidFiles::savedSize())
+    static QString sizeOf(QString uri, QString &error);
 
     // Removes the document at uri if it is empty: the one the picker
     // makes for a save, when the save is not made there. True if it did
