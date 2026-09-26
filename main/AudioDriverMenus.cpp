@@ -123,6 +123,9 @@ AudioDriverMenus::applyLatency()
 QString
 AudioDriverMenus::driverName(QString implementation)
 {
+    // Tony's own on Android (OboeAudioIO, AudioRoute::driver), which
+    // bqaudioio's factory has never heard of and calls "(unknown)"
+    if (implementation == "oboe") return "Oboe";
     return QString::fromStdString
         (breakfastquay::AudioFactory::getImplementationDescription
          (implementation.toStdString()));

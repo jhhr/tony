@@ -2070,10 +2070,11 @@ private slots:
                            "Settings, Apps", "cancelling echo",
                            "output Built-in speaker (Pixel 7); input "
                            "Built-in microphone (Pixel 7)",
-                           "Streams:", "Exclusive, burst 96, buffer 192" }) {
+                           "Streams:", "Exclusive, burst 96, buffer 192",
+                           "Oboe" }) {
             QVERIFY2(words.contains(w), qPrintable(w + " not in: " + words));
         }
-        for (QString w : { "Windows", "Hands-Free" }) {
+        for (QString w : { "Windows", "Hands-Free", "(unknown)" }) {
             QVERIFY2(!words.contains(w), qPrintable(w + " in: " + words));
         }
 

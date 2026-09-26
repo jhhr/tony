@@ -164,7 +164,7 @@ private:
     void stopStreams();
     bool waitUntilMeasurable(int maxMillis) const;
     bool measureLatency(StreamLatency::Estimate &latency,
-                        int &backlog) const;
+                        int &backlog, int &lost) const;
     bool keptUp(int waiting) const;
     void report(StreamLatency::Estimate latency, bool withInput);
     void logStream(std::string name, oboe::AudioStream *stream) const;

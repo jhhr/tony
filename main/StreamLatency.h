@@ -118,6 +118,16 @@ namespace StreamLatency
      */
     bool inputKeptUp(int backlogFrames, int outputBufferFrames,
                      int inputBurstFrames);
+
+    /**
+     * Whether an input latency read from the timestamps, in frames, can
+     * be the device's at all: less than the input's buffer holds.  Input
+     * lost to an overrun runs the device's position on past the frames
+     * read, and reads as latency, a buffer's worth at a time.  The phone
+     * gave 11691 and 23219 frames against a buffer of 11520 while its
+     * input kept up, and an MMAP stream's overrun count said nothing.
+     */
+    bool inputLatencyPossible(double inputFrames, int capacityFrames);
 }
 
 #endif

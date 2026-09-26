@@ -196,6 +196,11 @@ builds happen in the container.)
   lost to overruns, not input waiting. `OboeAudioIO` refuses a reading after an input
   overrun (`getXRunCount()`), which A13's guard on waiting input did not see; the log's
   first line gives the installed version name, with its commit.)
+- (Lead, 2026-09-26, from the fifth dev run, all ten checks passed at 042e3d7: the input
+  latency still read 23194 and 23262 frames after two takes, with no overrun counted by
+  the MMAP stream and no input waiting. A reading whose input latency is more than the
+  input's buffer holds is now refused as input lost, `StreamLatency::inputLatencyPossible()`;
+  the driver is named "Oboe" on the result page and in the report, not "(unknown)".)
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
