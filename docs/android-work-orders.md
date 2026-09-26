@@ -78,7 +78,9 @@ first.
   end, and again only if something failed. The app suite runs in real time (minutes):
   give it a 10-minute tool timeout.
 - Network: GitHub (git and release downloads), the Ubuntu archive, PyPI, conda-forge,
-  `download.qt.io` and `dl.google.com` are reachable. `breakfastquay.com` and
+  `download.qt.io` and `dl.google.com` are reachable; but `download.qt.io` answers every
+  Qt binary archive with a redirect to a mirror, and all mirrors are blocked (A2 builds Qt
+  from source). `breakfastquay.com` and
   `ppa.launchpadcontent.net` are blocked by the environment's policy, and `hg.sr.ht`
   answers 502: do not look for mirrors of blocked hosts; report if you need them.
 - Every behaviour gets a test that can fail. Show it for the two or three that matter
@@ -147,7 +149,7 @@ builds happen in the container.)
 
 - A0 — Desktop build and tests in the container. Done.
 - A1 — Sample rate: a device that is not at 44.1 kHz. Done.
-- A2 — Android toolchain and C libraries.
+- A2 — Android toolchain and C libraries. Done.
 - A3 — Tony as an APK (no audio): the test port.
 - A4 — Touch gestures on the panes.
 - A5 — Compact touch mode.
@@ -209,7 +211,8 @@ tests".
 - A script that fetches or checks the Android toolchain (Qt 6.11 for `android_arm64_v8a`
   plus the matching host Qt, NDK r27c, JDK 21, SDK platform 36 and build tools) and
   cross-compiles the C libraries into one prefix for `arm64-v8a`, API 28: libsndfile
-  (without its codec libraries), libsamplerate, fftw3 (float), Rubber Band 3, libogg,
+  (without its codec libraries), libsamplerate, fftw3 (double: `meson.build` defines
+  `FFTW_DOUBLE_ONLY` everywhere, so no float), Rubber Band 3, libogg,
   opus, opusfile, serd and sord, libmad, libid3tag (with the NDK's zlib). Pin versions.
 - Leave out JACK, PulseAudio, ALSA, PortAudio, oggz and fishsound; note any other library
   that turns out to be needed.
@@ -338,3 +341,27 @@ Left open:
 - A loaded singing track not at 44.1 kHz: the splice refuses it and erase misplaces.
 - For A8: takes.md "Known limitations" (last bullet), open-points.md weak spot,
   recording.md "Latency" (units), testing.md (tones for another device rate).
+
+### Phase A2 — 2026-09-26
+Built: `deploy/android/` `setup-toolchain.sh` (apt packages, SDK tools 22.0, android-36,
+build-tools 36.0.0, platform-tools, NDK r27c), `build-qt.sh` (host Qt and Qt for Android
+6.11.2, qtbase + qtsvg, from source), `build-deps.sh` (static PIC libraries, the cross file,
+a link check). Run in that order; fresh container 21 min (Qt 18); idempotent.
+Paths: JDK `/usr/lib/jvm/java-21-openjdk-amd64`; SDK `/opt/android/sdk`; NDK
+`/opt/android/sdk/ndk/27.2.12479018`; Qt for Android
+`/opt/android/qt/6.11.2/android_arm64_v8a`; host Qt `/opt/android/qt/6.11.2/gcc_64` (moc,
+rcc, uic in `libexec/`); prefix `/opt/android/deps-arm64-v8a`; cross file
+`/opt/android/cross-arm64-v8a.ini`, whose `pkg_config_libdir` is the prefix's
+`lib/pkgconfig` and `boost_root` the prefix; logs `/opt/android/logs`.
+Choices / deviations:
+- Qt from source (GitHub's qt/ mirrors; newest 6.11 tag 6.11.2, the desktop's too):
+  download.qt.io redirects every archive to a mirror, all denied. No OpenSSL, SQL, printing.
+- fftw3 double (`FFTW_DOUBLE_ONLY`), NEON, Debian's fix for its arm64 NEON probe; no fftw3f.
+- Added bzip2 (`BZipFileDevice` includes bzlib.h unconditionally), Boost 1.83 headers
+  (pYIN), zix (sord). libmad 0.16.4 / libid3tag 0.16.3 (maintained fork, .pc files). Rubber
+  Band 3.3.0, built-in FFT and resampler. SDK tools 22.0: 23.0's sdkmanager wraps a new CLI.
+The next phase must know: `dependency(x, static: true)`, or the private libraries (ogg,
+opus, zix, serd) are missing; meson then links the NDK's `libz.a`. Model deployment JSON:
+`logs/android-check-deployment-settings.json` (qt-cmake's). Gradle's first run got 429 Too
+Many Requests from repo.maven.apache.org: expect to retry.
+Left open: Oboe (A6) not built; sdkmanager takes the latest android-36/platform-tools revision.
