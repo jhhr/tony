@@ -21,6 +21,7 @@
 #include "TestTakesFile.h"
 #include "TestTakeTiming.h"
 #include "TestLyrics.h"
+#include "TestLyricsTtml.h"
 
 #include "RunSuite.h"
 
@@ -101,6 +102,12 @@ int main(int argc, char *argv[])
 
     {
         TestLyrics t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsTtml t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

@@ -1096,6 +1096,7 @@ tony_entry_files = [
 tony_core_files = [
   'main/Coverage.cpp',
   'main/Lyrics.cpp',
+  'main/LyricsTtml.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
   'main/TakeAudio.cpp',
@@ -1360,6 +1361,7 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestTakesFile.h',
   'main/test/TestTakeTiming.h',
   'main/test/TestLyrics.h',
+  'main/test/TestLyricsTtml.h',
 ])
 
 # Where the suites find the files in testdata/. Forward slashes: a

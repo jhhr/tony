@@ -13,6 +13,7 @@
 */
 
 #include "Lyrics.h"
+#include "LyricsTtml.h"
 
 #include <QCoreApplication>
 #include <QStringConverter>
@@ -135,45 +136,6 @@ bool readMetadata(const QString &row, QString &key, QString &value)
     return true;
 }
 
-/**
- * XML 1.0 cannot hold the C0 controls other than tab (and the line
- * breaks, which never get this far), nor U+FFFE and U+FFFF, which the
- * UTF-8 decoder lets through: one in a label would make the session
- * file unreadable.  DEL is never meant as text either.  A tab becomes
- * a space, which is what it comes back as from a session file anyway:
- * an XML attribute value is read with its tabs as spaces.
- */
-QString withoutControls(const QString &s)
-{
-    QString out;
-    out.reserve(s.size());
-    for (QChar c : s) {
-        const ushort u = c.unicode();
-        if (u == '\t') {
-            out += QLatin1Char(' ');
-            continue;
-        }
-        if (u < 0x20 || u == 0x7F || u == 0xFFFE || u == 0xFFFF) {
-            continue;
-        }
-        out += c;
-    }
-    return out;
-}
-
-// A label as it is shown and saved: trimmed, and not too long
-QString labelFrom(const QString &text)
-{
-    QString s = text.trimmed();
-    if (s.size() > Lyrics::maxLabelLength) {
-        int n = Lyrics::maxLabelLength;
-        // Never half of a surrogate pair
-        if (s.at(n - 1).isHighSurrogate()) --n;
-        s = s.left(n).trimmed();
-    }
-    return s;
-}
-
 // Nothing but notes and space: the exporter's mark for a gap
 bool isOnlyMusic(const QString &text)
 {
@@ -292,7 +254,7 @@ TimedLine readLineText(const QString &text, Ms stamp, int &backwards)
                 previous.endGiven = true;
             }
         }
-        QString label = labelFrom(piece.text);
+        QString label = lyricsLabel(piece.text);
         if (label.isEmpty()) continue;
         Entry entry;
         entry.start = time;
@@ -365,6 +327,40 @@ void inferEnds(QVector<TimedLine> &lines)
 
 } // namespace
 
+QString
+lyricsWithoutControls(const QString &text)
+{
+    QString out;
+    out.reserve(text.size());
+    for (QChar c : text) {
+        const ushort u = c.unicode();
+        if (u == '\t') {
+            out += QLatin1Char(' ');
+            continue;
+        }
+        // The line breaks too: an LRC row never has one, and to TTML
+        // they are whitespace, which its parser has made spaces
+        if (u < 0x20 || u == 0x7F || u == 0xFFFE || u == 0xFFFF) {
+            continue;
+        }
+        out += c;
+    }
+    return out;
+}
+
+QString
+lyricsLabel(const QString &text)
+{
+    QString s = lyricsWithoutControls(text).trimmed();
+    if (s.size() > Lyrics::maxLabelLength) {
+        int n = Lyrics::maxLabelLength;
+        // Never half of a surrogate pair
+        if (s.at(n - 1).isHighSurrogate()) --n;
+        s = s.left(n).trimmed();
+    }
+    return s;
+}
+
 int
 Lyrics::lineCount() const
 {
@@ -401,7 +397,7 @@ parseLrc(const QByteArray &bytes)
     const QStringList rows = text.split(QLatin1Char('\n'));
     for (const QString &raw : rows) {
 
-        const QString row = withoutControls(raw).trimmed();
+        const QString row = lyricsWithoutControls(raw).trimmed();
         if (row.isEmpty()) continue;
 
         QVector<Ms> stamps;
@@ -433,12 +429,12 @@ parseLrc(const QByteArray &bytes)
                 } else {
                     result.warnings << tr("The offset \"%1\" is not a whole "
                                           "number of milliseconds and was "
-                                          "ignored.").arg(labelFrom(value));
+                                          "ignored.").arg(lyricsLabel(value));
                 }
             } else if (key == QLatin1String("ti")) {
-                lyrics.title = labelFrom(value);
+                lyrics.title = lyricsLabel(value);
             } else if (key == QLatin1String("ar")) {
-                lyrics.artist = labelFrom(value);
+                lyrics.artist = lyricsLabel(value);
             }
             continue;
         }
@@ -515,6 +511,30 @@ parseLrc(const QByteArray &bytes)
     }
 
     return result;
+}
+
+LyricsParseResult
+parseLyrics(const QByteArray &bytes)
+{
+    // UTF-16 and UTF-32 have to be decoded to be looked at; without a
+    // BOM, or with UTF-8's, whatever the encoding, the blanks and the
+    // '<' are single ASCII bytes, as Latin-1 reads them.  The decoder
+    // drops the BOM.
+    std::optional<QStringConverter::Encoding> bom =
+        QStringConverter::encodingForData(bytes);
+    QString text;
+    if (bom) {
+        text = QStringDecoder(*bom).decode(bytes);
+    } else {
+        text = QString::fromLatin1(bytes);
+    }
+
+    for (QChar c : text) {
+        if (c.isSpace()) continue;
+        if (c == QLatin1Char('<')) return parseTtml(bytes);
+        break;
+    }
+    return parseLrc(bytes);
 }
 
 EventVector

@@ -24,13 +24,14 @@
 #include <QVector>
 
 /**
- * Timed lyrics read from an LRC file, and the events of the region
- * model that holds them in a session: one region per word (or per
- * line, for a file that times only lines), with the line's index as
- * its value.
+ * Timed lyrics read from an LRC or TTML file, and the events of the
+ * region model that holds them in a session: one region per word (or
+ * per line, for a file that times only lines), with the line's index
+ * as its value.
  *
  * These are pure functions over bytes and event lists: they touch no
- * model, so they can be tested without a window (TestLyrics).
+ * model, so they can be tested without a window (TestLyrics,
+ * TestLyricsTtml).
  */
 
 /**
@@ -62,11 +63,11 @@ struct Lyrics
     /// Sorted by start
     QVector<LyricWord> words;
 
-    /// From [ti:] and [ar:], for the layer's name
+    /// From [ti:] and [ar:], or TTML's <ttm:title>, for the layer's name
     QString title;
     QString artist;
 
-    /// Any <mm:ss.xx> word tags were seen
+    /// Any <mm:ss.xx> word tags, or TTML <span>s with times, were seen
     bool wordTimed = false;
 
     bool isEmpty() const { return words.isEmpty(); }
@@ -87,7 +88,7 @@ struct Lyrics
     /// A longer word or line is cut to this many characters
     static constexpr int maxLabelLength = 200;
 
-    /// LRC files are a few kB; a bigger file is not read at all
+    /// Lyrics files are a few kB; a bigger file is not read at all
     static constexpr qint64 maxFileBytes = 1024 * 1024;
 };
 
@@ -95,8 +96,8 @@ struct LyricsParseResult
 {
     Lyrics lyrics;
 
-    /// Non-empty if there is nothing usable (not LRC, no timed lines,
-    /// too big); lyrics is then empty
+    /// Non-empty if there is nothing usable (not LRC or TTML, no timed
+    /// lines, too big); lyrics is then empty
     QString error;
 
     /// Short sentences on what was skipped or changed, for the status bar
@@ -108,6 +109,30 @@ struct LyricsParseResult
  * ([mm:ss.xx]<mm:ss.xx>word <mm:ss.xx>word ...).
  */
 LyricsParseResult parseLrc(const QByteArray &bytes);
+
+/**
+ * Read a lyrics file of either kind: TTML (parseTtml(), in
+ * LyricsTtml.h) if its first character that is not blank, after a
+ * byte order mark, is '<', else LRC.
+ */
+LyricsParseResult parseLyrics(const QByteArray &bytes);
+
+/**
+ * The text without the characters a session file cannot hold: XML 1.0
+ * has no C0 controls other than tab, nor U+FFFE and U+FFFF, which a
+ * UTF-8 decoder lets through, and one in a label would make the session
+ * unreadable.  DEL is never meant as text either.  A tab becomes a
+ * space, which is what it comes back as from a session file anyway: an
+ * XML attribute value is read with its tabs as spaces.
+ */
+QString lyricsWithoutControls(const QString &text);
+
+/**
+ * The text as a word's label is shown and saved: without controls,
+ * trimmed, and cut to Lyrics::maxLabelLength characters.  Every parser
+ * makes its labels with this.
+ */
+QString lyricsLabel(const QString &text);
 
 /**
  * The events of a region model holding the lyrics: frame = start,
