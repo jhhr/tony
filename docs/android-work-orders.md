@@ -163,6 +163,8 @@ builds happen in the container.)
 - A7b — Fixes from the second phone test: menus, the picker, Downloads. Done.
 - A4b — Vertical zoom and scroll by touch. Done.
 - A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session. Done.
+- A9 — Live dots in real time on the phone.
+- A10 — Plot elements sized for the screen.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -411,6 +413,93 @@ Opus (opusfile) are read.
 - A session that loaded incomplete (audio it names could not be read) is never saved
   without the user asking: not by the save on suspend (A7), and Save warns first. Find
   where svapp reports "Incomplete session loaded" and how Tony can know it happened.
+
+### A9 — Live dots in real time on the phone
+
+The fourth phone test (2026-09-26): the Avi Kaplan session and a direct `.m4a` open, but
+while recording the orange live dots lag **several seconds** behind the singing on the
+phone. On the desktop they keep up. Nothing else about recording was reported yet.
+
+What is known from the code (not measured):
+
+- `RealtimePitchTracker` (its own thread) emits `pitchDetected()` **once per hop**, 256
+  frames, about 172 signals a second. Each is a queued call into
+  `MainWindow::onRealtimePitchDetected()`, which adds one point to the live model
+  (`SparseTimeValueModel::add`, a model change the pane repaints for) and sets the status
+  bar text. A GUI thread that needs more than about 5.8 ms per estimate falls behind for
+  good, and the lag grows for as long as the take lasts.
+- The recorded audio reaches the model on the GUI thread too: svapp's
+  `AudioCallbackRecordTarget::updateModel()` every 10 ms (the fork's timeout; upstream about
+  200 ms) writes to the file and calls `WritableWaveFileModel::updateModel()`, which closes
+  and reopens the file (`WavFileReader::updateFrameCount()`). The tracker can only see
+  what that has written.
+- svgui's `View` paints layers into an image at `ceil(devicePixelRatio)`: 3 on the phone
+  (2.75), nine times the pixels of the desktop. The pane follows the playback cursor (20 ms
+  timer, svgui fork) while recording.
+- `main.cpp` copies every `cerr` line to logcat and to the log file.
+
+Wanted:
+
+- **Measure first, in the container**: the desktop build, at `QT_SCALE_FACTOR=3` with a
+  window of a phone's logical size (about 400 x 850), a reference of a few minutes with its
+  pitch track and notes, recording through `FakeAudioIO`. Find what the GUI thread spends
+  per estimate, per record update, and per paint of the pane, and whether the tracker's
+  thread itself keeps up. A phone core is several times slower than this container's:
+  say which costs would scale to a lag.
+- **Fix so the lag is bounded by design**, whatever the phone's speed: the dots come to the
+  GUI thread in batches (everything the tracker found since the last one) at a paced rate,
+  go into the model together, and the status bar is set once per batch. If the GUI thread
+  is slow, the dots arrive later in bigger batches, but never a growing queue behind. Fix
+  any other per-estimate or per-update cost the measurement shows, the simpler way.
+- **A log line once a second while recording**, so the phone's log (Help > Save Log...)
+  says whether it holds: seconds recorded, seconds the tracker has reached, seconds of
+  dots drawn, and the GUI-side costs measured above (e.g. slot time, paint time of the
+  pane, largest and average). Keep it to one line a second.
+- A test that fails with the per-estimate design: e.g. a GUI thread made slow on purpose
+  in the test, and the newest dot must stay within a bound of the recording.
+- If the measurement points into svgui (the pane repaints its whole image for each point,
+  say), you may change the fork `svgui/` for it: on its branch `tony-customizations`,
+  committed there with its own style (`view: what`), not pushed; the lead pushes it and
+  pins it. `svcore/` and `svapp/`: report the change, do not make it.
+
+### A10 — Plot elements sized for the screen
+
+The same phone test: the pitch tracks are thin lines and the notes thin bars, hard to make
+out, while the rest of the GUI is sized for the phone. A4b's vertical zoom spreads the
+pitch but does not thicken what is drawn. The user: "the GUI elements have been adequately
+resized to fit the higher DPI resolution of the mobile screen but the graph plot elements
+have not."
+
+What is known from the code: svgui's `View` renders the layers into an image at
+`ceil(devicePixelRatio)` (3 on the phone) through a `ViewProxy` whose coordinates are in
+those physical pixels. Sizes that the layers give in pixels are then physical pixels:
+`TimeValueLayer`'s `PlotPoints` (Tony's pitch tracks and the live dots) draws each point as
+`drawRect(x, y - 1, w, 2)`; `FlexiNoteLayer` draws notes `NOTE_HEIGHT` (16) high; and
+`ViewProxy::scalePenWidth()` scales pens by only the square root of the ratio. So on the
+phone a pitch point is about a third, and a note a third, of its desktop height in logical
+pixels.
+
+Wanted:
+
+- What Tony draws in its panes (the reference and singing pitch tracks, the live dots, the
+  notes, the coverage strip, anything else of Tony's that looks too thin) keeps its size
+  in **logical pixels** at any pixel ratio: at ratio 3 it is three times as many physical
+  pixels as at ratio 1. Note editing (hit areas that use `NOTE_HEIGHT`) must match what is
+  drawn.
+- A **plot size** setting for making them bigger still: View menu, a few steps (say 100%,
+  150%, 200%), remembered in `QSettings`, applied at once. Default 100% on the desktop,
+  150% on Android. The same on both platforms otherwise.
+- The desktop at ratio 1 and 100% draws **exactly as before**: prove it with a test that
+  renders the layers into images before/after, or equivalent.
+- The change is in the fork `svgui/`, which you may edit for this phase: on its branch
+  `tony-customizations`, as small and general as it can be (e.g. a plot scale in
+  `ViewManager` that `View`/`ViewProxy` apply, and the layers using `scalePixelSize()` for
+  their hard-coded sizes), committed there with its own style (`layer: what`,
+  `view: what`), not pushed; the lead pushes it and pins it. Tony's side (the setting, the
+  menu) in `main/`. Say which svgui layers change on a hi-DPI desktop (Windows at 150% or
+  200%), since they do too.
+- Tests: the sizes at ratio 1 and 3 and the setting's steps, in images rendered offscreen
+  (`QT_SCALE_FACTOR` or a `QImage` with a device pixel ratio).
 
 ### A8 — Documentation pass
 
