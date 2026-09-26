@@ -157,7 +157,8 @@ Windows path would start an escape in the C string.
   below.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
-  dialogs a test does expect.
+  dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
+  title macOS does not keep, so that there its text alone must tell it apart.
 - `analysed()` waits for analysis completion, no running transformers **and** no ranged
   run. `snapshotTake()`, `verifyStripMatchesTake()`, `takeLayers()`.
 - `TestSignals.h`: sine, sawtooth, seeded noise, comparison in cents.

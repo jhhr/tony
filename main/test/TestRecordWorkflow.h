@@ -6061,7 +6061,9 @@ private slots:
         m_window->discardModifications();
         QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
                  MainWindow::FileOpenSucceeded);
-        QCOMPARE(dialogsMatching("Incomplete session loaded").size(), 1);
+        QCOMPARE(messagesMatching("Incomplete session loaded",
+                                  "referred to by the original session "
+                                  "file could not be loaded").size(), 1);
         QVERIFY2(m_window->isSessionIncomplete(),
                  "the session is not known to have loaded incomplete");
 
@@ -6122,7 +6124,9 @@ private slots:
 
         reopenSession(session);
         if (QTest::currentTestFailed()) return;
-        QCOMPARE(dialogsMatching("Incomplete session loaded").size(), 1);
+        QCOMPARE(messagesMatching("Incomplete session loaded",
+                                  "referred to by the original session "
+                                  "file could not be loaded").size(), 1);
         QVERIFY(m_window->isSessionIncomplete());
         QCOMPARE(m_window->sessionFile(), QString());
         m_window->markModified();
