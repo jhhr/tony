@@ -315,11 +315,14 @@ namespace TakeDiff
      *
      * Two kinds of dot are counted apart, their pitch not judged.  The
      * end of each sweep, near 8 kHz, makes a dot or two at a subharmonic
-     * just under the tracker's 1 kHz ceiling.  And a dot within one
-     * window after a tone's start, or after the punch-in's, comes of a
-     * window that straddles that start: on the fake it is on pitch, but
-     * through a real speaker, room and microphone it wanders, 50 to 75
-     * cents on the user's runs, at the same places on every driver.
+     * just under the tracker's 1 kHz ceiling.  And a dot at an edge
+     * comes of a window that straddles it: within one window after a
+     * tone's start or the punch-in's, or within half a window either
+     * side of a tone's end, where the window holds the tone's decay
+     * through the room and then silence.  On the fake such a dot is on
+     * pitch, but through a real speaker, room and microphone it wanders,
+     * 50 to 75 cents on the user's runs, at the same places on every
+     * driver.
      */
     constexpr int kDotHops = 1;
     constexpr double kDotCents = 50.0;
@@ -328,7 +331,8 @@ namespace TakeDiff
     enum class DotPlace {
         OnPitch,    ///< on a tone, within kDotCents of its pitch
         OffPitch,   ///< on a tone, further from its pitch
-        AtOnset,    ///< within a window after a tone's or the punch-in's start
+        AtEdge,     ///< within a window after a tone's or the punch-in's
+                    ///< start, or half a window either side of a tone's end
         OnSweep,    ///< on a sweep
         OnNothing   ///< on none of the reference's sounds
     };
@@ -336,7 +340,7 @@ namespace TakeDiff
     struct LiveDot {
         DotPlace place;
 
-        /// The tone it lies on, or at the start of, and how far the dot
+        /// The tone it lies on, or at an edge of, and how far the dot
         /// is from its pitch in cents; 0 for a dot on no tone
         double toneHz;
         double cents;
@@ -346,15 +350,17 @@ namespace TakeDiff
 
     /**
      * How far a sound's dots reach, in seconds: before its start, and
-     * past its end; and how long after a start they are not judged.
-     * The tracker's frames, counted at the rate given: the reference's,
-     * as the dots are placed on its timeline.
+     * past its end; how long after a start they are not judged, and how
+     * far either side of a tone's end.  The tracker's frames, counted
+     * at the rate given: the reference's, as the dots are placed on its
+     * timeline.
      */
     struct DotReach {
         double before;
         double after;
         double onset;
-        DotReach() : before(0), after(0), onset(0) { }
+        double end;
+        DotReach() : before(0), after(0), onset(0), end(0) { }
     };
     DotReach dotReach(sv::sv_samplerate_t rate);
 

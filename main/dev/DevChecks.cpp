@@ -1286,7 +1286,7 @@ DevChecks::liveDotsCheck(QString reason) const
     // loopback records the reference, so that is where the singing is.
     // Where a sound's dots may lie, and which of them are counted apart
     // and not judged (on the sweeps, and at the start of a tone or of
-    // the punch-in), TakeDiff::placeLiveDot() says
+    // the punch-in or at a tone's end), TakeDiff::placeLiveDot() says
     const sv_samplerate_t rate = m_fresh.referenceRate;
     const LatencyCheck::Layout &layout = m_layout;
     const TakeDiff::DotReach reach = TakeDiff::dotReach(layout.rate);
@@ -1294,7 +1294,7 @@ DevChecks::liveDotsCheck(QString reason) const
 
     QStringList problems;
     vector<double> behind;
-    int atOnsets = 0;
+    int atEdges = 0;
     for (int i = 0; i < int(s.punchIns.size()); ++i) {
         const LatencyCheck::PunchInResult &p = s.punchIns[i];
         const Watched *w = freshWatched(i);
@@ -1305,7 +1305,7 @@ DevChecks::liveDotsCheck(QString reason) const
 
         const vector<TakeObserver::Dot> &dots = w->seen.dots;
         int onSweeps = 0;
-        int onsets = 0;
+        int edges = 0;
         int off = 0;
         QString firstOff;
         for (const TakeObserver::Dot &d : dots) {
@@ -1321,8 +1321,8 @@ DevChecks::liveDotsCheck(QString reason) const
                 ++onSweeps;
                 continue;
             }
-            if (dot.place == TakeDiff::DotPlace::AtOnset) {
-                ++onsets;
+            if (dot.place == TakeDiff::DotPlace::AtEdge) {
+                ++edges;
                 continue;
             }
             if (off++ == 0) {
@@ -1335,7 +1335,7 @@ DevChecks::liveDotsCheck(QString reason) const
                     .arg(t, 0, 'f', 3).arg(d.hz, 0, 'f', 1).arg(why);
             }
         }
-        atOnsets += onsets;
+        atEdges += edges;
 
         if (int(dots.size()) <= kMinDots) {
             problems << tr("punch-in %1 drew %2 live dots").arg(i + 1)
@@ -1350,11 +1350,11 @@ DevChecks::liveDotsCheck(QString reason) const
             ({ tr("dots, punch-in %1 (%2 to %3 s)").arg(i + 1)
                .arg(secondsText(p.range.start))
                .arg(secondsText(p.range.end)),
-               tr("%1: %2 on the tones, %3 at onsets, %4 on the sweeps, %5 "
+               tr("%1: %2 on the tones, %3 at edges, %4 on the sweeps, %5 "
                   "elsewhere")
                .arg(dots.size())
-               .arg(int(dots.size()) - onSweeps - onsets - off)
-               .arg(onsets).arg(onSweeps).arg(off) });
+               .arg(int(dots.size()) - onSweeps - edges - off)
+               .arg(edges).arg(onSweeps).arg(off) });
     }
     if (s.punchIns.empty()) problems << tr("no punch-in was judged");
 
@@ -1380,12 +1380,15 @@ DevChecks::liveDotsCheck(QString reason) const
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
     }
-    // A window that straddles a start wanders off pitch through a real
-    // speaker and mic, so what the dots there did is only told
-    if (atOnsets > 0) {
+    // A window that straddles a start or a tone's end wanders off pitch
+    // through a real speaker and mic, so what the dots there did is only
+    // told
+    if (atEdges > 0) {
         c.message += tr(" %1 dots within %2 after the start of a tone or "
-                        "of a punch-in were not judged.")
-            .arg(atOnsets).arg(unsignedMs(reach.onset));
+                        "of a punch-in, or within %3 either side of a "
+                        "tone's end, were not judged.")
+            .arg(atEdges).arg(unsignedMs(reach.onset))
+            .arg(unsignedMs(reach.end));
     }
     return c;
 }

@@ -342,6 +342,7 @@ TakeDiff::dotReach(sv_samplerate_t rate)
     reach.after = reach.before +
         double(RealtimePitchTracker::kWindowSize / 2) / rate;
     reach.onset = double(RealtimePitchTracker::kWindowSize) / rate;
+    reach.end = double(RealtimePitchTracker::kWindowSize / 2) / rate;
     return reach;
 }
 
@@ -358,6 +359,12 @@ TakeDiff::placeLiveDot(const LatencyCheck::Layout &layout,
             seconds < start + reach.onset;
     };
 
+    // A dot is at the middle of its window: within half a window of a
+    // tone's end, the window holds both the tone and what follows it
+    auto atEnd = [&](double end) {
+        return std::fabs(seconds - end) < reach.end;
+    };
+
     for (const LatencyCheck::Event &e : layout.events) {
         const double sweepAt = double(e.sweepStart) / layout.rate;
         if (seconds >= sweepAt - reach.before &&
@@ -370,7 +377,7 @@ TakeDiff::placeLiveDot(const LatencyCheck::Layout &layout,
     // The first windows of a punch-in straddle the start of what is
     // kept: before it, what the mic heard during the lead-in
     if (atOnset(punchInStart)) {
-        dot.place = DotPlace::AtOnset;
+        dot.place = DotPlace::AtEdge;
     }
 
     for (const LatencyCheck::Event &e : layout.events) {
@@ -382,8 +389,8 @@ TakeDiff::placeLiveDot(const LatencyCheck::Layout &layout,
         const bool voiced = (hz > 0.0);
         dot.toneHz = e.toneHz;
         dot.cents = (voiced ? 1200.0 * std::log2(hz / e.toneHz) : 0.0);
-        if (dot.place == DotPlace::AtOnset || atOnset(from)) {
-            dot.place = DotPlace::AtOnset;
+        if (dot.place == DotPlace::AtEdge || atOnset(from) || atEnd(to)) {
+            dot.place = DotPlace::AtEdge;
         } else {
             dot.place = (voiced && std::fabs(dot.cents) <= kDotCents ?
                          DotPlace::OnPitch : DotPlace::OffPitch);

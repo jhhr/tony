@@ -120,7 +120,7 @@ class TestTakeDiff : public QObject
         switch (place) {
         case TakeDiff::DotPlace::OnPitch: return "on pitch";
         case TakeDiff::DotPlace::OffPitch: return "off pitch";
-        case TakeDiff::DotPlace::AtOnset: return "at an onset";
+        case TakeDiff::DotPlace::AtEdge: return "at an edge";
         case TakeDiff::DotPlace::OnSweep: return "on a sweep";
         case TakeDiff::DotPlace::OnNothing: return "on nothing";
         }
@@ -684,7 +684,7 @@ private slots:
         QString message;
         for (double at : { 7.516, 7.519, 7.528, onset + window - 0.0005 }) {
             QVERIFY2(placedAs(punchIn, at, sharp,
-                              TakeDiff::DotPlace::AtOnset, message),
+                              TakeDiff::DotPlace::AtEdge, message),
                      qPrintable(message));
             QVERIFY2(placedAs(punchIn, at + window, sharp,
                               TakeDiff::DotPlace::OffPitch, message),
@@ -713,9 +713,12 @@ private slots:
     // The punch-in from 16.8 s, where the tone of 245 Hz before it ends:
     // its first window straddles the start of what is kept, and the
     // user's runs had dots off pitch there too, from 16.803 to 16.822 s.
-    // They are not judged; the same dots in a punch-in that began before
-    // the tone are, against the tone they trail. The same at a punch-in
-    // starting in silence, where one window later a dot is on nothing
+    // They are not judged; nor, since they lie within half a window of
+    // that tone's end, in a punch-in that began before the tone. The
+    // same dots at a punch-in starting inside a tone, at 16.4 s, are not
+    // judged, and in a punch-in that began before the tone they are. The
+    // same at a punch-in starting in silence, where one window later a
+    // dot is on nothing
     void live_dots_at_a_punch_ins_start_are_not_judged() {
         const LatencyCheck::Layout layout = LatencyCheck::devLayout();
         const double window =
@@ -723,18 +726,99 @@ private slots:
         const double sharp = 254.6;
         QString message;
         for (double at : { 16.803, 16.822 }) {
-            QVERIFY2(placedAs(16.8, at, sharp, TakeDiff::DotPlace::AtOnset,
+            QVERIFY2(placedAs(16.8, at, sharp, TakeDiff::DotPlace::AtEdge,
                               message), qPrintable(message));
-            QVERIFY2(placedAs(15.0, at, sharp, TakeDiff::DotPlace::OffPitch,
+            QVERIFY2(placedAs(15.0, at, sharp, TakeDiff::DotPlace::AtEdge,
                               message), qPrintable(message));
+            const double inside = at - 0.4;
+            QVERIFY2(placedAs(16.4, inside, sharp, TakeDiff::DotPlace::AtEdge,
+                              message), qPrintable(message));
+            QVERIFY2(placedAs(15.0, inside, sharp,
+                              TakeDiff::DotPlace::OffPitch, message),
+                     qPrintable(message));
         }
 
         // Between the tone that ends at 11.9 s and the sweep at 13.1 s
-        QVERIFY2(placedAs(12.3, 12.31, sharp, TakeDiff::DotPlace::AtOnset,
+        QVERIFY2(placedAs(12.3, 12.31, sharp, TakeDiff::DotPlace::AtEdge,
                           message), qPrintable(message));
         QVERIFY2(placedAs(12.3, 12.31 + window, sharp,
                           TakeDiff::DotPlace::OnNothing, message),
                  qPrintable(message));
+    }
+
+    // Item 3 at a tone's end, where the user's run at WASAPI 20 ms had
+    // dots 71 cents sharp at 8.302 s, as the tone of 245 Hz ends at
+    // 8.3 s, and 62 cents sharp at 18.797 s, as the tone of 220.5 Hz
+    // ends at 18.8 s. Within half a window either side of the end, the
+    // window straddles it, and the dots are not judged; the same dots a
+    // window earlier, inside the tone, are off pitch, and in tune there
+    // they are on pitch
+    void live_dots_off_pitch_at_a_tones_end_are_not_judged() {
+        const LatencyCheck::Layout layout = LatencyCheck::devLayout();
+        const TakeDiff::DotReach reach = TakeDiff::dotReach(layout.rate);
+        const double window =
+            double(RealtimePitchTracker::kWindowSize) / layout.rate;
+
+        struct UserDot {
+            int event;
+            double toneHz;
+            double end;
+            double punchIn;
+            double seconds;
+            double hz;
+            double cents;
+        };
+        const UserDot userDots[] = {
+            { 3, 245.0, 8.3, 6.3, 8.302, 255.3, 71.0 },
+            { 8, 220.5, 18.8, 16.8, 18.797, 228.5, 62.0 },
+        };
+
+        QString message;
+        for (const UserDot &u : userDots) {
+            const LatencyCheck::Event &e = layout.events[u.event];
+            QCOMPARE(e.toneHz, u.toneHz);
+            const double end = double(e.toneStart + e.toneLength) / layout.rate;
+            QVERIFY(std::fabs(end - u.end) < 1e-9);
+
+            const TakeDiff::LiveDot dot =
+                TakeDiff::placeLiveDot(layout, u.punchIn, u.seconds, u.hz);
+            QCOMPARE(dot.toneHz, u.toneHz);
+            QVERIFY2(std::fabs(dot.cents - u.cents) < 1.0,
+                     qPrintable(QString::number(dot.cents)));
+
+            QVERIFY2(placedAs(u.punchIn, u.seconds, u.hz,
+                              TakeDiff::DotPlace::AtEdge, message),
+                     qPrintable(message));
+            QVERIFY2(placedAs(u.punchIn, u.seconds, 0.0,
+                              TakeDiff::DotPlace::AtEdge, message),
+                     qPrintable(message));
+            QVERIFY2(placedAs(u.punchIn, u.seconds - window, u.hz,
+                              TakeDiff::DotPlace::OffPitch, message),
+                     qPrintable(message));
+            QVERIFY2(placedAs(u.punchIn, u.seconds - window, u.toneHz,
+                              TakeDiff::DotPlace::OnPitch, message),
+                     qPrintable(message));
+
+            // Half a window either side, and no further: past it, still
+            // within the tone's reach, the dot is judged again
+            const double margin = 0.0005;
+            for (double at : { end - reach.end + margin,
+                               end + reach.end - margin }) {
+                QVERIFY2(placedAs(u.punchIn, at, u.hz,
+                                  TakeDiff::DotPlace::AtEdge, message),
+                         qPrintable(message));
+            }
+            for (double at : { end - reach.end - margin,
+                               end + reach.end + margin }) {
+                QVERIFY(at < end + reach.after);
+                QVERIFY2(placedAs(u.punchIn, at, u.hz,
+                                  TakeDiff::DotPlace::OffPitch, message),
+                         qPrintable(message));
+                QVERIFY2(placedAs(u.punchIn, at, u.toneHz,
+                                  TakeDiff::DotPlace::OnPitch, message),
+                         qPrintable(message));
+            }
+        }
     }
 
     // How far a sound's dots reach: a hop before its start, half a
@@ -745,6 +829,7 @@ private slots:
         QVERIFY(std::fabs(reach.before - 256 / 44100.0) < 1e-12);
         QVERIFY(std::fabs(reach.after - (256 + 1024) / 44100.0) < 1e-12);
         QVERIFY(std::fabs(reach.onset - 2048 / 44100.0) < 1e-12);
+        QVERIFY(std::fabs(reach.end - 1024 / 44100.0) < 1e-12);
 
         // The event at 7.2 s: its sweep, then its tone from 7.5 to 8.3 s
         const double punchIn = 6.3;
@@ -762,7 +847,7 @@ private slots:
                      qPrintable(message));
         }
         QVERIFY2(placedAs(punchIn, 7.5 - reach.before + e, 245.0,
-                          TakeDiff::DotPlace::AtOnset, message),
+                          TakeDiff::DotPlace::AtEdge, message),
                  qPrintable(message));
         QVERIFY2(placedAs(punchIn, 8.3 + reach.after - e, 245.0,
                           TakeDiff::DotPlace::OnPitch, message),

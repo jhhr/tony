@@ -227,7 +227,7 @@ class TestDevChecks : public QObject
         return ok ? ms : std::nan("");
     }
 
-    // Item 3's "279: 262 on the tones, 12 at onsets, 5 on the sweeps, 0
+    // Item 3's "279: 262 on the tones, 12 at edges, 5 on the sweeps, 0
     // elsewhere" as 279; -1 for anything else
     static int dotCount(QString text) {
         bool ok = false;
