@@ -194,7 +194,7 @@ coloured fringes on the scale's labels read as live dots in `TestUiChecks`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`), C2 (`fbdce6c`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`), C2 (`fbdce6c`), C2b (`4fb73ac`).
 
 Also done: C1a (`4370131`), the merge of `default` (`c8b9585`), `test-tony-dev` (lead).
 
