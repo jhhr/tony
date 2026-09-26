@@ -91,9 +91,9 @@ struct AudioCheckResult
  * session of its own, then punch-ins recorded against it through the
  * ordinary take path, and the take that comes out of them judged by
  * LatencyCheck::judgeTake().  Every punch-in is a take as the user's
- * are (on desktop the stream kept running between them, on Android
- * started again for each), and is placed with the latency the window
- * uses for any take, which is what is being measured.
+ * are (the stream kept running between them), and is placed with the
+ * latency the window uses for any take, which is what is being
+ * measured.
  *
  * The takes are recorded with Record into Selection, Play Reference
  * While Recording and the plan's pre-roll (kPreRollSeconds unless it

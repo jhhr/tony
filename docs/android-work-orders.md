@@ -1256,3 +1256,18 @@ FullDuplexStream's read rule; guard always true; item 7's old verdict (`dev_chec
 For A8: testing.md (exactly periodic tones tie in pYIN even at whole periods), recording.md
 "Latency" (Oboe: readings refused with a backlog; the reopen on ErrorDisconnected).
 Left open: not on a phone; the calibrated figure may move by up to a burst (2 ms) with read-all.
+
+### Phase A14 — 2026-09-26 (the lead)
+Built: Android keeps the audio stream running between takes, as desktop does since
+feat/wasapi (`MainWindow::suspendAudioOnStop()` false everywhere), after the user's phone
+restarted at every take landed a Bluetooth calibration's punch-ins 8.5 ms apart and dev run
+items 1 and 2 up to +4.9 ms off. The device is suspended once it has idled (neither playing
+nor recording) for `audioIdleSuspendMillis()` (2 min on Android, never on desktop) and when
+Android sends Tony to the background; the next Play or Record resumes it. Oboe's latency is
+then measured at open and at those suspends only. recording.md "Latency", audio-drivers.md
+§5-6, calibrate-audio.md, testing.md, OboeAudioIO.h. Test: `TestRecordWorkflow::
+a_kept_running_device_is_suspended_once_idle` (seen failing with playback, or playback and
+recording, counted as idle). Not tested: the background suspend (Android only).
+Left open: a phone run should show items 1 and 2 within ±2 ms through Bluetooth, and no take
+misplaced after a busy spell (the input lost at the end of the long song's takes, now while
+the stream runs on).

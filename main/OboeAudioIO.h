@@ -57,8 +57,10 @@ enum class Result : int32_t;
  * worked out from the streams' timestamps (StreamLatency): when the
  * device is opened, for which the constructor runs the streams until
  * they have timestamps and leaves them suspended, and again each time
- * it is suspended after running, so that the next take is compensated
- * by what the device did last. Timestamps are read on the calling
+ * it is suspended after running (the application keeps it running
+ * between takes, and suspends it once it idles or Tony goes to the
+ * background), so that the takes after that are compensated by what
+ * the device did last. Timestamps are read on the calling
  * thread, never in the callback. A reading taken while the input was
  * not being read as it came in (more waiting than a callback leaves) is
  * of how far behind the reading was, not of the device, and is not

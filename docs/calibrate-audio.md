@@ -84,8 +84,8 @@ finger. Three pages:
    Selection, Play Reference While Recording and a 1 s pre-roll whatever the toolbar says,
    and the take stops itself at the end of the selection through the Stop path, is spliced
    and analysed. So every punch-in meets the audio stream as a real take does (kept
-   running between takes on desktop, started again for each on Android), and is placed
-   with the round trip every take is placed with, which is what is being measured.
+   running between takes), and is placed with the round trip every take is placed with,
+   which is what is being measured.
    The next punch-in waits for the take's analysis, which keeps pYIN's load out of its
    timing.
 3. **The check's playback.** Tony normalises every audio file to full scale as it reads it
@@ -499,12 +499,16 @@ calibrations on MME, and by up to about 8 ms either way on WASAPI as well
 0.3 ms; the start gap, measured at 0 frames both times, does not see it. No one stored
 figure then placed every take. Considered: widening items 1 and 2 to ±15 ms; the driver
 project, whose WASAPI restarted as unsteadily; keeping the stream running between takes.
-**Chosen, and built: the stream is kept running between takes on desktop**
+**Chosen, and built: the stream is kept running between takes**
 ([recording.md](recording.md#latency)), so that a session's takes share one alignment,
 which the calibration at its start measures. Items 1 and 2 keep ±2 ms. Not yet measured
 on a real device: the next dev run, on WASAPI at 20 ms, should pass items 1, 2, 7 and 13.
+The user's phone, restarted at every take, spread so too: through Bluetooth a
+calibration's punch-ins landed 8.5 ms apart and the dev run's up to +4.9 ms off, while one
+take's sweeps agreed; Android keeps the stream running as well since.
 What still moves the alignment is opening the device again (a driver, latency or device
-chosen, a device menu opened, Tony started again): a figure kept from an earlier session
+chosen, a device menu opened, Tony started again, on Android a resume after two idle
+minutes or the background): a figure kept from an earlier session
 is up to about 8 ms off, and takes after a reopen land that far out until the next
 calibration. Item 10, by reading the code, does not fail for a moved alignment (the join is
 a dip, below).
@@ -607,7 +611,7 @@ a dip, below).
   driver, both greyed out during a take and a check ([audio-drivers.md](audio-drivers.md),
   §6). On a fake whose loopback moves 10 ms at each restart, a check whose window suspends
   at Stop lands its punch-ins 10 ms apart (Unsteady), and one kept running, as the
-  application keeps it on desktop, lands them alike (Ok), the fake resumed once. Its runs
+  application keeps it, lands them alike (Ok), the fake resumed once. Its runs
   are two punch-ins of two sweeps on the first 11 s of the calibration reference, about
   13 s each.
 - **`TestDevChecks`** (`test-tony-dev`, development builds only): whole dev runs on the
@@ -655,7 +659,7 @@ and the dev checks".
 | How runs are driven | Polling timers and signals, never a nested event loop |
 | `test-tony-device` (from `default`) | Its checks moved into the dev run, and it is retired |
 | Where the dev checks' tests run | `test-tony-dev`, a third executable in development builds, run when a change touches what the checks drive (`AGENTS.md`) |
-| Restart jitter on MME (about 13 ms) | Not tuned away: WASAPI, measured against it, restarts as unsteadily, and is the default for its lower round trip; the stream is kept running between takes on desktop ([audio-drivers.md](audio-drivers.md), §5) |
+| Restart jitter on MME (about 13 ms) | Not tuned away: WASAPI, measured against it, restarts as unsteadily, and is the default for its lower round trip; the stream is kept running between takes ([audio-drivers.md](audio-drivers.md), §5), on Android too, where restarts through Bluetooth spread 8.5 ms, suspended there after two idle minutes |
 | The notes merge at a join inside a held note | Fixed on this branch: one note across the join ([takes.md](takes.md)) |
 
 ## 13. Facts checked in the code
@@ -669,8 +673,8 @@ So that later work does not derive them again.
   - input goes to the record target **before** output is asked for, in the same callback;
   - `suspend()`/`resume()` are `Pa_StopStream`/`Pa_StartStream`, and do nothing in the
     state they would bring about. `record()` resumes; `MainWindowBase::stop()` suspends
-    only where `suspendAudioOnStop()` says so (the svapp fork), which Tony's does on
-    Android alone, so on desktop the stream runs from the first take on;
+    only where `suspendAudioOnStop()` says so (the svapp fork), which Tony's never
+    does, so the stream runs from the first take on;
   - it exposes no device names and ignores PortAudio's callback time info.
 - **Device rate.**
   - `AudioCallbackPlaySource::getApplicationSampleRate()` and

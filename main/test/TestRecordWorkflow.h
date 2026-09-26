@@ -1609,6 +1609,55 @@ private slots:
                            lowHz)) < 10.0);
     }
 
+    // Kept running between takes, as the application keeps it, the
+    // device runs on after a take and after playback, and is suspended
+    // once it has idled for audioIdleSuspendMillis(): not before, not
+    // while it plays however long that is, and the next take resumes
+    // it. The application idles it for ever on desktop
+    void a_kept_running_device_is_suspended_once_idle() {
+        const int idle = 1500;
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        QCOMPARE(m_window->applicationAudioIdleSuspendMillis(), 0);
+        m_window->keepAudioRunning(true);
+        m_window->setAudioIdleSuspendMillis(idle);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+        FakeAudioIO *fake = m_window->fake();
+        QVERIFY(fake);
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        m_window->doRecord();
+        QElapsedTimer stopped;
+        stopped.start();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(!fake->isSuspended());
+        const int resumes = fake->getResumeCount();
+        QTRY_VERIFY_WITH_TIMEOUT(fake->isSuspended(), 10000);
+        QVERIFY2(stopped.elapsed() >= idle * 9 / 10,
+                 qPrintable(QString("suspended %1 ms after the take")
+                            .arg(stopped.elapsed())));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        QCOMPARE(fake->getResumeCount(), resumes + 1);
+        QTest::qWait(idle + 700);
+        QVERIFY(m_window->playSource()->isPlaying());
+        QVERIFY(!fake->isSuspended());
+        m_window->doPlay();
+        QVERIFY(!m_window->playSource()->isPlaying());
+        QVERIFY(!fake->isSuspended());
+        QTRY_VERIFY_WITH_TIMEOUT(fake->isSuspended(), 10000);
+
+        take(500);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(fake->getResumeCount(), resumes + 2);
+    }
+
     void live_dots_appear() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 3.0);

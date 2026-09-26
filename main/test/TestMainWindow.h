@@ -204,13 +204,20 @@ public:
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as
-    // the application has them do on desktop. Not unless a test asks:
+    // the application has them do. Not unless a test asks:
     // the fake starts its programmed input again at every resume, and
     // many tests rely on each take resuming it once
     void keepAudioRunning(bool on) { m_keepAudioRunning = on; }
     // What the application itself chooses, whatever this window does
     bool applicationSuspendsAudioOnStop() const {
         return MainWindow::suspendAudioOnStop();
+    }
+
+    // How long the device kept running may idle before it is suspended,
+    // in ms: never, unless a test asks, whatever the platform has
+    void setAudioIdleSuspendMillis(int ms) { m_audioIdleSuspendMillis = ms; }
+    int applicationAudioIdleSuspendMillis() const {
+        return MainWindow::audioIdleSuspendMillis();
     }
 
     // How often a device has been opened, and the driver and devices the
@@ -378,6 +385,10 @@ protected:
         return !m_keepAudioRunning;
     }
 
+    int audioIdleSuspendMillis() const override {
+        return m_audioIdleSuspendMillis;
+    }
+
     bool confirmRecordingOverTake() override {
         ++m_recordOverQuestions;
         if (m_recordOverInDialog) {
@@ -465,6 +476,7 @@ private:
     bool m_installDevice;
     QStringList m_implementations;
     bool m_keepAudioRunning = false;
+    int m_audioIdleSuspendMillis = 0;
     int m_audioIOOpened = 0;
     LatencyCalibration::Key m_audioIOOpenedFor;
     int m_liveDotsDelayMs = 0;

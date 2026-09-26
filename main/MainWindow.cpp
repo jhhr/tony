@@ -555,6 +555,19 @@ MainWindow::MainWindow(AudioMode audioMode,
         connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
                 this, SLOT(recordingStarted()));
     }
+
+    // The device is kept running between takes (suspendAudioOnStop()),
+    // and suspended once it has idled for audioIdleSuspendMillis()
+    m_audioIdleTimer = new QTimer(this);
+    m_audioIdleTimer->setSingleShot(true);
+    connect(m_audioIdleTimer, &QTimer::timeout,
+            this, &MainWindow::suspendIdleAudio);
+    connect(m_playSource, &AudioCallbackPlaySource::playStatusChanged,
+            this, &MainWindow::audioActivityChanged);
+    if (m_recordTarget) {
+        connect(m_recordTarget, &AudioCallbackRecordTarget::recordStatusChanged,
+                this, &MainWindow::audioActivityChanged);
+    }
     m_activityLog->hide();
 
     setAudioRecordMode(RecordReplaceSession);
@@ -1745,14 +1758,53 @@ MainWindow::suspendAudioOnStop() const
     // On the user's PC each take landed up to about 8 ms either way from
     // the last, on MME and WASAPI alike, while one take's sweeps agreed
     // within 0.3 ms: every start of the stream moved its input against
-    // its output. Kept running, every take of a session shares one
-    // alignment. Opening the device again (a driver, a latency or a
-    // device chosen, the device menus rescanning) still moves it
-#ifdef Q_OS_ANDROID
-    return true;
-#else
+    // its output. On the user's phone, through Bluetooth, takes landed
+    // up to 8.5 ms apart so. Kept running, every take of a session
+    // shares one alignment. Opening the device again (a driver, a
+    // latency or a device chosen, the device menus rescanning), or
+    // resuming it after it idled (audioIdleSuspendMillis()), still
+    // moves it
     return false;
+}
+
+int
+MainWindow::audioIdleSuspendMillis() const
+{
+#ifdef Q_OS_ANDROID
+    return 2 * 60 * 1000;
+#else
+    return 0;
 #endif
+}
+
+void
+MainWindow::audioActivityChanged()
+{
+    bool busy = (m_playSource && m_playSource->isPlaying()) ||
+        (m_recordTarget && m_recordTarget->isRecording());
+    int idle = audioIdleSuspendMillis();
+    if (busy || idle <= 0) {
+        m_audioIdleTimer->stop();
+    } else {
+        m_audioIdleTimer->start(idle);
+    }
+}
+
+void
+MainWindow::suspendIdleAudio()
+{
+    m_audioIdleTimer->stop();
+    if ((m_playSource && m_playSource->isPlaying()) ||
+        (m_recordTarget && m_recordTarget->isRecording())) {
+        return;
+    }
+    if (!m_audioIO && !m_playTarget) return;
+
+    // The next Play or Record resumes it, as the first did
+    cerr << "MainWindow::suspendIdleAudio: suspending the audio device"
+         << endl;
+    if (m_audioIO) m_audioIO->suspend();
+    else m_playTarget->suspend();
 }
 
 #ifndef Q_OS_ANDROID
@@ -3553,6 +3605,10 @@ MainWindow::applicationStateChanged(Qt::ApplicationState state)
     } else if (m_playSource && m_playSource->isPlaying()) {
         stop();
     }
+
+    // Kept running between takes, the device would keep the microphone
+    // open, and Android silences a microphone in the background anyway
+    suspendIdleAudio();
 
     // Only a session that has a file of its own: one never saved stays as
     // it is, as there is no one to ask where it should go. Nor one that
@@ -6235,7 +6291,7 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
 
     // Stop reference playback that was started for the singer's benefit,
     // and suspend the audio IO where Stop does (suspendAudioOnStop()):
-    // on desktop the stream keeps running for the next take
+    // the application keeps the stream running for the next take
     if (m_playSource && m_playSource->isPlaying()) {
         cerr << "MainWindow::recordingFinishedFull: stopping reference playback" << endl;
         m_playSource->stop();

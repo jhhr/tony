@@ -132,13 +132,14 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   driver may record at another rate, as another device may), and recreates the audio IO.
 - **The report's latency** is the one last handed to bqaudioio, not the Preferences', so
   that it says what the device was opened with.
-- **The stream kept running between takes** (desktop): `MainWindow::suspendAudioOnStop()`
+- **The stream kept running between takes**: `MainWindow::suspendAudioOnStop()`
   is false, so neither Stop nor the end of a take suspends the device, and every take
   until the device is opened again shares one alignment of input against output. Opening
   it again (a driver, a latency or a device chosen, either device menu opened, Tony
   started again) moves the alignment, by up to about 8 ms on the user's PC. The input
   stays open from the first take on, and Windows shows the microphone in use until Tony
-  quits. Android suspends as before ([recording.md](recording.md#latency)).
+  quits. Android does the same, and suspends the device once it has idled for two
+  minutes, or Tony goes to the background ([recording.md](recording.md#latency)).
 
 ## 6. Tests
 
@@ -159,12 +160,18 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
 - **Dev** (`TestDevChecks`): the report's header names the driver and the latency.
 - **The stream kept running**, with a fake whose loopback moves 10 ms at each restart:
   `TestAudioCheck`'s check lands its punch-ins 10 ms apart when the window suspends at
-  Stop, and alike when it keeps the stream running, as the application does on desktop,
-  resumed once and never suspended; `TestDevChecks`' whole run passes kept running
+  Stop, and alike when it keeps the stream running, as the application does, resumed
+  once and never suspended; `TestDevChecks`' whole run passes kept running
   ([testing.md](testing.md), "The audio check and the dev checks").
+- **The idle suspend** (`TestRecordWorkflow`): kept running with an idle time of 1.5 s,
+  the fake runs on after a take and after playback and is suspended no sooner than that
+  after either, not while it plays for longer, and the next take resumes it; the
+  application's idle time is never on desktop. Not tested: the suspend when Android sends
+  Tony to the background, which no desktop build has.
 - Seen failing with the code broken: the default, the latency per driver, the greying;
   the kept-running check and dev run with the stream suspended at Stop (items 1, 2, 7 and
-  13), and the check with the end of a take suspending again.
+  13), and the check with the end of a take suspending again; the idle suspend with the
+  take's playback or recording counted as idle.
 - Not tested: that a choice stops playback. Nothing here runs the fork's Windows code.
 
 ## 7. State, and the measurements on the user's PC

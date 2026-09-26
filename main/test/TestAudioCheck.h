@@ -1173,18 +1173,14 @@ private slots:
     }
 
     // The same device with the stream kept running between takes, as
-    // the application keeps it on desktop: started once, at the first
+    // the application keeps it: started once, at the first
     // take, and suspended neither by Stop nor by the end of a take, so
     // that both punch-ins land alike and the check is Ok
     void check_takes_agree_with_the_stream_kept_running() {
         FakeAudioIO::Config config = loopback();
         config.restartShift = restartShift;
         makeWindow(config);
-#ifdef Q_OS_ANDROID
-        QVERIFY(m_window->applicationSuspendsAudioOnStop());
-#else
         QVERIFY(!m_window->applicationSuspendsAudioOnStop());
-#endif
         m_window->keepAudioRunning(true);
 
         runCheck();

@@ -1212,12 +1212,20 @@ protected:
     // of its own, has been changed, and is not incomplete
     bool maySaveUnasked() const;
 
-    // Whether Stop, and the end of a take, suspend the audio device. Not
-    // on desktop: each start of a stream can move its input against its
-    // output by several ms, which no one measured figure can place every
-    // take with, so the stream is kept running from the first take on.
-    // On Android they do: a phone should not keep its microphone open
+    // Whether Stop, and the end of a take, suspend the audio device. No:
+    // each start of a stream can move its input against its output by
+    // several ms, which no one measured figure can place every take with,
+    // so the stream is kept running from the first take on
     bool suspendAudioOnStop() const override;
+
+    // How long the device kept running may sit idle, neither playing nor
+    // recording, before it is suspended anyway, in ms; 0 for never. On
+    // Android, where the microphone stays open and the battery drains
+    // while it runs, a couple of minutes; on desktop never
+    virtual int audioIdleSuspendMillis() const;
+    void audioActivityChanged();
+    void suspendIdleAudio();
+    QTimer *m_audioIdleTimer;
 
 #ifdef Q_OS_ANDROID
     // Android's file picker gives content:// URIs, which svcore's readers
@@ -1254,9 +1262,10 @@ protected:
     bool recentFileIsThere(QString path);
 
     // Android sends Tony to the background: playback stops, a take being
-    // recorded is finished as Stop finishes it, and the session is saved
-    // as Save saves it, if it has a file of its own. Android holds Tony's
-    // event loop from the moment this returns until Tony is back, so
+    // recorded is finished as Stop finishes it, the audio device is
+    // suspended, and the session is saved as Save saves it, if it has a
+    // file of its own. Android holds Tony's event loop from the moment
+    // this returns until Tony is back, so
     // nothing here may wait on it: a save that has to wait for the
     // analysis of a take is made when that is done
     void applicationStateChanged(Qt::ApplicationState state);

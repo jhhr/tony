@@ -1012,9 +1012,9 @@ private slots:
 
     // A device whose input moves 10 ms against its output each time its
     // stream starts, with the stream kept running between takes, as the
-    // application keeps it on desktop: started once, at the run's first
-    // take, so that every take shares one alignment, and every item
-    // passes. Suspended at each Stop, as svapp does unless told
+    // application keeps it: started once, at the run's first take, so
+    // that every take shares one alignment, and every item passes.
+    // Suspended at each Stop, as svapp does unless told
     // otherwise, the takes land 10 ms apart in turn, and items 1, 2, 7
     // and 13 fail
     void dev_checks_pass_with_the_stream_kept_running() {

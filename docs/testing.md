@@ -157,11 +157,13 @@ Windows path would start an escape in the C string.
   Preferences named for the last device opened (`audioIOOpenedFor()`). The drivers are
   the ones a test gives with `setAudioImplementations()`, none by default, whatever the
   platform has. **It suspends the device at Stop and at the end of a take**, as svapp does
-  by default and unlike the application on desktop, which keeps the stream running
+  by default and unlike the application, which keeps the stream running
   ([recording.md](recording.md#latency)): a great many tests rely on each take resuming
   the fake, and so starting its programmed input again. A test that wants the
   application's way calls `keepAudioRunning(true)`; `applicationSuspendsAudioOnStop()`
-  gives what `MainWindow` itself chooses. It **answers dialogs through virtual seams**: `confirmRecordingOverTake()`,
+  gives what `MainWindow` itself chooses. Nor does it suspend a device that idles, unless
+  a test sets an idle time (`setAudioIdleSuspendMillis()`;
+  `applicationAudioIdleSuspendMillis()` is the application's). It **answers dialogs through virtual seams**: `confirmRecordingOverTake()`,
   `confirmDeleteTake()`, `askForTakeName()`, `askForLyricsFile()`,
   `askForLyricsExportFile()` (which also keeps
   the path it was offered), each with a `set...Answer()` and a counter of questions asked.
