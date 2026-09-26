@@ -28,7 +28,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -46,9 +46,11 @@ Each part of that is there because of something that went wrong:
 - **Spell `MINGW_PREFIX` exactly `C:/msys64/mingw64`.** A reconfigure with a different
   spelling than the build directory was set up with changes the include flags and
   rebuilds everything (about 560 steps).
-- **`-j 3`.** At ninja's default parallelism a large rebuild runs this machine out of
-  memory (`cc1plus.exe: out of memory`, bash cannot fork). If it happens, run the same
-  command again; ninja carries on where it stopped.
+- **`-j 4`**, one job per core. It relies on Windows' page file being on. Without one,
+  Windows can promise programs no more memory than the RAM, and with an editor and a
+  browser open a large rebuild ran out (`cc1plus.exe: out of memory`, bash cannot fork)
+  while RAM was still free. If it happens, run the same command again; ninja carries on
+  where it stopped.
 - **Redirect to a log and never pipe ninja.** The output is large and can stall or time out
   the tool. `tmp/` is gitignored and is the place for logs.
 - **Write ninja's exit status into the log.** The status of a `ninja ...; tail ...` chain
@@ -66,7 +68,7 @@ Reconfigure from scratch (rarely needed):
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 3 -C build_mingw Tony.exe >> tmp/build.log 2>&1
+meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 4 -C build_mingw Tony.exe >> tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 ```
 

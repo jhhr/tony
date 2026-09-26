@@ -29,12 +29,12 @@ from sh. A Linux cloud session builds otherwise: see the end of this section.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 ```
 
 - Only `mingw64/bin` on PATH (never `/c/msys64/usr/bin`); always set `MINGW_PREFIX`,
-  spelled exactly so; always `-j 3`; always log to a file and never pipe ninja; targets
+  spelled exactly so; always `-j 4`; always log to a file and never pipe ninja; targets
   need `.exe`. The reasons are in [docs/building.md](docs/building.md).
 - Incremental builds take under a minute, a few minutes after `MainWindow.cpp`; a clean
   build up to 30 minutes. If `cc1plus.exe` runs out of memory, run the command again.
