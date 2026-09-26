@@ -78,6 +78,10 @@ echo "exit:$?" >> tmp/build.log
   include directories for `opus`, `sord-0`, `serd-0`.
 - `-DHAVE_MEDIAFOUNDATION` with `-lmfplat -lmfreadwrite -lmfuuid -lpropsys`; needs the
   `bqaudiostream` fork.
+- `general_defines` goes on every target, svcore and the plugins included, so a change to
+  it recompiles everything (about 620 steps, 20 minutes). A define that only Tony's code
+  reads goes in `tony_defines`, which only Tony's own targets get. `tony_app` compiles
+  svgui and svapp too, so a change there still recompiles those, but not svcore.
 - `tony_core` / `tony_app` static libraries and the test executables; see
   [architecture.md](architecture.md) for what goes where. A new source file goes into
   `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
