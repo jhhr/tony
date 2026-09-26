@@ -42,21 +42,19 @@ computeRecordingLatency(sv::sv_frame_t outputLatency,
  * 0 for a take made without the reference playing, which is placed with
  * none.
  *
- * In frames as the window has them.  The round trip is taken off the
- * recording, and the input latency is the device's, so both count
- * frames of the recording; but the play source reports the output
- * latency in frames of the session, converted when it resamples to the
- * device (unless the device was opened before the session had a rate;
- * see MainWindow::roundTripAt()).  The two kinds differ only when the
- * device's rate is not the session's; the round trip is worked out in
- * seconds for that reason.
+ * The round trip is in frames of the recording, which it is taken off.
+ * The two reported latencies are in seconds, as MainWindow::roundTripAt()
+ * works them out from the frames each counts in (the play source's, the
+ * device's), and as it compares them with a stored figure's
+ * fingerprint: in frames they count at two different rates when the
+ * device's rate is not the session's.
  */
 struct TakeLatency
 {
     sv::sv_frame_t roundTrip;
     bool measured;
-    sv::sv_frame_t reportedOutput;
-    sv::sv_frame_t reportedInput;
+    double reportedOutput;
+    double reportedInput;
     sv::sv_samplerate_t recordingRate;
 
     TakeLatency() : roundTrip(0), measured(false), reportedOutput(0),

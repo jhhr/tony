@@ -4225,8 +4225,8 @@ MainWindow::recordingStarted()
             m_recordingLatencyFrames = roundTrip + m_recordingStartGapEstimate;
 
             m_takeLatency.roundTrip = roundTrip;
-            m_takeLatency.reportedOutput = outputLatency;
-            m_takeLatency.reportedInput = inputLatency;
+            m_takeLatency.reportedOutput = inUse.reportedOutput;
+            m_takeLatency.reportedInput = inUse.reportedInput;
             m_takeLatency.measured =
                 (inUse.source == LatencyCalibration::Source::Measured);
             cerr << "MainWindow::recordingStarted: round trip " << roundTrip

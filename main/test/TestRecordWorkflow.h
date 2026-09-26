@@ -1377,8 +1377,8 @@ private slots:
         TakeLatency used = m_window->takeLatency();
         QVERIFY(used.measured);
         QCOMPARE(used.roundTrip, sv::sv_frame_t(K));
-        QCOMPARE(used.reportedOutput, sv::sv_frame_t(reportedOut));
-        QCOMPARE(used.reportedInput, sv::sv_frame_t(reportedIn));
+        QCOMPARE(used.reportedOutput, reportedOut / rate);
+        QCOMPARE(used.reportedInput, reportedIn / rate);
     }
 
     // A round trip measured while the device reported other latencies
@@ -1421,7 +1421,8 @@ private slots:
     // A device at 48 kHz reporting 2 x 4096 frames out and 4096 in: the
     // take is placed with those 3 x 4096 frames of the recording,
     // although the play source has the output latency in frames of the
-    // session, converted as it resamples
+    // session, converted as it resamples; the take keeps each latency in
+    // seconds, the output's from those converted frames
     void latency_reported_at_the_device_rate() {
         const double deviceRate = 48000.0;
         const int reportedOut = 2 * 4096;
@@ -1443,8 +1444,8 @@ private slots:
         QCOMPARE(used.recordingRate, deviceRate);
         QVERIFY(!used.measured);
         QCOMPARE(used.reportedOutput,
-                 sv::sv_frame_t(std::lround(reportedOut * rate / deviceRate)));
-        QCOMPARE(used.reportedInput, sv::sv_frame_t(reportedIn));
+                 std::lround(reportedOut * rate / deviceRate) / rate);
+        QCOMPARE(used.reportedInput, reportedIn / deviceRate);
         QVERIFY2(std::llabs(used.roundTrip - (reportedOut + reportedIn)) <= 2,
                  qPrintable(QString("placed with %1 frames at %2 Hz; the "
                                     "device reports %3 + %4")
@@ -1456,7 +1457,7 @@ private slots:
     // device menu at startup. The play source has no rate yet, so its
     // resampler passes the output latency on as the device counts it,
     // and tells the play source the device's rate is 0: the round trip
-    // is the same
+    // is the same, and so is the output latency in seconds
     void latency_reported_with_device_opened_first() {
         const double deviceRate = 48000.0;
         const int reportedOut = 2 * 4096;
@@ -1478,7 +1479,7 @@ private slots:
 
         TakeLatency used = m_window->takeLatency();
         QCOMPARE(used.recordingRate, deviceRate);
-        QCOMPARE(used.reportedOutput, sv::sv_frame_t(reportedOut));
+        QCOMPARE(used.reportedOutput, reportedOut / deviceRate);
         QVERIFY2(std::llabs(used.roundTrip - (reportedOut + reportedIn)) <= 2,
                  qPrintable(QString("placed with %1 frames at %2 Hz; the "
                                     "device reports %3 + %4")

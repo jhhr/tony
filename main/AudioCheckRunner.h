@@ -44,9 +44,9 @@ struct AudioCheckResult
     /// What each punch-in was placed with, in the order recorded
     std::vector<TakeLatency> takes;
 
-    /// The round trip the first punch-in was placed with, as frames of
-    /// the recording, and the two latencies the device reported, each at
-    /// the rate it counts in (see TakeLatency)
+    /// The round trip the first punch-in was placed with, and the two
+    /// latencies the device reported then, as the take path had them
+    /// (see TakeLatency)
     double usedRoundTrip;
     double reportedOutputLatency;
     double reportedInputLatency;
@@ -94,12 +94,23 @@ struct AudioCheckResult
  * take stops itself at the end of the selection, through the same path
  * as the Stop button.
  *
+ * The check's session plays the reference centred and at the level it
+ * was made at, LatencyCheck::kPeakDbfs, and leaves the pitch and notes
+ * sonification silent: an earcup is held to the microphone, and Tony
+ * otherwise plays the reference in the left channel only, normalised
+ * to full scale, with the sonification in the right.  This is set on
+ * the play parameters of the session's own models, never through
+ * Analyser::setAudible() and the like, which write the settings every
+ * session reads.  It stays so after the run, as the session does, and
+ * a session opened afterwards plays as before.
+ *
  * Driven by a polling timer, like MainWindow's own take polling, and
  * never by a nested event loop: this runs in every build, and the
  * window can be closed at any moment.  MainWindow owns it, deletes it
  * first thing in its destructor, and tells it when the session closes.
- * A friend of MainWindow: it drives the window's take path, and reads
- * what the take was placed with, but changes nothing else there.
+ * A friend of MainWindow: it drives the window's take path, reads what
+ * the take was placed with, and sets the playback of the session it
+ * opened, but changes nothing else there.
  */
 class AudioCheckRunner : public QObject
 {
@@ -126,17 +137,59 @@ public:
         int eventsEach;
 
         /// Where the reference is written, over whatever is there; ""
-        /// for defaultReferencePath()
+        /// for a new file in referenceDirectory() (nextReferencePath())
         QString referencePath;
 
         Plan() : punchIns(0), eventsEach(0) { }
     };
 
+    /// The steps of a run, in order; the last two come once for each
+    /// punch-in
+    enum class Step {
+        Idle,
+        OpeningReference,
+        AnalysingReference,
+        Recording,
+        AnalysingTake
+    };
+
+    /// How far a run has got
+    struct Progress {
+        Step step;
+
+        /// Punch-in punchIn of punchIns: the one being recorded, or
+        /// whose take is being analysed, counting from 1; 0 before the
+        /// first
+        int punchIn;
+        int punchIns;
+
+        /// Seconds of recording still to come: the rest of the take
+        /// being recorded, and the lead-in and range of each one after
+        /// it.  The waits for the analyses between them are not in it:
+        /// their length is not known
+        double secondsLeft;
+
+        Progress() : step(Step::Idle), punchIn(0), punchIns(0),
+                     secondsLeft(0) { }
+    };
+
     explicit AudioCheckRunner(MainWindow *window);
     virtual ~AudioCheckRunner();
 
-    /// A file in the application's data directory
-    static QString defaultReferencePath();
+    /// Where the reference is written unless the plan names a file:
+    /// the application's data directory
+    static QString referenceDirectory();
+
+    /**
+     * A file in the directory to write the next reference to, never
+     * the one inUse names: that is the session open now, perhaps the
+     * check before, and on Windows a file that is open cannot be
+     * written over.  The references in the directory that inUse does
+     * not name are removed first, as no session holds them; and the
+     * lowest free number is taken, so the names go 1, 2, 1, 2 and
+     * Recent Files, where each one opened is listed, gets two at most.
+     */
+    static QString nextReferencePath(QString directory, QString inUse);
 
     /**
      * Begin a run.  False, with nothing started, if one is running
@@ -159,20 +212,20 @@ public:
 signals:
     void finished(const AudioCheckResult &result);
 
-private:
-    enum class Step {
-        Idle,
-        OpeningReference,
-        AnalysingReference,
-        Recording,
-        AnalysingTake
-    };
+    /// When a step begins, and each time the whole seconds left go
+    /// down while a take is recorded.  Never from inside start() or
+    /// cancel()
+    void progress(const AudioCheckRunner::Progress &state);
 
+private:
     MainWindow *m_window;
     QTimer *m_timer;
     Step m_step;
     Plan m_plan;
     AudioCheckResult m_result;
+
+    /// The last progress reported
+    Progress m_reported;
 
     /// The punch-ins in seconds, from the plan, until the reference is
     /// open; from then on as the takes record them, in whole frames of
@@ -198,8 +251,22 @@ private:
     void takeStopped();
     void judge();
 
+    /// The check session's playback, set on the play parameters of the
+    /// reference and of its pitch and notes: see the class comment
+    void setPlayback();
+
+    /// The gain that brings the reference, as the session's model
+    /// has it, down to the level it was made at
+    static double referenceGain();
+
     void setStep(Step step, qint64 limitMs);
     bool stepTimedOut() const;
+
+    Progress currentProgress() const;
+
+    /// Emit progress() if the step, the punch-in or the whole seconds
+    /// left have changed since it was last emitted
+    void reportProgress();
 
     /// Stop a take the check is recording, through the Stop path
     void stopTake();

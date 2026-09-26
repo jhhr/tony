@@ -873,8 +873,9 @@ protected:
 
     // What the take being recorded, or the last one, was placed with:
     // cleared when a take starts, the round trip and the latencies the
-    // device reported filled in when the reference starts to play, and
-    // the recording's rate when the take is spliced in
+    // device reported (in seconds, as roundTripAt() has them) filled in
+    // when the reference starts to play, and the recording's rate when
+    // the take is spliced in
     TakeLatency m_takeLatency;
 
     // The audio check, and the override it sets for each take of its

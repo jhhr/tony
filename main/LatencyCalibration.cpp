@@ -162,6 +162,8 @@ roundTripInUse(const Figure *stored,
                double reportedOutput, double reportedInput)
 {
     InUse inUse;
+    inUse.reportedOutput = reportedOutput;
+    inUse.reportedInput = reportedInput;
     if (stored && !isStale(*stored, reportedOutput, reportedInput)) {
         inUse.source = Source::Measured;
         inUse.roundTrip = stored->roundTrip;

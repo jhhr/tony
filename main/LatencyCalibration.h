@@ -113,7 +113,14 @@ namespace LatencyCalibration
         /// A figure was stored for the key, but it is stale
         bool stale;
 
-        InUse() : source(Source::Reported), roundTrip(0), stale(false) { }
+        /// The latencies the device reports now, which the choice was
+        /// made against, whichever source won: a figure measured now is
+        /// stored with these as its fingerprint
+        double reportedOutput;
+        double reportedInput;
+
+        InUse() : source(Source::Reported), roundTrip(0), stale(false),
+                  reportedOutput(0), reportedInput(0) { }
     };
 
     /**

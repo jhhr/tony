@@ -509,3 +509,16 @@ The next phase must know:
 - The runner's `reportedOutputLatency` still divides by the reference's rate. It matches the take path at 44.1 kHz, the only rate that is stored.
 - `storeMeasuredLatency()` reads the device from the Preferences when "Use this latency" is pressed. If B4's non-modal dialog lets the device change in between, the figure is stored under the new device.
 Left open: `computeRecordingLatency()` is unused outside `TestLatencyShift`. The svapp fork could add `AudioCallbackRecordTarget::getRecordSampleRate()` so that `latencyInUse()` knows the rate before the first take.
+
+### Phase B3 — 2026-09-26
+Built: `AudioCheckRunner::setPlayback()`: on the play parameters of the check session's own models, the reference audible, centred, gain 10^(kPeakDbfs/20) (1 if the normalise preference is off); its pitch and notes muted. Applied once the reference is open and again before every punch-in. Public `Step`, `Progress {step, punchIn, punchIns, secondsLeft}`, signal `progress()`. `referenceDirectory()`, `nextReferencePath(dir, inUse)`. `LatencyCalibration::InUse::reportedOutput/Input` (seconds, whichever source won); `TakeLatency::reportedOutput/Input` are now those seconds, and `end()` copies them. App tests `check_plays_the_reference_centred_and_quiet` (13 s), `check_leaves_the_next_session_alone` (4 s), `check_reference_gets_a_file_of_its_own`; core `round_trip_in_use` extended. Four existing tests now compare the reported pair in seconds.
+Choices / deviations:
+- The toolbar's reference level control (`m_audioLPW`) answers a gain between its notches (−12 dB lies between −11.25 and −20) by emitting the nearest; `audioGainChanged()` then sets it through `Analyser::setGain()`/`setAudible()`, writing `Analyser/audible-0`. `setPlayback()` moves the control first under a `QSignalBlocker`. Without it both new session tests fail on the settings.
+- Reference files `calibrate-audio-reference-N.wav`: every such file in the directory but the open session's main model file is removed, then the lowest free N is taken, so names alternate 1, 2. A timestamp per run would add a dead Recent Files entry per run (`RecentFiles` has no remove, and keeps 20).
+- The check session keeps its playback after the run. The reference is made audible even where the user's settings mute it.
+- `progress()` comes from `poll()` only, never from inside `start()`/`cancel()`: on each step change, and each whole second less while recording. `secondsLeft` counts recording to come (min(1 s, start) + range per take), not analyses. No metatype: direct connections only.
+- "Afterwards" is tested after a cancelled run, against the same file opened before the check: the settings alone do not say how a session plays (below).
+The next phase must know:
+- Pre-existing, not fixed: (a) in the first file of a window the same feedback moves the pitch and notes gain from 0.5 to 0.562 and forces both audible, writing the settings; (b) `audible-0` is overridden at load by `audible-3`: the spectrogram is a layer on the reference's model, so it plays whenever `audible-3` is true.
+- B4: add a few seconds per analysis to `secondsLeft` for a rough total.
+Left open: the default reference path is exercised only through `nextReferencePath()`; the tests name their own file.

@@ -209,7 +209,8 @@ private slots:
         }
     }
 
-    // The stored figure while it is fresh, the reported sum otherwise
+    // The stored figure while it is fresh, the reported sum otherwise;
+    // and either way the reported pair it was chosen against
     void round_trip_in_use() {
         const double out = 0.2;
         const double in = 0.1;
@@ -219,6 +220,8 @@ private slots:
         QCOMPARE(none.roundTrip, out + in);
         QVERIFY(none.date.isNull());
         QVERIFY(!none.stale);
+        QCOMPARE(none.reportedOutput, out);
+        QCOMPARE(none.reportedInput, in);
 
         const Figure fresh = figure(0.345, out, in);
         InUse measured = LatencyCalibration::roundTripInUse(&fresh, out, in);
@@ -226,6 +229,8 @@ private slots:
         QCOMPARE(measured.roundTrip, 0.345);
         QCOMPARE(measured.date, fresh.date);
         QVERIFY(!measured.stale);
+        QCOMPARE(measured.reportedOutput, out);
+        QCOMPARE(measured.reportedInput, in);
 
         const Figure old = figure(0.345, out + 0.01, in);
         InUse stale = LatencyCalibration::roundTripInUse(&old, out, in);
@@ -233,6 +238,8 @@ private slots:
         QCOMPARE(stale.roundTrip, out + in);
         QVERIFY(stale.date.isNull());
         QVERIFY(stale.stale);
+        QCOMPARE(stale.reportedOutput, out);
+        QCOMPARE(stale.reportedInput, in);
 
         // A latency reported as less than nothing counts as none
         InUse negative = LatencyCalibration::roundTripInUse(nullptr, -0.5, in);

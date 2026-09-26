@@ -291,7 +291,7 @@ marked "Done" when it is committed.
      `recordingStarted()`, staleness). This was step 3 below; it moved up because the
      dialog needs it. Done.
    - **B3** The check's playback: the reference centred at −12 dBFS, the sonification
-     silent, and a progress signal.
+     silent, and a progress signal. Done.
    - **B4** The Calibrate Audio dialog and menu entry.
 
    **Then you run it on your PC.** Its numbers settle three things: how wrong the
@@ -335,7 +335,9 @@ could convert. The button then shows the fix working on each device.
 - **Loudness.** The sweeps are −12 dBFS with earcups off the ears; the dialog says so
   before starting. *Found in B1:* not as played. Tony normalises every audio file to
   full scale as it reads it (`Preferences::setNormaliseAudio(true)`), so the reference
-  plays at 0 dBFS, in the left channel only (§11).
+  plays at 0 dBFS, in the left channel only (§11). *Since B3* the check's session
+  plays it centred, with a play gain that brings it back to −12 dBFS, and its
+  sonification silent. Other sessions play as before.
 - **Cursor versus dots.** The cursor subtracts the *reported* output latency. With a
   measured round trip the dots move to the right place and may sit off the cursor. Item
   8's number will show how much. Fixing it needs the round trip split between output
@@ -387,7 +389,9 @@ Checked on 2026-09-25, so that phases do not re-derive them.
   called.
 - **Where the reference is heard** (found in B1). `Analyser` pans the reference hard
   left and its pitch and notes sonification hard right, so only the left earcup
-  carries the sweeps; the right one carries the synth.
+  carries the sweeps; the right one carries the synth. *Since B3* the check's own
+  session sets its models' play parameters instead: the reference centred at
+  −12 dBFS, the sonification muted.
 - **bqaudioio `PortAudioIO`** (upstream, not a fork):
   - one duplex `Pa_OpenStream`, `suggestedLatency = 0.2`, no host-API stream info;
   - input goes to the record target **before** output is asked for, in the same
@@ -429,8 +433,8 @@ Checked on 2026-09-25, so that phases do not re-derive them.
 - **Fake device.** `FakeAudioIO::Config::loopback` adds the output to the input
   `inputDelay` frames late; `TestAudioCheck` uses it. The reported latencies are
   independent of the real delay. `TestMainWindow::createAudioIO()` installs the fake.
-  Its output is the mean of the channels, so the hard-left reference loops back at
-  half level.
+  Its output is the mean of the channels, so a hard-left reference loops back at
+  half level; the check's, centred since B3, at the level it is played at.
 - **Menus.** The Playback menu is built in `MainWindow::setupToolbars()`
   (`m_playbackMenu`). The audio device submenus are there too.
 - **Build types.** `build.bat` uses `debugoptimized`; `meson.build` defaults to

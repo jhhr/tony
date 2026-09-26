@@ -19,19 +19,28 @@
 #include "SingingTakes.h"
 
 #include "audio/AudioCallbackRecordTarget.h"
+#include "base/PlayParameterRepository.h"
+#include "base/PlayParameters.h"
+#include "base/Preferences.h"
 #include "base/Selection.h"
 #include "data/fileio/FileSource.h"
 #include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
+#include "data/model/ReadOnlyWaveFileModel.h"
 #include "data/model/WaveFileModel.h"
+#include "layer/Layer.h"
 #include "transform/ModelTransformerFactory.h"
 #include "view/ViewManager.h"
+#include "widgets/LevelPanToolButton.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -81,11 +90,36 @@ AudioCheckRunner::~AudioCheckRunner()
 }
 
 QString
-AudioCheckRunner::defaultReferencePath()
+AudioCheckRunner::referenceDirectory()
 {
-    QString dir =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dir).filePath("calibrate-audio-reference.wav");
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+}
+
+QString
+AudioCheckRunner::nextReferencePath(QString directory, QString inUse)
+{
+    const QString stem = "calibrate-audio-reference";
+    const QDir dir(directory);
+    const QFileInfo held(inUse);
+
+    // One that cannot be removed (another program has it open, say)
+    // stays, and its number is passed over below
+    const QStringList names =
+        dir.entryList(QStringList() << stem + "*.wav", QDir::Files);
+    for (const QString &name : names) {
+        const QString path = dir.absoluteFilePath(name);
+        if (inUse != "" && QFileInfo(path) == held) continue;
+        if (!QFile::remove(path)) {
+            cerr << "AudioCheckRunner: an earlier reference could not be "
+                 << "removed: " << path << endl;
+        }
+    }
+
+    for (int n = 1; ; ++n) {
+        const QString path =
+            dir.absoluteFilePath(QString("%1-%2.wav").arg(stem).arg(n));
+        if (!QFileInfo::exists(path)) return path;
+    }
 }
 
 bool
@@ -108,17 +142,15 @@ AudioCheckRunner::start(const Plan &plan)
     }
 
     m_plan = plan;
-    if (m_plan.referencePath == "") {
-        m_plan.referencePath = defaultReferencePath();
-    }
     m_result = AudioCheckResult();
+    m_reported = Progress();
     m_punchIns = punchIns;
     m_starts.clear();
     m_ends.clear();
     m_punchIn = 0;
 
     cerr << "AudioCheckRunner::start: " << m_punchIns.size()
-         << " punch-ins against " << m_plan.referencePath << endl;
+         << " punch-ins of " << m_plan.eventsEach << " events" << endl;
 
     // Nothing is done before the first poll, so that however the run
     // ends, the caller hears of it through finished() and never from
@@ -156,6 +188,11 @@ AudioCheckRunner::poll()
 {
     if (m_inPoll) return;
     m_inPoll = true;
+
+    // Before the step, so that the first poll says the reference is
+    // being opened before it is, and after it, so that a step begun here
+    // is reported as it begins and not a poll later
+    reportProgress();
 
     switch (m_step) {
 
@@ -200,6 +237,8 @@ AudioCheckRunner::poll()
         break;
     }
 
+    reportProgress();
+
     m_inPoll = false;
 }
 
@@ -217,10 +256,21 @@ AudioCheckRunner::openReference()
     }
     if (m_step != Step::OpeningReference) return;
 
-    // Written afresh every time, over the one a check before wrote: it
-    // is made from the plan, and a session opened from it has read it
-    // whole already
+    // Made from the plan and written afresh every time, to a file of its
+    // own: the session open now may be the check before, and on Windows
+    // the file it plays cannot be written over.  A plan that names a
+    // file has that one written over
     QString path = m_plan.referencePath;
+    if (path == "") {
+        QString inUse;
+        if (auto model = std::dynamic_pointer_cast<ReadOnlyWaveFileModel>
+            (m_window->getMainModel())) {
+            inUse = model->getLocalFilename();
+        }
+        path = nextReferencePath(referenceDirectory(), inUse);
+        m_plan.referencePath = path;
+    }
+    cerr << "AudioCheckRunner: writing the reference to " << path << endl;
     QDir().mkpath(QFileInfo(path).absolutePath());
     vector<float> samples = LatencyCheck::generate(m_plan.layout);
     WavFileWriter writer(path, m_plan.layout.rate, 1,
@@ -257,6 +307,9 @@ AudioCheckRunner::openReference()
                                   double(m_ends.back()) / rate);
     }
 
+    // Its layers were made as it opened
+    setPlayback();
+
     setStep(Step::AnalysingReference, kReferenceTimeoutMs);
 }
 
@@ -283,6 +336,10 @@ AudioCheckRunner::startPunchIn()
     ViewManager *viewManager = m_window->m_viewManager;
     viewManager->clearSelections();
     viewManager->addSelectionQuietly(Selection(from, to));
+
+    // Again for every take: whatever has happened since the last, the
+    // takes are all recorded with the same playback
+    setPlayback();
 
     m_window->m_audioCheckTakes = true;
     m_window->record();
@@ -354,6 +411,93 @@ AudioCheckRunner::judge()
 }
 
 void
+AudioCheckRunner::setPlayback()
+{
+    const float gain = float(referenceGain());
+
+    // The reference's model: its waveform layer, and any other layer on
+    // it, has these parameters.  Audible even if the user has muted the
+    // reference in their own sessions: the check has to hear it
+    if (auto params = PlayParameterRepository::getInstance()
+        ->getPlayParameters(m_window->getMainModelId().untyped)) {
+        params->setPlayAudible(true);
+        params->setPlayPan(0.f);
+        params->setPlayGain(gain);
+    }
+
+    Analyser *reference = m_window->m_analyser;
+    for (Analyser::Component c : { Analyser::PitchTrack, Analyser::Notes }) {
+        Layer *layer = reference ? reference->getLayer(c) : nullptr;
+        if (!layer) continue;
+        if (auto params = layer->getPlayParameters()) {
+            params->setPlayAudible(false);
+        }
+    }
+
+    // The toolbar's level control shows the reference's gain.  Given one
+    // between its notches, it moves to the nearest and says so, and the
+    // window sets that gain through Analyser::setGain() and setAudible(),
+    // which write the shared settings.  Moved here first without a word,
+    // it has nothing to say when the window shows the gain
+    if (LevelPanToolButton *control = m_window->m_audioLPW) {
+        QSignalBlocker quiet(control);
+        control->setLevel(gain);
+        control->setPan(0.f);
+    }
+    m_window->updateLayerStatuses();
+}
+
+double
+AudioCheckRunner::referenceGain()
+{
+    // Made with its peak at kPeakDbfs, and read normalised to full scale,
+    // as MainWindow has every audio file read
+    if (!Preferences::getInstance()->getNormaliseAudio()) return 1.0;
+    return std::pow(10.0, LatencyCheck::kPeakDbfs / 20.0);
+}
+
+AudioCheckRunner::Progress
+AudioCheckRunner::currentProgress() const
+{
+    Progress p;
+    p.step = m_step;
+    p.punchIns = int(m_punchIns.size());
+    if (m_step == Step::Recording || m_step == Step::AnalysingTake) {
+        p.punchIn = m_punchIn + 1;
+    }
+
+    // The lead-in of a take to come is the whole of the check's, unless
+    // its range starts sooner than that
+    for (int i = m_punchIn; i < int(m_punchIns.size()); ++i) {
+        const LatencyCheck::PunchIn &range = m_punchIns[i];
+        double seconds = std::min(kPreRollSeconds, range.start) +
+            (range.end - range.start);
+        if (i == m_punchIn) {
+            if (m_step == Step::AnalysingTake) continue;
+            if (m_step == Step::Recording) {
+                seconds = std::max(0.0, seconds -
+                                   double(m_stepClock.elapsed()) / 1000.0);
+            }
+        }
+        p.secondsLeft += seconds;
+    }
+    return p;
+}
+
+void
+AudioCheckRunner::reportProgress()
+{
+    if (m_step == Step::Idle) return;
+    const Progress p = currentProgress();
+    if (p.step == m_reported.step && p.punchIn == m_reported.punchIn &&
+        std::ceil(p.secondsLeft) == std::ceil(m_reported.secondsLeft)) {
+        return;
+    }
+    m_reported = p;
+    emit progress(p);
+}
+
+void
 AudioCheckRunner::setStep(Step step, qint64 limitMs)
 {
     m_step = step;
@@ -388,15 +532,12 @@ AudioCheckRunner::end(QString failure)
 
     m_result.failure = failure;
     if (!m_result.takes.empty()) {
-        // Each at the rate it counts in (see TakeLatency)
+        // The reported pair as the take path worked it out, and compares
+        // a stored figure's fingerprint with
         const TakeLatency &first = m_result.takes.front();
         m_result.usedRoundTrip = first.recordingSeconds(first.roundTrip);
-        m_result.reportedInputLatency =
-            first.recordingSeconds(first.reportedInput);
-        if (m_result.referenceRate > 0) {
-            m_result.reportedOutputLatency =
-                double(first.reportedOutput) / m_result.referenceRate;
-        }
+        m_result.reportedOutputLatency = first.reportedOutput;
+        m_result.reportedInputLatency = first.reportedInput;
         m_result.recordingRate = first.recordingRate;
         m_result.rateMismatch = m_result.recordingRate > 0 &&
             m_result.referenceRate > 0 &&

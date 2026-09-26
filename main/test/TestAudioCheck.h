@@ -29,6 +29,8 @@
 #include "../AudioCheckRunner.h"
 #include "../LatencyCheck.h"
 
+#include "base/PlayParameterRepository.h"
+
 class TestAudioCheck : public QObject
 {
     Q_OBJECT
@@ -45,19 +47,26 @@ class TestAudioCheck : public QObject
     QTimer m_watchdog;
     QStringList m_dialogs;
 
-    // What the runner said when the run ended, and how often it said it
+    // What the runner said when the run ended, and how often it said it;
+    // and every progress it reported
     AudioCheckResult m_result;
     int m_finished = 0;
+    std::vector<AudioCheckRunner::Progress> m_progress;
 
     void makeWindow(FakeAudioIO::Config config, bool installDevice = true) {
         delete m_window;
         m_window = new TestMainWindow(config, installDevice);
         m_result = AudioCheckResult();
         m_finished = 0;
+        m_progress.clear();
         connect(m_window->audioCheck(), &AudioCheckRunner::finished,
                 this, [this](const AudioCheckResult &result) {
                     m_result = result;
                     ++m_finished;
+                });
+        connect(m_window->audioCheck(), &AudioCheckRunner::progress,
+                this, [this](const AudioCheckRunner::Progress &progress) {
+                    m_progress.push_back(progress);
                 });
     }
 
@@ -147,6 +156,140 @@ class TestAudioCheck : public QObject
             .arg(r.recordingRate)
             .arg(r.referenceRate)
             .toUtf8();
+    }
+
+    // What differs from the check's playback, or "": the reference
+    // audible, centred, and brought back from full scale to the level it
+    // was made at; its pitch and notes silent
+    QString checkPlaybackProblem() {
+        const float gain =
+            float(std::pow(10.0, LatencyCheck::kPeakDbfs / 20.0));
+        QStringList problems;
+        auto reference = sv::PlayParameterRepository::getInstance()
+            ->getPlayParameters(m_window->mainModelId().untyped);
+        if (!reference) {
+            problems << "the reference has no play parameters";
+        } else {
+            if (!reference->isPlayAudible()) {
+                problems << "the reference is muted";
+            }
+            if (reference->getPlayPan() != 0.f) {
+                problems << QString("the reference is panned %1")
+                    .arg(reference->getPlayPan());
+            }
+            if (std::fabs(reference->getPlayGain() - gain) > 1e-6f) {
+                problems << QString("the reference plays at %1 dB")
+                    .arg(20.0 * std::log10(reference->getPlayGain()));
+            }
+        }
+        for (Analyser::Component c : { Analyser::PitchTrack,
+                                       Analyser::Notes }) {
+            sv::Layer *layer = m_window->analyser()->getLayer(c);
+            auto params = layer ? layer->getPlayParameters() : nullptr;
+            if (!params) {
+                problems << QString("no layer %1").arg(int(c));
+            } else if (params->isPlayAudible()) {
+                problems << QString("layer %1 is heard").arg(int(c));
+            }
+        }
+        return problems.join(", ");
+    }
+
+    // The settings the analysers' show and play toggles are kept in, as
+    // Analyser::loadState() reads them
+    static QStringList analyserSettings() {
+        QSettings settings;
+        settings.beginGroup("Analyser");
+        QStringList state;
+        for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
+            state << QString("component %1 visible %2 audible %3").arg(c)
+                .arg(settings.value(QString("visible-%1").arg(c),
+                                    c != Analyser::Spectrogram).toBool())
+                .arg(settings.value(QString("audible-%1").arg(c), true)
+                     .toBool());
+        }
+        settings.endGroup();
+        return state;
+    }
+
+    // The reference muted in the user's own sessions. Its spectrogram's
+    // setting as well: both are read for the reference's model, the
+    // spectrogram's last
+    static void muteReferenceInSettings() {
+        QSettings settings;
+        settings.beginGroup("Analyser");
+        settings.setValue(QString("audible-%1").arg(Analyser::Audio), false);
+        settings.setValue(QString("audible-%1").arg(Analyser::Spectrogram),
+                          false);
+        settings.endGroup();
+    }
+
+    // How the session open now plays its reference, and its pitch and
+    // notes. Not the gain of those two: the toolbar moves it to a notch
+    // of its own level control in the first session of a window only
+    QStringList sessionPlayback() {
+        QStringList state;
+        auto reference = sv::PlayParameterRepository::getInstance()
+            ->getPlayParameters(m_window->mainModelId().untyped);
+        if (reference) {
+            state << QString("reference audible %1 pan %2 gain %3")
+                .arg(reference->isPlayAudible())
+                .arg(reference->getPlayPan())
+                .arg(reference->getPlayGain());
+        } else {
+            state << "no reference";
+        }
+        for (Analyser::Component c : { Analyser::PitchTrack,
+                                       Analyser::Notes }) {
+            sv::Layer *layer = m_window->analyser()->getLayer(c);
+            auto params = layer ? layer->getPlayParameters() : nullptr;
+            if (params) {
+                state << QString("layer %1 audible %2 pan %3").arg(int(c))
+                    .arg(params->isPlayAudible())
+                    .arg(params->getPlayPan());
+            } else {
+                state << QString("no layer %1").arg(int(c));
+            }
+        }
+        return state;
+    }
+
+    // An ordinary file, opened as the user opens one, and analysed
+    void openSong() {
+        const QString path = m_dir.filePath("song.wav");
+        if (!QFileInfo::exists(path)) {
+            const std::vector<float> samples = TestSignals::sawtooth
+                (220.5, rate, int(1.5 * rate), 0.5);
+            sv::WavFileWriter writer(path, rate, 1,
+                                     sv::WavFileWriter::WriteToTarget);
+            const float *data = samples.data();
+            QVERIFY(writer.isOK());
+            QVERIFY(writer.writeSamples(&data,
+                                        sv::sv_frame_t(samples.size())));
+            QVERIFY(writer.close());
+        }
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(path, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        Analyser *analyser = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (analyser->getLayer(Analyser::PitchTrack) &&
+             analyser->getLayer(Analyser::Notes) &&
+             analyser->getInitialAnalysisCompletion() >= 100 &&
+             !sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+    }
+
+    static QString stepName(AudioCheckRunner::Step step) {
+        switch (step) {
+        case AudioCheckRunner::Step::Idle: return "idle";
+        case AudioCheckRunner::Step::OpeningReference: return "opening";
+        case AudioCheckRunner::Step::AnalysingReference:
+            return "analysing the reference";
+        case AudioCheckRunner::Step::Recording: return "recording";
+        case AudioCheckRunner::Step::AnalysingTake: return "analysing the take";
+        }
+        return "";
     }
 
     // Not a slot: QtTest would run it as a test. As TestRecordWorkflow's
@@ -270,8 +413,8 @@ private slots:
         QCOMPARE(int(r.takes.size()), 2);
         for (const TakeLatency &t : r.takes) {
             QCOMPARE(t.roundTrip, sv::sv_frame_t(reportedOut + reportedIn));
-            QCOMPARE(t.reportedOutput, sv::sv_frame_t(reportedOut));
-            QCOMPARE(t.reportedInput, sv::sv_frame_t(reportedIn));
+            QCOMPARE(t.reportedOutput, reportedOut / rate);
+            QCOMPARE(t.reportedInput, reportedIn / rate);
             QCOMPARE(t.recordingRate, rate);
         }
         QCOMPARE(r.usedRoundTrip, (reportedOut + reportedIn) / rate);
@@ -444,6 +587,182 @@ private slots:
         QTest::qWait(500);
         QVERIFY(!m_window->recordTarget()->isRecording());
         QCOMPARE(m_finished, 1);
+    }
+
+    // The check's session plays the reference centred, at the level it
+    // was made at, and not its pitch and notes: from the first take to
+    // the end of the run, and after it. The user has muted the reference
+    // in their own sessions, which the check does not follow; its sweeps
+    // reach the speakers at -12 dBFS, in both channels, and come back at
+    // the level they were made at. Its progress names each step and
+    // punch-in in order, with the recording still to come going down
+    void check_plays_the_reference_centred_and_quiet() {
+        muteReferenceInSettings();
+        const QStringList settingsBefore = analyserSettings();
+        makeWindow(loopback());
+
+        QStringList problems;
+        int looks = 0;
+        bool recorded = false;
+        QTimer sampler;
+        connect(&sampler, &QTimer::timeout, &sampler, [&]() {
+            if (!m_window->audioCheck()->isRunning()) return;
+            if (m_window->recordTarget()->isRecording()) recorded = true;
+            if (!recorded) return;
+            ++looks;
+            const QString problem = checkPlaybackProblem();
+            if (problem != "" && !problems.contains(problem)) {
+                problems << problem;
+            }
+        });
+        sampler.start(20);
+        runCheck();
+        sampler.stop();
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_result.failure == "", describe(m_result).constData());
+
+        // What reached the speakers, both channels mixed: the reference
+        // centred has the same level there as in each channel
+        const std::vector<float> played =
+            m_window->fake()->getCapturedOutput();
+        float peak = 0.f;
+        for (float s : played) peak = std::max(peak, std::fabs(s));
+        const double peakDb = 20.0 * std::log10(peak);
+        QVERIFY2(std::fabs(peakDb - LatencyCheck::kPeakDbfs) <= 0.5,
+                 qPrintable(QString("played at %1 dBFS").arg(peakDb)));
+
+        // and each sweep, as the finder heard it come back: 0 dB is the
+        // level it was made at
+        QVERIFY2(m_result.summary.found == 4, describe(m_result).constData());
+        for (const LatencyCheck::EventResult &e : m_result.summary.events) {
+            if (!e.arrival.found) continue;
+            QVERIFY2(std::fabs(e.arrival.levelDb) <= 1.0,
+                     qPrintable(QString("the sweep at %1 s came back at "
+                                        "%2 dB")
+                                .arg(e.expectedSeconds)
+                                .arg(e.arrival.levelDb)));
+        }
+
+        // The playback, looked at every 20 ms from the first take on:
+        // neither the analyses nor the next take put anything back
+        QVERIFY2(looks >= 200,
+                 qPrintable(QString("looked %1 times").arg(looks)));
+        QVERIFY2(problems.isEmpty(),
+                 qPrintable("during the check: " + problems.join(" | ")));
+        const QString after = checkPlaybackProblem();
+        QVERIFY2(after == "", qPrintable("after the check: " + after));
+        QCOMPARE(analyserSettings(), settingsBefore);
+
+        // Each step once as it begins, and more often while a take is
+        // recorded, as the seconds of recording to come go down
+        QVERIFY(!m_progress.empty());
+        const AudioCheckRunner::Plan plan = shortPlan();
+        double planned = 0.0;
+        for (const LatencyCheck::PunchIn &p : LatencyCheck::punchInsFor
+                 (plan.layout, plan.punchIns, plan.eventsEach)) {
+            planned += std::min(AudioCheckRunner::kPreRollSeconds, p.start) +
+                (p.end - p.start);
+        }
+        QVERIFY2(std::fabs(m_progress.front().secondsLeft - planned) < 0.01,
+                 qPrintable(QString("%1 s to record at first, not %2 s")
+                            .arg(m_progress.front().secondsLeft)
+                            .arg(planned)));
+        QStringList steps;
+        int reportsWhileRecording[3] = { 0, 0, 0 };
+        double left = m_progress.front().secondsLeft;
+        for (const AudioCheckRunner::Progress &p : m_progress) {
+            QCOMPARE(p.punchIns, 2);
+            QVERIFY(p.punchIn >= 0 && p.punchIn <= 2);
+            QVERIFY2(p.secondsLeft <= left + 0.001,
+                     qPrintable(QString("%1 s left after %2 s")
+                                .arg(p.secondsLeft).arg(left)));
+            left = p.secondsLeft;
+            const QString step =
+                QString("%1 %2").arg(stepName(p.step)).arg(p.punchIn);
+            if (steps.isEmpty() || steps.back() != step) steps << step;
+            if (p.step == AudioCheckRunner::Step::Recording) {
+                ++reportsWhileRecording[p.punchIn];
+            }
+        }
+        QCOMPARE(steps, QStringList()
+                 << "opening 0" << "analysing the reference 0"
+                 << "recording 1" << "analysing the take 1"
+                 << "recording 2" << "analysing the take 2");
+        QVERIFY2(reportsWhileRecording[1] >= 3 && reportsWhileRecording[2] >= 3,
+                 qPrintable(QString("%1 and %2 reports while recording")
+                            .arg(reportsWhileRecording[1])
+                            .arg(reportsWhileRecording[2])));
+        QCOMPARE(m_progress.back().secondsLeft, 0.0);
+    }
+
+    // A session opened after a check plays as one opened before it did,
+    // and the settings every session reads are as they were: the
+    // check's playback was its session's alone. The user has the
+    // reference muted and the sonification on, both the other way round
+    // from the check's
+    void check_leaves_the_next_session_alone() {
+        muteReferenceInSettings();
+        makeWindow(loopback());
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        const QStringList before = sessionPlayback();
+        const QStringList settingsBefore = analyserSettings();
+        QVERIFY2(checkPlaybackProblem() != "", qPrintable(before.join(", ")));
+
+        startCheck();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
+                                 30000);
+        QTest::qWait(500);
+        QCOMPARE(checkPlaybackProblem(), QString());
+        m_window->audioCheck()->cancel();
+        QCOMPARE(m_finished, 1);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        QCOMPARE(analyserSettings(), settingsBefore);
+
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(sessionPlayback(), before);
+        QCOMPARE(analyserSettings(), settingsBefore);
+    }
+
+    // Each check writes its reference to a file of its own, never over
+    // the one the open session plays, which may be the check before's;
+    // the others are removed, and the lowest free number is taken
+    void check_reference_gets_a_file_of_its_own() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        auto touch = [&](QString name) {
+            QFile file(dir.filePath(name));
+            return file.open(QIODevice::WriteOnly);
+        };
+        auto files = [&]() {
+            return QDir(dir.path()).entryList(QDir::Files, QDir::Name);
+        };
+        const QString one = dir.filePath("calibrate-audio-reference-1.wav");
+        const QString two = dir.filePath("calibrate-audio-reference-2.wav");
+
+        QCOMPARE(AudioCheckRunner::nextReferencePath(dir.path(), ""), one);
+        QVERIFY(touch("calibrate-audio-reference-1.wav"));
+
+        // Check Again, with the first check's session open
+        QCOMPARE(AudioCheckRunner::nextReferencePath(dir.path(), one), two);
+        QVERIFY(touch("calibrate-audio-reference-2.wav"));
+        QVERIFY(touch("calibrate-audio-reference.wav"));
+        QVERIFY(touch("song.wav"));
+
+        // and again
+        QCOMPARE(AudioCheckRunner::nextReferencePath(dir.path(), two), one);
+        QCOMPARE(files(), QStringList()
+                 << "calibrate-audio-reference-2.wav" << "song.wav");
+
+        // A check with the user's song open
+        QCOMPARE(AudioCheckRunner::nextReferencePath
+                 (dir.path(), dir.filePath("song.wav")), one);
+        QCOMPARE(files(), QStringList() << "song.wav");
     }
 };
 
