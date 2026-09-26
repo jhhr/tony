@@ -117,8 +117,9 @@ The environment's settings:
   added for the Android branch (the SDK, the NDK, and Gradle's Google repository, which
   `maven.google.com` redirects to). GitHub, conda-forge and Ubuntu's archive are in the
   default list; hg.sr.ht, download.qt.io and Qt's mirrors are not. A push to one of the
-  forks is another matter, which the level does not decide: with Trusted access too, it is
-  refused until the fork is attached to the session ([forks.md](forks.md#changing-a-fork)).
+  forks is another matter: with this Custom access it is refused (HTTP 403) until the fork
+  is attached to the session, and goes through once it is
+  ([forks.md](forks.md#changing-a-fork)).
 - Variables `BASH_DEFAULT_TIMEOUT_MS=600000` and `BASH_MAX_TIMEOUT_MS=1800000`, so that a
   build or a suite run is not moved to the background after the tool's default two minutes,
   and a 30-minute timeout can be given at all.
