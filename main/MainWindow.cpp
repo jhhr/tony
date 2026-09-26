@@ -6201,8 +6201,9 @@ MainWindow::startTakeAnalysis(sv_frame_t start, sv_frame_t end)
         return false;
     }
 
-    // A range short enough to have been analysed and merged before the
-    // call returned leaves nothing to wait for
+    // The analysis is merged from the event loop, however soon it is
+    // done (Analyser::analyseRange()); this is for an analyser that
+    // could not start one after all
     if (!m_analyser2->isAnalysingRange()) return false;
 
     m_takeAnalysisRange = Coverage::Range(start, end);

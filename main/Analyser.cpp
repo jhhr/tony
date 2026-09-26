@@ -1206,8 +1206,15 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
 
     // createDerivedLayers() returns only once the transform has set both
     // outputs' completion to 0, so no signal can have been missed above.
-    // A very short range could have finished by now all the same
-    rangedAnalysisCompletionChanged({});
+    // A very short range could have finished by now all the same.  It is
+    // looked at from the event loop, not here: then the caller always
+    // finds the range being analysed when this returns, whether pYIN took
+    // a second or was done within the call, and waits for the merge the
+    // same way.  (It was done within the call often enough, on a quiet
+    // machine, to make tests of what happens during an analysis fail.)
+    QMetaObject::invokeMethod(this, [this]() {
+        rangedAnalysisCompletionChanged({});
+    }, Qt::QueuedConnection);
 
     return "";
 }
