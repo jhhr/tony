@@ -116,7 +116,9 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   line (where the value changes) is bold. The font (`getLyricsFontPixelSize()`) is twice
   the view's at the least, up to four times, and never more than an eighth of the view's
   height; it grows with the **square root** of the zoom, so that zooming in gives the
-  words room (their boxes grow with the zoom itself). No vertical scale, no feature
+  words room (their boxes grow with the zoom itself). `setLyricsTextScale()` (branch
+  `feat/tonyandroid`) draws the words at a share of that: `LyricsTrack` asks for 65 % on
+  Android, where the desktop's size left room for only a few words. No vertical scale, no feature
   description, and not editable by the pane's tools: Tony's `LyricsEditor` edits the
   model itself.
   `setHighlightFrame()` draws the region at that frame in amber (the latest to start, where

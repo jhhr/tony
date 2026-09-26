@@ -54,6 +54,16 @@ LyricsTrack::~LyricsTrack()
 {
 }
 
+double
+LyricsTrack::textScale()
+{
+#ifdef Q_OS_ANDROID
+    return 0.65;
+#else
+    return 1.0;
+#endif
+}
+
 QString
 LyricsTrack::layerName()
 {
@@ -162,6 +172,7 @@ LyricsTrack::configureLayer()
     // scale to this layer
     m_layer->setVerticalScale(RegionLayer::EqualSpaced);
     m_layer->setPlotStyle(RegionLayer::PlotLyrics);
+    m_layer->setLyricsTextScale(textScale());
 
     // The words are dark on light boxes whatever this is; grey rather
     // than the layer's default black wherever else its colour shows

@@ -110,6 +110,13 @@ public:
      */
     static QString layerName();
 
+    /**
+     * The share of svgui's size the words are drawn at: 65% on a phone,
+     * where the desktop's size leaves room for only a few words in the
+     * pane and a verse wants to be on show at once; all of it elsewhere.
+     */
+    static double textScale();
+
 private slots:
     void layerAboutToBeDeleted(sv::Layer *);
 

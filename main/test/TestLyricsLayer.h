@@ -582,6 +582,30 @@ private slots:
         QCOMPARE(row.width(), m_pane->getPaintWidth());
     }
 
+    // A phone draws the words smaller (LyricsTrack::textScale()): the
+    // row of boxes, as high as a line of the font and a margin, comes
+    // down with the font
+    void the_words_are_drawn_at_the_text_scale() {
+        QCOMPARE(m_layer->getLyricsTextScale(), 1.0);
+        addSpacedWords(3);
+        render({ QRect(0, 0, kWidth, kHeight) });
+        int margin = m_pane->scalePixelSize(4);
+        int whole = m_layer->getLyricsBoxRow(m_pane).height() - margin;
+        QVERIFY(whole > 10);
+
+        m_layer->setLyricsTextScale(0.65);
+        render({ QRect(0, 0, kWidth, kHeight) });
+        int scaled = m_layer->getLyricsBoxRow(m_pane).height() - margin;
+        QVERIFY2(std::abs(scaled - 0.65 * whole) <= 2.0,
+                 qPrintable(QString("a line of the words is %1 px high at "
+                                    "65%, against %2 px at 100%")
+                            .arg(scaled).arg(whole)));
+
+        m_layer->setLyricsTextScale(1.0);
+        render({ QRect(0, 0, kWidth, kHeight) });
+        QCOMPARE(m_layer->getLyricsBoxRow(m_pane).height() - margin, whole);
+    }
+
     void painting_in_strips_matches_painting_whole() {
         // A view that scrolls repaints only the strip that comes into
         // sight; the labels in it must be where they were when the
