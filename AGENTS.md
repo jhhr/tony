@@ -44,7 +44,7 @@ Run tests from `build_mingw/` with the same environment:
 ```sh
 mkdir -p ../tmp/tl
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "exit:$?"
-TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~9 min, real time
+TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~12 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ```
@@ -58,7 +58,7 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
-- Give the app suite a tool timeout of 15 minutes, or run it in the background.
+- Give the app suite a tool timeout of 20 minutes, or run it in the background.
 
 In a **Linux cloud session** the commands are others. The session's hook has started a
 build into `build/` in the background; run `deploy/linux/cloud-session.sh wait` before the
