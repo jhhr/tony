@@ -194,7 +194,7 @@ coloured fringes on the scale's labels read as live dots in `TestUiChecks`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`), C2 (`fbdce6c`), C2b (`4fb73ac`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`), C2 (`fbdce6c`), C2b (`4fb73ac`), C2c (`5f7b2b8`).
 
 Also done: C1a (`4370131`), the merge of `default` (`c8b9585`), `test-tony-dev` (lead).
 
@@ -388,11 +388,44 @@ and `TestSingingAnalysis.h` for "note"); C2's log entry.
 
 ### C3 — Retire `test-tony-device`
 
-To be refined by the lead after C2. Outline: remove `TestRealDevice.h`,
-`tony-device-check.cpp` and its target once everything it checks is in the dev run (its
-"no input does no harm" case included, as an app test if not already covered); update the
-docs that name it in the same commit (`AGENTS.md`, `building.md`, `testing.md`, and
-`manual-checklist.md` section 1, which becomes "Calibrate Audio with the dev checks").
+Read also: `main/test/TestRealDevice.h` whole (607 lines: what is being retired);
+`docs/manual-checklist.md` whole; `docs/testing.md`'s table and the passages naming
+`test-tony-device`; `main/dev/DevChecks.h` (the items and the report); the runner's
+`Recording` step in `AudioCheckRunner.cpp`.
+
+- **Check coverage first**, test by test of `TestRealDevice.h`, and write the mapping into
+  your log entry: `device()` → the report header; `takes_line_up_with_the_reference` →
+  items 1 and 2; `nothing_of_the_take_comes_back_out` → item 4;
+  `stop_is_quicker_than_a_whole_song` → item 9; `live_dots_were_drawn` → items 3 and 5;
+  `no_input_does_no_harm` → see below. Anything it checks that the dev run does not:
+  report it, and port it if small.
+- **A device that opens but delivers nothing** (its `no_input_does_no_harm` and the
+  QFAIL "the device opened, but … delivered no input at all"): the runner today waits
+  out its `Recording` step and ends with "A take did not stop at the end of its range",
+  which misleads. Make the runner end a take that has received no frames at all by the
+  time the take should be over, with a message that says the device delivered no input,
+  through the Stop path, leaving no take and no harm; and an app test in
+  `TestAudioCheck` with a fake device that opens and never calls back (see how
+  `FakeAudioIO` and `TestMainWindow` make one; add a field if needed). A device that
+  cannot be opened at all is covered already (`check_fails_without_a_device`).
+- **Remove** `main/test/TestRealDevice.h`, `main/test/tony-device-check.cpp` and the
+  `test-tony-device` target in `meson.build`, and `TestMainWindow`'s
+  `setUseRealDevice()` and what serves only it, if nothing else uses them.
+- **Docs, in the same change** (AGENTS.md's "Keeping the docs true"):
+  - `AGENTS.md` and `docs/building.md`: the build command without `test-tony-device.exe`;
+  - `docs/testing.md`: its table row and paragraph;
+  - `docs/manual-checklist.md` section 1 becomes "The device check: Calibrate Audio with
+    the dev checks": in a development build, Playback ▸ Calibrate Audio… with the
+    checkbox on; the earcup against the microphone; the report file `DevChecks.txt` in
+    Tony's application data folder; what each item's numbers mean in a line each; what
+    fails on MME today (items 1, 2 and 10's offsets, spec §8) and why. Keep the list of
+    what it covers and the dated notes that still hold; drop what was only about the
+    executable (`TONY_DEVICE_CHECK_FAKE`: `TestDevChecks` checks the check now).
+  - `main/dev/DevChecks.h`'s comments that name `test-tony-device`.
+  - Leave `docs/calibrate-audio*.md` beyond your log entry and spec §7's "Done": phase D
+    brings them up to date.
+- **Tests:** the new `TestAudioCheck` test, seen failing before the runner change. The
+  three suites green; `test-tony-device` no longer builds or exists.
 
 ### Lead — release build
 
