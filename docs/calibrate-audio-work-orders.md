@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
@@ -540,3 +540,8 @@ The next phase must know:
 - A run replacing a check session asks "Session modified: save?" (its takes mark it modified). Check Again always meets it; answer No. The runner could skip the question for its own reference's session.
 - Not on the result page: §2's mic channel and noise floor. The runner measures neither.
 Left open: Record stays enabled during a check. Pressing it there goes through the Stop path and ends the check's take early; what the run then makes of it was not tried.
+
+### Lead — 2026-09-26, after B4
+- The button is complete; the user's Windows run is the checkpoint (spec §7). C0 onwards goes on meanwhile.
+- Left for C1 (small, in passing): Record stays enabled during a check, and pressing it ends the check's take early; grey it while a check runs.
+- Left for D: spec §2 promises the mic channel and noise floor on the result page, which nothing measures yet (C2's item 5 measures the channel); §8 says "modal progress dialog", true only of the dev run; Check Again always asks to save the check's own session (answer No), a possible later nicety.
