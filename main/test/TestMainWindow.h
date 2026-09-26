@@ -15,7 +15,7 @@
 #define TEST_MAIN_WINDOW_H
 
 // The real MainWindow for the suites that drive it: TestRecordWorkflow,
-// TestUiChecks and the real-device check
+// TestUiChecks, TestAudioCheck, TestDevChecks and the real-device check
 
 #include "FakeAudioIO.h"
 
@@ -23,6 +23,10 @@
 #include "../Analyser.h"
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
+
+#ifdef TONY_DEV_CHECKS
+#include "../dev/DevChecks.h"
+#endif
 
 #include "view/ViewManager.h"
 #include "audio/AudioCallbackPlaySource.h"
@@ -114,6 +118,9 @@ public:
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
     bool isDocumentModified() { return m_documentModified; }
+
+    // As any edit does
+    void markModified() { documentModified(); }
     void doCloseSession() { discardModifications(); closeSession(); }
 
     void setPlayReferenceWhileRecording(bool on) {
@@ -123,6 +130,42 @@ public:
     void setRecordIntoSelection(bool on) {
         m_recordIntoSelection->setChecked(on);
     }
+    QAction *playReferenceWhileRecordingAction() {
+        return m_playRefWhileRecording;
+    }
+    QAction *preRollAction() { return m_preRoll; }
+    QAction *recordIntoSelectionAction() { return m_recordIntoSelection; }
+
+    // The audio check, the override it sets for its own takes, and what
+    // the last take was placed with
+    AudioCheckRunner *audioCheck() { return m_audioCheck; }
+    bool audioCheckTakes() { return m_audioCheckTakes; }
+
+    // The Record button, as the user presses it
+    QAction *recordAction() { return m_recordAction; }
+
+#ifdef TONY_DEV_CHECKS
+    // The development checks; deleted as the window's destructor deletes
+    // them, with the window left, and then as a release build has it
+    DevChecks *devChecks() { return m_devChecks; }
+    void doDeleteDevChecks() {
+        delete m_devChecks;
+        m_devChecks = nullptr;
+    }
+#endif
+
+    // Playback > Calibrate Audio, the dialog it shows once it has been
+    // chosen, the lines under it, and the device menus above it
+    QAction *calibrateAudioAction() { return m_calibrateAudioAction; }
+    CalibrateAudioDialog *calibrateAudioDialog() {
+        return m_calibrateAudioDialog;
+    }
+    QAction *latencyLineAction() { return m_latencyLineAction; }
+    QAction *forgetLatencyAction() { return m_forgetLatencyAction; }
+    QMenu *playbackMenu() { return m_playbackMenu; }
+    QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
+    QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
+    TakeLatency takeLatency() { return m_takeLatency; }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
 
     Analyser *analyser() { return m_analyser; }

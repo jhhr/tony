@@ -1,17 +1,21 @@
 # Testing
 
 QtTest suites in `main/test/`, in two executables that mirror the two libraries
-(see [architecture.md](architecture.md)). The commands are in [AGENTS.md](../AGENTS.md).
+(see [architecture.md](architecture.md)), plus one for the development checks and one for
+the real device. The commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
 | `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestModelChangeThrottle` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestRecordWorkflow`, `TestUiChecks` | about 5 minutes (measured 2026-09-25 on Linux), nearly all of it `TestRecordWorkflow` and `TestUiChecks`: takes are recorded in real time |
+| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about a minute and growing: each test records several takes in real time |
 | `test-tony-device` | as `test-tony-app`, but with the **real** audio device | `TestRealDevice` | about a minute; run by hand only, see the [manual checklist](manual-checklist.md) |
 
-`meson test` / `build.bat test` runs the first two plus four svcore suites. `test-tony-device`
+`meson test` / `build.bat test` runs the first three plus four svcore suites. `test-tony-device`
 is built with them and never run by `meson test`: it needs a microphone that hears the
-speakers.
+speakers. `test-tony-dev` is apart from `test-tony-app` so that the everyday runs stay
+shorter: run it when a change touches what the development checks drive (see
+[AGENTS.md](../AGENTS.md)).
 
 - The `tony-app` meson test has `timeout: 900`; the suite took about 277 s unloaded when
   that was set. Every workflow test adds real time, so if the suite comes near it, raise it

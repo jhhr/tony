@@ -18,6 +18,8 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 ## Not built
 
+- **Calibrate Audio**: a measured round trip in place of PortAudio's reported latency,
+  and dev checks for the manual checklist. Planned in [calibrate-audio.md](calibrate-audio.md).
 - Showing two takes at once, or any comparison of takes other than switching.
 - Singing track gain and pan are not saved in the session.
 - Background music is not saved in the session; it is reloaded by hand.

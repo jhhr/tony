@@ -18,11 +18,17 @@
 #include "MainWindow.h"
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
+#include "AudioCheckRunner.h"
+#include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
 #include "TakesFile.h"
+
+#ifdef TONY_DEV_CHECKS
+#include "dev/DevChecks.h"
+#endif
 
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
@@ -202,7 +208,20 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingLatencyFrames(0),
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
-    m_awaitingReferenceStart(false)
+    m_awaitingReferenceStart(false),
+    m_takeLatency(),
+    m_audioCheck(nullptr),
+    m_audioCheckTakes(false),
+    m_audioCheckRoundTrip(-1.0),
+#ifdef TONY_DEV_CHECKS
+    m_devChecks(nullptr),
+#endif
+    m_recordAction(nullptr),
+    m_calibrateAudioDialog(nullptr),
+    m_calibrateAudioAction(nullptr),
+    m_latencyLineAction(nullptr),
+    m_forgetLatencyAction(nullptr),
+    m_lastRecordingRate(0)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -294,8 +313,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     // We have a pane stack: it comes with the territory. However, we
     // have a fixed and known number of panes in it -- it isn't
     // variable
-    connect(m_paneStack, SIGNAL(doubleClickSelectInvoked(sv_frame_t)),
-            this, SLOT(doubleClickSelectInvoked(sv_frame_t)));
+    // By member pointer: the slot takes sv::sv_frame_t, which a SLOT()
+    // string saying sv_frame_t does not match under every Qt version
+    connect(m_paneStack, &PaneStack::doubleClickSelectInvoked,
+            this, &MainWindow::doubleClickSelectInvoked);
     scroll->setWidget(m_paneStack);
 
     m_overview = new Overview(frame);
@@ -394,6 +415,24 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
+    m_audioCheck = new AudioCheckRunner(this);
+
+    // What may be chosen changes as a check begins and as it ends.  The
+    // first progress comes from its first step, before anything is asked
+    connect(m_audioCheck, &AudioCheckRunner::progress,
+            this, [this]() { updateMenuStates(); });
+    connect(m_audioCheck, &AudioCheckRunner::finished,
+            this, [this]() { updateMenuStates(); });
+
+#ifdef TONY_DEV_CHECKS
+    // Likewise for the development checks, which run the check among
+    // stages of their own
+    m_devChecks = new DevChecks(this, m_audioCheck);
+    connect(m_devChecks, &DevChecks::progress,
+            this, [this]() { updateMenuStates(); });
+    connect(m_devChecks, &DevChecks::finished,
+            this, [this]() { updateMenuStates(); });
+#endif
 
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
@@ -451,6 +490,18 @@ MainWindow::MainWindow(AudioMode audioMode,
 
 MainWindow::~MainWindow()
 {
+    // The check's dialog first, as it holds the runner and the dev
+    // checks; then the dev checks, which drive the runner; then a check
+    // still running ends here, before anything it reads goes
+    delete m_calibrateAudioDialog;
+    m_calibrateAudioDialog = nullptr;
+#ifdef TONY_DEV_CHECKS
+    delete m_devChecks;
+    m_devChecks = nullptr;
+#endif
+    delete m_audioCheck;
+    m_audioCheck = nullptr;
+
     // Nothing must poll a take while the window is coming down
     stopTakePolling();
 
@@ -1447,6 +1498,9 @@ MainWindow::audioDeviceSelected(QAction *action)
         stop();
     }
 
+    // Another device may record at another rate
+    m_lastRecordingRate = 0;
+
     recreateAudioIO();
 }
 
@@ -1509,7 +1563,9 @@ MainWindow::setupToolbars()
     recordAction->setCheckable(true);
     recordAction->setShortcut(tr("Ctrl+Space"));
     recordAction->setStatusTip(tr("Record a new audio file. If a reference track is already loaded, the recording is added as the singing track alongside it."));
-    connect(recordAction, SIGNAL(triggered()), this, SLOT(record()));
+    connect(recordAction, &QAction::triggered,
+            this, &MainWindow::recordPressed);
+    m_recordAction = recordAction;
     connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
 	    recordAction, SLOT(setChecked(bool)));
     connect(m_recordTarget, SIGNAL(recordCompleted()),
@@ -1644,6 +1700,29 @@ MainWindow::setupToolbars()
         connect(g, SIGNAL(triggered(QAction *)),
                 this, SLOT(audioDeviceSelected(QAction *)));
     }
+
+    // The audio check, and the latency takes are placed with: a line to
+    // read, never chosen, brought up to date whenever the menu opens
+    m_calibrateAudioAction = menu->addAction(tr("&Calibrate Audio..."));
+    m_calibrateAudioAction->setStatusTip
+        (tr("Measure how late recordings arrive through these devices, with "
+            "an earcup held against the microphone"));
+    connect(m_calibrateAudioAction, &QAction::triggered,
+            this, &MainWindow::calibrateAudio);
+
+    m_latencyLineAction = menu->addAction(QString());
+    m_latencyLineAction->setEnabled(false);
+
+    m_forgetLatencyAction = menu->addAction(tr("&Forget Measured Latency"));
+    m_forgetLatencyAction->setStatusTip
+        (tr("Place takes on these devices with the latency the driver "
+            "reports again"));
+    connect(m_forgetLatencyAction, &QAction::triggered,
+            this, [this]() { forgetMeasuredLatency(); });
+
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::updateLatencyMenuLine);
+    updateLatencyMenuLine();
     menu->addSeparator();
 
     m_rightButtonPlaybackMenu->addAction(playAction);
@@ -2211,6 +2290,20 @@ MainWindow::updateMenuStates()
     emit canChangeTakes(canChange);
     emit canActOnTake(canChange && m_takes->getActiveIndex() >= 0);
 
+    // The audio check records takes of its own, and keeps what it
+    // measures for the devices it started on.  Record is shut after the
+    // base class has opened it: a press would stop the check's take, or
+    // record one of the user's into the check's session
+    bool checking = audioCheckRunning();
+    if (checking) emit canRecord(false);
+    if (m_calibrateAudioAction) {
+        m_calibrateAudioAction->setEnabled(!inTake && !checking);
+    }
+    for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        if (m) m->menuAction()->setEnabled(!checking);
+    }
+    updateLatencyMenuLine();
+
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
         m_showCandidatesAction->setStatusTip(tr("Remove the display of alternate pitch candidates for the selected region"));
@@ -2537,6 +2630,16 @@ void
 MainWindow::closeSession()
 {
     if (!checkSaveModified()) return;
+
+    // A check has nothing left to record into; a take of its own that is
+    // running is stopped through the Stop path, as the check's Cancel does.
+    // The runner first: one that is replacing the session for the dev
+    // checks carries on, and the dev checks see it running and carry on
+    // with it, as they do through a reopen of their own
+    if (m_audioCheck) m_audioCheck->sessionClosing();
+#ifdef TONY_DEV_CHECKS
+    if (m_devChecks) m_devChecks->sessionClosing();
+#endif
 
     // Nothing of a take that is still running outlives its session
     stopTakePolling();
@@ -3888,6 +3991,7 @@ MainWindow::record()
     m_recordingStartGapEstimate = 0;
     m_awaitingReferenceStart = false;
     m_recordingStartGapMeasured = -1;
+    m_takeLatency = TakeLatency();
 
     if (haveReference) {
 
@@ -3901,10 +4005,12 @@ MainWindow::record()
         // Record into Selection: the selection is what is recorded, so it
         // says where the take starts and where it stops, and the playhead
         // only picks which selection that is.  With none selected this is
-        // an ordinary recording from the playhead.
+        // an ordinary recording from the playhead.  The audio check's
+        // takes always record into the selection it makes.
         sv_frame_t end = -1;
-        if (m_recordIntoSelection && m_recordIntoSelection->isChecked() &&
-            m_viewManager) {
+        bool intoSelection = m_audioCheckTakes ||
+            (m_recordIntoSelection && m_recordIntoSelection->isChecked());
+        if (intoSelection && m_viewManager) {
             Coverage::Ranges selected;
             for (const Selection &s : m_viewManager->getSelections()) {
                 if (!s.isEmpty()) {
@@ -4067,6 +4173,36 @@ MainWindow::record()
 }
 
 void
+MainWindow::recordPressed()
+{
+    // The check starts and stops its takes through record() itself, and
+    // a press would stop its take early, or start one of the user's in
+    // the check's session.  The button is shut while it runs; a press
+    // that arrives all the same (queued before it was shut, say) leaves
+    // the button showing what is really happening
+    if (audioCheckRunning()) {
+        cerr << "MainWindow::recordPressed: the audio check is running; "
+             << "Record is ignored" << endl;
+        if (m_recordAction) {
+            m_recordAction->setChecked
+                (m_recordTarget && m_recordTarget->isRecording());
+        }
+        return;
+    }
+    record();
+}
+
+bool
+MainWindow::audioCheckRunning() const
+{
+    if (m_audioCheck && m_audioCheck->isRunning()) return true;
+#ifdef TONY_DEV_CHECKS
+    if (m_devChecks && m_devChecks->isRunning()) return true;
+#endif
+    return false;
+}
+
+void
 MainWindow::startTakePolling()
 {
     // Only a take that is to stop by itself needs watching: nothing else
@@ -4195,9 +4331,11 @@ MainWindow::recordingStarted()
         // hears the reference from there.  The audio IO was already
         // resumed by record() so m_playSource can be started directly
         // without calling MainWindowBase::play() (which would stop
-        // recording if isRecording() is true).
-        if (m_recordingAsSingingTrack &&
-            m_playRefWhileRecording && m_playRefWhileRecording->isChecked() &&
+        // recording if isRecording() is true).  The audio check's takes
+        // always play it: they measure where it arrives.
+        bool playReference = m_audioCheckTakes ||
+            (m_playRefWhileRecording && m_playRefWhileRecording->isChecked());
+        if (m_recordingAsSingingTrack && playReference &&
             m_playSource && !m_playSource->isPlaying()) {
             cerr << "MainWindow::recordingStarted: starting reference playback" << endl;
 
@@ -4208,7 +4346,9 @@ MainWindow::recordingStarted()
             // The singer's response to the reference where playback starts
             // arrives in the recording at approximately frame
             // (outputLatency + inputLatency), so that is the frame the splice
-            // reads the recording from.
+            // reads the recording from.  Drivers often report those two
+            // wrong; a round trip the audio check measured on this device
+            // is used instead, while there is one (roundTripAt()).
             // With a pre-roll, playback starts at the beginning of the
             // lead-in rather than at the take's position, and the splice
             // skips the lead-in as well (TakeTiming::spliceOffset()).
@@ -4227,10 +4367,64 @@ MainWindow::recordingStarted()
             // figure, and refineRecordingLatency() picks it up.
             m_recordingStartGapEstimate =
                 m_recordTarget ? m_recordTarget->getFramesReceived() : 0;
-            m_recordingLatencyFrames =
-                computeRecordingLatency(outputLatency, inputLatency) +
-                m_recordingStartGapEstimate;
-            cerr << "MainWindow::recordingStarted: output latency=" << outputLatency
+
+            // The round trip is taken off the front of the recording, so it
+            // is counted in frames of the recording, at the device's rate.
+            // The reported latencies are not both counted so: the play
+            // source usually has the output latency in frames of the
+            // session.  They differ when the device is not at 44.1 kHz, so
+            // the round trip goes through seconds
+            sv_samplerate_t recordingRate = 0;
+            if (auto wfm = ModelById::getAs<WritableWaveFileModel>
+                (m_currentRecordingModelId)) {
+                recordingRate = wfm->getSampleRate();
+            }
+            if (recordingRate <= 0) {
+                recordingRate = sessionRate();
+                cerr << "MainWindow::recordingStarted: the recording's rate "
+                     << "is not known; taking the session's, "
+                     << recordingRate << " Hz" << endl;
+            }
+            m_lastRecordingRate = recordingRate;
+
+            LatencyCalibration::InUse inUse = roundTripAt(recordingRate);
+
+            // A check that brings a round trip of its own places its takes
+            // with that, for the run only (the dev checks, with the figure
+            // the calibration before them measured): nothing is stored,
+            // and latencyInUse() goes on describing roundTripAt()'s.  The
+            // reported pair stays the device's
+            const bool checkOwn =
+                m_audioCheckTakes && m_audioCheckRoundTrip >= 0.0;
+            if (checkOwn) inUse.roundTrip = m_audioCheckRoundTrip;
+
+            sv_frame_t roundTrip =
+                LatencyCalibration::toFrames(inUse.roundTrip, recordingRate);
+            m_recordingLatencyFrames = roundTrip + m_recordingStartGapEstimate;
+
+            m_takeLatency.roundTrip = roundTrip;
+            m_takeLatency.reportedOutput = inUse.reportedOutput;
+            m_takeLatency.reportedInput = inUse.reportedInput;
+            m_takeLatency.measured = checkOwn ||
+                (inUse.source == LatencyCalibration::Source::Measured);
+            m_takeLatency.startGap = m_recordingStartGapEstimate;
+            m_takeLatency.startGapMeasured = false;
+            cerr << "MainWindow::recordingStarted: round trip " << roundTrip
+                 << " frames at " << recordingRate << " Hz ("
+                 << inUse.roundTrip * 1000.0 << " ms), ";
+            if (checkOwn) {
+                cerr << "the audio check's own, for its run only";
+            } else {
+                cerr << LatencyCalibration::sourceName(inUse.source);
+                if (inUse.source == LatencyCalibration::Source::Measured) {
+                    cerr << " on "
+                         << inUse.date.toString(Qt::ISODate).toStdString();
+                } else if (inUse.stale) {
+                    cerr << ": the measured one is stale, the device reports "
+                         << "other latencies now";
+                }
+            }
+            cerr << "; output latency=" << outputLatency
                  << " input latency=" << inputLatency
                  << " estimated start gap=" << m_recordingStartGapEstimate
                  << " total compensation=" << m_recordingLatencyFrames << " frames" << endl;
@@ -4252,7 +4446,16 @@ void
 MainWindow::refineRecordingLatency()
 {
     sv_frame_t measured = m_recordingStartGapMeasured;
-    if (measured < 0 || measured == m_recordingStartGapEstimate) return;
+    if (measured < 0) return;
+
+    // Measured, whether or not the estimate was right: the audio check
+    // reports for each take which of the two it was placed with.  Kept
+    // here, on the GUI thread, and not by the audio callback that
+    // measures it
+    m_takeLatency.startGap = measured;
+    m_takeLatency.startGapMeasured = true;
+
+    if (measured == m_recordingStartGapEstimate) return;
     cerr << "MainWindow::refineRecordingLatency: start gap was " << measured
          << " frames, not the estimated " << m_recordingStartGapEstimate << endl;
     m_recordingLatencyFrames = currentRecordingLatency();
@@ -4271,6 +4474,122 @@ MainWindow::currentRecordingLatency() const
     return m_recordingLatencyFrames + (measured - m_recordingStartGapEstimate);
 }
 
+sv_samplerate_t
+MainWindow::sessionRate() const
+{
+    sv_samplerate_t rate = m_playSource ? m_playSource->getSourceSampleRate() : 0;
+    if (rate <= 0) rate = Preferences::getInstance()->getFixedSampleRate();
+    return rate;
+}
+
+LatencyCalibration::InUse
+MainWindow::roundTripAt(sv_samplerate_t recordingRate) const
+{
+    // The play source counts its output latency in frames at the rate it
+    // was told the device runs at, as its own getCurrentPlayingFrame()
+    // does.  bqaudioio's ResamplerWrapper tells it the session's rate and
+    // converts the device's figure to it, when the session had a rate by
+    // the time the device was opened.  If it had none yet (a device chosen
+    // before any file was opened), the wrapper passed the figure on as the
+    // device counts it and told the play source 0: the recording's frames
+    sv_samplerate_t outputRate =
+        m_playSource ? m_playSource->getDeviceSampleRate() : 0;
+    if (outputRate <= 0) outputRate = recordingRate;
+
+    double output = m_playSource ?
+        LatencyCalibration::reportedSeconds
+        (m_playSource->getTargetPlayLatency(), outputRate) : 0.0;
+    double input = m_recordTarget ?
+        LatencyCalibration::reportedSeconds
+        (m_recordTarget->getSystemRecordLatency(), recordingRate) : 0.0;
+
+    QSettings settings;
+    LatencyCalibration::Figure figure;
+    bool stored = LatencyCalibration::load
+        (settings, LatencyCalibration::currentKey(settings, recordingRate),
+         figure);
+    return LatencyCalibration::roundTripInUse
+        (stored ? &figure : nullptr, output, input);
+}
+
+sv_samplerate_t
+MainWindow::expectedRecordingRate() const
+{
+    return m_lastRecordingRate > 0 ? m_lastRecordingRate : sessionRate();
+}
+
+LatencyCalibration::InUse
+MainWindow::latencyInUse() const
+{
+    return roundTripAt(expectedRecordingRate());
+}
+
+bool
+MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
+{
+    if (!result.calibrationUsable()) return false;
+
+    LatencyCalibration::Figure figure;
+    figure.roundTrip = result.calibratedRoundTrip;
+    figure.spread = result.summary.spread;
+    figure.date = QDateTime::currentDateTimeUtc();
+    figure.reportedOutput = result.reportedOutputLatency;
+    figure.reportedInput = result.reportedInputLatency;
+
+    // Under the devices the check ran on, which the Preferences may no
+    // longer name: the result can be on show long after the run
+    LatencyCalibration::Key key = result.key;
+    key.rate = result.recordingRate;
+
+    QSettings settings;
+    LatencyCalibration::store(settings, key, figure);
+    cerr << "MainWindow::storeMeasuredLatency: round trip "
+         << figure.roundTrip * 1000.0 << " ms at " << key.rate
+         << " Hz, the device reporting " << figure.reportedOutput * 1000.0
+         << " ms out and " << figure.reportedInput * 1000.0 << " ms in"
+         << endl;
+    updateLatencyMenuLine();
+    return true;
+}
+
+void
+MainWindow::forgetMeasuredLatency()
+{
+    QSettings settings;
+    LatencyCalibration::forget
+        (settings, LatencyCalibration::currentKey(settings,
+                                                  expectedRecordingRate()));
+    cerr << "MainWindow::forgetMeasuredLatency: at "
+         << expectedRecordingRate() << " Hz" << endl;
+    updateLatencyMenuLine();
+}
+
+void
+MainWindow::updateLatencyMenuLine()
+{
+    if (!m_latencyLineAction || !m_forgetLatencyAction) return;
+    LatencyCalibration::InUse inUse = latencyInUse();
+    m_latencyLineAction->setText
+        (tr("Latency: %1").arg(CalibrateAudioDialog::describeLatency(inUse)));
+
+    // A stale figure is kept too (it applies again if the device goes
+    // back to its old buffers), and can be forgotten like any other
+    m_forgetLatencyAction->setEnabled
+        (inUse.source == LatencyCalibration::Source::Measured || inUse.stale);
+}
+
+void
+MainWindow::calibrateAudio()
+{
+    if (!m_calibrateAudioDialog) {
+        m_calibrateAudioDialog = new CalibrateAudioDialog(this, m_audioCheck);
+#ifdef TONY_DEV_CHECKS
+        m_calibrateAudioDialog->setDevChecks(m_devChecks);
+#endif
+    }
+    m_calibrateAudioDialog->present();
+}
+
 TakeTiming
 MainWindow::currentTakeTiming() const
 {
@@ -4287,12 +4606,17 @@ MainWindow::currentTakeTiming() const
 sv_frame_t
 MainWindow::wantedPreRollFrames() const
 {
-    if (!m_preRoll || !m_preRoll->isChecked()) return 0;
-
-    QSettings settings;
-    settings.beginGroup("MainWindow");
-    double seconds = settings.value("prerollseconds", 3.0).toDouble();
-    settings.endGroup();
+    double seconds = 0.0;
+    if (m_audioCheckTakes) {
+        // The audio check's takes have a lead-in of their own
+        seconds = AudioCheckRunner::kPreRollSeconds;
+    } else {
+        if (!m_preRoll || !m_preRoll->isChecked()) return 0;
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        seconds = settings.value("prerollseconds", 3.0).toDouble();
+        settings.endGroup();
+    }
     if (seconds <= 0.0) return 0;
 
     auto model = getMainModel();
@@ -4441,6 +4765,7 @@ MainWindow::finishSingingTake()
         (m_currentRecordingModelId)) {
         recordingPath = wfm->getLocation();
         recorded = wfm->getFrameCount();
+        m_takeLatency.recordingRate = wfm->getSampleRate();
     }
 
     // The take is over: the tracker goes first, so that the recording's
