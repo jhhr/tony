@@ -52,7 +52,7 @@ class TestVerticalZoom : public QObject
         return r.log ? std::log2(r.max / r.min) : r.max - r.min;
     }
 
-    static bool near(double a, double b, double tolerance) {
+    static bool within(double a, double b, double tolerance) {
         return std::fabs(a - b) <= tolerance;
     }
 
@@ -63,7 +63,7 @@ private slots:
         Range log = range(40.0, 1500.0, true);
         QCOMPARE(VerticalZoom::valueAtY(log, 400.0, 400.0), 40.0);
         QCOMPARE(VerticalZoom::valueAtY(log, 400.0, 0.0), 1500.0);
-        QVERIFY(near(VerticalZoom::valueAtY(log, 400.0, 200.0),
+        QVERIFY(within(VerticalZoom::valueAtY(log, 400.0, 200.0),
                      std::sqrt(40.0 * 1500.0), 1.0e-9));
 
         Range linear = range(100.0, 300.0, false);
@@ -77,7 +77,7 @@ private slots:
             for (double y : { 0.0, 13.5, 200.0, 377.0, 400.0 }) {
                 double value = VerticalZoom::valueAtY(r, 400.0, y);
                 double back = VerticalZoom::yForValue(r, 400.0, value);
-                QVERIFY2(near(back, y, 1.0e-9),
+                QVERIFY2(within(back, y, 1.0e-9),
                          qPrintable(QString("%1: y %2 came back as %3")
                                     .arg(text(r)).arg(y).arg(back)));
             }
@@ -98,9 +98,9 @@ private slots:
                         .arg(text(start)).arg(factor).arg(value).arg(y)
                         .arg(text(r));
                     QVERIFY2(r.log == log, qPrintable(what));
-                    QVERIFY2(near(VerticalZoom::yForValue(r, 400.0, value),
+                    QVERIFY2(within(VerticalZoom::yForValue(r, 400.0, value),
                                   y, 1.0e-6), qPrintable(what));
-                    QVERIFY2(near(span(r), span(start) / factor,
+                    QVERIFY2(within(span(r), span(start) / factor,
                                   1.0e-9 * span(start)), qPrintable(what));
                 }
             }
@@ -114,16 +114,16 @@ private slots:
         Range start = range(100.0, 400.0, true);
         double value = VerticalZoom::valueAtY(start, 400.0, 300.0);
         Range r = VerticalZoom::zoomedAbout(start, 1.0, value, 400.0, 200.0);
-        QVERIFY(near(VerticalZoom::yForValue(r, 400.0, value), 200.0, 1.0e-6));
-        QVERIFY(near(span(r), 2.0, 1.0e-9));
-        QVERIFY(near(r.min, 100.0 / std::sqrt(2.0), 1.0e-9));
+        QVERIFY(within(VerticalZoom::yForValue(r, 400.0, value), 200.0, 1.0e-6));
+        QVERIFY(within(span(r), 2.0, 1.0e-9));
+        QVERIFY(within(r.min, 100.0 / std::sqrt(2.0), 1.0e-9));
     }
 
     void pitch_limits_are_the_piano_and_a_major_third() {
         VerticalZoom::Limits limits = VerticalZoom::pitchLimits();
         QCOMPARE(limits.lowest, 27.5);
-        QVERIFY(near(limits.highest, 4186.009, 0.001));
-        QVERIFY(near(12.0 * std::log2(limits.narrowest), 4.0, 1.0e-9));
+        QVERIFY(within(limits.highest, 4186.009, 0.001));
+        QVERIFY(within(12.0 * std::log2(limits.narrowest), 4.0, 1.0e-9));
     }
 
     void a_range_within_the_limits_is_left_as_it_is() {
@@ -149,9 +149,9 @@ private slots:
                 double value = VerticalZoom::valueAtY(r, 400.0, y);
                 Range l = VerticalZoom::limited(r, limits, 400.0, y);
                 QString what = text(r) + " became " + text(l);
-                QVERIFY2(near(l.max / l.min, limits.narrowest, 1.0e-9),
+                QVERIFY2(within(l.max / l.min, limits.narrowest, 1.0e-9),
                          qPrintable(what));
-                QVERIFY2(near(VerticalZoom::valueAtY(l, 400.0, y), value,
+                QVERIFY2(within(VerticalZoom::valueAtY(l, 400.0, y), value,
                               1.0e-9), qPrintable(what));
             }
         }
@@ -164,17 +164,17 @@ private slots:
         Range low = VerticalZoom::limited(range(20.0, 100.0, true),
                                           limits, 400.0, 200.0);
         QCOMPARE(low.min, 27.5);
-        QVERIFY(near(low.max, 137.5, 1.0e-6));
+        QVERIFY(within(low.max, 137.5, 1.0e-6));
 
         Range high = VerticalZoom::limited(range(3000.0, 6000.0, true),
                                            limits, 400.0, 200.0);
         QCOMPARE(high.max, limits.highest);
-        QVERIFY(near(high.min, limits.highest / 2.0, 1.0e-6));
+        QVERIFY(within(high.min, limits.highest / 2.0, 1.0e-6));
 
         Range linear = VerticalZoom::limited(range(10.0, 110.0, false),
                                              limits, 400.0, 200.0);
         QCOMPARE(linear.min, 27.5);
-        QVERIFY(near(linear.max, 127.5, 1.0e-6));
+        QVERIFY(within(linear.max, 127.5, 1.0e-6));
     }
 
     // Wider than the limits, or showing nothing: all of them
@@ -203,14 +203,14 @@ private slots:
         double middle = 0.0;
         QVERIFY(VerticalZoom::middleShown(values, range(40.0, 1500.0, true),
                                           middle));
-        QVERIFY(near(middle, 200.0, 1.0e-9));
+        QVERIFY(within(middle, 200.0, 1.0e-9));
         QVERIFY(VerticalZoom::middleShown(values, range(40.0, 1500.0, false),
                                           middle));
-        QVERIFY(near(middle, 250.0, 1.0e-9));
+        QVERIFY(within(middle, 250.0, 1.0e-9));
 
         QVERIFY(VerticalZoom::middleShown({ 73.5 }, range(40.0, 1500.0, true),
                                           middle));
-        QVERIFY(near(middle, 73.5, 1.0e-9));
+        QVERIFY(within(middle, 73.5, 1.0e-9));
     }
 
     // Only what the range shows: values above or below it, and not
@@ -221,10 +221,10 @@ private slots:
         double middle = 0.0;
         QVERIFY(VerticalZoom::middleShown(values, range(50.0, 1000.0, true),
                                           middle));
-        QVERIFY(near(middle, 200.0, 1.0e-9));
+        QVERIFY(within(middle, 200.0, 1.0e-9));
         QVERIFY(VerticalZoom::middleShown(values, range(100.0, 400.0, true),
                                           middle));
-        QVERIFY(near(middle, 200.0, 1.0e-9));
+        QVERIFY(within(middle, 200.0, 1.0e-9));
 
         middle = -5.0;
         QVERIFY(!VerticalZoom::middleShown(values, range(500.0, 1000.0, true),
@@ -249,7 +249,7 @@ private slots:
         double middle = 0.0;
         QVERIFY(VerticalZoom::middleShown(values, range(30.0, 1500.0, true),
                                           middle));
-        QVERIFY2(near(middle, std::sqrt(70.0 * 90.0), 1.0e-9),
+        QVERIFY2(within(middle, std::sqrt(70.0 * 90.0), 1.0e-9),
                  qPrintable(QString("%1").arg(middle)));
 
         values.clear();
@@ -258,7 +258,7 @@ private slots:
         for (int i = 0; i < 5; ++i) values.push_back(700.0);
         QVERIFY(VerticalZoom::middleShown(values, range(30.0, 1500.0, true),
                                           middle));
-        QVERIFY2(near(middle, std::sqrt(70.0 * 700.0), 1.0e-9),
+        QVERIFY2(within(middle, std::sqrt(70.0 * 700.0), 1.0e-9),
                  qPrintable(QString("%1").arg(middle)));
     }
 
@@ -342,10 +342,10 @@ private slots:
         m.start(100.0); // already counting: no change
         QCOMPARE(m.update(18.0, 0.0), 10.0);
 
-        PinchZoom::AxisMovement far(20.0);
-        far.start(-50.0);
-        QCOMPARE(far.update(-50.0, 0.0), 0.0);
-        QCOMPARE(far.update(-60.0, 500.0), -10.0);
+        PinchZoom::AxisMovement distant(20.0);
+        distant.start(-50.0);
+        QCOMPARE(distant.update(-50.0, 0.0), 0.0);
+        QCOMPARE(distant.update(-60.0, 500.0), -10.0);
     }
 };
 
