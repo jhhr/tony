@@ -54,6 +54,11 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
 - Give the app suite a tool timeout of 10 minutes.
 
+In a **Linux cloud session** the commands are others: run `deploy/linux/cloud-session.sh
+start` first (it builds in the background) and `deploy/linux/cloud-session.sh wait` before
+the first build or test; the rest is in
+[docs/building.md](docs/building.md#on-linux-a-cloud-session).
+
 ## Rules for working here
 
 ### Scope
