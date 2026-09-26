@@ -64,6 +64,11 @@ class TestAudioCheck : public QObject
 
     static constexpr double rate = 44100.0;
 
+    // What Windows' mixer and phones run at. The reference is made at
+    // rate whatever the device runs at, and a take recorded at this one
+    // is converted to it as it is spliced
+    static constexpr double otherRate = 48000.0;
+
     // What the device reports, and what the round trip really is
     static constexpr int reportedOut = 2 * 4096;
     static constexpr int reportedIn = 4096;
@@ -593,7 +598,6 @@ private slots:
         QCOMPARE(r.reportedInputLatency, reportedIn / rate);
         QCOMPARE(r.recordingRate, rate);
         QCOMPARE(r.referenceRate, rate);
-        QVERIFY(!r.rateMismatch);
         QVERIFY(r.calibrationUsable());
         QVERIFY2(std::fabs(r.calibratedRoundTrip * rate - roundTrip) <= 4.0,
                  describe(r).constData());
@@ -650,29 +654,118 @@ private slots:
         QCOMPARE(inUse.roundTrip, (reportedOut + reportedIn) / rate);
     }
 
-    // A device at 48 kHz: the takes are recorded at a rate other than the
-    // reference's, which is reported with both rates, whatever the sweeps
-    // say. What Tony does with such takes is a known bug of its own, so
-    // only what the check reports is asserted, and that it ends
-    void check_flags_a_rate_mismatch() {
+    // A device at 48 kHz against the reference at 44.1: the takes are
+    // recorded at the device's rate and converted as they are spliced, so
+    // the check is judged, and its figure kept, like any other. The fake's
+    // delay and the latencies it reports count its own frames: the round
+    // trip it really has is roundTrip frames at 48 kHz, worked out here in
+    // seconds. The figure is kept under the device's rate, not the
+    // reference's, and the Playback menu's line then shows it
+    void check_measures_the_round_trip_at_48000() {
         FakeAudioIO::Config config = loopback();
-        config.sampleRate = 48000;
+        config.sampleRate = int(otherRate);
         makeWindow(config);
 
         runCheck();
         if (QTest::currentTestFailed()) return;
 
-        qDebug() << "48 kHz:" << describe(m_result).constData();
-        QVERIFY2(m_result.rateMismatch, describe(m_result).constData());
-        QCOMPARE(m_result.recordingRate, 48000.0);
-        QCOMPARE(m_result.referenceRate, rate);
-        QVERIFY(!m_result.calibrationUsable());
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(r.summary.judged, 4);
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(r.recordingRate, otherRate);
+        QCOMPARE(r.referenceRate, rate);
+        QCOMPARE(r.key.rate, otherRate);
+
+        // Placed with the reported pair, in frames of the recording
+        QCOMPARE(int(r.takes.size()), 2);
+        for (const TakeLatency &t : r.takes) {
+            QCOMPARE(t.recordingRate, otherRate);
+            QCOMPARE(t.roundTrip, sv::sv_frame_t(reportedOut + reportedIn));
+        }
+        QCOMPARE(r.usedRoundTrip, (reportedOut + reportedIn) / otherRate);
+        QCOMPARE(r.reportedInputLatency, reportedIn / otherRate);
+        // The play source has it at the reference's rate, to a frame
+        QVERIFY(std::fabs(r.reportedOutputLatency - reportedOut / otherRate)
+                < 1.0 / rate);
+
+        // bqaudioio's ResamplerWrapper, which brings the reference to the
+        // device's rate, holds it back by about a millisecond that nothing
+        // reports (TestRecordWorkflow's latency_with_a_device_at_48000):
+        // part of the round trip the takes need, as on a real device at
+        // another rate, and never early. Counted at the wrong rate, the
+        // figure would be 8 % off, some 20 ms
+        QVERIFY(r.calibrationUsable());
+        const double late = r.calibratedRoundTrip - roundTrip / otherRate;
+        QVERIFY2(late >= -0.0001 && late <= 0.0015,
+                 qPrintable(QString("measured %1 ms, the fake's delay is "
+                                    "%2 ms: %3")
+                            .arg(r.calibratedRoundTrip * 1000.0)
+                            .arg(roundTrip / otherRate * 1000.0)
+                            .arg(describe(r).constData())));
         QVERIFY(!m_window->audioCheckTakes());
 
-        // and such a figure is not kept
-        QVERIFY(!m_window->storeMeasuredLatency(m_result));
-        QSettings settings;
-        QVERIFY(!settings.childGroups().contains("LatencyCalibration"));
+        QVERIFY(m_window->storeMeasuredLatency(r));
+        LatencyCalibration::Key at48 = key("", "");
+        at48.rate = otherRate;
+        LatencyCalibration::Figure figure;
+        {
+            QSettings settings;
+            QVERIFY(LatencyCalibration::load(settings, at48, figure));
+            QCOMPARE(figure.roundTrip, r.calibratedRoundTrip);
+            QVERIFY(!LatencyCalibration::load(settings, key("", ""), figure));
+        }
+        const LatencyCalibration::InUse inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Measured);
+        QCOMPARE(inUse.roundTrip, r.calibratedRoundTrip);
+        const QString line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured"), qPrintable(line));
+    }
+
+    // The round trip measured at 48 kHz, kept: a second check places its
+    // takes with it, turned into frames at the device's rate, and finds
+    // every one where it belongs. The first check is one punch-in, which
+    // is enough to measure with and keeps this short
+    void check_stored_round_trip_is_used_at_48000() {
+        FakeAudioIO::Config config = loopback();
+        config.sampleRate = int(otherRate);
+        makeWindow(config);
+
+        runCheck(onePunchIn());
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());
+        QVERIFY(m_window->storeMeasuredLatency(m_result));
+        const double measured = m_result.calibratedRoundTrip;
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+
+        // Near 0: the wrapper's hold-back moves by a frame or two from one
+        // stream start to the next, so not to 4 frames as at 44.1 kHz. A
+        // figure turned into frames at the wrong rate lands some 20 ms off,
+        // and one without the hold-back 1 ms
+        const double allowed = 0.0002;
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        for (const LatencyCheck::PunchInResult &p : r.summary.punchIns) {
+            QVERIFY2(std::fabs(p.medianOffset) <= allowed,
+                     describe(r).constData());
+        }
+        QCOMPARE(int(r.takes.size()), 2);
+        for (const TakeLatency &t : r.takes) {
+            QVERIFY(t.measured);
+            QCOMPARE(t.roundTrip,
+                     sv::sv_frame_t(std::llround(measured * otherRate)));
+        }
+        QVERIFY2(std::fabs(r.calibratedRoundTrip - measured) <= allowed,
+                 describe(r).constData());
     }
 
     // Cancel during a take stops it through the Stop path, clears the
@@ -1432,16 +1525,18 @@ private slots:
                { "Use this latency" });
         if (QTest::currentTestFailed()) return;
 
-        // A device at 48 kHz: what the sweeps say is not the point
-        AudioCheckResult fast = judgedResult(LatencyCheck::Verdict::Scattered);
-        fast.recordingRate = 48000;
-        fast.rateMismatch = true;
-        fast.summary.spread = 0.6;
-        verify(fast, false,
-               { "The recording device runs at 48000 Hz; takes cannot line "
-                 "up until that is fixed.",
-                 "recorded at 48000 Hz, reference at 44100 Hz" },
-               { "varies from take to take" });
+        // A device at 48 kHz is judged like any other: its rate is in the
+        // figures, as a fact
+        AudioCheckResult fast = judgedResult(LatencyCheck::Verdict::Ok);
+        fast.recordingRate = otherRate;
+        fast.key.rate = otherRate;
+        verify(fast, true,
+               { "The test sounds came back steadily",
+                 "Press Use this latency",
+                 "282 ms measured; the driver reports",
+                 "recorded at 48000 Hz, converted to the reference's "
+                 "44100 Hz" },
+               { "cannot line up", "reference at 44100 Hz" });
         if (QTest::currentTestFailed()) return;
 
         // Unsteady, but usable; and the microphone monitored
@@ -1455,7 +1550,8 @@ private slots:
                { "The driver's timing varies from take to take by 8 ms.",
                  "Your microphone is being played back somewhere",
                  "Listen to this device", "45 ms later",
-                 "45 ms after the sound, 12 dB quieter" },
+                 "45 ms after the sound, 12 dB quieter",
+                 "recorded at 44100 Hz, reference at 44100 Hz" },
                { "Kept." });
     }
 

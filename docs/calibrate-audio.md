@@ -24,11 +24,13 @@ Audacity's measurements) was a separate report, not kept in the repository.
   `Pa_GetStreamInfo()`, which on MME, DirectSound and WASAPI is buffer sizes only.
   Audacity measured it off by −5 to +155 ms. bqaudioio opens the stream with
   `suggestedLatency = 0.2` on both sides.
-- **The device's sample rate is not checked.** The device opens at PortAudio's default
+- **The device need not run at the reference's rate.** It opens at PortAudio's default
   rate: for "(System Default)" through MME most likely 44.1 kHz, for a device whose name
-  exists only under WASAPI or WDM-KS often 48 kHz. A take's first recording is written at
-  that rate and placed frame for frame on the 44.1 kHz reference, so at 48 kHz it lands
-  early by 8 % of its position. The check names the mismatch; it does not fix it (§10).
+  exists only under WASAPI or WDM-KS often 48 kHz. A recording is converted to the
+  reference's rate as it is spliced, and the round trip is counted in seconds and turned
+  into frames of the recording ([recording.md](recording.md#latency)), so a check on such
+  a device is judged, and its figure kept, like any other. The result names the device's
+  rate among its figures (§4).
 - **The manual checklist's device items had never been run.** Many ask whether logic the
   app suite proves on `FakeAudioIO` holds on a real device. A loopback run in the real app
   answers that without a person listening.
@@ -84,9 +86,8 @@ would show how the run ended. Three pages:
    −12 dBFS it was made at, and the sonification silent. It stays so after the run; a
    session opened afterwards plays as before.
 4. **Judged from the take's file** (`AudioCheckRunner::readTakeFile()`), mixed to one
-   channel at the rate it was recorded, never from the take's model: the model is
-   normalised to full scale as it is read, so every take would read as clipped, and
-   resampled to the session's rate.
+   channel at the file's rate (the reference's), never from the take's model: the model
+   is normalised to full scale as it is read, so every take would read as clipped.
 
 Under a minute in all. Every step has a limit and ends the run with a reason: 60 s for the
 reference's analysis, 30 s for a take's, a take's lead-in and range plus 10 s to stop
@@ -150,17 +151,15 @@ kept.
 | Unsteady | they disagree by 5 to 15 ms | small enough: the measured round trip is the middle of it, and a take may land up to half the spread off | yes |
 | Ok | none of these | the sweeps came back steadily | yes |
 
-Two findings stand beside the verdict:
+One finding stands beside the verdict: **an echo**, a second peak at the same delay,
+within 3 ms, after more than half of the sweeps heard and three at least, 20 ms late or
+more and no more than 30 dB down: the input is played back out somewhere (Windows' "Listen
+to this device", an interface's monitor) and heard again. A paragraph on the result page;
+not a verdict. An echo under 20 ms is not seen: that is where the tail of a close
+reflection lies.
 
-- **A rate mismatch**, the recording's rate not the reference's. It replaces the verdict's
-  words, and the calibration is not usable whatever the verdict says. It comes from the
-  two rates, not from the sweeps: at 48 kHz a punch-in from about 10 s into the reference
-  lands further off than the finder searches, and the sweeps then read as Scattered.
-- **An echo**: a second peak at the same delay, within 3 ms, after more than half of the
-  sweeps heard and three at least, 20 ms late or more and no more than 30 dB down: the
-  input is played back out somewhere (Windows' "Listen to this device", an interface's
-  monitor) and heard again. A paragraph on the result page; not a verdict. An echo under
-  20 ms is not seen: that is where the tail of a close reflection lies.
+A device at another rate than the reference's is judged like any other: no verdict comes
+from the rates.
 
 **The calibrated round trip** is the one the takes were placed with plus the median offset.
 A take that landed late was spliced from too early a frame of its recording, so the round
@@ -173,10 +172,11 @@ and 28 dB over it); none has been tuned on a real device yet.
 ## 4. The result page
 
 The verdict in one sentence and its fix; the echo, if one was heard; then a table: the
-round trip measured (not for NoSignal or a rate mismatch) against the driver's, output plus
-input; what the takes were placed with (measured before, or the driver's figure); where each
-punch-in landed (+ is late); the spread; sweeps found of those judged; both rates; the input
-peak in dBFS; the echo; the devices. A failed run shows why it ended instead.
+round trip measured (not for NoSignal) against the driver's, output plus input; what the
+takes were placed with (measured before, or the driver's figure); where each punch-in
+landed (+ is late); the spread; sweeps found of those judged; both rates ("recorded at
+48000 Hz, converted to the reference's 44100 Hz" where they differ); the input peak in
+dBFS; the echo; the devices. A failed run shows why it ended instead.
 
 **Use this latency** keeps the calibrated round trip for the devices the check started on,
 not for those the Preferences name when it is pressed (the result stays on show for as long
@@ -210,8 +210,10 @@ the round trip is exactly the old sum; a core test checks it over a grid of valu
 
 The menu line, Forget Measured Latency and the dialog's instructions use the rate of the
 last take placed with a round trip, or before any take the session's: the device's rate is
-not known before a take (`AudioCallbackRecordTarget` has no getter for it), and the session's
-is the only rate a usable check stores at. Choosing a device from the menu resets it.
+not known before a take (`AudioCallbackRecordTarget` has no getter for it). Choosing a
+device from the menu resets it. So on a device at another rate than the session's, the
+three see a figure kept for it only once a take has been recorded since Tony started or
+the device was chosen; takes are placed with it from the first.
 
 A dev run places its takes with the round trip the calibration before it measured, for the
 run only: nothing is stored, the menu line goes on describing the window's own figure, and
@@ -262,7 +264,8 @@ Why so:
 
 - **The long song first**, so that the dev reference then replaces its session as a
   check's own, unsaved, without asking, and the run still ends on the saved session: no
-  saved session is ever replaced. Far into a song is also where a rate mismatch shows.
+  saved session is ever replaced. Far into a song is also where a take converted at the
+  wrong rate would show.
 - **Stage 2's ranges** leave room for the rest: the start (before 4.3 s) for stage 4; the
   held tones for stage 5; and each range holds two sweeps, so that stage 3 can start inside
   the second one past its first sweep and still judge the other.
@@ -353,8 +356,8 @@ and the whole `DevChecks.txt`. What the numbers decide:
   wrong the driver is, and how far the offset moves from one stream start to the next (the
   Unsteady and Scattered thresholds, and the restart jitter of §10).
 - **Sweeps found, the input peak, the echo:** the finder's thresholds, NoSignal and Clipped.
-- **The recording's rate:** whether the device runs at 44.1 kHz, which the rate fix of §10
-  is for.
+- **The recording's rate:** whether the device runs at the reference's 44.1 kHz or its
+  takes are converted; a figure is kept for each rate.
 - **The report's header:** the drivers built in and what the device reports.
 - **Items 1 and 2**, each sweep's offset and each start gap: the ±2 ms. **Item 3**, how far
   the dots trail the cursor. **Items 4 and 12**, the margin, the looks in the gaps and the
@@ -433,12 +436,12 @@ the reasons.
 **Next: a lower-latency driver** (the user's decision, 2026-09-26, from the restart jitter
 below). In order:
 
-1. **The device-rate mismatch.** A take recorded at 48 kHz is placed frame for frame into
-   a 44.1 kHz session. The robust fix converts when the take is spliced, whatever the
-   device's rate; the other way, the record target asking for the session's rate
-   (`AudioCallbackRecordTarget::getApplicationSampleRate()` in the svapp fork), fails where
-   the device runs only at its mixer's rate. It comes first because WASAPI opens at the
-   Windows mixer's rate, usually 48 kHz. The button then shows the fix working.
+1. **The device's rate.** Done: a recording at another rate than the reference's is
+   converted as it is spliced, whatever the device's rate (the other way, the record
+   target asking for the session's rate through `getApplicationSampleRate()` in the svapp
+   fork, fails where the device runs only at its mixer's rate), and Calibrate Audio
+   measures such a device, and keeps its figure, like any other. It came first because
+   WASAPI opens at the Windows mixer's rate, usually 48 kHz.
 2. **A `bqaudioio` fork**, `jhhr/bqaudioio` (created 2026-09-26; the remote `jhhr` in
    `bqaudioio/`). Nothing uses it yet: `repoint-project.json` still takes bqaudioio from
    sourcehut, and nothing is pinned to the fork. For choosing the host API, WASAPI's
@@ -540,7 +543,9 @@ Item 10, by reading the code, does not fail for it (the join is a dip, below).
 - **`TestAudioCheck`** (`test-tony-app`): the check on the loopback fake, whose device
   reports 2 × 4096 frames out and 4096 in while the true round trip is 123 frames longer.
   The check measures the true one, and once it is stored a second check finds its takes
-  in place; a 48 kHz fake is a rate mismatch; cancel, a closed session, no device, a device
+  in place; the same on a 48 kHz fake, the figure kept under 48000 Hz and checked against
+  the fake's delay in seconds (bqaudioio's `ResamplerWrapper` adds about 1 ms, unreported,
+  that belongs to the round trip); cancel, a closed session, no device, a device
   that never calls back; the check's playback, and a session opened after it playing as
   before; the user's toggles and their settings untouched; plans refused; the plan's round
   trip and pre-roll; keeping the session; replacing a check's own session without asking,
@@ -603,9 +608,14 @@ So that later work does not derive them again.
     opens at the output device's default rate. PortAudio's MME default is the first of
     44100, 48000, … that the device accepts.
   - `ResamplerWrapper` resamples the play source to it; the record target records at it.
-    `MainWindow` sets `Preferences::setFixedSampleRate(44100)`.
-  - `TakeAudio::splice()` writes a take's first recording at the recording's rate without
-    converting positions, and refuses a later one whose rate differs from the take file's.
+    `MainWindow` sets `Preferences::setFixedSampleRate(44100)`. The wrapper pads with
+    silence what its resampler holds back, so at 48 kHz the reference goes out about 53
+    frames (1.1 ms) later than the play source counts, which nothing reports; on the fake
+    the check measures it as part of the round trip.
+  - `TakeAudio::splice()` refuses a recording whose rate differs from the take file's;
+    `SingingTakes::spliceRecording()` converts one at another rate than the reference's
+    (`TakeAudio::resample()`) before it splices, so a take's file is at the reference's
+    rate, and so is what the check judges.
 - **The reported latencies** count frames at two rates: `getTargetPlayLatency()` at the
   play source's `getDeviceSampleRate()`, which is the session's when bqaudioio's
   `ResamplerWrapper` converted it, but the device's own when a device was opened before

@@ -54,9 +54,7 @@ using namespace sv;
 bool
 AudioCheckResult::calibrationUsable() const
 {
-    // A take recorded at another rate is misplaced by an amount that
-    // grows with its position, so no one round trip places it right
-    if (failure != "" || rateMismatch) return false;
+    if (failure != "") return false;
     return summary.verdict == LatencyCheck::Verdict::Ok ||
         summary.verdict == LatencyCheck::Verdict::Unsteady;
 }
@@ -517,7 +515,7 @@ AudioCheckRunner::takeStopped()
 void
 AudioCheckRunner::judge()
 {
-    // The file holds what was recorded, at the rate it was recorded at
+    // The file holds what was recorded, at the reference's rate
     vector<float> mono;
     sv_samplerate_t rate = 0;
     const QString error =
@@ -703,9 +701,6 @@ AudioCheckRunner::end(QString failure)
         m_result.reportedInputLatency = first.reportedInput;
         m_result.recordingRate = first.recordingRate;
         m_result.key.rate = first.recordingRate;
-        m_result.rateMismatch = m_result.recordingRate > 0 &&
-            m_result.referenceRate > 0 &&
-            m_result.recordingRate != m_result.referenceRate;
     }
     if (failure == "") {
         m_result.calibratedRoundTrip = LatencyCheck::calibratedRoundTrip

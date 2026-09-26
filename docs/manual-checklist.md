@@ -40,7 +40,7 @@ file, and compares the take before and after each punch-in.
 4. **Playback > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
    is by default), then **Start**. A few minutes; leave the window alone meanwhile (Cancel
    stops the run). The dev checks run only after a calibration that can be used (verdict
-   Ok or Unsteady, recorded at the reference's rate, 44.1 kHz). No signal, or a fading one,
+   Ok or Unsteady, whatever the device's rate). No signal, or a fading one,
    means the microphone did not hear the sweeps, or Windows' audio enhancements took them
    out. The stored latency changes only through **Use this latency**.
 5. The report is on the dialog's result page and in `DevChecks.txt` in Tony's application
