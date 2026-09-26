@@ -20,3 +20,4 @@ methods, and they do not tell the story of fixed bugs.
 | [open-points.md](open-points.md) | Decisions waiting for the user, things not built, weak spots |
 | [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes — none of it tried yet |
 | [calibrate-audio.md](calibrate-audio.md) | Plan, not built: a Calibrate Audio button that measures the round trip through a speaker-to-mic loopback, and dev checks that automate most of the manual checklist |
+| [windows-shards.md](windows-shards.md) | Plan, not built: sharded test runs from Git Bash on Windows, each shard kept apart by an application name of its own |
