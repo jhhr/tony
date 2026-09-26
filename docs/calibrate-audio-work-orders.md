@@ -354,3 +354,22 @@ The next phase must know:
 - §2's punch-ins as [2,7], [8,13], [14,19], [20,25] s judge 7 events (2, 2, 2, 1). A punch-in shorter than 1.95 s judges none.
 - An echo under 20 ms (an interface's direct monitor) is not seen.
 Left open: every threshold untuned. The verdict thresholds came from the lead's brief; spec §5 has none of them.
+
+### Phase B1 — 2026-09-26
+Built: `LatencyCheck::punchInsFor()` (+ `kPunchInSlackSeconds`, 10 ms) and core test `punch_ins_hold_the_events_asked_for`. `TakeLatency` in `LatencyUtils.h`. `main/AudioCheckRunner.{h,cpp}` (`tony_app`): `Plan`, `start()`, `cancel()`, `sessionClosing()`, `finished(AudioCheckResult)`. `MainWindow`: `friend class AudioCheckRunner`, the override `m_audioCheckTakes` (read by `record()`, the `recordingStarted()` lambda, `wantedPreRollFrames()`), `m_takeLatency`, the runner made in the constructor, deleted first in `~MainWindow`, told by `closeSession()`. New app class `main/test/TestAudioCheck.h`: 6 tests, 32 s.
+Choices / deviations:
+- **4 × 3 does not fit the calibration layout** (spec §2 now says why). `punchInsFor()` returns nothing then; 4 × 2 and 3 × 3 fit. B3 needs the lead's choice.
+- The take is read from its **file**, not its model: the model is peak-normalised as read (measured: every take Clipped) and resampled to 44.1 kHz.
+- `friend` over accessors: the runner needs about nine internals. A new test class, not `TestRecordWorkflow` (5475 lines); its watchdog and init/cleanup are copied.
+- Selection: `clearSelections()` + `addSelectionQuietly()`, so the reference is not re-analysed during a take; each punch-in adds one or two "Select" undo steps, as a user's selection does.
+- Waits: poll every 50 ms for "nothing being analysed", not "analysed": with auto-analysis off the reference never gets layers (test `check_runs_without_automatic_analysis`). Limits 60 s reference, 30 s a take's analysis, take length + 10 s to stop (then the Stop path); each ends the run with a reason.
+- `~MainWindow` deletes the runner: the run ends silently and a take in progress is left to the destructor (the Stop path would splice and start pYIN mid-teardown). `closeSession()` → Stop path + `finished()`.
+- Reference: `AppDataLocation/calibrate-audio-reference.wav` unless the plan names a path (tests: their temp dir). Save question first, then write, then open.
+- `calibrationUsable()`: Ok or Unsteady, and no rate mismatch.
+- No loopback gain was needed (see below).
+The next phase must know:
+- `Analyser` pans the reference hard left, sonification hard right: only the **left earcup** carries sweeps. Normalised, the reference plays at 0 dBFS, not −12. The fake averages channels: sweeps loop back at half level (peak 0.905 with the synth).
+- `getTargetPlayLatency()` counts session frames, `getSystemRecordLatency()` device frames; the result converts each at its own rate. At 48 kHz the round trip used was 242 ms, not 256.
+- 48 kHz fake: Scattered, 3 of 3 found, offsets −200 ms median, as A2 foresaw.
+- No progress signal yet; B3's dialog may want one (`m_punchIn`).
+Left open: no test deletes the window mid-check. Seen while proving the session-close hook: closing a session during an **ordinary** take, then pressing Stop, hangs (pre-existing).

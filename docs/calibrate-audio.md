@@ -45,6 +45,12 @@ with less noise.
    not from fixed times: a 5 s punch-in judges only one or two sweeps. They use the
    ordinary take path with Play Reference While Recording on. Every punch-in restarts the
    stream, as a real take does.
+   *Found in B1:* the calibration layout cannot hold four times three. Where one
+   punch-in ends and the next begins, two sweeps must be 1.9 s apart (what the finder
+   reads around each), and the layout's boundaries after its 3rd, 6th and 9th sweeps
+   are 2.5, 1.7 and 1.8 s. `punchInsFor()` returns nothing for 4 × 3; 4 × 2 and 3 × 3
+   fit. Swapping two pairs of spacings (`{21,16,25,19,17,23,26,20,24,18,22}`) would
+   make 4 × 3 fit, ending at 25.2 s.
 4. **Result page:**
    - **Round trip:** measured, next to the driver's figure.
    - **Spread between punch-ins:** how much the driver's timing moves from one stream
@@ -280,7 +286,7 @@ marked "Done" when it is committed.
    - **A2** Verdicts and calibration arithmetic: aggregation over events and punch-ins.
      Done.
 2. **Runner, dialog and calibration page** (every build), with app tests.
-   - **B1** The alignment check runner and its app tests.
+   - **B1** The alignment check runner and its app tests. Done.
    - **B2** Storing the measured round trip and using it in takes (`LatencyCalibration`,
      `recordingStarted()`, staleness). This was step 3 below; it moved up because the
      dialog needs it.
@@ -325,7 +331,9 @@ could convert. The button then shows the fix working on each device.
   and Cancel must always leave a clean state. `closeSession()` already stops take
   polling.
 - **Loudness.** The sweeps are −12 dBFS with earcups off the ears; the dialog says so
-  before starting.
+  before starting. *Found in B1:* not as played. Tony normalises every audio file to
+  full scale as it reads it (`Preferences::setNormaliseAudio(true)`), so the reference
+  plays at 0 dBFS, in the left channel only (§11).
 - **Cursor versus dots.** The cursor subtracts the *reported* output latency. With a
   measured round trip the dots move to the right place and may sit off the cursor. Item
   8's number will show how much. Fixing it needs the round trip split between output
@@ -363,7 +371,13 @@ Checked on 2026-09-25, so that phases do not re-derive them.
   start gap comes from the play-start callback set in `MainWindow`'s constructor:
   `getFramesReceived() − blockFrames` on the first output block with audio.
   `refineRecordingLatency()` and `currentRecordingLatency()` swap the estimate for the
-  measurement.
+  measurement. *Found in B1:* `getTargetPlayLatency()` counts frames of the session's
+  rate (bqaudioio's `ResamplerWrapper` converts it), `getSystemRecordLatency()` the
+  device's, and L is taken off the recording, in the device's. They differ only when
+  the device is not at 44.1 kHz.
+- **Where the reference is heard** (found in B1). `Analyser` pans the reference hard
+  left and its pitch and notes sonification hard right, so only the left earcup
+  carries the sweeps; the right one carries the synth.
 - **bqaudioio `PortAudioIO`** (upstream, not a fork):
   - one duplex `Pa_OpenStream`, `suggestedLatency = 0.2`, no host-API stream info;
   - input goes to the record target **before** output is asked for, in the same
@@ -395,14 +409,18 @@ Checked on 2026-09-25, so that phases do not re-derive them.
     the layers exist. See `analysed()` in `TestRecordWorkflow.h`.
 - **The take after Stop.**
   - Its audio is the model `analyser2()->getMainModelId()`, and its file is
-    `m_takes->getAudioPath()`.
+    `m_takes->getAudioPath()`. *Found in B1:* the model is normalised to full scale
+    and resampled to 44.1 kHz as it is read, so every take read from it is Clipped;
+    the check reads the file.
   - Coverage is `m_takes->getCoverage().getRanges()`.
   - The take is analysed when `analysed(analyser2())` holds.
 - **Levels.** `getOutputLevels()` and `getInputLevels()`, on the play source and record
   target, return per-channel peaks since the last call.
 - **Fake device.** `FakeAudioIO::Config::loopback` adds the output to the input
-  `inputDelay` frames late; no test uses it yet. The reported latencies are independent
-  of the real delay. `TestMainWindow::createAudioIO()` installs the fake.
+  `inputDelay` frames late; `TestAudioCheck` uses it. The reported latencies are
+  independent of the real delay. `TestMainWindow::createAudioIO()` installs the fake.
+  Its output is the mean of the channels, so the hard-left reference loops back at
+  half level.
 - **Menus.** The Playback menu is built in `MainWindow::setupToolbars()`
   (`m_playbackMenu`). The audio device submenus are there too.
 - **Build types.** `build.bat` uses `debugoptimized`; `meson.build` defaults to

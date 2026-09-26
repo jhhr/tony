@@ -426,6 +426,26 @@ namespace LatencyCheck
                           sv::sv_samplerate_t rate,
                           const std::vector<PunchIn> &punchIns);
 
+    /// punchInsFor() leaves this much more room around what the finder
+    /// reads than judgeTake() asks for, so that a range rounded to whole
+    /// frames, at any rate, still holds all of it
+    constexpr double kPunchInSlackSeconds = 0.01;
+
+    /**
+     * The ranges of a run of punch-ins against the reference made from
+     * this layout: count of them, one after another along the timeline
+     * and not overlapping, each holding eventsEach consecutive events
+     * that judgeTake() judges in it, and no other.
+     *
+     * An event is judged only where all that the finder reads for it
+     * lies inside one range, so where one range ends and the next
+     * begins, that much of the spacing between two events is lost (1.9
+     * s): an event whose reading would begin before the previous range
+     * ends is left out.  Empty if the layout has no room for them all.
+     */
+    std::vector<PunchIn> punchInsFor(const Layout &layout,
+                                     int count, int eventsEach);
+
     /**
      * The round trip that would have placed the take right, in seconds:
      * the one it was placed with plus the median offset measured.

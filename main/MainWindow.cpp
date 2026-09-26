@@ -18,6 +18,7 @@
 #include "MainWindow.h"
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
+#include "AudioCheckRunner.h"
 #include "LatencyUtils.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
@@ -199,7 +200,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingLatencyFrames(0),
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
-    m_awaitingReferenceStart(false)
+    m_awaitingReferenceStart(false),
+    m_takeLatency(),
+    m_audioCheck(nullptr),
+    m_audioCheckTakes(false)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -393,6 +397,7 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
+    m_audioCheck = new AudioCheckRunner(this);
 
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
@@ -450,6 +455,10 @@ MainWindow::MainWindow(AudioMode audioMode,
 
 MainWindow::~MainWindow()
 {
+    // A check still running ends here, before anything it reads goes
+    delete m_audioCheck;
+    m_audioCheck = nullptr;
+
     // Nothing must poll a take while the window is coming down
     stopTakePolling();
 
@@ -2533,6 +2542,10 @@ MainWindow::closeSession()
 {
     if (!checkSaveModified()) return;
 
+    // A check has nothing left to record into; a take of its own that is
+    // running is stopped through the Stop path, as the check's Cancel does
+    if (m_audioCheck) m_audioCheck->sessionClosing();
+
     // Nothing of a take that is still running outlives its session
     stopTakePolling();
 
@@ -3836,6 +3849,7 @@ MainWindow::record()
     m_recordingStartGapEstimate = 0;
     m_awaitingReferenceStart = false;
     m_recordingStartGapMeasured = -1;
+    m_takeLatency = TakeLatency();
 
     if (haveReference) {
 
@@ -3849,10 +3863,12 @@ MainWindow::record()
         // Record into Selection: the selection is what is recorded, so it
         // says where the take starts and where it stops, and the playhead
         // only picks which selection that is.  With none selected this is
-        // an ordinary recording from the playhead.
+        // an ordinary recording from the playhead.  The audio check's
+        // takes always record into the selection it makes.
         sv_frame_t end = -1;
-        if (m_recordIntoSelection && m_recordIntoSelection->isChecked() &&
-            m_viewManager) {
+        bool intoSelection = m_audioCheckTakes ||
+            (m_recordIntoSelection && m_recordIntoSelection->isChecked());
+        if (intoSelection && m_viewManager) {
             Coverage::Ranges selected;
             for (const Selection &s : m_viewManager->getSelections()) {
                 if (!s.isEmpty()) {
@@ -4143,9 +4159,11 @@ MainWindow::recordingStarted()
         // hears the reference from there.  The audio IO was already
         // resumed by record() so m_playSource can be started directly
         // without calling MainWindowBase::play() (which would stop
-        // recording if isRecording() is true).
-        if (m_recordingAsSingingTrack &&
-            m_playRefWhileRecording && m_playRefWhileRecording->isChecked() &&
+        // recording if isRecording() is true).  The audio check's takes
+        // always play it: they measure where it arrives.
+        bool playReference = m_audioCheckTakes ||
+            (m_playRefWhileRecording && m_playRefWhileRecording->isChecked());
+        if (m_recordingAsSingingTrack && playReference &&
             m_playSource && !m_playSource->isPlaying()) {
             cerr << "MainWindow::recordingStarted: starting reference playback" << endl;
 
@@ -4175,9 +4193,13 @@ MainWindow::recordingStarted()
             // figure, and refineRecordingLatency() picks it up.
             m_recordingStartGapEstimate =
                 m_recordTarget ? m_recordTarget->getFramesReceived() : 0;
-            m_recordingLatencyFrames =
-                computeRecordingLatency(outputLatency, inputLatency) +
-                m_recordingStartGapEstimate;
+            sv_frame_t roundTrip =
+                computeRecordingLatency(outputLatency, inputLatency);
+            m_recordingLatencyFrames = roundTrip + m_recordingStartGapEstimate;
+
+            m_takeLatency.roundTrip = roundTrip;
+            m_takeLatency.reportedOutput = outputLatency;
+            m_takeLatency.reportedInput = inputLatency;
             cerr << "MainWindow::recordingStarted: output latency=" << outputLatency
                  << " input latency=" << inputLatency
                  << " estimated start gap=" << m_recordingStartGapEstimate
@@ -4234,12 +4256,17 @@ MainWindow::currentTakeTiming() const
 sv_frame_t
 MainWindow::wantedPreRollFrames() const
 {
-    if (!m_preRoll || !m_preRoll->isChecked()) return 0;
-
-    QSettings settings;
-    settings.beginGroup("MainWindow");
-    double seconds = settings.value("prerollseconds", 3.0).toDouble();
-    settings.endGroup();
+    double seconds = 0.0;
+    if (m_audioCheckTakes) {
+        // The audio check's takes have a lead-in of their own
+        seconds = AudioCheckRunner::kPreRollSeconds;
+    } else {
+        if (!m_preRoll || !m_preRoll->isChecked()) return 0;
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        seconds = settings.value("prerollseconds", 3.0).toDouble();
+        settings.endGroup();
+    }
     if (seconds <= 0.0) return 0;
 
     auto model = getMainModel();
@@ -4385,6 +4412,7 @@ MainWindow::finishSingingTake()
         (m_currentRecordingModelId)) {
         recordingPath = wfm->getLocation();
         recorded = wfm->getFrameCount();
+        m_takeLatency.recordingRate = wfm->getSampleRate();
     }
 
     // The take is over: the tracker goes first, so that the recording's

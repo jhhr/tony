@@ -1106,6 +1106,7 @@ tony_core_files = [
 
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
+  'main/AudioCheckRunner.cpp',
   'main/CoverageStrip.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
@@ -1126,6 +1127,7 @@ tony_app_moc_files = qt.preprocess(
   'main/MainWindow.h',
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
+  'main/AudioCheckRunner.h',
   'main/CoverageStrip.h',
 ])
 
@@ -1390,6 +1392,7 @@ tony_app_test_moc_files = qt.preprocess(
   'main/test/TestSingingDocument.h',
   'main/test/TestSingingAnalysis.h',
   'main/test/TestRecordWorkflow.h',
+  'main/test/TestAudioCheck.h',
 ])
 
 tony_app_test_exe = executable(

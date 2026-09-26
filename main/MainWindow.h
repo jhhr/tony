@@ -24,6 +24,7 @@
 #include "SingingTakes.h"
 #include "TakeCommands.h"
 #include "TakeTiming.h"
+#include "LatencyUtils.h"
 
 #include <vector>
 #include <string>
@@ -35,6 +36,8 @@ class QTimer;
 class QComboBox;
 class QActionGroup;
 
+class AudioCheckRunner;
+
 namespace sv {
 class VersionTester;
 class ActivityLog;
@@ -45,6 +48,10 @@ class TimeValueLayer;
 class MainWindow : public sv::MainWindowBase
 {
     Q_OBJECT
+
+    // The audio check drives the take path of the window, and reads what
+    // each take was placed with; see AudioCheckRunner
+    friend class AudioCheckRunner;
 
 public:
     MainWindow(AudioMode audioMode,
@@ -566,7 +573,8 @@ protected:
     TakeTiming currentTakeTiming() const;
 
     // The pre-roll asked for, in frames of the reference: the QSettings
-    // value MainWindow/prerollseconds (3 s), or 0 with the toggle off
+    // value MainWindow/prerollseconds (3 s), or 0 with the toggle off;
+    // for a take of the audio check, the check's own
     sv::sv_frame_t wantedPreRollFrames() const;
 
     // Put the countdown of a pre-roll's lead-in in the status bar, and
@@ -842,6 +850,20 @@ protected:
     // that came before that block.  -1 until then.
     std::atomic<sv::sv_frame_t> m_recordingStartGapMeasured;
     std::atomic<bool> m_awaitingReferenceStart;
+
+    // What the take being recorded, or the last one, was placed with:
+    // cleared when a take starts, the round trip and the latencies the
+    // device reported filled in when the reference starts to play, and
+    // the recording's rate when the take is spliced in
+    TakeLatency m_takeLatency;
+
+    // The audio check, and the override it sets for each take of its
+    // own: Record into Selection, Play Reference While Recording and a
+    // pre-roll of AudioCheckRunner::kPreRollSeconds, whatever the toolbar
+    // says.  Not by setting the toggles, which write the user's settings.
+    // record(), recordingStarted() and wantedPreRollFrames() consult it
+    AudioCheckRunner *m_audioCheck;
+    bool m_audioCheckTakes;
 
     void refineRecordingLatency();
 

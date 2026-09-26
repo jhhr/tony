@@ -583,6 +583,40 @@ LatencyCheck::judgeTake(const Layout &layout,
     return summary;
 }
 
+vector<LatencyCheck::PunchIn>
+LatencyCheck::punchInsFor(const Layout &layout, int count, int eventsEach)
+{
+    if (count <= 0 || eventsEach <= 0 || layout.rate <= 0) return {};
+
+    // All that judgeTake() reads for an event, as it works it out, and a
+    // little more
+    const double before =
+        kSearchSeconds + kJudgeMarginSeconds + kPunchInSlackSeconds;
+    const double after = kSearchSeconds + kSweepSeconds +
+        kJudgeMarginSeconds + kPunchInSlackSeconds;
+    const double length = double(layout.length) / layout.rate;
+    const int n = int(layout.events.size());
+
+    auto at = [&](int i) {
+        return double(layout.events[i].sweepStart) / layout.rate;
+    };
+
+    vector<PunchIn> punchIns;
+    double free = 0.0;
+    int i = 0;
+    while (int(punchIns.size()) < count) {
+        while (i < n && at(i) - before < free) ++i;
+        const int last = i + eventsEach - 1;
+        if (last >= n) return {};
+        const PunchIn p(at(i) - before, at(last) + after);
+        if (p.end > length) return {};
+        punchIns.push_back(p);
+        free = p.end;
+        i = last + 1;
+    }
+    return punchIns;
+}
+
 double
 LatencyCheck::calibratedRoundTrip(double usedRoundTripSeconds,
                                   double medianOffsetSeconds)

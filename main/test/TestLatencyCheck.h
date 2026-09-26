@@ -954,6 +954,73 @@ private slots:
         QCOMPARE(s.events[1].arrival.errorFrames, later);
     }
 
+    // The punch-ins of a run of takes. Each holds the events asked for,
+    // and judgeTake() judges those in it and no other: the reference
+    // itself, as a take placed right, finds every one where it is. Also
+    // with the ranges rounded to whole frames, as the takes record them.
+    // Between two ranges an event may have to be left out: in the
+    // calibration layout the sweep at 4.7 s is only 1.6 s after the one
+    // at 3.1 s, and the finder reads 1.9 s around the two of them
+    void punch_ins_hold_the_events_asked_for() {
+        const LatencyCheck::Layout layout = LatencyCheck::calibrationLayout();
+        const samples_t reference = LatencyCheck::generate(layout);
+        const double length = double(layout.length) / layout.rate;
+
+        struct Case { int count; int each; };
+        for (Case c : { Case { 2, 2 }, Case { 4, 2 }, Case { 3, 3 },
+                        Case { 1, 12 } }) {
+
+            const punchins_t exact =
+                LatencyCheck::punchInsFor(layout, c.count, c.each);
+            QCOMPARE(int(exact.size()), c.count);
+
+            punchins_t rounded;
+            for (const LatencyCheck::PunchIn &p : exact) {
+                rounded.push_back(LatencyCheck::PunchIn
+                                  (framesOf(p.start) / kRate,
+                                   framesOf(p.end) / kRate));
+            }
+
+            for (const punchins_t &punchIns : { exact, rounded }) {
+                for (int p = 0; p < c.count; ++p) {
+                    QVERIFY(punchIns[p].start >= 0.0);
+                    QVERIFY(punchIns[p].end <= length);
+                    QVERIFY(punchIns[p].end > punchIns[p].start);
+                    if (p > 0) QVERIFY(punchIns[p].start >= punchIns[p-1].end);
+                }
+
+                const LatencyCheck::TakeSummary s =
+                    judge(layout, reference, kRate, punchIns);
+                QVERIFY2(s.verdict == LatencyCheck::Verdict::Ok,
+                         describe(s).constData());
+                QCOMPARE(s.judged, c.count * c.each);
+                QCOMPARE(s.found, c.count * c.each);
+                for (int p = 0; p < c.count; ++p) {
+                    QCOMPARE(s.punchIns[p].judged, c.each);
+                }
+                // Consecutive events within each punch-in
+                for (int k = 1; k < s.judged; ++k) {
+                    if (s.events[k].punchIn == s.events[k-1].punchIn) {
+                        QCOMPARE(s.events[k].event, s.events[k-1].event + 1);
+                    }
+                }
+            }
+        }
+
+        // The two punch-ins of the app suite's check: the event at 4.7 s
+        // is left out
+        const punchins_t two = LatencyCheck::punchInsFor(layout, 2, 2);
+        const LatencyCheck::TakeSummary s = judge(layout, reference, kRate, two);
+        const int events[] = { 0, 1, 3, 4 };
+        QCOMPARE(int(s.events.size()), 4);
+        for (int k = 0; k < 4; ++k) QCOMPARE(s.events[k].event, events[k]);
+
+        // More than the layout holds, and nothing asked for
+        QVERIFY(LatencyCheck::punchInsFor(layout, 7, 2).empty());
+        QVERIFY(LatencyCheck::punchInsFor(layout, 1, 13).empty());
+        QVERIFY(LatencyCheck::punchInsFor(layout, 0, 2).empty());
+    }
+
     // The calibration's arithmetic. A take that landed late was placed
     // with too small a round trip, and the new one is larger by the
     // offset; early, smaller. From takes placed with 0.2 and 0.31 s

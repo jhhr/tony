@@ -156,6 +156,17 @@ public:
     void setRecordIntoSelection(bool on) {
         m_recordIntoSelection->setChecked(on);
     }
+    QAction *playReferenceWhileRecordingAction() {
+        return m_playRefWhileRecording;
+    }
+    QAction *preRollAction() { return m_preRoll; }
+    QAction *recordIntoSelectionAction() { return m_recordIntoSelection; }
+
+    // The audio check, the override it sets for its own takes, and what
+    // the last take was placed with
+    AudioCheckRunner *audioCheck() { return m_audioCheck; }
+    bool audioCheckTakes() { return m_audioCheckTakes; }
+    TakeLatency takeLatency() { return m_takeLatency; }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
 
     Analyser *analyser() { return m_analyser; }
