@@ -1,9 +1,13 @@
-# Building on Windows (MSYS2 MinGW-w64)
+# Building
 
 The development machine builds with meson + ninja under MSYS2's `mingw64` toolchain
-(default prefix `C:\msys64\mingw64`) into `build_mingw/`. The CI workflows in
+(default prefix `C:\msys64\mingw64`) into `build_mingw/`: that is most of this page. An
+agent in a cloud session builds on Linux instead, into `build/`: see
+[Building on Linux](#building-on-linux) at the end. The CI workflows in
 `.github/workflows/` build the upstream way on Linux, macOS and MSVC and are not what is
 described here.
+
+# Building on Windows (MSYS2 MinGW-w64)
 
 ## From cmd or PowerShell: `build.bat`
 
@@ -66,11 +70,25 @@ meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 3 -C build_mingw
 echo "exit:$?" >> tmp/build.log
 ```
 
-## On Linux (a cloud session)
+## What is particular about this `meson.build`
 
-Not how the project is developed, but it builds and both suites run in Claude's cloud
-container (Ubuntu 24.04, 4 cores, 16 GB, no sound card). Three scripts in `deploy/linux/`
-do it:
+- A MinGW/GCC win64 branch that upstream does not have: msys2 system libraries,
+  `-include main/mingw_byte_fix.h` on every translation unit (the C++17 `std::byte` versus
+  `rpcndr.h`'s `byte` clash), `--export-dynamic-symbol` for the vamp entry point, explicit
+  include directories for `opus`, `sord-0`, `serd-0`.
+- `-DHAVE_MEDIAFOUNDATION` with `-lmfplat -lmfreadwrite -lmfuuid -lpropsys`; needs the
+  `bqaudiostream` fork.
+- `tony_core` / `tony_app` static libraries and the two test executables; see
+  [architecture.md](architecture.md) for what goes where. A new source file goes into
+  `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
+  only if it declares `Q_OBJECT`.
+- Windows headers define `near` and `far` as macros. Do not use them as identifiers.
+
+# Building on Linux
+
+For a cloud session: Ubuntu 24.04, 4 cores, 16 GB, root, no sound card, and no Windows.
+repoint does not run there, and hg.sr.ht, where six of the libraries live, cannot be
+reached. Three scripts in `deploy/linux/` do the work:
 
 - **`cloud-environment.sh` is the cloud environment's setup script.** Its text is pasted
   into the environment's settings, with the network access and variables below; the copy in
@@ -98,7 +116,9 @@ The environment's settings:
 - Network access **Custom**, with the default list of package hosts, and `dl.google.com`
   added for the Android branch (the SDK, the NDK, and Gradle's Google repository, which
   `maven.google.com` redirects to). GitHub, conda-forge and Ubuntu's archive are in the
-  default list; hg.sr.ht, download.qt.io and Qt's mirrors are not.
+  default list; hg.sr.ht, download.qt.io and Qt's mirrors are not. A push to one of the
+  forks is another matter, which the level does not decide: with Trusted access too, it is
+  refused until the fork is attached to the session ([forks.md](forks.md#changing-a-fork)).
 - Variables `BASH_DEFAULT_TIMEOUT_MS=600000` and `BASH_MAX_TIMEOUT_MS=1800000`, so that a
   build or a suite run is not moved to the background after the tool's default two minutes,
   and a 30-minute timeout can be given at all.
@@ -125,16 +145,18 @@ Measured on 2026-09-26:
 | Full build, everything in ccache | 4 to 6 seconds |
 | A session's first build, with the setup script's ccache | 3.7 minutes, in the background |
 | Linking `tony`, `test-tony-core`, `test-tony-app` and `test-tony-device` | 3 s with mold, 12 s with GNU ld |
-| App suite | 488 s in one process, 87 s in eight |
-| Development checks' suite | 68 s in one process, 18 s in eight |
+| App suite | 550 s in one process, 95 s in eight |
+| Development checks' suite | 69 s in one process, 18 s in eight |
 
 Why each part is as it is:
 
-- **Qt 6.11 from conda-forge, not Ubuntu's 6.4.** Under 6.4 the string-based connects of
-  `Analyser` with `sv::` types do not resolve ("No such slot
-  Analyser::layerCompletionChanged(ModelId)"), so pYIN's completion never arrives and every
-  analysing test times out. download.qt.io's mirrors are blocked by the session's proxy;
-  conda-forge is not. Only Qt's own `.pc` files are put on meson's pkg-config path
+- **Qt 6.11 from conda-forge, not Ubuntu's 6.4**: the Qt of the Windows machine. Qt 6.4
+  does not match a `SIGNAL()`/`SLOT()` string naming `ModelId` or `sv_frame_t` against a
+  slot moc recorded with `sv::`, so such a connection fails silently there and works on
+  Windows (member-pointer connects, which AGENTS.md asks for, work on both). And with 6.4
+  several of the tests that race the analysis against a take fail whatever the change
+  ([testing.md](testing.md#running)); with 6.11 none do. download.qt.io's mirrors are
+  blocked by the session's proxy; conda-forge is not. Only Qt's own `.pc` files are put on meson's pkg-config path
   (`/opt/qt6-conda/tony-pkgconfig`), so that nothing else of conda's is picked up; meson
   puts Qt's library directory in the executables' RPATH.
 - **The Mercurial libraries come from their GitHub mirrors.** hg.sr.ht is blocked, and
@@ -155,17 +177,3 @@ Why each part is as it is:
 - Measured and left alone: `-g1` compiles svcore in 19 % less time than `-g`, but Windows
   builds `debugoptimized`, with full debug information; clang is no faster than GCC; and a
   unity build fails in the libraries, which define the same names in several files.
-
-## What is particular about this `meson.build`
-
-- A MinGW/GCC win64 branch that upstream does not have: msys2 system libraries,
-  `-include main/mingw_byte_fix.h` on every translation unit (the C++17 `std::byte` versus
-  `rpcndr.h`'s `byte` clash), `--export-dynamic-symbol` for the vamp entry point, explicit
-  include directories for `opus`, `sord-0`, `serd-0`.
-- `-DHAVE_MEDIAFOUNDATION` with `-lmfplat -lmfreadwrite -lmfuuid -lpropsys`; needs the
-  `bqaudiostream` fork.
-- `tony_core` / `tony_app` static libraries and the two test executables; see
-  [architecture.md](architecture.md) for what goes where. A new source file goes into
-  `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
-  only if it declares `Q_OBJECT`.
-- Windows headers define `near` and `far` as macros. Do not use them as identifiers.

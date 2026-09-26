@@ -20,6 +20,9 @@
 #include "TestSingingTakes.h"
 #include "TestTakesFile.h"
 #include "TestTakeTiming.h"
+#include "TestLyrics.h"
+#include "TestLyricsTtml.h"
+#include "TestLyricsEdit.h"
 #include "TestLatencyCheck.h"
 #include "TestLatencyCalibration.h"
 #include "TestTakeDiff.h"
@@ -99,6 +102,24 @@ int main(int argc, char *argv[])
 
     {
         TestTakeTiming t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyrics t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsTtml t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsEdit t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

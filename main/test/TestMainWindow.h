@@ -38,6 +38,8 @@
 #include <QMenu>
 #include <QTimer>
 
+#include <functional>
+
 /**
  * MainWindow with the fake device in place of a real one, and the
  * protected state of the singing workflow opened up for inspection.
@@ -230,6 +232,50 @@ public:
     QAction *alternatePitchUpAction() { return m_alternatePitchUpAction; }
     QAction *alternatePitchDownAction() { return m_alternatePitchDownAction; }
 
+    // The timed lyrics, and the four menu actions that act on them
+    LyricsTrack *lyrics() { return m_lyrics; }
+    bool doImportLyricsFrom(QString path) { return importLyricsFrom(path); }
+    bool doExportLyricsTo(QString path) { return exportLyricsTo(path); }
+    QAction *importLyricsAction() { return m_importLyricsAction; }
+    QAction *exportLyricsAction() { return m_exportLyricsAction; }
+    QAction *removeLyricsAction() { return m_removeLyricsAction; }
+    QAction *showLyricsAction() { return m_showLyrics; }
+
+    // Edit > Edit Lyrics, and the editor it switches on; Edit > Shift
+    // Lyrics...
+    QAction *editLyricsAction() { return m_editLyricsAction; }
+    QAction *shiftLyricsAction() { return m_shiftLyricsAction; }
+    LyricsEditor *lyricsEditor() { return m_lyricsEditor; }
+
+    // The file Import Lyrics asks for, answered from here: "" is Cancel
+    void setLyricsFileAnswer(QString path) { m_lyricsFileAnswer = path; }
+    int lyricsFileQuestions() const { return m_lyricsFileQuestions; }
+
+    // The file Export Lyrics asks for, likewise, and the path it offered
+    void setLyricsExportAnswer(QString path) { m_lyricsExportAnswer = path; }
+    int lyricsExportQuestions() const { return m_lyricsExportQuestions; }
+    QString lyricsExportSuggestion() const { return m_lyricsExportSuggestion; }
+
+    // The texts the lyrics editor asks for, answered from here in turn.
+    // A question with no answer left is cancelled
+    void answerWordText(QString text) { m_wordTextAnswers.push_back({true, text}); }
+    void cancelWordText() { m_wordTextAnswers.push_back({false, QString()}); }
+    int wordTextQuestions() const { return m_wordTextQuestions; }
+    int wordTextAnswersLeft() const { return int(m_wordTextAnswers.size()); }
+    // The text the last question offered, and whether it was for a new word
+    QString wordTextOffered() const { return m_wordTextOffered; }
+    bool wordTextWasNew() const { return m_wordTextWasNew; }
+    // Done while the next question is open, as anything can be while its
+    // dialog runs an event loop
+    void whileAskingWordText(std::function<void()> f) { m_whileAskingWordText = f; }
+
+    // The seconds Shift Lyrics asks for, answered from here in turn, as
+    // the texts are.  A question with no answer left is cancelled
+    void answerLyricsShift(double seconds) { m_shiftAnswers.push_back({true, seconds}); }
+    void cancelLyricsShift() { m_shiftAnswers.push_back({false, 0.0}); }
+    int lyricsShiftQuestions() const { return m_shiftQuestions; }
+    void whileAskingLyricsShift(std::function<void()> f) { m_whileAskingShift = f; }
+
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
         onRealtimePitchDetected(frame, hz);
     }
@@ -270,6 +316,47 @@ protected:
         return m_takeNameAnswer == "" ? current : m_takeNameAnswer;
     }
 
+    QString askForLyricsFile() override {
+        ++m_lyricsFileQuestions;
+        return m_lyricsFileAnswer;
+    }
+
+    QString askForLyricsExportFile(QString suggested) override {
+        ++m_lyricsExportQuestions;
+        m_lyricsExportSuggestion = suggested;
+        return m_lyricsExportAnswer;
+    }
+
+    bool askForLyricsWordText(QString &text, bool isNew) override {
+        ++m_wordTextQuestions;
+        m_wordTextOffered = text;
+        m_wordTextWasNew = isNew;
+        if (m_whileAskingWordText) {
+            auto during = m_whileAskingWordText;
+            m_whileAskingWordText = nullptr;
+            during();
+        }
+        if (m_wordTextAnswers.isEmpty()) return false;
+        auto answer = m_wordTextAnswers.takeFirst();
+        if (!answer.first) return false;
+        text = answer.second;
+        return true;
+    }
+
+    bool askForLyricsShift(double &seconds) override {
+        ++m_shiftQuestions;
+        if (m_whileAskingShift) {
+            auto during = m_whileAskingShift;
+            m_whileAskingShift = nullptr;
+            during();
+        }
+        if (m_shiftAnswers.isEmpty()) return false;
+        auto answer = m_shiftAnswers.takeFirst();
+        if (!answer.first) return false;
+        seconds = answer.second;
+        return true;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -283,6 +370,19 @@ private:
     bool m_deleteTakeAnswer = true;
     int m_deleteTakeQuestions = 0;
     QString m_takeNameAnswer;
+    QString m_lyricsFileAnswer;
+    int m_lyricsFileQuestions = 0;
+    QString m_lyricsExportAnswer;
+    int m_lyricsExportQuestions = 0;
+    QString m_lyricsExportSuggestion;
+    QList<QPair<bool, QString>> m_wordTextAnswers;
+    int m_wordTextQuestions = 0;
+    QString m_wordTextOffered;
+    bool m_wordTextWasNew = false;
+    std::function<void()> m_whileAskingWordText;
+    QList<QPair<bool, double>> m_shiftAnswers;
+    int m_shiftQuestions = 0;
+    std::function<void()> m_whileAskingShift;
 };
 
 #endif
