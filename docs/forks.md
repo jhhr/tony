@@ -56,7 +56,9 @@ another branch builds something the lock file does not say.
 **repoint does not run on the development machine** (it needs an SML compiler and none is
 installed). The checkouts are managed with plain git, and `repoint-project.json` /
 `repoint-lock.json` are edited by hand. Keep the lock file's pins equal to what is checked
-out: CI and anyone else's checkout get exactly what the lock file says.
+out: CI and anyone else's checkout get exactly what the lock file says. Keep its final
+newline too: `repoint install` writes the file afresh, with one, and without it CI's tree
+counts as changed (the APK's version then says `+`).
 
 **Searching**: ripgrep-based search tools skip these directories because they are
 gitignored. Pass the directory as the search path explicitly, or use `grep -rn` in Bash.

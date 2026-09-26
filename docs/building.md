@@ -5,7 +5,11 @@ The development machine builds with meson + ninja under MSYS2's `mingw64` toolch
 agent in a cloud session builds on Linux instead, into `build/`: see
 [Building on Linux](#building-on-linux) at the end. The Windows CI workflow in
 `.github/workflows/` builds as the development machine does, from MSYS2's packages; the
-Linux and macOS ones build the upstream way.
+Linux and macOS ones build the upstream way. The Android one builds the APK with the
+scripts in `deploy/android/`, as a cloud session does, and keeps it as the run's artifact
+`Tony-debug-apk`. It caches Qt for Android and the C libraries, each under a key made from
+the script that builds it and `setup-toolchain.sh`: a change to one of those builds it
+again, Qt in about twenty minutes.
 
 # Building on Windows (MSYS2 MinGW-w64)
 
