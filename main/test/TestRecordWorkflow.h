@@ -1630,9 +1630,11 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         waitForSomethingRecorded();
-        m_window->doRecord();
+        // Timed from before Stop: the take's splice, which Stop runs
+        // before it returns, comes after the idle time has started
         QElapsedTimer stopped;
         stopped.start();
+        m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!fake->isSuspended());
         const int resumes = fake->getResumeCount();
