@@ -170,7 +170,8 @@ device's rate (svgui's `ViewManager`, an expected failure in `TestRecordWorkflow
     Navigate mode (`Pane::dragTopLayer()`) and dragging in the selection strip (SelectMode
     through `setToolModeFor()`) should therefore work.
   - Pinch to zoom, two-finger scrolling and long-press for the right-button menu (the pane
-    emits `rightButtonMenuRequested` on a right click) need adding in the svgui fork.
+    emits `rightButtonMenuRequested` on a right click) are added by `TouchGestures` in
+    `main/`, an event filter on each pane; the svgui fork needed no change (phase A4).
 - `main.cpp`:
   - `--no-audio` selects `AUDIO_NONE`, which is useful for a first test port;
   - the window is sized from the screen;
@@ -201,7 +202,8 @@ device's rate (svgui's `ViewManager`, an expected failure in `TestRecordWorkflow
     Ctrl+D action as a button), zoom.
   - The Show and Play toggles and gains in a slide-out panel.
   - Hidden: the note-editing tools, the audio device menus, perhaps the spectrogram.
-- **Gestures in the svgui fork**: pinch zoom, two-finger scroll, long-press menu.
+- **Gestures**: pinch zoom, two-finger scroll, long-press menu (`TouchGestures` in `main/`,
+  not the svgui fork).
 - **The latency calibration setting** described above, if a test port needs it.
 - **The sample-rate check** described above.
 - **Headphones.**

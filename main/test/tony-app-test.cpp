@@ -14,6 +14,7 @@
 #include "TestSingingDocument.h"
 #include "TestSingingAnalysis.h"
 #include "TestRecordWorkflow.h"
+#include "TestTouchGestures.h"
 
 #include "RunSuite.h"
 
@@ -66,6 +67,12 @@ int main(int argc, char *argv[])
 
     {
         TestRecordWorkflow t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTouchGestures t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

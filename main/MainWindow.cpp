@@ -23,6 +23,7 @@
 #include "TakeEvents.h"
 #include "TakeLayers.h"
 #include "TakesFile.h"
+#include "TouchGestures.h"
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
@@ -6032,6 +6033,7 @@ void
 MainWindow::paneAdded(Pane *pane)
 {
     pane->setPlaybackFollow(PlaybackScrollPage);
+    new TouchGestures(pane); // owned by the pane
     m_paneStack->sizePanesEqually();
     if (m_overview) m_overview->registerView(pane);
 }    

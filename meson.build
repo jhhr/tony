@@ -1167,6 +1167,7 @@ tony_entry_files = [
 tony_core_files = [
   'main/AndroidFiles.cpp',
   'main/Coverage.cpp',
+  'main/PinchZoom.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
   'main/TakeAudio.cpp',
@@ -1184,6 +1185,7 @@ tony_app_files = [
   'main/PaneUtils.cpp',
   'main/TakeCommands.cpp',
   'main/TakeLayers.cpp',
+  'main/TouchGestures.cpp',
 ]
 
 tony_core_moc_files = qt.preprocess(
@@ -1198,6 +1200,7 @@ tony_app_moc_files = qt.preprocess(
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
   'main/CoverageStrip.h',
+  'main/TouchGestures.h',
 ])
 
 qt_resource_files = qt.preprocess(
@@ -1465,6 +1468,7 @@ if system != 'android'
     'main/test/TestRealtimePitchTracker.h',
     'main/test/TestLatencyShift.h',
     'main/test/TestCoverage.h',
+    'main/test/TestPinchZoom.h',
     'main/test/TestTakeAudio.h',
     'main/test/TestTakeEvents.h',
     'main/test/TestSingingTakes.h',
@@ -1502,6 +1506,7 @@ if system != 'android'
     'main/test/TestSingingDocument.h',
     'main/test/TestSingingAnalysis.h',
     'main/test/TestRecordWorkflow.h',
+    'main/test/TestTouchGestures.h',
   ])
 
   tony_app_test_exe = executable(
