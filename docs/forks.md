@@ -157,6 +157,17 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `View::paintEvent()` on a cache hit no longer has the cached layers draw into its buffer,
   where the cache then covered them. Upstream has done that since 2018, so the cache saved
   nothing and every paint, down to the play pointer's few pixels, drew every layer.
+- Plot elements keep their size in logical pixels (branch `feat/tonyandroid`, for the
+  Android port). `View` draws its layers at the whole pixel ratio (3 on a phone at 2.75),
+  but `TimeValueLayer`'s points (2 px high) and `FlexiNoteLayer`'s notes (`NOTE_HEIGHT`)
+  were sized in those physical pixels and pens scaled by only the square root of the ratio,
+  so on a phone pitch and notes were a third of their size. Now
+  `LayerGeometryProvider::scalePlotSize()` (logical px x ratio x plot scale, no font factor:
+  unchanged at ratio 1 and scale 1) sizes them, the notes' hit areas use it too, and
+  `ViewProxy::scalePenWidth()` scales by the whole ratio and the plot scale.
+  `ViewManager::setPlotScale()` / `plotScaleChanged()` is Tony's View > Plot Size; each
+  view drops its cache on a change. On a hi-DPI desktop (ratio 2) this doubles points and
+  notes, and thickens the pens of every layer drawn through a `ViewProxy`.
 
 ## Known defects in the forks, not fixed
 

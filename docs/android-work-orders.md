@@ -178,7 +178,7 @@ builds happen in the container.)
 - A4b — Vertical zoom and scroll by touch. Done.
 - A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session. Done.
 - A9 — Live dots in real time on the phone. Done.
-- A10 — Plot elements sized for the screen.
+- A10 — Plot elements sized for the screen. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -866,3 +866,28 @@ Flaky: tests needing the ranged analysis running just after Stop lose when pYIN 
 here, 0 of 3 at HEAD, which also lost one in a parallel repeat. Lead: `analyseRange()` now looks
 at a finished run from the event loop, never within the call; 5 of 5 runner runs green after.
 The lead also brought the docs naming `ModelChangeThrottle` up to date. Not on a phone.
+
+### Phase A10 — 2026-09-26
+Built: svgui `a082647` (view): `ViewManager::setPlotScale()` and `plotScaleChanged()` (views drop
+their cache and repaint); `LayerGeometryProvider::scalePlotSize()` (logical px x ratio x plot
+scale, no font factor: the identity at 1 and 1) and `scalePlotPixelSize()`;
+`ViewProxy::scalePenWidth()` by ratio x plot scale, not sqrt(ratio). `8286def` (layer):
+TimeValueLayer's point height and least width, FlexiNoteLayer's note height, outline and hit
+area (`getRelativeMousePosition()`, `getFeatureDescription()`) through it. Neither pushed nor
+pinned. `main/PlotSize` (app): View > Plot Size 100/150/200 %, `MainWindow/plotsize`, default 150
+on Android and 100 elsewhere; nothing stored until a step is chosen, anything else stored is the
+default. Tests: `TestPlotSize`, one each in `TestViewCache` and `TestCompactLayout`.
+Measured: a whole pane of Tony's at ratio 1 (waveform, pitch, notes) was byte-identical before
+and after (a one-off shot, since removed). Ratio 3, 400x850 compact: pitch layer 6.2 ms a paint
+before and after at 100 %, 6.7-7.5 ms at 150/200 %; notes 0.05 ms; whole pane 17-19 ms either
+way. At ratio 1, 150/200 % doubles the pitch layer (2.5 to 6 ms): a pen wider than a pixel leaves
+Qt's fast path, which at ratio 3 the old 1.7 px pen had left already.
+Hi-DPI desktop (ratio 2 at Windows 150/200 %) changes too: TimeValueLayer (points 2 logical px
+high, not 1; pens 2 px, not 1.4), FlexiNoteLayer (notes 16 logical px, not 8, now as high as
+their hit area), the pens of RegionLayer's bar styles and of SliceLayer/SpectrumLayer. Not the
+coverage strip or lyrics (already `scalePixelSize()`), waveform, spectrogram or time ruler.
+Left: the ruler's ticks and the waveform's lines stay 1 physical px (looked fine at ratio 3); the
+strip and lyrics do not follow the plot size; forks.md not updated (A8). Not on a phone.
+Tests seen failing: ViewProxy without the ratio (the old sizes at 3): sizes, hit area; plot
+scale x1.1 at 100 %: desktop_draws_as_before; no connection: the cache test; PlotSize not
+applying: its step test and the menu test.

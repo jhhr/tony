@@ -302,6 +302,7 @@ private slots:
             delete m_window;
             m_window = nullptr;
         }
+        QSettings().remove("MainWindow/plotsize");
         QVERIFY2(m_dialogs.isEmpty(),
                  qPrintable("unexpected dialog: " + m_dialogs.join(" | ")));
     }
@@ -682,6 +683,47 @@ private slots:
             QVERIFY2(toolBar->isVisible(), qPrintable(toolBar->objectName()));
         }
         QVERIFY(m_window->takeBox()->isVisible());
+    }
+
+    // View > Plot Size (PlotSize): the steps with the default checked, a
+    // step applied to the panes at once and taken up at the next start.
+    // On a phone it is in the menu button's popup with the rest of the
+    // View menu
+    void plot_size_in_the_view_menu() {
+        QSettings().remove("MainWindow/plotsize");
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+
+        QMenu *plotSize = nullptr;
+        for (QAction *menu: m_window->menuBar()->actions()) {
+            if (!menu->menu() || !menu->menu()->actions()
+                .contains(m_window->compact()->getAction())) continue;
+            for (QAction *action: menu->menu()->actions()) {
+                if (action->menu() && action->text() == "Plot &Size") {
+                    plotSize = action->menu();
+                }
+            }
+        }
+        QVERIFY(plotSize);
+
+        QStringList texts, checked;
+        for (QAction *action: plotSize->actions()) {
+            texts << action->text();
+            if (action->isChecked()) checked << action->text();
+        }
+        QCOMPARE(texts, QStringList({ "100%", "150%", "200%" }));
+        QCOMPARE(checked, QStringList({ "100%" }));
+        QCOMPARE(m_window->viewManager()->getPlotScale(), 1.0);
+
+        plotSize->actions().at(2)->trigger();
+        QCOMPARE(m_window->viewManager()->getPlotScale(), 2.0);
+
+        m_window->doCloseSession();
+        delete m_window;
+        m_window = nullptr;
+        openWindow();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->viewManager()->getPlotScale(), 2.0);
     }
 };
 

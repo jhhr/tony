@@ -46,6 +46,7 @@ class QComboBox;
 class QActionGroup;
 class QToolBar;
 class CompactLayout;
+class PlotSize;
 
 class AudioCheckRunner;
 struct AudioCheckResult;
@@ -387,6 +388,10 @@ protected:
     // the parts (setupCompactLayout()): the actions below, which are made
     // with the menus and toolbars, and others that have members already
     CompactLayout *m_compactLayout;
+
+    // View > Plot Size: how large the panes draw pitch and notes
+    PlotSize      *m_plotSize;
+
     QAction       *m_playAction;
     QAction       *m_recordAction;
     QAction       *m_zoomInAction;

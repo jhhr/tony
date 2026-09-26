@@ -19,6 +19,7 @@
 #include "TestCompactLayout.h"
 #include "TestTouchMenuStyle.h"
 #include "TestLyricsLayer.h"
+#include "TestPlotSize.h"
 #include "TestUiChecks.h"
 #include "TestAudioCheck.h"
 
@@ -89,6 +90,12 @@ int main(int argc, char *argv[])
 
     {
         TestLyricsLayer t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestPlotSize t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

@@ -19,6 +19,7 @@
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
 #include "CompactLayout.h"
+#include "PlotSize.h"
 #include "AudioCheckRunner.h"
 #include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
@@ -164,6 +165,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_liveDotsFeed(40),
     m_overview(0),
     m_compactLayout(nullptr),
+    m_plotSize(nullptr),
     m_playAction(nullptr),
     m_recordAction(nullptr),
     m_zoomInAction(nullptr),
@@ -512,8 +514,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takeTimer->setInterval(100);
     connect(m_takeTimer, SIGNAL(timeout()), this, SLOT(pollTakeProgress()));
 
-    // Before the menus: its switch is in the View menu
+    // Before the menus: their switches are in the View menu
     m_compactLayout = new CompactLayout(this);
+    m_plotSize = new PlotSize(m_viewManager, this);
 
     setupMenus();
     setupToolbars();
@@ -1159,6 +1162,8 @@ MainWindow::setupViewMenu()
     menu->addSeparator();
 
     menu->addAction(m_compactLayout->getAction());
+    QMenu *plotSizeMenu = menu->addMenu(tr("Plot &Size"));
+    plotSizeMenu->addActions(m_plotSize->getActions());
     // Enabled and checked in updateLayerStatuses().  Not "Show &Lyrics":
     // Peek Left has the L
     m_showLyrics = new QAction(tr("Show L&yrics"), this);

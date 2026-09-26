@@ -1229,6 +1229,7 @@ tony_app_files = [
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
   'main/PaneUtils.cpp',
+  'main/PlotSize.cpp',
   'main/TakeCommands.cpp',
   'main/TakeLayers.cpp',
   'main/TouchGestures.cpp',
@@ -1258,6 +1259,7 @@ tony_app_moc_headers = [
   'main/CoverageStrip.h',
   'main/LyricsTrack.h',
   'main/LyricsEditor.h',
+  'main/PlotSize.h',
   'main/TouchGestures.h',
   'main/TouchMenuStyle.h',
 ]
@@ -1598,6 +1600,7 @@ if system != 'android'
     'main/test/TestSingingAnalysis.h',
     'main/test/TestRecordWorkflow.h',
     'main/test/TestLyricsLayer.h',
+    'main/test/TestPlotSize.h',
     'main/test/TestUiChecks.h',
     'main/test/TestAudioCheck.h',
     'main/test/TestTouchGestures.h',
