@@ -23,7 +23,9 @@ code.
 
 ## Build and test
 
-From **Git Bash** (the usual agent shell). `build.bat` does not run from sh.
+From **Git Bash** (the usual agent shell) on the Windows machine. `build.bat` does not run
+from sh. In a Linux cloud session, set up and build as in
+[docs/building.md](docs/building.md#building-on-linux) instead, into `build_linux/`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
@@ -42,7 +44,7 @@ Run tests from `build_mingw/` with the same environment:
 ```sh
 mkdir -p ../tmp/tl
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "exit:$?"
-TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~5 min, real time
+TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~8 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ```
@@ -56,7 +58,7 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
-- Give the app suite a tool timeout of 10 minutes.
+- Give the app suite a tool timeout of 15 minutes.
 
 ## Rules for working here
 

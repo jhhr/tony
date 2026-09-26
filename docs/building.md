@@ -1,9 +1,13 @@
-# Building on Windows (MSYS2 MinGW-w64)
+# Building
 
 The development machine builds with meson + ninja under MSYS2's `mingw64` toolchain
-(default prefix `C:\msys64\mingw64`) into `build_mingw/`. The CI workflows in
+(default prefix `C:\msys64\mingw64`) into `build_mingw/`: that is most of this page. An
+agent in a cloud session builds on Linux instead, into `build_linux/`: see
+[Building on Linux](#building-on-linux) at the end. The CI workflows in
 `.github/workflows/` build the upstream way on Linux, macOS and MSVC and are not what is
 described here.
+
+# Building on Windows (MSYS2 MinGW-w64)
 
 ## From cmd or PowerShell: `build.bat`
 
@@ -104,3 +108,89 @@ on 2026-09-25 (Ubuntu 24.04, no sound card):
   `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
   only if it declares `Q_OBJECT`.
 - Windows headers define `near` and `far` as macros. Do not use them as identifiers.
+
+# Building on Linux
+
+For a cloud session (Ubuntu 24.04, root, no Windows): a fresh container has none of the
+libraries, and repoint does not run there either, so everything below is done by hand.
+A clean build takes 15 to 20 minutes with `-j 4`.
+
+## Packages
+
+```sh
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential meson ninja-build \
+  qt6-base-dev qt6-base-dev-tools qt6-tools-dev-tools qt6-pdf-dev libqt6svg6-dev \
+  libboost-all-dev libbz2-dev libfftw3-dev libsndfile-dev libsamplerate-dev \
+  librubberband-dev libsord-dev raptor2-utils liboggz2-dev libfishsound1-dev \
+  libmad0-dev libid3tag0-dev libopus-dev libopusfile-dev libopusenc-dev liblo-dev \
+  liblrdf0-dev libjack-jackd2-dev libpulse-dev libasound2-dev portaudio19-dev \
+  capnproto libcapnp-dev libglib2.0-dev libxml2-utils mercurial
+```
+
+Ubuntu 24.04 gives Qt **6.4** and rubberband 3.3; the Windows machine has Qt 6.11. See the
+traps below.
+
+## The libraries
+
+Check out every library of `repoint-project.json` at its pin in `repoint-lock.json`, into
+the directory of the same name at the top of the repository (`icons/scalable` included).
+The git ones:
+
+```sh
+cd /path/to/tony
+python3 -c '
+import json
+p = json.load(open("repoint-project.json"))["libraries"]
+l = json.load(open("repoint-lock.json"))["libraries"]
+for name, lib in p.items():
+    if lib["vcs"] == "git":
+        repo = lib.get("repository", name.split("/")[-1])
+        print(name, "https://github.com/%s/%s" % (lib["owner"], repo), l[name]["pin"])
+' | while read dir url pin; do
+  [ -d "$dir/.git" ] || git clone -q "$url" "$dir"
+  git -C "$dir" checkout -q "$pin" && echo "$dir $pin"
+done
+```
+
+The six Mercurial ones (`dataquay`, `bqvec`, `bqfft`, `bqresample`, `bqaudioio`,
+`bqthingfactory`) live on `hg.sr.ht/~breakfastquay`. **A cloud session's network proxy
+refuses that host**, so use the git mirrors at `github.com/breakfastquay/<name>` instead.
+The mirrors' hashes are not the hg pins: take each mirror's `HEAD`, which matched the pins
+when this was written (for `bqaudioio`, its "Merge from branch toggle-record-in-io" is
+hg `017ab3ed3a33`, which `FakeAudioIO` needs). If a pin moves past a mirror's `HEAD`, the
+build or the tests will say so.
+
+```sh
+for r in dataquay bqvec bqfft bqresample bqaudioio bqthingfactory; do
+  [ -d "$r" ] || git clone -q "https://github.com/breakfastquay/$r" "$r"
+done
+```
+
+Where `hg.sr.ht` can be reached, `hg clone` and `hg update -r <pin>` are the real thing. If
+`hg` fails with `ImportError: cannot import name parsers`, a Python on `PATH` other than the
+system's is picking it up: run it as `/usr/bin/python3.12 /usr/bin/hg`.
+
+## Configure, build, test
+
+```sh
+meson setup build_linux --buildtype release > tmp/configure.log 2>&1
+ninja -j 4 -C build_linux tony test-tony-core test-tony-app pyin.so > tmp/build.log 2>&1
+echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
+```
+
+Targets have no `.exe`, and `pyin.so` has to be named: nothing else builds the plugin the
+app suite loads. The rules above still hold: log to a file, never pipe ninja, write the exit
+status into the log. Tests run from `build_linux/` exactly as [testing.md](testing.md)
+says, with `./test-tony-core` and `./test-tony-app`.
+
+## Traps
+
+- **Some tests fail on Linux whatever the change**: the list is in
+  [testing.md](testing.md#running). Record the baseline before changing anything.
+- **Qt 6.4 does not match a `SIGNAL()`/`SLOT()` string saying `ModelId` or `sv_frame_t`
+  against a slot moc recorded with `sv::`**, where Qt 6.11 does. Such a connection fails
+  silently here and works on Windows. Use member-pointer `connect` (AGENTS.md asks for it
+  anyway), and use no Qt API newer than 6.4.
+- Several tests race the analysis against the take; this machine finishes the analysis
+  sooner than the Windows one does, which is why some of them fail here.

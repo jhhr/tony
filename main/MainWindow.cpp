@@ -21,6 +21,8 @@
 #include "AudioCheckRunner.h"
 #include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
+#include "Lyrics.h"
+#include "LyricsTtml.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
@@ -99,6 +101,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QInputDialog>
+#include <QFileDialog>
 #include <QStatusBar>
 #include <QFileInfo>
 #include <QDir>
@@ -112,6 +115,8 @@
 #include <QDialogButtonBox>
 #include <QActionGroup>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QSet>
 #include <QTimer>
 #include <QEventLoop>
 #include <QTextStream>
@@ -157,6 +162,14 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_singingNotesHiddenForTake(false),
     m_takes(nullptr),
     m_coverageStrip(nullptr),
+    m_lyrics(nullptr),
+    m_importLyricsAction(nullptr),
+    m_exportLyricsAction(nullptr),
+    m_removeLyricsAction(nullptr),
+    m_showLyrics(nullptr),
+    m_lyricsEditor(nullptr),
+    m_editLyricsAction(nullptr),
+    m_shiftLyricsAction(nullptr),
     m_takesMenu(nullptr),
     m_takeCombo(nullptr),
     m_newTakeAction(nullptr),
@@ -263,6 +276,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     cdb->setUseDarkBackground(cdb->addColour(Qt::green, tr("Bright Green")), true);
     cdb->setUseDarkBackground(cdb->addColour(QColor(225, 74, 255), tr("Bright Purple")), true);
     cdb->setUseDarkBackground(cdb->addColour(QColor(255, 188, 80), tr("Bright Orange")), true);
+    // The waveforms under the lyrics (Analyser::setWaveformFaded()).
+    // Last, so that the colours before it keep their indices
+    cdb->addColour(QColor(225, 225, 225), tr("Pale Grey"));
 
     Preferences::getInstance()->setResampleOnLoad(true);
     Preferences::getInstance()->setFixedSampleRate(44100);
@@ -415,6 +431,14 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
+    m_lyrics = new LyricsTrack(this);
+    m_lyricsEditor = new LyricsEditor(m_lyrics, this);
+    connect(m_lyricsEditor, &LyricsEditor::contextHelpChanged,
+            this, &MainWindow::contextHelpChanged);
+    m_lyricsEditor->setTextQuestion([this](QString &text, bool isNew) {
+        return askForLyricsWordText(text, isNew);
+    });
+
     m_audioCheck = new AudioCheckRunner(this);
 
     // What may be chosen changes as a check begins and as it ends.  The
@@ -539,6 +563,11 @@ MainWindow::~MainWindow()
     m_alternatePitch = nullptr;
     delete m_coverageStrip;
     m_coverageStrip = nullptr;
+    // Before the lyrics track, which it finds the lyrics through
+    delete m_lyricsEditor;
+    m_lyricsEditor = nullptr;
+    delete m_lyrics;
+    m_lyrics = nullptr;
     delete m_analyser;
     delete m_keyReference;
     Profiles::getInstance()->dump();
@@ -656,6 +685,25 @@ MainWindow::setupFileMenu()
     connect(m_loadBackgroundMusicAction, SIGNAL(triggered()), this, SLOT(openBackgroundMusic()));
     connect(this, SIGNAL(canPlay(bool)), m_loadBackgroundMusicAction, SLOT(setEnabled(bool)));
     menu->addAction(m_loadBackgroundMusicAction);
+
+    // Enabled in updateMenuStates()
+    m_importLyricsAction = new QAction(il.load("fileopen"), tr("Import &Lyrics..."), this);
+    m_importLyricsAction->setStatusTip(tr("Import timed lyrics from a TTML or LRC file, to be shown along the bottom of the pane"));
+    m_importLyricsAction->setEnabled(false);
+    connect(m_importLyricsAction, &QAction::triggered, this, &MainWindow::importLyrics);
+    menu->addAction(m_importLyricsAction);
+
+    m_exportLyricsAction = new QAction(tr("Expor&t Lyrics..."), this);
+    m_exportLyricsAction->setStatusTip(tr("Write the lyrics, as they are now, to a TTML file"));
+    m_exportLyricsAction->setEnabled(false);
+    connect(m_exportLyricsAction, &QAction::triggered, this, &MainWindow::exportLyrics);
+    menu->addAction(m_exportLyricsAction);
+
+    m_removeLyricsAction = new QAction(tr("Remove Lyrics"), this);
+    m_removeLyricsAction->setStatusTip(tr("Take the imported lyrics out of the session"));
+    m_removeLyricsAction->setEnabled(false);
+    connect(m_removeLyricsAction, &QAction::triggered, this, &MainWindow::removeLyrics);
+    menu->addAction(m_removeLyricsAction);
 
     menu->addSeparator();
 
@@ -938,6 +986,28 @@ MainWindow::setupEditMenu()
     m_eraseSingingAction->setEnabled(false);
     menu->addAction(m_eraseSingingAction);
     m_rightButtonMenu->addAction(m_eraseSingingAction);
+
+    menu->addSeparator();
+
+    // A mode, not a tool: the lyrics are never the pane's top layer, which
+    // is what the tools act on.  Enabled and checked in updateMenuStates().
+    // No shortcut: it is not switched on and off in the middle of things
+    m_editLyricsAction = new QAction(tr("Edit L&yrics"), this);
+    m_editLyricsAction->setCheckable(true);
+    m_editLyricsAction->setStatusTip(tr("Edit the words of the lyrics along the bottom of the pane: drag a start or end, Shift-drag to move all the words, double-click a word to change its text, right-click to add or delete one"));
+    m_editLyricsAction->setEnabled(false);
+    connect(m_editLyricsAction, &QAction::triggered,
+            this, &MainWindow::editLyricsToggled);
+    menu->addAction(m_editLyricsAction);
+
+    // The same shift as a Shift-drag in edit mode, by a number: for an
+    // offset known beforehand, such as the lyrics exporter's
+    m_shiftLyricsAction = new QAction(tr("S&hift Lyrics..."), this);
+    m_shiftLyricsAction->setStatusTip(tr("Move all the words of the lyrics earlier or later by a number of seconds"));
+    m_shiftLyricsAction->setEnabled(false);
+    connect(m_shiftLyricsAction, &QAction::triggered,
+            this, &MainWindow::shiftLyrics);
+    menu->addAction(m_shiftLyricsAction);
 }
 
 void
@@ -1012,6 +1082,17 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Set the minimum and maximum frequencies in the visible display"));
     connect(action, SIGNAL(triggered()), this, SLOT(editDisplayExtents()));
     menu->addAction(action);
+
+    menu->addSeparator();
+
+    // Enabled and checked in updateLayerStatuses().  Not "Show &Lyrics":
+    // Peek Left has the L
+    m_showLyrics = new QAction(tr("Show L&yrics"), this);
+    m_showLyrics->setCheckable(true);
+    m_showLyrics->setStatusTip(tr("Show or hide the imported lyrics along the bottom of the pane"));
+    m_showLyrics->setEnabled(false);
+    connect(m_showLyrics, &QAction::triggered, this, &MainWindow::showLyricsToggled);
+    menu->addAction(m_showLyrics);
 }
 
 void
@@ -2290,6 +2371,35 @@ MainWindow::updateMenuStates()
     emit canChangeTakes(canChange);
     emit canActOnTake(canChange && m_takes->getActiveIndex() >= 0);
 
+    if (m_importLyricsAction) {
+        m_importLyricsAction->setEnabled(lyricsImportAllowed());
+    }
+    if (m_exportLyricsAction) {
+        m_exportLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
+    }
+    if (m_removeLyricsAction) {
+        m_removeLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
+    }
+
+    // Edit mode goes off here whenever it is no longer to be had: Remove
+    // Lyrics, Show Lyrics, the base class's record() once the take has
+    // started, and closeSession() (by documentRestored()) all come
+    // through here.  None of those is an undo or a redo, which come
+    // through here as well, and during which the drag that this finishes
+    // could not push its command
+    bool lyricsEditable = lyricsEditAllowed();
+    if (!lyricsEditable && m_lyricsEditor && m_lyricsEditor->isEnabled()) {
+        setLyricsEditing(false);
+    }
+    if (m_editLyricsAction) {
+        m_editLyricsAction->setEnabled(lyricsEditable);
+        m_editLyricsAction->setChecked
+            (m_lyricsEditor && m_lyricsEditor->isEnabled());
+    }
+    if (m_shiftLyricsAction) {
+        m_shiftLyricsAction->setEnabled(lyricsEditable);
+    }
+
     // The audio check records takes of its own, and keeps what it
     // measures for the devices it started on.  Record is shut after the
     // base class has opened it: a press would stop the check's take, or
@@ -2518,6 +2628,12 @@ MainWindow::updateLayerStatuses()
             (shown && !inTake && m_alternatePitch->canStep(false));
     }
 
+    // Lyrics: shown or hidden once there are some
+    if (m_showLyrics && m_lyrics) {
+        m_showLyrics->setEnabled(m_lyrics->isShown());
+        m_showLyrics->setChecked(m_lyrics->isVisible());
+    }
+
     // Background music toggle: enabled when a background music track is loaded
     if (m_playBackgroundMusic) {
         bool haveBgMusic = (m_backgroundMusicLayer != nullptr);
@@ -2652,6 +2768,10 @@ MainWindow::closeSession()
     teardownBackgroundMusic();
     m_alternatePitch->hide();
     m_coverageStrip->hide();
+    m_lyrics->hide();
+    // The fade goes with the lyrics.  m_analyser stays for the next file,
+    // and would make that one's waveform faded as well
+    updateWaveformFade();
     m_referencePitchHiddenForTake = false;
     m_singingPitchHiddenForTake = false;
     m_singingNotesHiddenForTake = false;
@@ -3420,6 +3540,354 @@ MainWindow::syncCoverageStrip()
     }
 }
 
+bool
+MainWindow::lyricsImportAllowed() const
+{
+    // The words are put on the reference's timeline, in pane 0.  Not
+    // while a take is being recorded: the singer is reading the words
+    // that are there
+    if (!m_document || !getMainModel()) return false;
+    if (!m_paneStack || m_paneStack->getPaneCount() < 1) return false;
+    if (m_recordTarget && m_recordTarget->isRecording()) return false;
+    return true;
+}
+
+QString
+MainWindow::askForLyricsFile()
+{
+    // Lyrics are for the reference, and likely to be kept next to it
+    QString dir;
+    if (auto reference = getMainModel()) {
+        QFileInfo info(reference->getLocation());
+        if (info.exists()) dir = info.absolutePath();
+    }
+
+    return QFileDialog::getOpenFileName
+        (this, tr("Import Lyrics"), dir,
+         tr("Lyrics (*.ttml *.lrc)") + ";;" + tr("TTML lyrics (*.ttml)") +
+         ";;" + tr("LRC lyrics (*.lrc)") + ";;" + tr("All files (*)"));
+}
+
+void
+MainWindow::importLyrics()
+{
+    if (!lyricsImportAllowed()) return;
+    QString path = askForLyricsFile();
+    if (path.isEmpty()) return;
+    importLyricsFrom(path);
+}
+
+bool
+MainWindow::importLyricsFrom(QString path)
+{
+    if (!lyricsImportAllowed()) return false;
+
+    Pane *pane = m_paneStack->getPane(0);
+    auto reference = getMainModel();
+
+    emit activity(tr("Import lyrics \"%1\"").arg(path));
+
+    // A lyrics file is a few kB.  One chosen by mistake, a recording say,
+    // is not read at all; and the read stops just past the limit, which
+    // the parsers enforce too, in case the file grows in the meantime
+    QString error;
+    QByteArray bytes;
+    QFileInfo info(path);
+    if (!info.isFile()) {
+        error = tr("File \"%1\" could not be found.").arg(path);
+    } else if (info.size() > Lyrics::maxFileBytes) {
+        error = tr("The file is over 1 MB, too big to be a lyrics file.");
+    } else {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            error = tr("File \"%1\" could not be opened: %2")
+                .arg(path).arg(file.errorString());
+        } else {
+            bytes = file.read(Lyrics::maxFileBytes + 1);
+        }
+    }
+
+    LyricsParseResult parsed;
+    if (error == "") {
+        parsed = parseLyrics(bytes);
+        error = parsed.error;
+    }
+
+    // Nothing has changed yet, and nothing does: the lyrics there are
+    // stay
+    if (error != "") {
+        QMessageBox::warning(this, tr("Could not import lyrics"), error);
+        return false;
+    }
+
+    const Lyrics &lyrics = parsed.lyrics;
+    EventVector events = lyricsToEvents(lyrics, reference->getSampleRate());
+
+    // Words after the end of the reference are shown where there is
+    // nothing to hear: the lyrics may be of another recording of the song
+    sv_frame_t end = reference->getEndFrame();
+    int pastEnd = int(std::count_if(events.begin(), events.end(),
+                                    [end](const Event &e) {
+                                        return e.getFrame() >= end;
+                                    }));
+
+    // New words are not what edit mode was switched on for, and the ones
+    // there are go now: a drag of one of them ends first
+    setLyricsEditing(false);
+
+    QString name = (lyrics.title != "" ? lyrics.title : tr("Lyrics"));
+    if (!m_lyrics->show(m_document, pane, events, name)) {
+        // Only if the layer could not be made
+        updateMenuStates();
+        updateLayerStatuses();
+        return false;
+    }
+
+    // The play source takes in the model of every layer that is in a
+    // view, whether the model can be played or not, and the models it
+    // holds are what say where playback ends.  Words past the end of the
+    // reference would hold playback open, with nothing to hear
+    if (m_playSource && !m_lyrics->getModelId().isNone()) {
+        m_playSource->removeModel(m_lyrics->getModelId());
+    }
+
+    // The word at the cursor, without waiting for playback to move it;
+    // and the waveforms fade under the words
+    m_lyrics->setPlaybackFrame(m_viewManager->getPlaybackFrame());
+    updateWaveformFade();
+
+    // The layer arrived without a command, as it must, and an import is
+    // not undoable; but the session has changed
+    documentModified();
+    updateMenuStates();
+    updateLayerStatuses();
+
+    // Kept as the status message, so that the pane's context help, when
+    // it has nothing to say, gives this back rather than clearing it
+    int wordCount = int(lyrics.words.size());
+    int lineCount = lyrics.lineCount();
+    QStringList messages;
+    messages << tr("Imported %1 in %2.")
+        .arg(wordCount == 1 ? tr("1 word") : tr("%1 words").arg(wordCount),
+             lineCount == 1 ? tr("1 line") : tr("%1 lines").arg(lineCount));
+    messages << parsed.warnings;
+    if (pastEnd == 1) {
+        messages << tr("1 word starts after the end of the reference.");
+    } else if (pastEnd > 1) {
+        messages << tr("%1 words start after the end of the reference.")
+            .arg(pastEnd);
+    }
+    m_myStatusMessage = messages.join(" ");
+    getStatusLabel()->setText(m_myStatusMessage);
+
+    return true;
+}
+
+QString
+MainWindow::askForLyricsExportFile(QString suggested)
+{
+    return QFileDialog::getSaveFileName
+        (this, tr("Export Lyrics"), suggested,
+         tr("TTML lyrics (*.ttml)") + ";;" + tr("All files (*)"));
+}
+
+bool
+MainWindow::askForLyricsWordText(QString &text, bool isNew)
+{
+    bool ok = false;
+    QString typed = QInputDialog::getText
+        (this, isNew ? tr("Add Word") : tr("Edit Word Text"),
+         isNew ? tr("Text of the new word:") : tr("Text of the word:"),
+         QLineEdit::Normal, text, &ok);
+    if (!ok) return false;
+    text = typed;
+    return true;
+}
+
+bool
+MainWindow::askForLyricsShift(double &seconds)
+{
+    // Milliseconds are as fine as anyone can hear, and an hour is longer
+    // than any song
+    bool ok = false;
+    double typed = QInputDialog::getDouble
+        (this, tr("Shift Lyrics"),
+         tr("Move all the words by this many seconds\n"
+            "(negative: earlier, positive: later):"),
+         seconds, -3600.0, 3600.0, 3, &ok);
+    if (!ok) return false;
+    seconds = typed;
+    return true;
+}
+
+void
+MainWindow::exportLyrics()
+{
+    if (!m_lyrics || !m_lyrics->isShown()) return;
+
+    // Named after the reference and beside it, as the lyrics to import
+    // were looked for there
+    QString suggested;
+    if (auto reference = getMainModel()) {
+        QFileInfo info(reference->getLocation());
+        if (info.exists()) {
+            suggested = QDir(info.absolutePath())
+                .filePath(info.completeBaseName() + ".ttml");
+        }
+    }
+
+    QString path = askForLyricsExportFile(suggested);
+    if (path.isEmpty()) return;
+    exportLyricsTo(path);
+}
+
+bool
+MainWindow::exportLyricsTo(QString path)
+{
+    if (!m_lyrics || !m_lyrics->isShown()) return false;
+    auto model = ModelById::getAs<RegionModel>(m_lyrics->getModelId());
+    if (!model) return false;
+
+    // The words as the model has them now, not as the file they came
+    // from had them.  The title is not in the model: an import named the
+    // layer after it
+    Lyrics lyrics = lyricsFromEvents(model->getAllEvents(),
+                                     model->getSampleRate());
+    if (RegionLayer *layer = m_lyrics->getLayer()) {
+        QString name = layer->getLayerPresentationName();
+        if (name != tr("Lyrics")) lyrics.title = name;
+    }
+    QByteArray bytes = writeTtml(lyrics);
+
+    // A file that is there already is replaced only once the new one is
+    // written in full
+    QSaveFile file(path);
+    bool written = file.open(QIODevice::WriteOnly) &&
+        file.write(bytes) == bytes.size() &&
+        file.commit();
+    if (!written) {
+        QMessageBox::warning
+            (this, tr("Could not export lyrics"),
+             tr("File \"%1\" could not be written: %2")
+             .arg(path).arg(file.errorString()));
+        return false;
+    }
+
+    emit activity(tr("Export lyrics to \"%1\"").arg(path));
+
+    // Not a change to the session, so nothing is marked modified.  Kept
+    // as the status message, as an import's is
+    int wordCount = int(lyrics.words.size());
+    QSet<int> lines;
+    for (const LyricWord &w : lyrics.words) lines.insert(w.line);
+    int lineCount = int(lines.size());
+    m_myStatusMessage = tr("Exported %1 in %2.")
+        .arg(wordCount == 1 ? tr("1 word") : tr("%1 words").arg(wordCount),
+             lineCount == 1 ? tr("1 line") : tr("%1 lines").arg(lineCount));
+    getStatusLabel()->setText(m_myStatusMessage);
+
+    return true;
+}
+
+void
+MainWindow::removeLyrics()
+{
+    if (!m_lyrics->isShown()) return;
+    m_lyrics->hide();
+    updateWaveformFade();
+    // As for the import: no command, but the session has changed
+    documentModified();
+    updateMenuStates();
+    updateLayerStatuses();
+}
+
+void
+MainWindow::showLyricsToggled()
+{
+    // Straight on the layer, with no command and nothing in the settings:
+    // the pane writes the layer's visibility into the session, which is
+    // where it belongs
+    if (m_lyrics->isShown()) {
+        m_lyrics->setVisible(!m_lyrics->isVisible());
+        documentModified();
+    }
+    updateWaveformFade();
+    updateLayerStatuses();
+
+    // Edit Lyrics goes with the words out of sight
+    updateMenuStates();
+}
+
+bool
+MainWindow::lyricsEditAllowed() const
+{
+    if (!m_lyrics || !m_lyrics->isShown() || !m_lyrics->isVisible()) {
+        return false;
+    }
+    if (m_recordTarget && m_recordTarget->isRecording()) return false;
+    return true;
+}
+
+void
+MainWindow::setLyricsEditing(bool on)
+{
+    if (!m_lyricsEditor) return;
+    m_lyricsEditor->setEnabled(on && lyricsEditAllowed());
+    if (m_editLyricsAction) {
+        m_editLyricsAction->setChecked(m_lyricsEditor->isEnabled());
+    }
+}
+
+void
+MainWindow::editLyricsToggled()
+{
+    if (!m_editLyricsAction) return;
+    setLyricsEditing(m_editLyricsAction->isChecked());
+}
+
+void
+MainWindow::shiftLyrics()
+{
+    if (!m_lyricsEditor || !lyricsEditAllowed()) return;
+    ModelId lyricsModel = m_lyrics->getModelId();
+
+    double seconds = 0.0;
+    if (!askForLyricsShift(seconds)) return;
+
+    // The dialog ran an event loop of its own, in which the lyrics may
+    // have gone, been hidden or replaced, or a take begun: then the
+    // offset typed is not for what is there now
+    if (!lyricsEditAllowed() || m_lyrics->getModelId() != lyricsModel) {
+        return;
+    }
+
+    // One command; a shift of 0, or one the start of the song leaves no
+    // room for, is none
+    double shifted = m_lyricsEditor->shiftLyrics(lyricsModel, seconds);
+    if (shifted == 0.0) return;
+
+    // Kept as the status message, as an import's is.  The amount is the
+    // one the words moved by, which is less than asked if the first word
+    // reached the start
+    QString amount = QString::number(std::abs(shifted), 'f', 3);
+    m_myStatusMessage = (shifted < 0.0 ?
+                         tr("Shifted the lyrics %1 s earlier.").arg(amount) :
+                         tr("Shifted the lyrics %1 s later.").arg(amount));
+    getStatusLabel()->setText(m_myStatusMessage);
+}
+
+void
+MainWindow::updateWaveformFade()
+{
+    // The words are drawn over the bottom of the pane, where the
+    // waveforms are, and have to be read over them.  Not with
+    // Analyser::setVisible() or anything else that writes a setting:
+    // this is the state of the session, which saves the colour
+    bool faded = m_lyrics && m_lyrics->isShown() && m_lyrics->isVisible();
+    if (m_analyser) m_analyser->setWaveformFaded(faded);
+    if (m_analyser2) m_analyser2->setWaveformFaded(faded);
+}
+
 void
 MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnalysis)
 {
@@ -3481,6 +3949,10 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
         audio->setSavedInSession(false);
     }
+
+    // A new analyser, with a new waveform, under the lyrics as much as
+    // the one it replaces: a take switch and every recording come here
+    updateWaveformFade();
 
     // m_analyser2->newFileLoaded() has now created its own WaveformLayer
     // referencing singingModelId.  This means it is safe to delete the orphan
@@ -4285,6 +4757,11 @@ MainWindow::recordDurationChanged(sv_frame_t frame, sv_samplerate_t rate)
 void
 MainWindow::playbackFrameChanged(sv_frame_t frame)
 {
+    // The word being sung, before the countdown can return: the reference
+    // plays during a lead-in, and the words go with it.  This comes while
+    // playing, while recording, and for a seek with playback stopped
+    if (m_lyrics) m_lyrics->setPlaybackFrame(frame);
+
     if (showTakeCountdown()) return;
     MainWindowBase::playbackFrameChanged(frame);
 }
@@ -7768,6 +8245,28 @@ MainWindow::analyseNewMainModel()
              << m_alternatePitch->getOctaves() << " octave(s)" << endl;
         syncAlternatePitchTrack();
     }
+
+    // Lyrics saved with the session are there too.  The load put their
+    // model into the play source when it added the layer to the view, as
+    // it does for every layer, and words past the end of the reference
+    // would hold playback open: out again, as after an import
+    if (pane && m_lyrics->adopt(m_document, pane)) {
+        cerr << "analyseNewMainModel: found the lyrics of the session" << endl;
+        if (m_playSource && !m_lyrics->getModelId().isNone()) {
+            m_playSource->removeModel(m_lyrics->getModelId());
+        }
+        // The word at the cursor, without waiting for playback to move it
+        m_lyrics->setPlaybackFrame(m_viewManager->getPlaybackFrame());
+        // Remove Lyrics; Show Lyrics is set by updateLayerStatuses() below
+        updateMenuStates();
+    }
+
+    // Whether there were lyrics or not.  The waveform's colour is saved
+    // with its layer, and the analyser, which took the layer over before
+    // the lyrics were looked for, gave it the fade it knew of then:
+    // faded if lyrics were found on show, and otherwise grey, even in a
+    // session saved faded whose lyrics have gone since
+    updateWaveformFade();
 
     if (!m_withSpectrogram) {
         m_analyser->setVisible(Analyser::Spectrogram, false);
