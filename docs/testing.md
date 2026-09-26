@@ -97,6 +97,10 @@ Windows path would start an escape in the C string.
 - CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
   suite at a time. When a run fails, its `test-failures` step lists each failed test with
   the lines QTest indents under it, from meson's full log.
+- **CI's macOS runs timers and sleeps late**: a 20 ms `QTimer` fired every 60 to 67 ms and
+  a 5.8 ms sleep took about 30. A test that needs something to have happened a number of
+  times waits for it (`QTRY_*`), and one that checks what was timed checks it against its
+  own clock, not against the interval asked for.
 
 ## Design principles
 

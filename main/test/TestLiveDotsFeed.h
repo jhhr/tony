@@ -26,6 +26,7 @@
 #include <QtTest>
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -109,9 +110,10 @@ private slots:
         LiveDotsFeed feed(kInterval);
         feed.start([&]() { ++looked; return Estimates(); },
                    [&](const Estimates &) { ++handed; });
-        QTest::qWait(kInterval * 10);
+        // Until it has looked a few times, however late the timer fires:
+        // three times late and more on CI's macOS
+        QTRY_VERIFY_WITH_TIMEOUT(looked >= 3, 5000);
         feed.stop();
-        QVERIFY(looked >= 3);
         QCOMPARE(handed, 0);
     }
 
@@ -123,10 +125,19 @@ private slots:
         std::atomic<int> produced(0);
         std::atomic<bool> producing(true);
         std::thread producer([&]() {
-            // one a hop, as the tracker finds them: 5.8 ms
+            // One a hop, as the tracker finds them: 5.8 ms. Counted by the
+            // clock, not slept one by one: a sleep can take far longer
+            // than asked (5 times on CI's macOS), and the GUI would then
+            // not be slow next to the estimates at all
+            QElapsedTimer clock;
+            clock.start();
             while (producing) {
-                found.add(1);
-                ++produced;
+                int due = int(clock.nsecsElapsed() / 5800000);
+                int now = produced;
+                if (due > now) {
+                    found.add(due - now);
+                    produced = due;
+                }
                 std::this_thread::sleep_for(std::chrono::microseconds(5800));
             }
         });
@@ -187,12 +198,27 @@ private slots:
         std::vector<LiveDotsFeed::Report> reports;
         int handedOver = 0;
         sv::sv_frame_t newest = -1;
+        // The looks and batches as the test sees them, by its own clock,
+        // and how many of each there had been when each report was made:
+        // what a report says is checked against these, not against how
+        // punctual the machine's timers are (three times late and more
+        // on CI's macOS)
+        QElapsedTimer clock;
+        std::vector<double> looks;
+        int batches = 0;
+        std::vector<std::pair<int, int>> atReport;
         LiveDotsFeed feed(kInterval);
         feed.setReporter([&](const LiveDotsFeed::Report &r) {
             reports.push_back(r);
+            atReport.push_back({ int(looks.size()), batches });
         });
-        feed.start([&]() { return found.take(); },
+        clock.start();
+        feed.start([&]() {
+                       looks.push_back(double(clock.nsecsElapsed()) / 1.0e6);
+                       return found.take();
+                   },
                    [&](const Estimates &e) {
+                       ++batches;
                        handedOver += int(e.size());
                        newest = e.back().frame;
                    });
@@ -206,15 +232,27 @@ private slots:
 
         QCOMPARE(int(reports.size()), 2);
         int reported = 0;
-        for (const auto &r : reports) {
+        for (int i = 0; i < 2; ++i) {
+            const auto &r = reports[i];
             QVERIFY2(r.seconds >= 0.95 && r.seconds < 1.5,
                      qPrintable(QString("a report of %1 s").arg(r.seconds)));
-            QVERIFY(r.batches.count > 10);
-            QVERIFY(r.intervals.count > 10);
-            QVERIFY2(r.intervals.averageMs() >= kInterval * 0.8 &&
-                     r.intervals.averageMs() < kInterval * 3,
+            // The looks whose interval since the one before this report
+            // holds: the first look of all has none
+            int first = (i == 0 ? 1 : atReport[i-1].first);
+            int last = atReport[i].first;
+            QVERIFY(last - first >= 5);
+            QCOMPARE(r.intervals.count, last - first);
+            double seen = (looks[last - 1] - looks[first - 1]) /
+                (last - first);
+            QVERIFY2(std::fabs(r.intervals.averageMs() - seen) < 1.0,
+                     qPrintable(QString("reported a look every %1 ms, "
+                                        "seen every %2 ms")
+                                .arg(r.intervals.averageMs()).arg(seen)));
+            QVERIFY2(r.intervals.averageMs() >= kInterval * 0.8,
                      qPrintable(QString("looked every %1 ms")
                                 .arg(r.intervals.averageMs())));
+            QCOMPARE(r.batches.count, atReport[i].second -
+                     (i == 0 ? 0 : atReport[i-1].second));
             QCOMPARE(r.paints.count, 0);
             reported += r.estimates;
         }
