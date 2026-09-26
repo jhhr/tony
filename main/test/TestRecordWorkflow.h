@@ -1806,6 +1806,11 @@ private slots:
         openReference(writeWav(tone(lowHz, 5.0)));
         if (QTest::currentTestFailed()) return;
 
+        // The merges are held until both takes have stopped: pYIN may
+        // analyse the first range before its Stop returns, and then there
+        // is nothing left to lose
+        m_window->holdRangedMerges(true);
+
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(900);
@@ -1822,11 +1827,9 @@ private slots:
         QVERIFY(firstEnd > sv::sv_frame_t(0.7 * rate));
 
         // A second take in a gap, recorded without letting the event
-        // loop run: the result of a ranged analysis is merged from a
-        // queued call, so the first one cannot have finished by the time
-        // this one stops, however quick the machine is. (The device
-        // records from a thread of its own, and the record target's ring
-        // buffer holds ten seconds.)
+        // loop run, as it was before the merges could be held. (The
+        // device records from a thread of its own, and the record
+        // target's ring buffer holds ten seconds.)
         const sv::sv_frame_t P = sv::sv_frame_t(3.0 * rate);
         m_window->seekTo(P);
         startTake();
@@ -1834,7 +1837,7 @@ private slots:
         QThread::msleep(250);
         QVERIFY2(m_window->analysingRange(),
                  "the first range's analysis finished before the second take "
-                 "stopped: something ran the event loop");
+                 "stopped");
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
 
@@ -1843,6 +1846,7 @@ private slots:
         QCOMPARE(m_window->analysedRangeStart(), sv::sv_frame_t(0));
         QVERIFY(m_window->analysedRangeEnd() > P);
 
+        m_window->holdRangedMerges(false);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
         auto events = pitchEvents(m_window->analyser2());
         QVERIFY2(!eventsBetween(events, 0, firstEnd).empty(),
@@ -1863,6 +1867,11 @@ private slots:
         makeWindow(config);
         openReference(writeWav(tone(lowHz, 3.0)));
         if (QTest::currentTestFailed()) return;
+
+        // Held, so that each merge is still to come when its models go,
+        // however quickly pYIN analyses the range. Never let go: it is
+        // torn down each time
+        m_window->holdRangedMerges(true);
 
         startTake();
         if (QTest::currentTestFailed()) return;
@@ -5351,6 +5360,10 @@ private slots:
         openReference(writeWav(tone(lowHz, 2.0)));
         if (QTest::currentTestFailed()) return;
 
+        // Held, however quickly pYIN analyses the range, until the save
+        // runs the event loop
+        m_window->holdRangedMerges(true);
+
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(700);
@@ -5363,6 +5376,10 @@ private slots:
                  "the test shows nothing: no analysis was running when the "
                  "session was saved");
 
+        // Let go from the event loop, which only a save that waits runs
+        QTimer::singleShot(0, m_window, [this]() {
+            m_window->holdRangedMerges(false);
+        });
         QString session = m_dir.filePath("mid-analysis.ton");
         QVERIFY(m_window->saveSessionFile(session));
 

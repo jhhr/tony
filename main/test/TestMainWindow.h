@@ -98,6 +98,15 @@ public:
     sv::sv_frame_t analysedRangeStart() { return m_takeAnalysisRange.start; }
     sv::sv_frame_t analysedRangeEnd() { return m_takeAnalysisRange.end; }
 
+    // Hold the merge of the analysis of each recorded range until let go,
+    // in the take's analyser and in every one made after it, so that a
+    // test can act while a range is being analysed: pYIN may analyse a
+    // short one before Stop returns (Analyser::setRangedMergeHeld())
+    void holdRangedMerges(bool hold) {
+        m_holdRangedMerges = hold;
+        if (m_analyser2) m_analyser2->setRangedMergeHeld(hold);
+    }
+
     // Save As, with the file name given here instead of by a dialog: the
     // session's own file is set, so that what is recorded next goes into
     // its takes folder
@@ -255,6 +264,16 @@ protected:
         return m_takeNameAnswer == "" ? current : m_takeNameAnswer;
     }
 
+    // Every take analyser is made here, for a take's first recording and
+    // for each swap of its audio, before its range is analysed
+    void setupSingingTrackAnalyser(sv::ModelId singingModelId,
+                                   bool deferAnalysis = false) override {
+        MainWindow::setupSingingTrackAnalyser(singingModelId, deferAnalysis);
+        if (m_analyser2 && m_holdRangedMerges) {
+            m_analyser2->setRangedMergeHeld(true);
+        }
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -267,6 +286,7 @@ private:
     bool m_deleteTakeAnswer = true;
     int m_deleteTakeQuestions = 0;
     QString m_takeNameAnswer;
+    bool m_holdRangedMerges = false;
 };
 
 #endif

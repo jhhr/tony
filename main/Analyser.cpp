@@ -67,7 +67,8 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedEnd(0),
     m_rangedMergeStart(0),
     m_rangedMergeEnd(0),
-    m_rangedClippedEnd(false)
+    m_rangedClippedEnd(false),
+    m_rangedMergeHeld(false)
 {
     QSettings settings;
     settings.beginGroup("LayerDefaults");
@@ -1204,7 +1205,21 @@ Analyser::rangedAnalysisCompletionChanged(ModelId)
     // at 100 in both means a result
     if (!newPitch->isReady() || !newNotes->isReady()) return;
 
+    // Finished, but a test is holding it (setRangedMergeHeld()); never
+    // so in the application
+    if (m_rangedMergeHeld) return;
+
     mergeRangedAnalysis();
+}
+
+void
+Analyser::setRangedMergeHeld(bool held)
+{
+    m_rangedMergeHeld = held;
+
+    // A run that finished while held gets no second completion signal:
+    // look now, as that signal would have
+    if (!held) rangedAnalysisCompletionChanged({});
 }
 
 void

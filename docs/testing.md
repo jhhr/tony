@@ -178,6 +178,10 @@ it; the marker goes in the commit that fixes it. There are none at present.
 - A take's analysis lands in two steps, `rangedAnalysisMerged()` then
   `initialAnalysisCompleted()`. Read results after the merge (`analysingRange()` false),
   not after some other signal that happens to come at about the same time.
+- pYIN may analyse a short recorded range before Stop returns, so nothing is being analysed
+  after it. A test that acts during that analysis calls `holdRangedMerges(true)` on its
+  `TestMainWindow` before Stop (`Analyser::setRangedMergeHeld()`), and `false` before it
+  waits for `analysed()`, or from a timer where a save's own wait has to let the merge go.
 - The status bar is written by three base-class timers; a test that reads it must go
   through what `showTakeCountdown()` controls.
 - Deleting a derived layer does not stop its transform; only
