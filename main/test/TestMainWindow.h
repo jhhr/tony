@@ -31,6 +31,7 @@
 #include "view/ViewManager.h"
 #include "audio/AudioCallbackPlaySource.h"
 #include "audio/AudioCallbackRecordTarget.h"
+#include "data/model/WritableWaveFileModel.h"
 
 #include <QAction>
 #include <QComboBox>
@@ -189,6 +190,26 @@ public:
     sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
     sv::sv_frame_t takeEnd() { return m_takeEnd; }
     bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
+
+    // Whether Stop would keep the take being recorded. finishSingingTake()
+    // drops one no longer than the latency and the lead-in, as a take
+    // stopped straight after Record is when the device has not delivered
+    // a block yet. Counted as it counts them, and only once nothing can
+    // move the latency any more: the take's deferred start has run (it
+    // sets up the live dots, and then the latency), and the start of the
+    // reference, if that plays, has been measured
+    bool stopWouldKeepTake() {
+        if (!m_recordingInProgress || !m_realtimePitchLayer) return false;
+        if (m_awaitingReferenceStart) return false;
+        if (m_playSource && m_playSource->isPlaying() &&
+            m_recordingStartGapMeasured < 0) {
+            return false;
+        }
+        auto recording = sv::ModelById::getAs<sv::WritableWaveFileModel>
+            (m_currentRecordingModelId);
+        return recording &&
+            recording->getFrameCount() > currentTakeTiming().spliceOffset();
+    }
 
     void seekTo(sv::sv_frame_t frame) {
         m_viewManager->setPlaybackFrame(frame);

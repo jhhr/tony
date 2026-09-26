@@ -170,6 +170,13 @@ class TestRecordWorkflow : public QObject
         QVERIFY(m_window->recordTarget()->isRecording());
     }
 
+    // For a test that stops a take as soon as it has looked at it: until
+    // Stop would keep the take. One stopped before the device's first
+    // block has nothing in it and is dropped, with no analysis to wait for
+    void waitUntilStopKeepsTake() {
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->stopWouldKeepTake(), 2000);
+    }
+
     // Stop, then wait for pYIN on the take
     void stopTake() {
         QVERIFY(m_window->recordTarget()->isRecording());
@@ -4982,6 +4989,8 @@ private slots:
         m_window->doNewEmptyTake();
         QCOMPARE(m_window->takes()->getTakeCount(), 1);
 
+        waitUntilStopKeepsTake();
+        if (QTest::currentTestFailed()) return;
         stopTake();
         if (QTest::currentTestFailed()) return;
         m_window->doUpdateMenuStates();
@@ -5899,6 +5908,8 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         QVERIFY(!reference->isLayerDormant(pane));
+        waitUntilStopKeepsTake();
+        if (QTest::currentTestFailed()) return;
         stopTake();
     }
 
@@ -6331,6 +6342,8 @@ private slots:
         QVERIFY(!m_window->doImportLyricsFrom(path));
         QVERIFY(!m_window->lyrics()->isShown());
 
+        waitUntilStopKeepsTake();
+        if (QTest::currentTestFailed()) return;
         stopTake();
         if (QTest::currentTestFailed()) return;
         QTRY_VERIFY_WITH_TIMEOUT(import->isEnabled(), 2000);
