@@ -526,3 +526,27 @@ The next phase must know: the margin is the most frames received across one look
 an OS stall between those reads (not the event loop) widens it for the whole take and can
 leave no look in any gap: now "not judged", not a Fail.
 Left open: `test-tony-dev` 13 tests, about 228 s (two runs of about 22 s added).
+
+### Phase C2c — 2026-09-26
+Built: `Analyser::mergeRangedAnalysis()`: an old note sounding at W's start and ending inside
+W takes the end of the run's note sounding there (onset before W), that end found as for an
+added note (`newNoteEnd()`: `endBeyondRun` if the run's end cut it off, cut back at the next
+old onset after W), then cut back to the first added onset as before. Recorded in
+`m_rangedNotesChange` like the old cut, so undo restores the old note. Tests:
+`TestRecordWorkflow::join_inside_a_held_note_keeps_one_note` (Record into Selection
+[0.5, 1.5] then [1.5, 2.5] s on one held tone: one note; undo gives the first's note back
+exactly, redo the one note); `TestSingingAnalysis::ranged_join_inside_a_note`, rows "the same
+note going on" (one note) and "a new note from the join" (two, the first ending at J).
+`TestDevChecks`: item 10's `QEXPECT_FAIL` gone; `dev_checks_fail_with_the_round_trip_off`
+now requires item 10 to pass (it allowed either).
+Choices: "the same note" = both sounding at W's start, where the audio has not changed. No
+pitch tolerance (the values are medians over different stretches; a pitch the user corrected
+must not stop the note). Only an old note ending inside W: one running past W keeps its end
+(`ranged_keeps_a_note_across_the_window_edge` compares it exactly). A run's note beginning
+before W with no old note sounding there is still not added: before W the models' notes stand.
+Seen failing: the same-note cases of both new tests before the fix (the first's note alone,
+0.517-1.509 s); the "new note" row with a naive join (an old note carried over a new note
+beginning within 4 hops of its end, and the cut at the first added onset off).
+Left open (`docs/takes.md`, known limits): a note running on past W keeps its old end where
+the new audio stopped it inside W; a note whose onset in the run and in the models lie a hop
+or two either side of W's start is lost (pre-existing, found by reading).

@@ -1708,6 +1708,92 @@ private slots:
         verifyPlaySourceClean();
     }
 
+    // Two punch-ins that meet at J inside a note held through both. The
+    // first's note ends at J, where its recording stopped; the analysis
+    // of the second starts half a second before J, inside the note, so
+    // the note it finds begins before the window the merge replaces. It
+    // is the same note going on, and the take has one note through J.
+    // Undoing the second punch-in gives the first's note back exactly
+    void join_inside_a_held_note_keeps_one_note() {
+        FakeAudioIO::Config config;
+        config.input = tone(lowHz, 3.0);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(false);
+        m_window->setRecordIntoSelection(true);
+        openReference(writeWav(tone(highHz, 3.5)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t P = sv::sv_frame_t(0.5 * rate);
+        const sv::sv_frame_t J = sv::sv_frame_t(1.5 * rate);
+        const sv::sv_frame_t E = sv::sv_frame_t(2.5 * rate);
+
+        // Record into Selection, so that each punch-in stops exactly at
+        // the end of its selection and the two meet at J
+        auto punchIn = [this](sv::sv_frame_t from, sv::sv_frame_t to) {
+            m_window->clearSelections();
+            m_window->selectRange(from, to);
+            m_window->seekTo(from);
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!m_window->recordTarget()->isRecording(), 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+        };
+        auto describe = [](const sv::EventVector &notes) {
+            QStringList out;
+            for (const auto &e : notes) {
+                out << QString("%1 to %2 s at %3 Hz")
+                    .arg(double(e.getFrame()) / rate, 0, 'f', 3)
+                    .arg(double(e.getFrame() + e.getDuration()) / rate,
+                         0, 'f', 3)
+                    .arg(double(e.getValue()), 0, 'f', 1);
+            }
+            return "[" + out.join(", ") + "]";
+        };
+
+        punchIn(P, J);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot first = snapshotTake();
+        QCOMPARE(int(first.coverage.size()), 1);
+        QCOMPARE(first.coverage[0], Coverage::Range(P, J));
+
+        // The first punch-in's note runs to the join
+        QVERIFY2(first.notes.size() == 1, qPrintable(describe(first.notes)));
+        const sv::Event held = first.notes[0];
+        QVERIFY2(std::llabs(held.getFrame() - P) <= 4 * hop &&
+                 std::llabs(held.getFrame() + held.getDuration() - J)
+                 <= 4 * hop, qPrintable(describe(first.notes)));
+
+        punchIn(J, E);
+        if (QTest::currentTestFailed()) return;
+        TakeSnapshot second = snapshotTake();
+        QCOMPARE(int(second.coverage.size()), 1);
+        QCOMPARE(second.coverage[0], Coverage::Range(P, E));
+
+        // One note, the first's carried on through J to the end of the
+        // second punch-in: its onset, pitch and label as they were
+        QVERIFY2(second.notes.size() == 1 &&
+                 second.notes[0].getFrame() == held.getFrame() &&
+                 second.notes[0].getValue() == held.getValue() &&
+                 second.notes[0].getLabel() == held.getLabel() &&
+                 std::llabs(second.notes[0].getFrame() +
+                            second.notes[0].getDuration() - E) <= 4 * hop,
+                 qPrintable(QString("the notes after the second punch-in "
+                                    "are %1; the first's was %2, the join "
+                                    "is at %3 s")
+                            .arg(describe(second.notes))
+                            .arg(describe(first.notes))
+                            .arg(double(J) / rate, 0, 'f', 3)));
+
+        // Undo gives the first punch-in's note back, exactly as it was,
+        // and redo the one note again
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        verifyTakeMatches(first);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        verifyTakeMatches(second);
+    }
+
     // Recording again while the analysis of the range just recorded is
     // still running. That analysis is lost -- the swap releases the models
     // it was to be merged into -- so the analysis that follows has to

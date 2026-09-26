@@ -732,24 +732,16 @@ private slots:
             QVERIFY2(!joins->message.contains(part), describe());
         }
 
-        // And one note through the join, which the take does not have:
-        // the second punch-in's analysis starts 0.5 s before the join,
-        // inside the tone, so its note begins before the merge window and
-        // is not merged in, while the first's note, which ends at the
-        // join, stays. The tone after the join has no note
-        const bool joinsPass = joins->verdict == CheckResult::Verdict::Pass;
-        QEXPECT_FAIL("", "one note should run through a join inside a held "
-                     "tone, but the notes merge by onset keeps the first "
-                     "punch-in's note, ending at the join, and drops the "
-                     "second's, which begins before the merge window "
-                     "(docs/takes.md, \"Notes, by onset\")", Continue);
-        QVERIFY2(joinsPass, describe());
+        // And one note through the join. The second punch-in's analysis
+        // starts 0.5 s before the join, inside the tone, so its note begins
+        // before the merge window: the first's note, which ended at the
+        // join, is that note going on and takes its end
+        QVERIFY2(joins->verdict == CheckResult::Verdict::Pass, describe());
 
         QVERIFY(QFileInfo(m_report.reportPath).fileName() == "DevChecks.txt");
         QVERIFY(TakesFile::isInFolder(reportDirectory(), m_report.reportPath));
         QCOMPARE(lastReportLine(),
-                 QString("Totals: %1 passed, %2 failed, 1 measured, 0 skipped")
-                 .arg(joinsPass ? 10 : 9).arg(joinsPass ? 0 : 1));
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
 
         QVERIFY(m_report.sessionPath != "");
         QCOMPARE(m_window->sessionFile(), m_report.sessionPath);
@@ -841,12 +833,12 @@ private slots:
                  check(9)->verdict == CheckResult::Verdict::Skipped &&
                  check(9)->message == "The long song was left out of this "
                  "run.", describe());
-        const bool joinsPass =
-            check(10) && check(10)->verdict == CheckResult::Verdict::Pass;
+        QVERIFY2(check(10) &&
+                 check(10)->verdict == CheckResult::Verdict::Pass,
+                 describe());
         QCOMPARE(lastReportLine(),
                  QString("Totals: %1 passed, %2 failed, 1 measured, 1 skipped")
-                 .arg((dotsPass ? 4 : 3) + (joinsPass ? 1 : 0))
-                 .arg((dotsPass ? 4 : 5) + (joinsPass ? 0 : 1)));
+                 .arg(dotsPass ? 5 : 4).arg(dotsPass ? 4 : 5));
     }
 
     // The loopback heard a second time, 50 ms later at half the level, as

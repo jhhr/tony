@@ -119,10 +119,21 @@ as a transform's output never was) and `rangedAnalysisMerged()` then
   what the grid alignment is for.
 - **Pitch**: old events in W go, new events in W are added.
 - **Notes, by onset**: old notes with onset in W go; new notes with onset in W are added.
-  An old note from before W is cut back only if a new note overlaps it. A new note that
-  would overlap an old note starting at or after the end of W is cut back to that onset. A
-  new note cut off by the *end of the run* (ends within four hops of it) takes the end of
-  the old note that ran past, if there is one.
+  A new note that would overlap an old note starting at or after the end of W is cut back
+  to that onset. A new note cut off by the *end of the run* (ends within four hops of it)
+  takes the end of the old note that ran past, if there is one.
+- **A note running into W from before it** keeps its onset. If it also *ends inside W*, it
+  takes the end of the run's note that is sounding at W's start (that end found as for a
+  new note, above). The audio at W's start has not changed, so two notes sounding there
+  are one note; this is what keeps one note through a join inside a held note, where the
+  old note stops where the old recording did and the run's note began before W. No pitch
+  tolerance: the two values are medians over different stretches, and a pitch the user
+  corrected by hand must not stop the note. One that runs on past W keeps its end, in
+  unchanged audio. Either way it is cut back to the onset of a new note that starts inside
+  it, so it never runs over a note the run found in W.
+- A run's note that begins before W is otherwise **not added**, even where no old note
+  sounds at W's start: before W the notes the models hold stand (the old analysis had more
+  context, or the user deleted that note).
 - **pYIN stamps one frame of every run twice** in fixed-lag mode: the last frame of
   `process()` comes again first from `getRemainingFeatures()`, 100 hops before the end.
   Whole-file tracks have it too, harmlessly. In a ranged run it falls inside W, so the
@@ -256,8 +267,12 @@ Things to know, none of which stops the feature being used. See also
   next ordinary save brings them back.
 - About 11 ms of pitch at the very start of a coverage range cannot be produced (pYIN's
   first two hops).
-- One sung note can still become two when a note runs into W from before it *and* its
-  audio changed. Deliberate trade for not splitting notes in unchanged audio.
+- One sung note becomes two only where the run finds an onset inside it (a re-attack,
+  say). A note that runs on past W keeps its old end even where the new audio stopped it
+  inside W, up to the next onset the run found.
+- A note whose old onset lies just inside W and whose onset in the run lies just before
+  it (a hop or two either side of W's start) is lost: the old one goes with W, and the
+  run's is not added. Found by reading the merge, not seen.
 - A splice or erase that succeeded on disk but could not be shown is not rolled back; the
   user gets a dialog naming the file.
 - Playing a wave model with a **positive** start frame plays up to a block early and
