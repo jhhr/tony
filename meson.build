@@ -1100,6 +1100,7 @@ tony_core_files = [
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
   'main/TakeAudio.cpp',
+  'main/TakeDiff.cpp',
   'main/TakeEvents.cpp',
   'main/TakesFile.cpp',
   'main/TakeTiming.cpp',
@@ -1364,6 +1365,7 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestTakeTiming.h',
   'main/test/TestLatencyCheck.h',
   'main/test/TestLatencyCalibration.h',
+  'main/test/TestTakeDiff.h',
 ])
 
 tony_core_test_exe = executable(

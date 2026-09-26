@@ -22,6 +22,7 @@
 #include "TestTakeTiming.h"
 #include "TestLatencyCheck.h"
 #include "TestLatencyCalibration.h"
+#include "TestTakeDiff.h"
 
 #include "RunSuite.h"
 
@@ -108,6 +109,12 @@ int main(int argc, char *argv[])
 
     {
         TestLatencyCalibration t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeDiff t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

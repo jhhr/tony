@@ -300,7 +300,7 @@ marked "Done" when it is committed.
    thresholds and the restart-jitter remedy wait on those numbers.
 3. **Calibration in use:** built in B2 (Use this latency and Forget in B4).
 4. **Dev-check framework:**
-   - **C0** `TakeDiff`, pure.
+   - **C0** `TakeDiff`, pure. Done.
    - **C1** Build flag, `DevChecks`, `TakeObserver`, report, friend access. First
      group: items 1, 2, 7, 12, 13, 14.
 5. **C2** Observer group: items 3, 4, 5, 8, 15, 16.
