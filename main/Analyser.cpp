@@ -758,8 +758,8 @@ Analyser::addEmptyAnalyses()
         QString transformName =
             tf->getTransformFriendlyName(pyinBase + w.output);
         if (sourceName != "" && transformName != "") {
-            model->setObjectName(tr("%1: %2").arg(sourceName)
-                                 .arg(transformName));
+            model->setObjectName(tr("%1: %2").arg(sourceName,
+                                                  transformName));
         } else if (transformName != "") {
             model->setObjectName(transformName);
         }

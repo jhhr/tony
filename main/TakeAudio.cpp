@@ -58,7 +58,7 @@ std::unique_ptr<WavFileReader> openWav(QString path, QString &error)
     std::unique_ptr<WavFileReader> reader(new WavFileReader(FileSource(path)));
     if (!reader->isOK()) {
         error = tr("Failed to read audio file \"%1\": %2")
-            .arg(path).arg(reader->getError());
+            .arg(path, reader->getError());
         return {};
     }
     return reader;
@@ -162,7 +162,7 @@ QString write(WavFileReader *old, sv_samplerate_t rate, int channels,
     // The writer puts its file in place even when it is abandoned
     if (error != "") {
         QFile::remove(outPath);
-        return tr("Failed to write \"%1\": %2").arg(outPath).arg(error);
+        return tr("Failed to write \"%1\": %2").arg(outPath, error);
     }
 
     return "";
@@ -377,7 +377,7 @@ TakeAudio::resample(QString inPath, sv_samplerate_t rate, QString outPath)
     if (error != "") {
         QFile::remove(outPath);
         return tr("Failed to convert \"%1\" to %2 Hz: %3")
-            .arg(inPath).arg(rate).arg(error);
+            .arg(inPath, QString::number(rate), error);
     }
 
     return "";

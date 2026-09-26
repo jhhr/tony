@@ -81,10 +81,12 @@ TakesFile::toXml(const SingingTakes &takes, QString sessionPath, QString indent)
         .arg(XmlExportable::encodeEntities(takes.getActiveName()));
 
     for (const SingingTakes::Take &take : takes.getTakes()) {
+        // One arg() for all three: with one each, a "%1" or "%3" in the
+        // take's name would be filled in by the next
         xml += QString("%1  <take name=\"%2\" audio=\"%3\"/>\n")
-            .arg(indent)
-            .arg(XmlExportable::encodeEntities(take.name))
-            .arg(XmlExportable::encodeEntities
+            .arg(indent,
+                 XmlExportable::encodeEntities(take.name),
+                 XmlExportable::encodeEntities
                  (relativeAudioPath(sessionPath, take.audioPath)));
     }
 
@@ -257,7 +259,8 @@ TakesFile::freeCopyPath(QString folder, QString fileName)
     }
 
     for (int i = 2; i < 1000; ++i) {
-        QString name = QString("%1-%2%3").arg(base).arg(i).arg(suffix);
+        QString name = QString("%1-%2%3")
+            .arg(base, QString::number(i), suffix);
         if (!dir.exists(name)) return cleaned(dir.filePath(name));
     }
 
@@ -295,13 +298,13 @@ TakesFile::copyTakeAudioInto(SingingTakes &takes, QString folder)
             freeCopyPath(folder, QFileInfo(take->audioPath).fileName());
         if (target == "") {
             error = tr("Could not find a name to copy the audio of the take "
-                       "\"%1\" under, in \"%2\"").arg(take->name).arg(folder);
+                       "\"%1\" under, in \"%2\"").arg(take->name, folder);
             break;
         }
 
         if (!QFile::copy(take->audioPath, target)) {
             error = tr("Could not copy the audio of the take \"%1\" to "
-                       "\"%2\"").arg(take->name).arg(target);
+                       "\"%2\"").arg(take->name, target);
             break;
         }
 

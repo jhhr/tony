@@ -150,6 +150,21 @@ private slots:
         QCOMPARE(read.active, QString("Rock & \"Roll\" <2>"));
     }
 
+    // A name the user gave, and a file name, holding what QString::arg()
+    // takes for its placeholders: written as they are, and neither taken
+    // for the other
+    void names_like_placeholders() {
+        SingingTakes takes;
+        takes.addTake("Verse %1 %3");
+        takes.restoreTake("C:/songs/100%2 take.wav", Coverage());
+
+        TakesFile::Takes read = readString(inDocument(TakesFile::toXml(takes)));
+        QCOMPARE(int(read.takes.size()), 1);
+        QCOMPARE(read.takes[0].name, QString("Verse %1 %3"));
+        QCOMPARE(read.takes[0].audioPath, QString("C:/songs/100%2 take.wav"));
+        QCOMPARE(read.active, QString("Verse %1 %3"));
+    }
+
     // From a file: bzip2, as a .ton is, and plain XML, which the session
     // reader also accepts
     void from_a_file() {
@@ -355,6 +370,13 @@ private slots:
 
         QCOMPARE(TakesFile::freeCopyPath("", "take-1.wav"), QString());
         QCOMPARE(TakesFile::freeCopyPath(folder, ""), QString());
+
+        // A loaded file's own name, which may hold a '%'
+        QString percent = TakesFile::freeCopyPath(folder, "100%2.wav");
+        QCOMPARE(percent, QDir::cleanPath(folder + "/100%2.wav"));
+        QVERIFY(writeAudio(percent));
+        QCOMPARE(TakesFile::freeCopyPath(folder, "100%2.wav"),
+                 QDir::cleanPath(folder + "/100%2-2.wav"));
     }
 
     // The copy a save makes: one per file, the takes pointing at the
