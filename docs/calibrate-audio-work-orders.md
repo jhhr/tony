@@ -399,7 +399,37 @@ Read also: how an existing Tony dialog is built and tested (search
 
 ### C0 — TakeDiff (spec §5 "tony_core")
 
-To be refined by the lead.
+Read also: `docs/takes.md` on the splice's edge fades and on ranged analysis's merge
+window (search "fade", "±", "W"); `main/TakeAudio.h` and `main/TakeEvents.h` for the
+existing vocabulary. `TakeEvents` may already hold part of what is needed: reuse it and
+do not duplicate it.
+
+- **New `main/TakeDiff.{h,cpp}`** in `tony_core`, pure. The comparisons the dev checks
+  (C1–C4) use on a real take. Each returns a plain result: pass or fail, and the numbers
+  behind it, so that a check can report them. The inputs are sample buffers, event
+  vectors and frame ranges; no models.
+- **Audio unchanged outside a range.** Two sample buffers (before and after a
+  punch-in, as read from the take's file) are **bit-identical** outside
+  `[start, end)`, allowing for where the splice's fades fall. Find that in
+  `TakeAudio.cpp`; do not guess. Report the first differing frame.
+- **Events unchanged outside a range ± margin.** Two event vectors (pitch, and notes
+  with durations) are identical outside `[start − margin, end + margin]`. A note that
+  crosses the boundary counts as inside. Report what was added, removed and changed.
+- **Pitch continuous across a join.** Given pitch events and a join frame:
+  - no gap longer than N hops within ±W of the join;
+  - no two events at the same frame;
+  - frames strictly increasing.
+- **One note across a join.** Exactly one note spans the join frame, and no note
+  begins or ends within ±X of it. X is a named constant.
+- **No step at a join.** The largest first difference of the samples within ±2 ms of
+  the join, against the typical first difference over the 50 ms around it, in dB. It
+  should stay near 0 dB when the splice is clean, and a hard cut shows as a large
+  excess. The threshold is a named constant; justify it.
+- **Tests,** in a new core class `TestTakeDiff`, on synthetic data:
+  - each comparison passing and failing on purpose: one sample changed just outside
+    the range; one pitch event dropped at the join; a doubled frame; a note split in
+    two at the join; a hard cut in a sine.
+  - **Show failure** for two of them by breaking the code.
 
 ### C1 — Dev-check framework and first group (spec §3, §4, §5 "development builds only")
 
