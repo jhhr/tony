@@ -230,6 +230,17 @@ private slots:
         QVERIFY(StreamLatency::inputKeptUp(0, -1, -1));
         QVERIFY(!StreamLatency::inputKeptUp(1, 0, 0));
     }
+
+    // The phone's readings after input was lost: one and two buffers'
+    // worth over what it read, more than its buffer of 11520 holds
+    void an_input_latency_over_the_buffer_is_input_lost() {
+        QVERIFY(StreamLatency::inputLatencyPossible(154.0, 11520));
+        QVERIFY(StreamLatency::inputLatencyPossible(11519.0, 11520));
+        QVERIFY(!StreamLatency::inputLatencyPossible(11520.0, 11520));
+        QVERIFY(!StreamLatency::inputLatencyPossible(11691.0, 11520));
+        QVERIFY(!StreamLatency::inputLatencyPossible(23219.0, 11520));
+        QVERIFY(StreamLatency::inputLatencyPossible(23219.0, 0));
+    }
 };
 
 #endif

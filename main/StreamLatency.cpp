@@ -113,4 +113,10 @@ inputKeptUp(int backlogFrames, int outputBufferFrames, int inputBurstFrames)
         2 * std::max(0, inputBurstFrames);
 }
 
+bool
+inputLatencyPossible(double inputFrames, int capacityFrames)
+{
+    return capacityFrames <= 0 || inputFrames < double(capacityFrames);
+}
+
 }

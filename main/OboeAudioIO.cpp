@@ -502,9 +502,9 @@ OboeAudioIO::measureOnceOpen()
     int waited = int(std::chrono::duration_cast<std::chrono::milliseconds>
                      (std::chrono::steady_clock::now() - started).count());
     StreamLatency::Estimate latency;
-    int backlog = 0;
+    int backlog = 0, lost = 0;
     bool withInput = m_inputRunning;
-    bool measured = measurable && measureLatency(latency, backlog);
+    bool measured = measurable && measureLatency(latency, backlog, lost);
     stopStreams();
     m_suspended = true;
 
@@ -645,8 +645,9 @@ OboeAudioIO::suspend()
         if (xruns) overruns = xruns.value() - m_inputXRunsAtStart;
     }
 
+    int lost = 0;
     bool measured = steady && overruns == 0 &&
-        measureLatency(latency, backlog);
+        measureLatency(latency, backlog, lost);
     int largestRead = m_engine->largestRead.load();
 
     stopStreams();
@@ -665,6 +666,12 @@ OboeAudioIO::suspend()
              << " time(s) while running, and what was lost would read as "
              << "latency, so the latency was not measured: kept at "
              << describe(m_latency, m_input != nullptr, m_rate) << endl;
+    } else if (steady && lost > 0) {
+        cerr << "OboeAudioIO: the input read " << lost << " frames ("
+             << describeMs(lost, m_rate) << ") late, more than its buffer "
+             << "holds: input was lost, so the latency was not measured: "
+             << "kept at " << describe(m_latency, m_input != nullptr, m_rate)
+             << endl;
     } else if (steady && backlog > 0) {
         cerr << "OboeAudioIO: the input was " << backlog << " frames ("
              << describeMs(backlog, m_rate) << ") behind as the device "
@@ -747,7 +754,7 @@ OboeAudioIO::waitUntilMeasurable(int maxMillis) const
 
 bool
 OboeAudioIO::measureLatency(StreamLatency::Estimate &latency,
-                            int &backlog) const
+                            int &backlog, int &lost) const
 {
     // Readings are taken here, not in the callback: Oboe advises
     // against timestamps there before Android 11. A reading that a
@@ -757,9 +764,14 @@ OboeAudioIO::measureLatency(StreamLatency::Estimate &latency,
     // it wrote, by the median. So is one taken while the input was not
     // being read as it came in, the callbacks held up: its input latency
     // is how far behind they were, not the device's (backlog says the
-    // most that was waiting then)
+    // most that was waiting then). And so is one whose input latency is
+    // more than the input's buffer holds: that is input lost, which
+    // stays in the timestamps until the streams stop (lost says the
+    // most read so)
     bool withInput = m_inputRunning;
     backlog = 0;
+    lost = 0;
+    const int capacity = withInput ? m_input->getBufferCapacityInFrames() : 0;
     std::vector<StreamLatency::Estimate> readings;
     for (int attempt = 0;
          attempt < readingsWanted * 5 && int(readings.size()) < readingsWanted;
@@ -804,11 +816,16 @@ OboeAudioIO::measureLatency(StreamLatency::Estimate &latency,
             continue;
         }
 
+        const double inputFrames = withInput ?
+            StreamLatency::inputLatency(input, now, m_rate) : 0.0;
+        if (!StreamLatency::inputLatencyPossible(inputFrames, capacity)) {
+            lost = std::max(lost, int(std::lround(inputFrames)));
+            continue;
+        }
+
         readings.push_back(StreamLatency::fromReading
                            (StreamLatency::outputLatency(output, now, m_rate),
-                            withInput ?
-                            StreamLatency::inputLatency(input, now, m_rate) :
-                            0.0));
+                            inputFrames));
     }
 
     return StreamLatency::median(readings, m_rate, latency);
