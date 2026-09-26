@@ -1,9 +1,13 @@
-# Building on Windows (MSYS2 MinGW-w64)
+# Building
 
 The development machine builds with meson + ninja under MSYS2's `mingw64` toolchain
-(default prefix `C:\msys64\mingw64`) into `build_mingw/`. The CI workflows in
+(default prefix `C:\msys64\mingw64`) into `build_mingw/`: that is most of this page. An
+agent in a cloud session builds on Linux instead, into `build/`: see
+[Building on Linux](#building-on-linux) at the end. The CI workflows in
 `.github/workflows/` build the upstream way on Linux, macOS and MSVC and are not what is
 described here.
+
+# Building on Windows (MSYS2 MinGW-w64)
 
 ## From cmd or PowerShell: `build.bat`
 
@@ -11,7 +15,7 @@ described here.
 .\build.bat           build Tony.exe
 .\build.bat run       build, then launch
 .\build.bat launch    launch without building
-.\build.bat test      meson test: tony-core, tony-app and four svcore suites
+.\build.bat test      meson test: tony-core, tony-app, tony-dev and four svcore suites
 .\build.bat clean     wipe build_mingw and reconfigure (only for a broken build directory)
 ```
 
@@ -24,7 +28,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe > tmp/build.log 2>&1
+ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-tony-device.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -79,3 +83,101 @@ echo "exit:$?" >> tmp/build.log
   `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
   only if it declares `Q_OBJECT`.
 - Windows headers define `near` and `far` as macros. Do not use them as identifiers.
+
+# Building on Linux
+
+For a cloud session: Ubuntu 24.04, 4 cores, 16 GB, root, no sound card, and no Windows.
+repoint does not run there, and hg.sr.ht, where six of the libraries live, cannot be
+reached. Three scripts in `deploy/linux/` do the work:
+
+- **`cloud-environment.sh` is the cloud environment's setup script.** Its text is pasted
+  into the environment's settings, with the network access and variables below; the copy in
+  the repository does nothing by itself. The platform runs it once and keeps a snapshot of
+  the disk, which later sessions start from, until the script or the allowed hosts change
+  or about a week has passed. It installs the packages, Qt, ccache and mold, the Android SDK
+  and NDK when `dl.google.com` is reachable, and spends what is left of four minutes filling
+  ccache from a build of the libraries. It also writes an `autoMode` entry to
+  `/root/.claude/settings.json` by which auto mode trusts the four library forks as it does
+  Tony's own repository ([forks.md](forks.md#changing-a-fork)): auto mode reads that from
+  the user's settings, never from the repository's `.claude/settings.json`. The snapshot is kept only when the script ends
+  within about five minutes, so any change to it has to keep to that. Its logs are in
+  `/var/log/tony-environment/`.
+- **`container-setup.sh`** makes any fresh Ubuntu 24.04 able to build: packages, Qt, the
+  library directories at their pins, `meson setup build`. Safe to run again. After the
+  environment's snapshot it only checks out the libraries and configures.
+- **`cloud-session.sh start` runs at the start of every cloud session**, from the
+  SessionStart hook in `.claude/settings.json` (`start --if-cloud`, which does nothing
+  outside the cloud). It runs `container-setup.sh` and then builds everything into `build/`
+  in the background, at low priority: about 4 minutes, while the session reads. The hook
+  itself returns at once. The log is `tmp/cloud-session.log`. `cloud-session.sh wait`
+  waits for it and exits as it did. **Wait before the first build or test**: two ninjas
+  must not work in one build directory. A session with several repositories runs no
+  repository's hooks; there, run `cloud-session.sh start` by hand.
+
+The environment's settings:
+
+- Network access **Custom**, with the default list of package hosts, and `dl.google.com`
+  added for the Android branch (the SDK, the NDK, and Gradle's Google repository, which
+  `maven.google.com` redirects to). GitHub, conda-forge and Ubuntu's archive are in the
+  default list; hg.sr.ht, download.qt.io and Qt's mirrors are not. A push to one of the
+  forks is another matter: with this Custom access it is refused (HTTP 403) until the fork
+  is attached to the session, and goes through once it is
+  ([forks.md](forks.md#changing-a-fork)).
+- Variables `BASH_DEFAULT_TIMEOUT_MS=600000` and `BASH_MAX_TIMEOUT_MS=1800000`, so that a
+  build or a suite run is not moved to the background after the tool's default two minutes,
+  and a 30-minute timeout can be given at all.
+
+Then, from the repository root:
+
+```sh
+ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-tony-dev > tmp/build.log 2>&1
+echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
+deploy/linux/run-tests.sh test-tony-core     # about a second
+deploy/linux/run-tests.sh test-tony-app      # a minute and a half
+deploy/linux/run-tests.sh test-tony-dev      # when AGENTS.md says to run it
+```
+
+No `.exe` on Linux; the plugin target is `pyin.so`. `run-tests.sh` runs an executable as
+several processes, each with a shard of every suite ([testing.md](testing.md#running)).
+The one-process runs of AGENTS.md work too, from `build/`.
+
+Measured on 2026-09-26:
+
+| | |
+| --- | --- |
+| Full build, nothing in ccache | 6.6 minutes: 1570 CPU-seconds, nearly all compiling |
+| Full build, everything in ccache | 4 to 6 seconds |
+| A session's first build, with the setup script's ccache | 3.7 minutes, in the background |
+| Linking `tony`, `test-tony-core`, `test-tony-app` and `test-tony-device` | 3 s with mold, 12 s with GNU ld |
+| App suite | 550 s in one process, 95 s in eight |
+| Development checks' suite | 69 s in one process, 18 s in eight |
+
+Why each part is as it is:
+
+- **Qt 6.11 from conda-forge, not Ubuntu's 6.4**: the Qt of the Windows machine. Qt 6.4
+  does not match a `SIGNAL()`/`SLOT()` string naming `ModelId` or `sv_frame_t` against a
+  slot moc recorded with `sv::`, so such a connection fails silently there and works on
+  Windows (member-pointer connects, which AGENTS.md asks for, work on both). And with 6.4
+  several of the tests that race the analysis against a take fail whatever the change
+  ([testing.md](testing.md#running)); with 6.11 none do. download.qt.io's mirrors are
+  blocked by the session's proxy; conda-forge is not. Only Qt's own `.pc` files are put on meson's pkg-config path
+  (`/opt/qt6-conda/tony-pkgconfig`), so that nothing else of conda's is picked up; meson
+  puts Qt's library directory in the executables' RPATH.
+- **The Mercurial libraries come from their GitHub mirrors.** hg.sr.ht is blocked, and
+  `repoint-lock.json` pins them by Mercurial hash, which the mirrors do not carry.
+  `container-setup.sh` has a table from pin to mirror commit and stops at a pin it does not
+  know.
+- **ccache**, which meson uses by itself when it is installed, with `hash_dir = false`
+  (`/etc/ccache.conf`). With `-g` every result's key otherwise holds the build directory,
+  and a second build directory or a worktree found 0.4 % of a full cache. The compiler's
+  name is part of the key too: a directory configured with `CC=gcc CXX=g++` finds nothing
+  that meson's own `cc` and `c++` put there. Configure through `container-setup.sh`.
+- **mold**: `cloud-session.sh` has `meson setup` take it (`CC_LD=mold CXX_LD=mold`) for a
+  new `build/`; a build directory keeps the linker it was set up with. Every change to
+  `main/` relinks all four executables.
+- **Run the app suite with nothing else building**: it records in real time.
+- Four tests of `TestTakesFile` fail on Linux and nowhere else: they are about Windows
+  paths (backslashes, drive letters, case).
+- Measured and left alone: `-g1` compiles svcore in 19 % less time than `-g`, but Windows
+  builds `debugoptimized`, with full debug information; clang is no faster than GCC; and a
+  unity build fails in the libraries, which define the same names in several files.

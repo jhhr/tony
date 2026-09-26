@@ -21,9 +21,14 @@
 #include "RealtimePitchTracker.h"
 #include "AlternatePitchTrack.h"
 #include "CoverageStrip.h"
+#include "LyricsTrack.h"
+#include "LyricsEditor.h"
 #include "SingingTakes.h"
 #include "TakeCommands.h"
 #include "TakeTiming.h"
+#include "LatencyUtils.h"
+#include "LatencyCalibration.h"
+#include "ModelChangeThrottle.h"
 
 #include <vector>
 #include <string>
@@ -42,6 +47,13 @@ class QActionGroup;
 class QToolBar;
 class CompactLayout;
 
+class AudioCheckRunner;
+struct AudioCheckResult;
+class CalibrateAudioDialog;
+#ifdef TONY_DEV_CHECKS
+class DevChecks;
+#endif
+
 namespace sv {
 class VersionTester;
 class ActivityLog;
@@ -52,6 +64,15 @@ class TimeValueLayer;
 class MainWindow : public sv::MainWindowBase
 {
     Q_OBJECT
+
+    // The audio check drives the take path of the window, and reads what
+    // each take was placed with; see AudioCheckRunner
+    friend class AudioCheckRunner;
+#ifdef TONY_DEV_CHECKS
+    // The development checks save and reopen the session, and read the
+    // take's pitch and notes; see DevChecks
+    friend class DevChecks;
+#endif
 
 public:
     MainWindow(AudioMode audioMode,
@@ -93,6 +114,23 @@ public:
     // Compact Layout does: main() switches it on at start on Android and
     // with --compact
     void setCompactLayout(bool on);
+    // The round trip takes are placed with (see LatencyCalibration).
+    // Keep the one an audio check measured, for the devices it started
+    // on and the rate it recorded at (AudioCheckResult::key); false, with
+    // nothing kept, unless the check's figure is usable.  The Playback
+    // menu's line about the latency follows
+    bool storeMeasuredLatency(const AudioCheckResult &result);
+
+    // Drop the figure latencyInUse() describes, and say so in the menu
+    void forgetMeasuredLatency();
+
+    // What the next take will be placed with, as far as it is known
+    // before the take starts: the device's rate is known only once it
+    // has recorded, so until a take has been recorded on these devices
+    // this assumes the session's rate, the only one a usable check
+    // stores a figure at.  The reported pair is 0 until the device is
+    // open
+    LatencyCalibration::InUse latencyInUse() const;
 
 signals:
     void canExportPitchTrack(bool);
@@ -119,6 +157,12 @@ protected slots:
     // can switch to RecordCreateAdditionalModel before starting the capture,
     // causing the recording to be treated as the singing track.
     virtual void record();
+
+    // The Record button, and its shortcut: record() or Stop, except
+    // while the audio check runs, which records and stops takes of its
+    // own through record(); the button is shut then, and a press that
+    // gets here all the same is ignored
+    virtual void recordPressed();
 
 protected slots:
     virtual void openFile();
@@ -190,6 +234,13 @@ protected slots:
     virtual void alternatePitchUp();
     virtual void alternatePitchDown();
     virtual void syncAlternatePitchTrack();
+
+    virtual void importLyrics();
+    virtual void exportLyrics();
+    virtual void removeLyrics();
+    virtual void showLyricsToggled();
+    virtual void editLyricsToggled();
+    virtual void shiftLyrics();
 
     virtual void editDisplayExtents();
 
@@ -268,6 +319,9 @@ protected slots:
     virtual void rescanAudioDevices();
     virtual void audioDeviceSelected(QAction *);
 
+    // Playback > Calibrate Audio: the audio check's dialog, not modal
+    virtual void calibrateAudio();
+
     virtual void handleOSCMessage(const sv::OSCMessage &);
 
     virtual void mouseEnteredWidget();
@@ -322,6 +376,10 @@ protected:
 
     // Model backing the realtime layer (owned by the document).
     sv::ModelId           m_realtimePitchModelId;
+
+    // Tells the pane of the dots added to that model, which tells nobody
+    // itself (see setupRealtimePitchLayer())
+    ModelChangeThrottle   m_realtimeDotsNotifier;
 
     sv::Overview  *m_overview;
 
@@ -385,6 +443,80 @@ protected:
     // Put the strip in step with the take's coverage: make it if there
     // is a take and none yet, take it away when the take goes
     void syncCoverageStrip();
+
+    // The timed lyrics of the session, drawn along the bottom of pane 0
+    // and stored in the session with the layer that draws them.  They
+    // belong to the song, not to a take.  Display only
+    LyricsTrack   *m_lyrics;
+    QAction       *m_importLyricsAction;
+    QAction       *m_exportLyricsAction;
+    QAction       *m_removeLyricsAction;
+    QAction       *m_showLyrics;
+
+    // Edit > Edit Lyrics: the mouse moves the words' starts and ends in
+    // the lyrics' box row while it is on, and changes, adds and deletes
+    // words there.  Off, and not to be had, without lyrics on show or
+    // while a take is being recorded, which updateMenuStates() sees to;
+    // and off after an import, which importLyricsFrom() sees to
+    LyricsEditor  *m_lyricsEditor;
+    QAction       *m_editLyricsAction;
+
+    // Edit > Shift Lyrics...: all the words earlier or later by a number
+    // of seconds.  To be had whenever editing is, edit mode on or not
+    QAction       *m_shiftLyricsAction;
+
+    // The lyrics are there to be edited: shown, visible, and no take
+    // being recorded (the singer is reading them)
+    bool lyricsEditAllowed() const;
+
+    // Edit mode on, if lyricsEditAllowed(), or off, and the action to
+    // match.  Off finishes a drag in progress, pushing its command, so
+    // this must not be reached from an undo or a redo
+    void setLyricsEditing(bool on);
+
+    // Fade the waveforms of both analysers while the lyrics are on show
+    // over them, and not otherwise.  Called after anything that shows or
+    // hides the lyrics, and after anything that makes an analyser: a new
+    // one starts unfaded, and a session's lyrics are found only after
+    // the reference's analyser has taken its waveform over
+    void updateWaveformFade();
+
+    // Put the lyrics of this TTML or LRC file on the reference's
+    // timeline, in place of any there are.  Not undoable, as loading
+    // background music is not, and nothing goes onto the undo stack.
+    // False if the file could not be read or holds no timed lyrics,
+    // which the user is told in a dialog, or if lyricsImportAllowed()
+    // says no; nothing has changed then
+    bool importLyricsFrom(QString path);
+
+    // Lyrics can be imported once there is a reference, and not while a
+    // take is being recorded
+    bool lyricsImportAllowed() const;
+
+    // Ask for the TTML or LRC file to import, "" if the user cancelled.
+    // Overridden by the tests, which cannot answer a dialog
+    virtual QString askForLyricsFile();
+
+    // Write the lyrics, as the model holds them now, to this TTML file.
+    // Not a command, and the session is not changed by it.  False if
+    // there are no lyrics, or if the file could not be written, which
+    // the user is told in a dialog
+    bool exportLyricsTo(QString path);
+
+    // Ask where to export the lyrics to, offering the suggested path;
+    // "" if the user cancelled.  Overridden by the tests
+    virtual QString askForLyricsExportFile(QString suggested);
+
+    // Ask for the text of a word of the lyrics, offering the one it has
+    // ("" for a new word): true with the text typed in its place, false
+    // if the user cancelled.  The lyrics editor asks through this.
+    // Overridden by the tests
+    virtual bool askForLyricsWordText(QString &text, bool isNew);
+
+    // Ask how far to shift all the words of the lyrics, in seconds,
+    // negative for earlier: true with the seconds, false if the user
+    // cancelled.  Overridden by the tests
+    virtual bool askForLyricsShift(double &seconds);
 
     // --- The audio folder of the session (spec 6.4) ---
 
@@ -593,7 +725,8 @@ protected:
     TakeTiming currentTakeTiming() const;
 
     // The pre-roll asked for, in frames of the reference: the QSettings
-    // value MainWindow/prerollseconds (3 s), or 0 with the toggle off
+    // value MainWindow/prerollseconds (3 s), or 0 with the toggle off;
+    // for a take of the audio check, the check's own
     sv::sv_frame_t wantedPreRollFrames() const;
 
     // Put the countdown of a pre-roll's lead-in in the status bar, and
@@ -797,6 +930,13 @@ protected:
     bool m_singingAudioAfterTake;
     void restoreSingingAudioAfterTake();
 
+    // Playback constrained to the selection is lifted while the reference
+    // plays for a take, and put back when the take is over: true while it
+    // is lifted
+    bool m_playSelectionLiftedForTake;
+    void liftPlaySelectionForTake();
+    void restorePlaySelectionAfterTake();
+
     // The main model last handed to m_analyser by analyseNewMainModel().
     // audioFileLoaded() is emitted for additional models too (a singing
     // track, background music), and the reference must not be set up again
@@ -848,14 +988,15 @@ protected:
     // what the singer sang would be left unanalysed.
     Coverage::Range m_takeAnalysisRange;
 
-    // Round-trip hardware latency (output + input, in frames of the
-    // recording, at the device's rate) stored when a singing-track
-    // recording is made with the "play reference while recording" toggle
-    // on.  The recording is read from this point on when it is spliced
-    // into the take's audio, so that what the singer sang in answer to
-    // the reference at m_takePosition lands there; and the live dots are
-    // placed with it during the take.  TakeTiming converts it to the
-    // reference's frames.
+    // Round-trip hardware latency (the figure the audio check measured,
+    // or else output + input as the device reports them, in frames of the
+    // recording, at the device's rate; see roundTripAt()) stored when a
+    // singing-track recording is made with the "play reference while
+    // recording" toggle on.  The recording is read from this frame on when
+    // it is spliced into the take's audio, so that what the singer sang in
+    // answer to the reference at m_takePosition lands there; and the live
+    // dots are placed with it during the take.  TakeTiming converts it to
+    // the reference's frames.
     // Reset to 0 in record() at the start of every take, standalone ones
     // included, but not by a Stop: the splice needs it after that.
     //
@@ -877,6 +1018,74 @@ protected:
     // source, set before the reference is started, for the audio
     // callback that measures the start gap
     std::atomic<double> m_recordFramesPerPlayFrame;
+    // What the take being recorded, or the last one, was placed with:
+    // cleared when a take starts, the round trip and the latencies the
+    // device reported (in seconds, as roundTripAt() has them) filled in
+    // when the reference starts to play, and the recording's rate when
+    // the take is spliced in
+    TakeLatency m_takeLatency;
+
+    // The audio check, and the override it sets for each take of its
+    // own: Record into Selection, Play Reference While Recording and a
+    // pre-roll of AudioCheckRunner::kPreRollSeconds, whatever the toolbar
+    // says.  Not by setting the toggles, which write the user's settings.
+    // record(), recordingStarted() and wantedPreRollFrames() consult it
+    AudioCheckRunner *m_audioCheck;
+    bool m_audioCheckTakes;
+
+    // The round trip the check's takes are placed with in place of
+    // roundTripAt()'s, in seconds, for a run that brings one of its own
+    // (AudioCheckRunner::Plan::roundTrip); negative when it brings none.
+    // Read with m_audioCheckTakes, and never by latencyInUse()
+    double m_audioCheckRoundTrip;
+
+#ifdef TONY_DEV_CHECKS
+    // The development checks, which drive the audio check and the
+    // session; made with the window, deleted in its destructor after the
+    // dialog and before the runner, and told when the session closes
+    DevChecks *m_devChecks;
+#endif
+
+    // The audio check, or the development checks, are running: the take
+    // path and the devices are theirs until they end
+    bool audioCheckRunning() const;
+
+    // The Record button (m_recordAction, with the compact layout's parts
+    // above) is shut while audioCheckRunning()
+
+    // Playback > Calibrate Audio, made the first time it is chosen, and
+    // the lines under it: the latency takes are placed with, and Forget
+    // Measured Latency.  Calibrate Audio is shut while a take or a check
+    // is being recorded, and so are the device menus while a check runs:
+    // the figure it measures is kept for the devices it started on
+    CalibrateAudioDialog *m_calibrateAudioDialog;
+    QAction *m_calibrateAudioAction;
+    QAction *m_latencyLineAction;
+    QAction *m_forgetLatencyAction;
+
+    // Say which latency is in use, and let it be forgotten if it is one
+    // the check measured
+    void updateLatencyMenuLine();
+
+    // The rate the device recorded at, the last time a take was placed
+    // with a round trip; 0 until then, and again once another device is
+    // chosen
+    sv::sv_samplerate_t m_lastRecordingRate;
+
+    // The session's rate, from the play source, or the fixed rate every
+    // file is read at before there is one
+    sv::sv_samplerate_t sessionRate() const;
+
+    // The rate the next take is expected to record at: the last one's,
+    // or before there is one, the session's
+    sv::sv_samplerate_t expectedRecordingRate() const;
+
+    // The round trip for a take recorded at the given rate, in seconds,
+    // and where it came from: a stored figure for these devices and this
+    // rate, unless the latencies the device reports have changed since
+    // it was measured; otherwise the reported pair, each converted from
+    // the frames it counts
+    LatencyCalibration::InUse roundTripAt(sv::sv_samplerate_t recordingRate) const;
 
     void refineRecordingLatency();
 

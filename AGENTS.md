@@ -24,11 +24,12 @@ code.
 
 ## Build and test
 
-From **Git Bash** (the usual agent shell). `build.bat` does not run from sh.
+From **Git Bash** (the usual agent shell) on the Windows machine. `build.bat` does not run
+from sh. A Linux cloud session builds otherwise: see the end of this section.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe > tmp/build.log 2>&1
+ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-tony-device.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 ```
 
@@ -43,7 +44,7 @@ Run tests from `build_mingw/` with the same environment:
 ```sh
 mkdir -p ../tmp/tl
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "exit:$?"
-TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~5 min, real time
+TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~8 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ```
@@ -52,8 +53,17 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 - A test name on the command line goes to **every** suite in the executable; the suites
   that lack it fail, so the exit status is only meaningful for a run with no names.
 - Run named tests while working; run **both whole suites** before calling anything done.
+- `test-tony-dev.exe` (development builds only) holds the development checks' suite,
+  about a minute and more of real-time takes. Run it as well, whole, when a change touches
+  the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
+  `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
-- Give the app suite a tool timeout of 10 minutes.
+- Give the app suite a tool timeout of 15 minutes.
+
+In a **Linux cloud session** the commands are others. The session's hook has started a
+build into `build/` in the background; run `deploy/linux/cloud-session.sh wait` before the
+first build or test (if it says none was started, run `deploy/linux/cloud-session.sh start`
+first). The rest is in [docs/building.md](docs/building.md#building-on-linux).
 
 ## Rules for working here
 
@@ -103,7 +113,8 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ### Git
 
 - Commit only when asked, and only with both whole suites green. One commit per coherent
-  step, staged by file name (never `git add -A`; `.claude/` and `tmp/` stay out).
+  step, staged by file name (never `git add -A`; `tmp/` and all of `.claude/` but
+  `settings.json` stay out).
 - Messages: `feat:` / `fix:` / `test:` / `docs:`, lower case, then a short what-and-why
   body. End with a `Co-Authored-By` trailer naming the model that wrote the code.
 - Use the `gh` CLI for anything on GitHub.

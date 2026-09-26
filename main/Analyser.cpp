@@ -33,7 +33,6 @@
 #include "layer/LayerFactory.h"
 #include "layer/SpectrogramLayer.h"
 #include "layer/Colour3DPlotLayer.h"
-#include "layer/ShowLayerCommand.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
 
@@ -68,7 +67,8 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedEnd(0),
     m_rangedMergeStart(0),
     m_rangedMergeEnd(0),
-    m_rangedClippedEnd(false)
+    m_rangedClippedEnd(false),
+    m_waveformFaded(false)
 {
     QSettings settings;
     settings.beginGroup("LayerDefaults");
@@ -162,10 +162,9 @@ Analyser::analyseExistingFile()
 QString
 Analyser::doAllAnalyses(bool withPitchTrack)
 {
-    m_reAnalysingSelection = Selection();
-    m_reAnalysisCandidates.clear();
-    m_currentCandidate = -1;
-    m_candidatesVisible = false;
+    // Candidates of the analysis being replaced. Only forgotten, they
+    // would stay in the pane: nothing takes a layer of ours out but us
+    discardPitchCandidates();
 
     // Note that we need at least one main-model layer (time ruler,
     // waveform or what have you). It could be hidden if we don't want
@@ -490,6 +489,9 @@ Analyser::addWaveform()
         if (existing && existing->getModel() == m_fileModel) {
             cerr << "recording existing waveform layer (matching our file model)" << endl;
             m_layers[Audio] = existing;
+            // A session saves the colour with the layer, faded or not
+            // as it was then; it is to be what it is now
+            existing->setBaseColour(getWaveformColour());
             return "";
         }
     }
@@ -518,8 +520,7 @@ Analyser::addWaveform()
 
     waveform->setMiddleLineHeight(0.9);
     waveform->setShowMeans(false); // too small & pale for this
-    waveform->setBaseColour
-        (ColourDatabase::getInstance()->getColourIndex(tr("Grey")));
+    waveform->setBaseColour(getWaveformColour());
     auto params = waveform->getPlayParameters();
     if (params) {
         params->setPlayPan(-1);
@@ -530,6 +531,32 @@ Analyser::addWaveform()
 
     m_layers[Audio] = waveform;
     return "";
+}
+
+int
+Analyser::getWaveformColour() const
+{
+    ColourDatabase *cdb = ColourDatabase::getInstance();
+    int colour = -1;
+    if (m_waveformFaded) colour = cdb->getColourIndex(tr("Pale Grey"));
+    // MainWindow names the colours; without that one, grey will do
+    if (colour < 0) colour = cdb->getColourIndex(tr("Grey"));
+    return colour;
+}
+
+void
+Analyser::setWaveformFaded(bool faded)
+{
+    m_waveformFaded = faded;
+
+    // Straight on the layer, which only repaints: no command, no
+    // modified flag, and not saveState(), which is for the user's own
+    // choices and would write this to the settings both analysers share
+    if (Layer *audio = m_layers[Audio]) {
+        if (auto waveform = qobject_cast<WaveformLayer *>(audio)) {
+            waveform->setBaseColour(getWaveformColour());
+        }
+    }
 }
 
 QString
@@ -908,19 +935,23 @@ Analyser::connectAnalysisLayers()
     // Claimed layers need these as much as ones we made ourselves: the
     // analyser they belonged to before is gone, and with it its
     // connections.  Unique, because an analyser handed the same layers
-    // twice would otherwise hear each signal twice
+    // twice would otherwise hear each signal twice.  By member pointer
+    // where the arguments are sv types: moc records this class's slots
+    // as taking sv::ModelId and sv::sv_frame_t, and whether a SLOT()
+    // string saying ModelId matches that depends on the Qt version (6.4
+    // says "No such slot")
     if (auto pitchLayer = qobject_cast<TimeValueLayer *>(m_layers[PitchTrack])) {
-        connect(pitchLayer, SIGNAL(modelCompletionChanged(ModelId)),
-                this, SLOT(layerCompletionChanged(ModelId)),
+        connect(pitchLayer, &Layer::modelCompletionChanged,
+                this, &Analyser::layerCompletionChanged,
                 Qt::UniqueConnection);
     }
 
     if (auto noteLayer = qobject_cast<FlexiNoteLayer *>(m_layers[Notes])) {
-        connect(noteLayer, SIGNAL(modelCompletionChanged(ModelId)),
-                this, SLOT(layerCompletionChanged(ModelId)),
+        connect(noteLayer, &Layer::modelCompletionChanged,
+                this, &Analyser::layerCompletionChanged,
                 Qt::UniqueConnection);
-        connect(noteLayer, SIGNAL(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)),
-                this, SLOT(reAnalyseRegion(sv_frame_t, sv_frame_t, float, float)),
+        connect(noteLayer, &FlexiNoteLayer::reAnalyseRegion,
+                this, &Analyser::reAnalyseRegion,
                 Qt::UniqueConnection);
         connect(noteLayer, SIGNAL(materialiseReAnalysis()),
                 this, SLOT(materialiseReAnalysis()),
@@ -969,10 +1000,7 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
     }
 
     if (!m_reAnalysisCandidates.empty()) {
-        CommandHistory::getInstance()->startCompoundOperation
-            (tr("Discard Previous Candidates"), true);
         discardPitchCandidates();
-        CommandHistory::getInstance()->endCompoundOperation();
     }
 
     m_reAnalysingSelection = sel;
@@ -1170,9 +1198,10 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
         auto model = ModelById::get(id);
         if (!model) continue;
         // Emitted on the transform's own thread, so delivered here as a
-        // queued call: the merge happens on this thread like any other
-        connect(model.get(), SIGNAL(completionChanged(ModelId)),
-                this, SLOT(rangedAnalysisCompletionChanged(ModelId)));
+        // queued call: the merge happens on this thread like any other.
+        // By member pointer, as in connectAnalysisLayers()
+        connect(model.get(), &Model::completionChanged,
+                this, &Analyser::rangedAnalysisCompletionChanged);
     }
 
     // createDerivedLayers() returns only once the transform has set both
@@ -1432,16 +1461,10 @@ Analyser::showPitchCandidates(bool shown)
 {
     if (m_candidatesVisible == shown) return;
 
+    // Directly and not by command, as with every layer of our own: see
+    // layersCreated()
     foreach (Layer *layer, m_reAnalysisCandidates) {
-        if (shown) {
-            CommandHistory::getInstance()->addCommand
-                (new ShowLayerCommand(m_pane, layer, true,
-                                      tr("Show Pitch Candidates")));
-        } else {
-            CommandHistory::getInstance()->addCommand
-                (new ShowLayerCommand(m_pane, layer, false,
-                                      tr("Hide Pitch Candidates")));
-        }
+        layer->showLayer(m_pane, shown);
     }
 
     m_candidatesVisible = shown;
@@ -1468,9 +1491,10 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
         }
         m_currentAsyncHandle = 0;
 
-        CommandHistory::getInstance()->startCompoundOperation
-            (tr("Re-Analyse Selection"), true);
-
+        // Like every layer of our own, the candidates make no undo
+        // commands. An undo could otherwise take them out of the pane
+        // while they stay on our list, and removing them again later
+        // left a command holding a layer already deleted
         m_reAnalysisCandidates.clear();
 
         vector<Layer *> all;
@@ -1491,7 +1515,7 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
                 t->setBaseColour
                     (ColourDatabase::getInstance()->getColourIndex(tr("Bright Orange")));
                 t->setPresentationName("candidate");
-                m_document->addLayerToView(m_pane, t);
+                m_document->attachLayerToView(m_pane, t);
                 m_reAnalysisCandidates.push_back(t);
                 /*
                 cerr << "New re-analysis candidate model has "
@@ -1505,8 +1529,6 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
             m_candidatesVisible = !show; // to ensure the following takes effect
             showPitchCandidates(show);
         }
-
-        CommandHistory::getInstance()->endCompoundOperation();
     }
 
     emit layersChanged();
@@ -1628,15 +1650,14 @@ Analyser::clearReAnalysis()
 void
 Analyser::discardPitchCandidates()
 {
-    if (!m_reAnalysisCandidates.empty()) {
-        // We don't use a compound command here, because we may be
-        // already in one. Caller bears responsibility for doing that
-        foreach (Layer *layer, m_reAnalysisCandidates) {
-            // This will cause the layer to be deleted later (ownership is
-            // transferred to the remove command)
-            m_document->removeLayerFromView(m_pane, layer);
+    // Deleted outright, with no command: see layersCreated(). They exist
+    // only once their transform has finished, so there is none to cancel
+    vector<Layer *> doomed = m_reAnalysisCandidates;
+    m_reAnalysisCandidates.clear(); // before deleteLayer() tells us of each
+    if (m_document) {
+        for (Layer *layer : doomed) {
+            m_document->deleteLayer(layer, true);
         }
-        m_reAnalysisCandidates.clear();
     }
 
     m_currentCandidate = -1;

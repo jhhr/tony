@@ -12,11 +12,15 @@
 */
 
 #include "TestSingingDocument.h"
+#include "TestViewCache.h"
 #include "TestSingingAnalysis.h"
 #include "TestRecordWorkflow.h"
 #include "TestTouchGestures.h"
 #include "TestCompactLayout.h"
 #include "TestTouchMenuStyle.h"
+#include "TestLyricsLayer.h"
+#include "TestUiChecks.h"
+#include "TestAudioCheck.h"
 
 #include "RunSuite.h"
 
@@ -24,6 +28,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFont>
 #include <QtTest>
 
 #include <iostream>
@@ -49,6 +54,15 @@ int main(int argc, char *argv[])
     app.setOrganizationName("tony-tests");
     app.setApplicationName("test-tony-app");
 
+    // Text in shades of grey, whatever the machine's fontconfig asks for.
+    // Ubuntu's asks for sub-pixel anti-aliasing, and Qt 6.4 follows it:
+    // the labels of a scale then have orange and blue fringes, and
+    // TestUiChecks, which finds the take's dots by their orange, takes
+    // the fringes for dots
+    QFont font = QApplication::font();
+    font.setStyleStrategy(QFont::NoSubpixelAntialias);
+    QApplication::setFont(font);
+
     // Tier 4 runs the real pYIN plugin, which the build leaves next to
     // this executable. Replace rather than extend VAMP_PATH, so that a
     // pYIN installed elsewhere on this machine is never the one tested.
@@ -62,7 +76,19 @@ int main(int argc, char *argv[])
     }
 
     {
+        TestViewCache t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestSingingAnalysis t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsLayer t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }
@@ -80,6 +106,12 @@ int main(int argc, char *argv[])
     }
 
     {
+        TestUiChecks t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestCompactLayout t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
@@ -87,6 +119,12 @@ int main(int argc, char *argv[])
 
     {
         TestTouchMenuStyle t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestAudioCheck t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

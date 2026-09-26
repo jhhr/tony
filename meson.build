@@ -71,6 +71,21 @@ elif buildtype.startswith('debug')
   ]
 endif # get_option('buildtype')
 
+# The development checks (main/dev/, docs/calibrate-audio.md) are in
+# every build but a release one: debug, debugoptimized, plain, minsize
+# and custom alike.  Packages are release builds and have none of it.
+# moc has to see the flag too, for what is inside its #ifdefs
+dev_checks = not buildtype.startswith('release')
+dev_moc_args = []
+if dev_checks
+  general_defines += [
+    '-DTONY_DEV_CHECKS',
+  ]
+  dev_moc_args += [
+    '-DTONY_DEV_CHECKS',
+  ]
+endif
+
 svcore_moc_args = []
 feature_additional_libs = []
 feature_include_dirs = []
@@ -1174,12 +1189,19 @@ tony_core_files = [
   'main/Coverage.cpp',
   'main/DecodedPcm.cpp',
   'main/LogFile.cpp',
+  'main/LatencyCalibration.cpp',
+  'main/LatencyCheck.cpp',
+  'main/Lyrics.cpp',
+  'main/LyricsEdit.cpp',
+  'main/LyricsTtml.cpp',
+  'main/ModelChangeThrottle.cpp',
   'main/PinchZoom.cpp',
   'main/PopupArea.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
   'main/StreamLatency.cpp',
   'main/TakeAudio.cpp',
+  'main/TakeDiff.cpp',
   'main/TakeEvents.cpp',
   'main/TakesFile.cpp',
   'main/TakeTiming.cpp',
@@ -1197,8 +1219,12 @@ endif
 
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
+  'main/AudioCheckRunner.cpp',
+  'main/CalibrateAudioDialog.cpp',
   'main/CompactLayout.cpp',
   'main/CoverageStrip.cpp',
+  'main/LyricsTrack.cpp',
+  'main/LyricsEditor.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
@@ -1222,16 +1248,33 @@ tony_core_moc_files = qt.preprocess(
   'main/SingingTakes.h',
 ])
 
-tony_app_moc_files = qt.preprocess(
-  moc_headers: [
+tony_app_moc_headers = [
   'main/MainWindow.h',
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
+  'main/AudioCheckRunner.h',
+  'main/CalibrateAudioDialog.h',
   'main/CompactLayout.h',
   'main/CoverageStrip.h',
+  'main/LyricsTrack.h',
+  'main/LyricsEditor.h',
   'main/TouchGestures.h',
   'main/TouchMenuStyle.h',
-])
+]
+
+if dev_checks
+  tony_app_files += [
+    'main/dev/DevChecks.cpp',
+  ]
+  tony_app_moc_headers += [
+    'main/dev/DevChecks.h',
+  ]
+endif
+
+tony_app_moc_files = qt.preprocess(
+  moc_headers: tony_app_moc_headers,
+  moc_extra_arguments: dev_moc_args,
+)
 
 qt_resource_files = qt.preprocess(
   qresources: [
@@ -1509,7 +1552,19 @@ if system != 'android'
     'main/test/TestTakesFile.h',
     'main/test/TestTakeTiming.h',
     'main/test/TestVerticalZoom.h',
+    'main/test/TestLyrics.h',
+    'main/test/TestLyricsTtml.h',
+    'main/test/TestLyricsEdit.h',
+    'main/test/TestLatencyCheck.h',
+    'main/test/TestLatencyCalibration.h',
+    'main/test/TestTakeDiff.h',
+    'main/test/TestModelChangeThrottle.h',
+    'main/test/TestRunSuite.h',
   ])
+
+  # Where the suites find the files in testdata/. Forward slashes: a
+  # backslash of a Windows path would start an escape in the C string.
+  tony_test_data_dir = import('fs').as_posix(meson.current_source_dir() / 'testdata')
 
   tony_core_test_exe = executable(
     'test-tony-core',
@@ -1528,6 +1583,7 @@ if system != 'android'
     cpp_args: [
       feature_defines,
       general_defines,
+      '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
     ],
     link_args: [
       feature_additional_libs,
@@ -1536,15 +1592,23 @@ if system != 'android'
     win_subsystem: 'console'
   )
 
-  tony_app_test_moc_files = qt.preprocess(
-    moc_headers: [
+  tony_app_test_moc_headers = [
     'main/test/TestSingingDocument.h',
+    'main/test/TestViewCache.h',
     'main/test/TestSingingAnalysis.h',
     'main/test/TestRecordWorkflow.h',
+    'main/test/TestLyricsLayer.h',
+    'main/test/TestUiChecks.h',
+    'main/test/TestAudioCheck.h',
     'main/test/TestTouchGestures.h',
     'main/test/TestCompactLayout.h',
     'main/test/TestTouchMenuStyle.h',
-  ])
+  ]
+
+  tony_app_test_moc_files = qt.preprocess(
+    moc_headers: tony_app_test_moc_headers,
+    moc_extra_arguments: dev_moc_args,
+  )
 
   tony_app_test_exe = executable(
     'test-tony-app',
@@ -1553,6 +1617,38 @@ if system != 'android'
     # The icons: without them every toolbar button shows its text, and
     # is as wide as that (TestCompactLayout needs the buttons' real size)
     qt_resource_files,
+    dependencies: [
+      tony_app_dep,
+      tony_core_dep,
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      os_dep,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+      '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
+
+  # The checks that need a real audio device, with its microphone hearing
+  # its speakers. Built with the rest, run only by hand: not a meson test
+  tony_device_test_moc_files = qt.preprocess(
+    moc_headers: [
+    'main/test/TestRealDevice.h',
+  ])
+
+  tony_device_test_exe = executable(
+    'test-tony-device',
+    tony_device_test_moc_files,
+    'main/test/tony-device-check.cpp',
     dependencies: [
       tony_app_dep,
       tony_core_dep,
@@ -1578,6 +1674,47 @@ if system != 'android'
        depends: pyin_plugin,
        timeout: 900,
        env: [ 'QT_QPA_PLATFORM=offscreen' ])
+
+  # The development checks' suite, only where the checks are built. Its
+  # own executable: every test records takes in real time, and it is run
+  # when a change touches what the checks drive (AGENTS.md)
+  if dev_checks
+    tony_dev_test_moc_files = qt.preprocess(
+      moc_headers: [
+      'main/test/TestDevChecks.h',
+      ],
+      moc_extra_arguments: dev_moc_args,
+    )
+
+    tony_dev_test_exe = executable(
+      'test-tony-dev',
+      tony_dev_test_moc_files,
+      'main/test/tony-dev-test.cpp',
+      dependencies: [
+        tony_app_dep,
+        tony_core_dep,
+        svcore_dep,
+        qt_dep,
+        feature_dependencies,
+        os_dep,
+        dl_dep,
+      ],
+      cpp_args: [
+        feature_defines,
+        general_defines,
+      ],
+      link_args: [
+        feature_additional_libs,
+        general_link_args,
+      ],
+      win_subsystem: 'console'
+    )
+
+    test('tony-dev', tony_dev_test_exe,
+         depends: pyin_plugin,
+         timeout: 900,
+         env: [ 'QT_QPA_PLATFORM=offscreen' ])
+  endif
 
   test('svcore-base', svcore_base_test_exe)
   test('svcore-system', svcore_system_test_exe)

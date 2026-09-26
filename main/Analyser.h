@@ -122,6 +122,18 @@ public:
     void setAudible(Component c, bool v);
     void toggleAudible(Component c) { setAudible(c, !isAudible(c)); }
 
+    /**
+     * Draw the waveform paler than usual, for while something is drawn
+     * over it (the lyrics), or back in its usual grey.  Remembered, so
+     * that a waveform this analyser makes or takes over later is drawn
+     * the same way.  Unlike setVisible() and setAudible() this is not a
+     * setting: nothing is written to QSettings, and nothing is marked
+     * modified.  A session saves the colour with the layer, so whoever
+     * calls this has to call it again after a load.
+     */
+    void setWaveformFaded(bool faded);
+    bool isWaveformFaded() const { return m_waveformFaded; }
+
     void cycleStatus(Component c) {
         if (isVisible(c)) {
             if (isAudible(c)) {
@@ -405,11 +417,18 @@ protected:
     TakeEvents::Change m_rangedPitchChange;
     TakeEvents::Change m_rangedNotesChange;
 
+    // See setWaveformFaded()
+    bool m_waveformFaded;
+
     QString doAllAnalyses(bool withPitchTrack);
 
     QString addVisualisations();
     QString addWaveform();
     QString addAnalyses();
+
+    // The colour the waveform is to be drawn in now: see
+    // setWaveformFaded()
+    int getWaveformColour() const;
 
     // The colours and play parameters of the pitch and notes layers,
     // whichever way they were made

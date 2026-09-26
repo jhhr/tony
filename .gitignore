@@ -38,6 +38,7 @@ build-android
 build_win32
 build_win64
 build_win64_debug
+build_linux
 *.AppImage
 *.AppDir
 Dockerfile*.gen
@@ -51,3 +52,7 @@ test-svcore-*
 .notarization-uuid
 Dockerfile*.gen
 tmp
+# Claude Code's local files (settings.local.json, worktrees); only the
+# shared settings, with the cloud session's hook, are tracked
+.claude/*
+!.claude/settings.json

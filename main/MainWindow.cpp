@@ -19,7 +19,11 @@
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
 #include "CompactLayout.h"
+#include "AudioCheckRunner.h"
+#include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
+#include "Lyrics.h"
+#include "LyricsTtml.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
@@ -39,6 +43,10 @@
 #include <QStandardPaths>
 #include <QThread>
 #include <unistd.h>
+#endif
+
+#ifdef TONY_DEV_CHECKS
+#include "dev/DevChecks.h"
 #endif
 
 #include "framework/Document.h"
@@ -89,6 +97,7 @@
 
 #include "widgets/RangeInputDialog.h"
 #include "widgets/ActivityLog.h"
+#include "widgets/InteractiveFileFinder.h"
 
 // For version information
 #include "vamp/vamp.h"
@@ -109,6 +118,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QInputDialog>
+#include <QFileDialog>
 #include <QStatusBar>
 #include <QFileInfo>
 #include <QDir>
@@ -122,6 +132,8 @@
 #include <QDialogButtonBox>
 #include <QActionGroup>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QSet>
 #include <QTimer>
 #include <QEventLoop>
 #include <QTextStream>
@@ -149,6 +161,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_analyser2(nullptr),
     m_realtimePitchTracker(nullptr),
     m_realtimePitchLayer(nullptr),
+    m_realtimeDotsNotifier(40),
     m_overview(0),
     m_compactLayout(nullptr),
     m_playAction(nullptr),
@@ -175,6 +188,14 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_singingNotesHiddenForTake(false),
     m_takes(nullptr),
     m_coverageStrip(nullptr),
+    m_lyrics(nullptr),
+    m_importLyricsAction(nullptr),
+    m_exportLyricsAction(nullptr),
+    m_removeLyricsAction(nullptr),
+    m_showLyrics(nullptr),
+    m_lyricsEditor(nullptr),
+    m_editLyricsAction(nullptr),
+    m_shiftLyricsAction(nullptr),
     m_takesMenu(nullptr),
     m_takeCombo(nullptr),
     m_newTakeAction(nullptr),
@@ -218,6 +239,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingAsSingingTrack(false),
     m_singingAudioMutedForTake(false),
     m_singingAudioAfterTake(true),
+    m_playSelectionLiftedForTake(false),
     m_paneCountBeforeRecording(0),
     m_currentRecordingModelId(),
     m_recordingLayer(nullptr),
@@ -226,7 +248,19 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
     m_awaitingReferenceStart(false),
-    m_recordFramesPerPlayFrame(1.0)
+    m_recordFramesPerPlayFrame(1.0),
+    m_takeLatency(),
+    m_audioCheck(nullptr),
+    m_audioCheckTakes(false),
+    m_audioCheckRoundTrip(-1.0),
+#ifdef TONY_DEV_CHECKS
+    m_devChecks(nullptr),
+#endif
+    m_calibrateAudioDialog(nullptr),
+    m_calibrateAudioAction(nullptr),
+    m_latencyLineAction(nullptr),
+    m_forgetLatencyAction(nullptr),
+    m_lastRecordingRate(0)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -290,6 +324,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     cdb->setUseDarkBackground(cdb->addColour(Qt::green, tr("Bright Green")), true);
     cdb->setUseDarkBackground(cdb->addColour(QColor(225, 74, 255), tr("Bright Purple")), true);
     cdb->setUseDarkBackground(cdb->addColour(QColor(255, 188, 80), tr("Bright Orange")), true);
+    // The waveforms under the lyrics (Analyser::setWaveformFaded()).
+    // Last, so that the colours before it keep their indices
+    cdb->addColour(QColor(225, 225, 225), tr("Pale Grey"));
 
     Preferences::getInstance()->setResampleOnLoad(true);
     Preferences::getInstance()->setFixedSampleRate(44100);
@@ -340,8 +377,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     // We have a pane stack: it comes with the territory. However, we
     // have a fixed and known number of panes in it -- it isn't
     // variable
-    connect(m_paneStack, SIGNAL(doubleClickSelectInvoked(sv_frame_t)),
-            this, SLOT(doubleClickSelectInvoked(sv_frame_t)));
+    // By member pointer: the slot takes sv::sv_frame_t, which a SLOT()
+    // string saying sv_frame_t does not match under every Qt version
+    connect(m_paneStack, &PaneStack::doubleClickSelectInvoked,
+            this, &MainWindow::doubleClickSelectInvoked);
     scroll->setWidget(m_paneStack);
 
     m_overview = new Overview(frame);
@@ -440,6 +479,32 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
+    m_lyrics = new LyricsTrack(this);
+    m_lyricsEditor = new LyricsEditor(m_lyrics, this);
+    connect(m_lyricsEditor, &LyricsEditor::contextHelpChanged,
+            this, &MainWindow::contextHelpChanged);
+    m_lyricsEditor->setTextQuestion([this](QString &text, bool isNew) {
+        return askForLyricsWordText(text, isNew);
+    });
+
+    m_audioCheck = new AudioCheckRunner(this);
+
+    // What may be chosen changes as a check begins and as it ends.  The
+    // first progress comes from its first step, before anything is asked
+    connect(m_audioCheck, &AudioCheckRunner::progress,
+            this, [this]() { updateMenuStates(); });
+    connect(m_audioCheck, &AudioCheckRunner::finished,
+            this, [this]() { updateMenuStates(); });
+
+#ifdef TONY_DEV_CHECKS
+    // Likewise for the development checks, which run the check among
+    // stages of their own
+    m_devChecks = new DevChecks(this, m_audioCheck);
+    connect(m_devChecks, &DevChecks::progress,
+            this, [this]() { updateMenuStates(); });
+    connect(m_devChecks, &DevChecks::finished,
+            this, [this]() { updateMenuStates(); });
+#endif
 
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
@@ -502,6 +567,18 @@ MainWindow::MainWindow(AudioMode audioMode,
 
 MainWindow::~MainWindow()
 {
+    // The check's dialog first, as it holds the runner and the dev
+    // checks; then the dev checks, which drive the runner; then a check
+    // still running ends here, before anything it reads goes
+    delete m_calibrateAudioDialog;
+    m_calibrateAudioDialog = nullptr;
+#ifdef TONY_DEV_CHECKS
+    delete m_devChecks;
+    m_devChecks = nullptr;
+#endif
+    delete m_audioCheck;
+    m_audioCheck = nullptr;
+
     // Nothing must poll a take while the window is coming down
     stopTakePolling();
 
@@ -539,6 +616,11 @@ MainWindow::~MainWindow()
     m_alternatePitch = nullptr;
     delete m_coverageStrip;
     m_coverageStrip = nullptr;
+    // Before the lyrics track, which it finds the lyrics through
+    delete m_lyricsEditor;
+    m_lyricsEditor = nullptr;
+    delete m_lyrics;
+    m_lyrics = nullptr;
     delete m_analyser;
     delete m_keyReference;
 #ifdef Q_OS_ANDROID
@@ -667,6 +749,25 @@ MainWindow::setupFileMenu()
     connect(m_loadBackgroundMusicAction, SIGNAL(triggered()), this, SLOT(openBackgroundMusic()));
     connect(this, SIGNAL(canPlay(bool)), m_loadBackgroundMusicAction, SLOT(setEnabled(bool)));
     menu->addAction(m_loadBackgroundMusicAction);
+
+    // Enabled in updateMenuStates()
+    m_importLyricsAction = new QAction(il.load("fileopen"), tr("Import &Lyrics..."), this);
+    m_importLyricsAction->setStatusTip(tr("Import timed lyrics from a TTML or LRC file, to be shown along the bottom of the pane"));
+    m_importLyricsAction->setEnabled(false);
+    connect(m_importLyricsAction, &QAction::triggered, this, &MainWindow::importLyrics);
+    menu->addAction(m_importLyricsAction);
+
+    m_exportLyricsAction = new QAction(tr("Expor&t Lyrics..."), this);
+    m_exportLyricsAction->setStatusTip(tr("Write the lyrics, as they are now, to a TTML file"));
+    m_exportLyricsAction->setEnabled(false);
+    connect(m_exportLyricsAction, &QAction::triggered, this, &MainWindow::exportLyrics);
+    menu->addAction(m_exportLyricsAction);
+
+    m_removeLyricsAction = new QAction(tr("Remove Lyrics"), this);
+    m_removeLyricsAction->setStatusTip(tr("Take the imported lyrics out of the session"));
+    m_removeLyricsAction->setEnabled(false);
+    connect(m_removeLyricsAction, &QAction::triggered, this, &MainWindow::removeLyrics);
+    menu->addAction(m_removeLyricsAction);
 
     menu->addSeparator();
 
@@ -955,6 +1056,28 @@ MainWindow::setupEditMenu()
     m_eraseSingingAction->setEnabled(false);
     menu->addAction(m_eraseSingingAction);
     m_rightButtonMenu->addAction(m_eraseSingingAction);
+
+    menu->addSeparator();
+
+    // A mode, not a tool: the lyrics are never the pane's top layer, which
+    // is what the tools act on.  Enabled and checked in updateMenuStates().
+    // No shortcut: it is not switched on and off in the middle of things
+    m_editLyricsAction = new QAction(tr("Edit L&yrics"), this);
+    m_editLyricsAction->setCheckable(true);
+    m_editLyricsAction->setStatusTip(tr("Edit the words of the lyrics along the bottom of the pane: drag a start or end, Shift-drag to move all the words, double-click a word to change its text, right-click to add or delete one"));
+    m_editLyricsAction->setEnabled(false);
+    connect(m_editLyricsAction, &QAction::triggered,
+            this, &MainWindow::editLyricsToggled);
+    menu->addAction(m_editLyricsAction);
+
+    // The same shift as a Shift-drag in edit mode, by a number: for an
+    // offset known beforehand, such as the lyrics exporter's
+    m_shiftLyricsAction = new QAction(tr("S&hift Lyrics..."), this);
+    m_shiftLyricsAction->setStatusTip(tr("Move all the words of the lyrics earlier or later by a number of seconds"));
+    m_shiftLyricsAction->setEnabled(false);
+    connect(m_shiftLyricsAction, &QAction::triggered,
+            this, &MainWindow::shiftLyrics);
+    menu->addAction(m_shiftLyricsAction);
 }
 
 void
@@ -1035,6 +1158,14 @@ MainWindow::setupViewMenu()
     menu->addSeparator();
 
     menu->addAction(m_compactLayout->getAction());
+    // Enabled and checked in updateLayerStatuses().  Not "Show &Lyrics":
+    // Peek Left has the L
+    m_showLyrics = new QAction(tr("Show L&yrics"), this);
+    m_showLyrics->setCheckable(true);
+    m_showLyrics->setStatusTip(tr("Show or hide the imported lyrics along the bottom of the pane"));
+    m_showLyrics->setEnabled(false);
+    connect(m_showLyrics, &QAction::triggered, this, &MainWindow::showLyricsToggled);
+    menu->addAction(m_showLyrics);
 }
 
 void
@@ -1538,6 +1669,9 @@ MainWindow::audioDeviceSelected(QAction *action)
         stop();
     }
 
+    // Another device may record at another rate
+    m_lastRecordingRate = 0;
+
     recreateAudioIO();
 }
 
@@ -1602,7 +1736,8 @@ MainWindow::setupToolbars()
     recordAction->setCheckable(true);
     recordAction->setShortcut(tr("Ctrl+Space"));
     recordAction->setStatusTip(tr("Record a new audio file. If a reference track is already loaded, the recording is added as the singing track alongside it."));
-    connect(recordAction, SIGNAL(triggered()), this, SLOT(record()));
+    connect(recordAction, &QAction::triggered,
+            this, &MainWindow::recordPressed);
     connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
 	    recordAction, SLOT(setChecked(bool)));
     connect(m_recordTarget, SIGNAL(recordCompleted()),
@@ -1739,6 +1874,29 @@ MainWindow::setupToolbars()
         connect(g, SIGNAL(triggered(QAction *)),
                 this, SLOT(audioDeviceSelected(QAction *)));
     }
+
+    // The audio check, and the latency takes are placed with: a line to
+    // read, never chosen, brought up to date whenever the menu opens
+    m_calibrateAudioAction = menu->addAction(tr("&Calibrate Audio..."));
+    m_calibrateAudioAction->setStatusTip
+        (tr("Measure how late recordings arrive through these devices, with "
+            "an earcup held against the microphone"));
+    connect(m_calibrateAudioAction, &QAction::triggered,
+            this, &MainWindow::calibrateAudio);
+
+    m_latencyLineAction = menu->addAction(QString());
+    m_latencyLineAction->setEnabled(false);
+
+    m_forgetLatencyAction = menu->addAction(tr("&Forget Measured Latency"));
+    m_forgetLatencyAction->setStatusTip
+        (tr("Place takes on these devices with the latency the driver "
+            "reports again"));
+    connect(m_forgetLatencyAction, &QAction::triggered,
+            this, [this]() { forgetMeasuredLatency(); });
+
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::updateLatencyMenuLine);
+    updateLatencyMenuLine();
     menu->addSeparator();
 
     m_rightButtonPlaybackMenu->addAction(playAction);
@@ -2335,11 +2493,58 @@ MainWindow::updateMenuStates()
     emit canEraseSinging(haveCoverage && !inTake && haveSelection &&
                          !analysingRange);
 
+    // Nor can playback be constrained to the selection during a take:
+    // see liftPlaySelectionForTake()
+    if (inTake) emit canPlaySelection(false);
+
     // The takes of the session: switching and making one need a session
     // and nothing running, and the rest need a take to act on as well
     bool canChange = takeOperationsAllowed();
     emit canChangeTakes(canChange);
     emit canActOnTake(canChange && m_takes->getActiveIndex() >= 0);
+
+    if (m_importLyricsAction) {
+        m_importLyricsAction->setEnabled(lyricsImportAllowed());
+    }
+    if (m_exportLyricsAction) {
+        m_exportLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
+    }
+    if (m_removeLyricsAction) {
+        m_removeLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
+    }
+
+    // Edit mode goes off here whenever it is no longer to be had: Remove
+    // Lyrics, Show Lyrics, the base class's record() once the take has
+    // started, and closeSession() (by documentRestored()) all come
+    // through here.  None of those is an undo or a redo, which come
+    // through here as well, and during which the drag that this finishes
+    // could not push its command
+    bool lyricsEditable = lyricsEditAllowed();
+    if (!lyricsEditable && m_lyricsEditor && m_lyricsEditor->isEnabled()) {
+        setLyricsEditing(false);
+    }
+    if (m_editLyricsAction) {
+        m_editLyricsAction->setEnabled(lyricsEditable);
+        m_editLyricsAction->setChecked
+            (m_lyricsEditor && m_lyricsEditor->isEnabled());
+    }
+    if (m_shiftLyricsAction) {
+        m_shiftLyricsAction->setEnabled(lyricsEditable);
+    }
+
+    // The audio check records takes of its own, and keeps what it
+    // measures for the devices it started on.  Record is shut after the
+    // base class has opened it: a press would stop the check's take, or
+    // record one of the user's into the check's session
+    bool checking = audioCheckRunning();
+    if (checking) emit canRecord(false);
+    if (m_calibrateAudioAction) {
+        m_calibrateAudioAction->setEnabled(!inTake && !checking);
+    }
+    for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        if (m) m->menuAction()->setEnabled(!checking);
+    }
+    updateLatencyMenuLine();
 
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
@@ -2555,6 +2760,12 @@ MainWindow::updateLayerStatuses()
             (shown && !inTake && m_alternatePitch->canStep(false));
     }
 
+    // Lyrics: shown or hidden once there are some
+    if (m_showLyrics && m_lyrics) {
+        m_showLyrics->setEnabled(m_lyrics->isShown());
+        m_showLyrics->setChecked(m_lyrics->isVisible());
+    }
+
     // Background music toggle: enabled when a background music track is loaded
     if (m_playBackgroundMusic) {
         bool haveBgMusic = (m_backgroundMusicLayer != nullptr);
@@ -2668,6 +2879,16 @@ MainWindow::closeSession()
 {
     if (!checkSaveModified()) return;
 
+    // A check has nothing left to record into; a take of its own that is
+    // running is stopped through the Stop path, as the check's Cancel does.
+    // The runner first: one that is replacing the session for the dev
+    // checks carries on, and the dev checks see it running and carry on
+    // with it, as they do through a reopen of their own
+    if (m_audioCheck) m_audioCheck->sessionClosing();
+#ifdef TONY_DEV_CHECKS
+    if (m_devChecks) m_devChecks->sessionClosing();
+#endif
+
     // Nothing of a take that is still running outlives its session
     stopTakePolling();
 
@@ -2679,6 +2900,10 @@ MainWindow::closeSession()
     teardownBackgroundMusic();
     m_alternatePitch->hide();
     m_coverageStrip->hide();
+    m_lyrics->hide();
+    // The fade goes with the lyrics.  m_analyser stays for the next file,
+    // and would make that one's waveform faded as well
+    updateWaveformFade();
     m_referencePitchHiddenForTake = false;
     m_singingPitchHiddenForTake = false;
     m_singingNotesHiddenForTake = false;
@@ -2686,6 +2911,7 @@ MainWindow::closeSession()
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
     m_singingAudioMutedForTake = false;
+    restorePlaySelectionAfterTake();
     m_analysedMainModelId = {};
 
     // Nothing is left waiting for a merge, and the history that holds the
@@ -3940,6 +4166,17 @@ MainWindow::syncCoverageStrip()
 
     m_coverageStrip->setCoverage(m_takes->getCoverage());
 
+    // The band runs along the bottom of the pane, over the take's
+    // waveform, so it has to be above that layer. The swap makes the
+    // waveform layer again, on top of everything (as does activating a
+    // take), so this is looked at on every call and not only when the
+    // strip is first shown
+    Layer *strip = m_coverageStrip->getLayer();
+    int layers = pane->getLayerCount();
+    if (strip && layers > 0 && pane->getLayer(layers - 1) != strip) {
+        TakeLayers::raise(pane, strip);
+    }
+
     if (!wasShown) {
         // The new layer is on top, where a tool would look for the layer
         // to act on, so the tracks that can be edited go back there, as
@@ -3953,6 +4190,354 @@ MainWindow::syncCoverageStrip()
         m_analyser->stackLayers();
         if (m_analyser2) m_analyser2->stackLayers();
     }
+}
+
+bool
+MainWindow::lyricsImportAllowed() const
+{
+    // The words are put on the reference's timeline, in pane 0.  Not
+    // while a take is being recorded: the singer is reading the words
+    // that are there
+    if (!m_document || !getMainModel()) return false;
+    if (!m_paneStack || m_paneStack->getPaneCount() < 1) return false;
+    if (m_recordTarget && m_recordTarget->isRecording()) return false;
+    return true;
+}
+
+QString
+MainWindow::askForLyricsFile()
+{
+    // Lyrics are for the reference, and likely to be kept next to it
+    QString dir;
+    if (auto reference = getMainModel()) {
+        QFileInfo info(reference->getLocation());
+        if (info.exists()) dir = info.absolutePath();
+    }
+
+    return QFileDialog::getOpenFileName
+        (this, tr("Import Lyrics"), dir,
+         tr("Lyrics (*.ttml *.lrc)") + ";;" + tr("TTML lyrics (*.ttml)") +
+         ";;" + tr("LRC lyrics (*.lrc)") + ";;" + tr("All files (*)"));
+}
+
+void
+MainWindow::importLyrics()
+{
+    if (!lyricsImportAllowed()) return;
+    QString path = askForLyricsFile();
+    if (path.isEmpty()) return;
+    importLyricsFrom(path);
+}
+
+bool
+MainWindow::importLyricsFrom(QString path)
+{
+    if (!lyricsImportAllowed()) return false;
+
+    Pane *pane = m_paneStack->getPane(0);
+    auto reference = getMainModel();
+
+    emit activity(tr("Import lyrics \"%1\"").arg(path));
+
+    // A lyrics file is a few kB.  One chosen by mistake, a recording say,
+    // is not read at all; and the read stops just past the limit, which
+    // the parsers enforce too, in case the file grows in the meantime
+    QString error;
+    QByteArray bytes;
+    QFileInfo info(path);
+    if (!info.isFile()) {
+        error = tr("File \"%1\" could not be found.").arg(path);
+    } else if (info.size() > Lyrics::maxFileBytes) {
+        error = tr("The file is over 1 MB, too big to be a lyrics file.");
+    } else {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            error = tr("File \"%1\" could not be opened: %2")
+                .arg(path).arg(file.errorString());
+        } else {
+            bytes = file.read(Lyrics::maxFileBytes + 1);
+        }
+    }
+
+    LyricsParseResult parsed;
+    if (error == "") {
+        parsed = parseLyrics(bytes);
+        error = parsed.error;
+    }
+
+    // Nothing has changed yet, and nothing does: the lyrics there are
+    // stay
+    if (error != "") {
+        QMessageBox::warning(this, tr("Could not import lyrics"), error);
+        return false;
+    }
+
+    const Lyrics &lyrics = parsed.lyrics;
+    EventVector events = lyricsToEvents(lyrics, reference->getSampleRate());
+
+    // Words after the end of the reference are shown where there is
+    // nothing to hear: the lyrics may be of another recording of the song
+    sv_frame_t end = reference->getEndFrame();
+    int pastEnd = int(std::count_if(events.begin(), events.end(),
+                                    [end](const Event &e) {
+                                        return e.getFrame() >= end;
+                                    }));
+
+    // New words are not what edit mode was switched on for, and the ones
+    // there are go now: a drag of one of them ends first
+    setLyricsEditing(false);
+
+    QString name = (lyrics.title != "" ? lyrics.title : tr("Lyrics"));
+    if (!m_lyrics->show(m_document, pane, events, name)) {
+        // Only if the layer could not be made
+        updateMenuStates();
+        updateLayerStatuses();
+        return false;
+    }
+
+    // The play source takes in the model of every layer that is in a
+    // view, whether the model can be played or not, and the models it
+    // holds are what say where playback ends.  Words past the end of the
+    // reference would hold playback open, with nothing to hear
+    if (m_playSource && !m_lyrics->getModelId().isNone()) {
+        m_playSource->removeModel(m_lyrics->getModelId());
+    }
+
+    // The word at the cursor, without waiting for playback to move it;
+    // and the waveforms fade under the words
+    m_lyrics->setPlaybackFrame(m_viewManager->getPlaybackFrame());
+    updateWaveformFade();
+
+    // The layer arrived without a command, as it must, and an import is
+    // not undoable; but the session has changed
+    documentModified();
+    updateMenuStates();
+    updateLayerStatuses();
+
+    // Kept as the status message, so that the pane's context help, when
+    // it has nothing to say, gives this back rather than clearing it
+    int wordCount = int(lyrics.words.size());
+    int lineCount = lyrics.lineCount();
+    QStringList messages;
+    messages << tr("Imported %1 in %2.")
+        .arg(wordCount == 1 ? tr("1 word") : tr("%1 words").arg(wordCount),
+             lineCount == 1 ? tr("1 line") : tr("%1 lines").arg(lineCount));
+    messages << parsed.warnings;
+    if (pastEnd == 1) {
+        messages << tr("1 word starts after the end of the reference.");
+    } else if (pastEnd > 1) {
+        messages << tr("%1 words start after the end of the reference.")
+            .arg(pastEnd);
+    }
+    m_myStatusMessage = messages.join(" ");
+    getStatusLabel()->setText(m_myStatusMessage);
+
+    return true;
+}
+
+QString
+MainWindow::askForLyricsExportFile(QString suggested)
+{
+    return QFileDialog::getSaveFileName
+        (this, tr("Export Lyrics"), suggested,
+         tr("TTML lyrics (*.ttml)") + ";;" + tr("All files (*)"));
+}
+
+bool
+MainWindow::askForLyricsWordText(QString &text, bool isNew)
+{
+    bool ok = false;
+    QString typed = QInputDialog::getText
+        (this, isNew ? tr("Add Word") : tr("Edit Word Text"),
+         isNew ? tr("Text of the new word:") : tr("Text of the word:"),
+         QLineEdit::Normal, text, &ok);
+    if (!ok) return false;
+    text = typed;
+    return true;
+}
+
+bool
+MainWindow::askForLyricsShift(double &seconds)
+{
+    // Milliseconds are as fine as anyone can hear, and an hour is longer
+    // than any song
+    bool ok = false;
+    double typed = QInputDialog::getDouble
+        (this, tr("Shift Lyrics"),
+         tr("Move all the words by this many seconds\n"
+            "(negative: earlier, positive: later):"),
+         seconds, -3600.0, 3600.0, 3, &ok);
+    if (!ok) return false;
+    seconds = typed;
+    return true;
+}
+
+void
+MainWindow::exportLyrics()
+{
+    if (!m_lyrics || !m_lyrics->isShown()) return;
+
+    // Named after the reference and beside it, as the lyrics to import
+    // were looked for there
+    QString suggested;
+    if (auto reference = getMainModel()) {
+        QFileInfo info(reference->getLocation());
+        if (info.exists()) {
+            suggested = QDir(info.absolutePath())
+                .filePath(info.completeBaseName() + ".ttml");
+        }
+    }
+
+    QString path = askForLyricsExportFile(suggested);
+    if (path.isEmpty()) return;
+    exportLyricsTo(path);
+}
+
+bool
+MainWindow::exportLyricsTo(QString path)
+{
+    if (!m_lyrics || !m_lyrics->isShown()) return false;
+    auto model = ModelById::getAs<RegionModel>(m_lyrics->getModelId());
+    if (!model) return false;
+
+    // The words as the model has them now, not as the file they came
+    // from had them.  The title is not in the model: an import named the
+    // layer after it
+    Lyrics lyrics = lyricsFromEvents(model->getAllEvents(),
+                                     model->getSampleRate());
+    if (RegionLayer *layer = m_lyrics->getLayer()) {
+        QString name = layer->getLayerPresentationName();
+        if (name != tr("Lyrics")) lyrics.title = name;
+    }
+    QByteArray bytes = writeTtml(lyrics);
+
+    // A file that is there already is replaced only once the new one is
+    // written in full
+    QSaveFile file(path);
+    bool written = file.open(QIODevice::WriteOnly) &&
+        file.write(bytes) == bytes.size() &&
+        file.commit();
+    if (!written) {
+        QMessageBox::warning
+            (this, tr("Could not export lyrics"),
+             tr("File \"%1\" could not be written: %2")
+             .arg(path).arg(file.errorString()));
+        return false;
+    }
+
+    emit activity(tr("Export lyrics to \"%1\"").arg(path));
+
+    // Not a change to the session, so nothing is marked modified.  Kept
+    // as the status message, as an import's is
+    int wordCount = int(lyrics.words.size());
+    QSet<int> lines;
+    for (const LyricWord &w : lyrics.words) lines.insert(w.line);
+    int lineCount = int(lines.size());
+    m_myStatusMessage = tr("Exported %1 in %2.")
+        .arg(wordCount == 1 ? tr("1 word") : tr("%1 words").arg(wordCount),
+             lineCount == 1 ? tr("1 line") : tr("%1 lines").arg(lineCount));
+    getStatusLabel()->setText(m_myStatusMessage);
+
+    return true;
+}
+
+void
+MainWindow::removeLyrics()
+{
+    if (!m_lyrics->isShown()) return;
+    m_lyrics->hide();
+    updateWaveformFade();
+    // As for the import: no command, but the session has changed
+    documentModified();
+    updateMenuStates();
+    updateLayerStatuses();
+}
+
+void
+MainWindow::showLyricsToggled()
+{
+    // Straight on the layer, with no command and nothing in the settings:
+    // the pane writes the layer's visibility into the session, which is
+    // where it belongs
+    if (m_lyrics->isShown()) {
+        m_lyrics->setVisible(!m_lyrics->isVisible());
+        documentModified();
+    }
+    updateWaveformFade();
+    updateLayerStatuses();
+
+    // Edit Lyrics goes with the words out of sight
+    updateMenuStates();
+}
+
+bool
+MainWindow::lyricsEditAllowed() const
+{
+    if (!m_lyrics || !m_lyrics->isShown() || !m_lyrics->isVisible()) {
+        return false;
+    }
+    if (m_recordTarget && m_recordTarget->isRecording()) return false;
+    return true;
+}
+
+void
+MainWindow::setLyricsEditing(bool on)
+{
+    if (!m_lyricsEditor) return;
+    m_lyricsEditor->setEnabled(on && lyricsEditAllowed());
+    if (m_editLyricsAction) {
+        m_editLyricsAction->setChecked(m_lyricsEditor->isEnabled());
+    }
+}
+
+void
+MainWindow::editLyricsToggled()
+{
+    if (!m_editLyricsAction) return;
+    setLyricsEditing(m_editLyricsAction->isChecked());
+}
+
+void
+MainWindow::shiftLyrics()
+{
+    if (!m_lyricsEditor || !lyricsEditAllowed()) return;
+    ModelId lyricsModel = m_lyrics->getModelId();
+
+    double seconds = 0.0;
+    if (!askForLyricsShift(seconds)) return;
+
+    // The dialog ran an event loop of its own, in which the lyrics may
+    // have gone, been hidden or replaced, or a take begun: then the
+    // offset typed is not for what is there now
+    if (!lyricsEditAllowed() || m_lyrics->getModelId() != lyricsModel) {
+        return;
+    }
+
+    // One command; a shift of 0, or one the start of the song leaves no
+    // room for, is none
+    double shifted = m_lyricsEditor->shiftLyrics(lyricsModel, seconds);
+    if (shifted == 0.0) return;
+
+    // Kept as the status message, as an import's is.  The amount is the
+    // one the words moved by, which is less than asked if the first word
+    // reached the start
+    QString amount = QString::number(std::abs(shifted), 'f', 3);
+    m_myStatusMessage = (shifted < 0.0 ?
+                         tr("Shifted the lyrics %1 s earlier.").arg(amount) :
+                         tr("Shifted the lyrics %1 s later.").arg(amount));
+    getStatusLabel()->setText(m_myStatusMessage);
+}
+
+void
+MainWindow::updateWaveformFade()
+{
+    // The words are drawn over the bottom of the pane, where the
+    // waveforms are, and have to be read over them.  Not with
+    // Analyser::setVisible() or anything else that writes a setting:
+    // this is the state of the session, which saves the colour
+    bool faded = m_lyrics && m_lyrics->isShown() && m_lyrics->isVisible();
+    if (m_analyser) m_analyser->setWaveformFaded(faded);
+    if (m_analyser2) m_analyser2->setWaveformFaded(faded);
 }
 
 void
@@ -4016,6 +4601,10 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
     if (Layer *audio = m_analyser2->getLayer(Analyser::Audio)) {
         audio->setSavedInSession(false);
     }
+
+    // A new analyser, with a new waveform, under the lyrics as much as
+    // the one it replaces: a take switch and every recording come here
+    updateWaveformFade();
 
     // m_analyser2->newFileLoaded() has now created its own WaveformLayer
     // referencing singingModelId.  This means it is safe to delete the orphan
@@ -4139,6 +4728,29 @@ MainWindow::restoreSingingAudioAfterTake()
         }
     }
     updateLayerStatuses();
+}
+
+void
+MainWindow::liftPlaySelectionForTake()
+{
+    // Playback constrained to the selection starts in the selection, not
+    // at the lead-in of a pre-roll or at a playhead outside it, and stops
+    // or loops at its end while the recording runs on. What was sung would
+    // then not be where the take puts it: the take counts the reference
+    // as playing on from playbackStart() without a break. Through the
+    // view manager, which writes no settings; the button follows it, and
+    // is greyed out meanwhile (updateMenuStates())
+    if (!m_viewManager->getPlaySelectionMode()) return;
+    m_viewManager->setPlaySelectionMode(false);
+    m_playSelectionLiftedForTake = true;
+}
+
+void
+MainWindow::restorePlaySelectionAfterTake()
+{
+    if (!m_playSelectionLiftedForTake) return;
+    m_playSelectionLiftedForTake = false;
+    m_viewManager->setPlaySelectionMode(true);
 }
 
 void
@@ -4277,6 +4889,11 @@ MainWindow::setupRealtimePitchLayer()
     // Its resolution is the YIN hop size: one estimate per hop.
     // Unit "Hz" is required so TimeValueLayer::shouldAutoAlign() defers to
     // the pane's log-frequency coordinate system (same as the pYIN pitch track).
+    //
+    // notifyOnAdd false: a notice for each of the ~170 dots a second
+    // would be a redraw for each. The model then tells nobody of a dot,
+    // though, so m_realtimeDotsNotifier tells the pane of what was added,
+    // 25 times a second
     auto pitchModel = std::make_shared<SparseTimeValueModel>
         (sr, RealtimePitchTracker::kHopSize, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
@@ -4303,8 +4920,14 @@ MainWindow::setupRealtimePitchLayer()
     // Associate our pre-filled SparseTimeValueModel with the layer.
     // The model was already registered via addNonDerivedModel above.
     m_document->setModel(m_realtimePitchLayer, m_realtimePitchModelId);
+    m_realtimeDotsNotifier.setModel(m_realtimePitchModelId);
     m_realtimePitchLayer->setVerticalScale(TimeValueLayer::AutoAlignScale);
     m_realtimePitchLayer->setPlotStyle(TimeValueLayer::PlotPoints);
+
+    // Out of the pane's cache: told of a change to the model of a layer
+    // in it, the pane draws every layer in it again -- the reference's
+    // pitch track, notes and waveform, 25 times a second
+    m_realtimePitchLayer->setCachedInView(false);
 
     // Singing/recording track uses the "Orange" colour so it is visually
     // distinct from the reference track (black) and notes (blue).
@@ -4341,6 +4964,7 @@ void
 MainWindow::teardownRealtimePitchLayer()
 {
     stopRealtimePitchTracker();
+    m_realtimeDotsNotifier.setModel({});
 
     if (m_realtimeLayerTeardownConnection) {
         disconnect(m_realtimeLayerTeardownConnection);
@@ -4505,6 +5129,7 @@ MainWindow::record()
     m_recordingStartGapEstimate = 0;
     m_awaitingReferenceStart = false;
     m_recordingStartGapMeasured = -1;
+    m_takeLatency = TakeLatency();
 
     if (haveReference) {
 
@@ -4518,10 +5143,12 @@ MainWindow::record()
         // Record into Selection: the selection is what is recorded, so it
         // says where the take starts and where it stops, and the playhead
         // only picks which selection that is.  With none selected this is
-        // an ordinary recording from the playhead.
+        // an ordinary recording from the playhead.  The audio check's
+        // takes always record into the selection it makes.
         sv_frame_t end = -1;
-        if (m_recordIntoSelection && m_recordIntoSelection->isChecked() &&
-            m_viewManager) {
+        bool intoSelection = m_audioCheckTakes ||
+            (m_recordIntoSelection && m_recordIntoSelection->isChecked());
+        if (intoSelection && m_viewManager) {
             Coverage::Ranges selected;
             for (const Selection &s : m_viewManager->getSelections()) {
                 if (!s.isEmpty()) {
@@ -4684,6 +5311,36 @@ MainWindow::record()
 }
 
 void
+MainWindow::recordPressed()
+{
+    // The check starts and stops its takes through record() itself, and
+    // a press would stop its take early, or start one of the user's in
+    // the check's session.  The button is shut while it runs; a press
+    // that arrives all the same (queued before it was shut, say) leaves
+    // the button showing what is really happening
+    if (audioCheckRunning()) {
+        cerr << "MainWindow::recordPressed: the audio check is running; "
+             << "Record is ignored" << endl;
+        if (m_recordAction) {
+            m_recordAction->setChecked
+                (m_recordTarget && m_recordTarget->isRecording());
+        }
+        return;
+    }
+    record();
+}
+
+bool
+MainWindow::audioCheckRunning() const
+{
+    if (m_audioCheck && m_audioCheck->isRunning()) return true;
+#ifdef TONY_DEV_CHECKS
+    if (m_devChecks && m_devChecks->isRunning()) return true;
+#endif
+    return false;
+}
+
+void
 MainWindow::startTakePolling()
 {
     // Only a take that is to stop by itself needs watching: nothing else
@@ -4766,6 +5423,11 @@ MainWindow::recordDurationChanged(sv_frame_t frame, sv_samplerate_t rate)
 void
 MainWindow::playbackFrameChanged(sv_frame_t frame)
 {
+    // The word being sung, before the countdown can return: the reference
+    // plays during a lead-in, and the words go with it.  This comes while
+    // playing, while recording, and for a seek with playback stopped
+    if (m_lyrics) m_lyrics->setPlaybackFrame(frame);
+
     if (showTakeCountdown()) return;
     MainWindowBase::playbackFrameChanged(frame);
 }
@@ -4812,9 +5474,11 @@ MainWindow::recordingStarted()
         // hears the reference from there.  The audio IO was already
         // resumed by record() so m_playSource can be started directly
         // without calling MainWindowBase::play() (which would stop
-        // recording if isRecording() is true).
-        if (m_recordingAsSingingTrack &&
-            m_playRefWhileRecording && m_playRefWhileRecording->isChecked() &&
+        // recording if isRecording() is true).  The audio check's takes
+        // always play it: they measure where it arrives.
+        bool playReference = m_audioCheckTakes ||
+            (m_playRefWhileRecording && m_playRefWhileRecording->isChecked());
+        if (m_recordingAsSingingTrack && playReference &&
             m_playSource && !m_playSource->isPlaying()) {
             cerr << "MainWindow::recordingStarted: starting reference playback" << endl;
 
@@ -4825,7 +5489,9 @@ MainWindow::recordingStarted()
             // The singer's response to the reference where playback starts
             // arrives in the recording at approximately frame
             // (outputLatency + inputLatency), so that is the frame the splice
-            // reads the recording from.
+            // reads the recording from.  Drivers often report those two
+            // wrong; a round trip the audio check measured on this device
+            // is used instead, while there is one (roundTripAt()).
             // With a pre-roll, playback starts at the beginning of the
             // lead-in rather than at the take's position, and the splice
             // skips the lead-in as well (TakeTiming::spliceOffset()).
@@ -4850,10 +5516,64 @@ MainWindow::recordingStarted()
             // figure, and refineRecordingLatency() picks it up.
             m_recordingStartGapEstimate =
                 m_recordTarget ? m_recordTarget->getFramesReceived() : 0;
-            m_recordingLatencyFrames =
-                computeRecordingLatency(outputLatency, inputLatency) +
-                m_recordingStartGapEstimate;
-            cerr << "MainWindow::recordingStarted: output latency=" << outputLatency
+
+            // The round trip is taken off the front of the recording, so it
+            // is counted in frames of the recording, at the device's rate.
+            // The reported latencies are not both counted so: the play
+            // source usually has the output latency in frames of the
+            // session.  They differ when the device is not at 44.1 kHz, so
+            // the round trip goes through seconds
+            sv_samplerate_t recordingRate = 0;
+            if (auto wfm = ModelById::getAs<WritableWaveFileModel>
+                (m_currentRecordingModelId)) {
+                recordingRate = wfm->getSampleRate();
+            }
+            if (recordingRate <= 0) {
+                recordingRate = sessionRate();
+                cerr << "MainWindow::recordingStarted: the recording's rate "
+                     << "is not known; taking the session's, "
+                     << recordingRate << " Hz" << endl;
+            }
+            m_lastRecordingRate = recordingRate;
+
+            LatencyCalibration::InUse inUse = roundTripAt(recordingRate);
+
+            // A check that brings a round trip of its own places its takes
+            // with that, for the run only (the dev checks, with the figure
+            // the calibration before them measured): nothing is stored,
+            // and latencyInUse() goes on describing roundTripAt()'s.  The
+            // reported pair stays the device's
+            const bool checkOwn =
+                m_audioCheckTakes && m_audioCheckRoundTrip >= 0.0;
+            if (checkOwn) inUse.roundTrip = m_audioCheckRoundTrip;
+
+            sv_frame_t roundTrip =
+                LatencyCalibration::toFrames(inUse.roundTrip, recordingRate);
+            m_recordingLatencyFrames = roundTrip + m_recordingStartGapEstimate;
+
+            m_takeLatency.roundTrip = roundTrip;
+            m_takeLatency.reportedOutput = inUse.reportedOutput;
+            m_takeLatency.reportedInput = inUse.reportedInput;
+            m_takeLatency.measured = checkOwn ||
+                (inUse.source == LatencyCalibration::Source::Measured);
+            m_takeLatency.startGap = m_recordingStartGapEstimate;
+            m_takeLatency.startGapMeasured = false;
+            cerr << "MainWindow::recordingStarted: round trip " << roundTrip
+                 << " frames at " << recordingRate << " Hz ("
+                 << inUse.roundTrip * 1000.0 << " ms), ";
+            if (checkOwn) {
+                cerr << "the audio check's own, for its run only";
+            } else {
+                cerr << LatencyCalibration::sourceName(inUse.source);
+                if (inUse.source == LatencyCalibration::Source::Measured) {
+                    cerr << " on "
+                         << inUse.date.toString(Qt::ISODate).toStdString();
+                } else if (inUse.stale) {
+                    cerr << ": the measured one is stale, the device reports "
+                         << "other latencies now";
+                }
+            }
+            cerr << "; output latency=" << outputLatency
                  << " input latency=" << inputLatency
                  << " estimated start gap=" << m_recordingStartGapEstimate
                  << " total compensation=" << m_recordingLatencyFrames << " frames" << endl;
@@ -4864,6 +5584,7 @@ MainWindow::recordingStarted()
                  double(timing.recordRate) / double(timing.rate) : 1.0);
             m_awaitingReferenceStart = true;
 
+            liftPlaySelectionForTake();
             m_viewManager->setPlaybackFrame(playbackStart);
             m_playSource->play(playbackStart);
         }
@@ -4877,7 +5598,16 @@ void
 MainWindow::refineRecordingLatency()
 {
     sv_frame_t measured = m_recordingStartGapMeasured;
-    if (measured < 0 || measured == m_recordingStartGapEstimate) return;
+    if (measured < 0) return;
+
+    // Measured, whether or not the estimate was right: the audio check
+    // reports for each take which of the two it was placed with.  Kept
+    // here, on the GUI thread, and not by the audio callback that
+    // measures it
+    m_takeLatency.startGap = measured;
+    m_takeLatency.startGapMeasured = true;
+
+    if (measured == m_recordingStartGapEstimate) return;
     cerr << "MainWindow::refineRecordingLatency: start gap was " << measured
          << " frames, not the estimated " << m_recordingStartGapEstimate << endl;
     m_recordingLatencyFrames = currentRecordingLatency();
@@ -4894,6 +5624,122 @@ MainWindow::currentRecordingLatency() const
     sv_frame_t measured = m_recordingStartGapMeasured;
     if (measured < 0) return m_recordingLatencyFrames;
     return m_recordingLatencyFrames + (measured - m_recordingStartGapEstimate);
+}
+
+sv_samplerate_t
+MainWindow::sessionRate() const
+{
+    sv_samplerate_t rate = m_playSource ? m_playSource->getSourceSampleRate() : 0;
+    if (rate <= 0) rate = Preferences::getInstance()->getFixedSampleRate();
+    return rate;
+}
+
+LatencyCalibration::InUse
+MainWindow::roundTripAt(sv_samplerate_t recordingRate) const
+{
+    // The play source counts its output latency in frames at the rate it
+    // was told the device runs at, as its own getCurrentPlayingFrame()
+    // does.  bqaudioio's ResamplerWrapper tells it the session's rate and
+    // converts the device's figure to it, when the session had a rate by
+    // the time the device was opened.  If it had none yet (a device chosen
+    // before any file was opened), the wrapper passed the figure on as the
+    // device counts it and told the play source 0: the recording's frames
+    sv_samplerate_t outputRate =
+        m_playSource ? m_playSource->getDeviceSampleRate() : 0;
+    if (outputRate <= 0) outputRate = recordingRate;
+
+    double output = m_playSource ?
+        LatencyCalibration::reportedSeconds
+        (m_playSource->getTargetPlayLatency(), outputRate) : 0.0;
+    double input = m_recordTarget ?
+        LatencyCalibration::reportedSeconds
+        (m_recordTarget->getSystemRecordLatency(), recordingRate) : 0.0;
+
+    QSettings settings;
+    LatencyCalibration::Figure figure;
+    bool stored = LatencyCalibration::load
+        (settings, LatencyCalibration::currentKey(settings, recordingRate),
+         figure);
+    return LatencyCalibration::roundTripInUse
+        (stored ? &figure : nullptr, output, input);
+}
+
+sv_samplerate_t
+MainWindow::expectedRecordingRate() const
+{
+    return m_lastRecordingRate > 0 ? m_lastRecordingRate : sessionRate();
+}
+
+LatencyCalibration::InUse
+MainWindow::latencyInUse() const
+{
+    return roundTripAt(expectedRecordingRate());
+}
+
+bool
+MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
+{
+    if (!result.calibrationUsable()) return false;
+
+    LatencyCalibration::Figure figure;
+    figure.roundTrip = result.calibratedRoundTrip;
+    figure.spread = result.summary.spread;
+    figure.date = QDateTime::currentDateTimeUtc();
+    figure.reportedOutput = result.reportedOutputLatency;
+    figure.reportedInput = result.reportedInputLatency;
+
+    // Under the devices the check ran on, which the Preferences may no
+    // longer name: the result can be on show long after the run
+    LatencyCalibration::Key key = result.key;
+    key.rate = result.recordingRate;
+
+    QSettings settings;
+    LatencyCalibration::store(settings, key, figure);
+    cerr << "MainWindow::storeMeasuredLatency: round trip "
+         << figure.roundTrip * 1000.0 << " ms at " << key.rate
+         << " Hz, the device reporting " << figure.reportedOutput * 1000.0
+         << " ms out and " << figure.reportedInput * 1000.0 << " ms in"
+         << endl;
+    updateLatencyMenuLine();
+    return true;
+}
+
+void
+MainWindow::forgetMeasuredLatency()
+{
+    QSettings settings;
+    LatencyCalibration::forget
+        (settings, LatencyCalibration::currentKey(settings,
+                                                  expectedRecordingRate()));
+    cerr << "MainWindow::forgetMeasuredLatency: at "
+         << expectedRecordingRate() << " Hz" << endl;
+    updateLatencyMenuLine();
+}
+
+void
+MainWindow::updateLatencyMenuLine()
+{
+    if (!m_latencyLineAction || !m_forgetLatencyAction) return;
+    LatencyCalibration::InUse inUse = latencyInUse();
+    m_latencyLineAction->setText
+        (tr("Latency: %1").arg(CalibrateAudioDialog::describeLatency(inUse)));
+
+    // A stale figure is kept too (it applies again if the device goes
+    // back to its old buffers), and can be forgotten like any other
+    m_forgetLatencyAction->setEnabled
+        (inUse.source == LatencyCalibration::Source::Measured || inUse.stale);
+}
+
+void
+MainWindow::calibrateAudio()
+{
+    if (!m_calibrateAudioDialog) {
+        m_calibrateAudioDialog = new CalibrateAudioDialog(this, m_audioCheck);
+#ifdef TONY_DEV_CHECKS
+        m_calibrateAudioDialog->setDevChecks(m_devChecks);
+#endif
+    }
+    m_calibrateAudioDialog->present();
 }
 
 TakeTiming
@@ -4918,12 +5764,17 @@ MainWindow::currentTakeTiming() const
 sv_frame_t
 MainWindow::wantedPreRollFrames() const
 {
-    if (!m_preRoll || !m_preRoll->isChecked()) return 0;
-
-    QSettings settings;
-    settings.beginGroup("MainWindow");
-    double seconds = settings.value("prerollseconds", 3.0).toDouble();
-    settings.endGroup();
+    double seconds = 0.0;
+    if (m_audioCheckTakes) {
+        // The audio check's takes have a lead-in of their own
+        seconds = AudioCheckRunner::kPreRollSeconds;
+    } else {
+        if (!m_preRoll || !m_preRoll->isChecked()) return 0;
+        QSettings settings;
+        settings.beginGroup("MainWindow");
+        seconds = settings.value("prerollseconds", 3.0).toDouble();
+        settings.endGroup();
+    }
     if (seconds <= 0.0) return 0;
 
     auto model = getMainModel();
@@ -4967,6 +5818,8 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
 
     if (m) {
         m->add(Event(dotFrame, float(hz), tr("")));
+        m_realtimeDotsNotifier.changed
+            (dotFrame, dotFrame + RealtimePitchTracker::kHopSize);
     }
 
     // Convert Hz to MIDI note number and cents deviation.
@@ -5040,6 +5893,7 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
         if (m_audioIO) m_audioIO->suspend();
         else if (m_playTarget) m_playTarget->suspend();
     }
+    restorePlaySelectionAfterTake();
 
     updateLayerStatuses();
     updateMenuStates();
@@ -5070,6 +5924,7 @@ MainWindow::finishSingingTake()
         (m_currentRecordingModelId)) {
         recordingPath = wfm->getLocation();
         recorded = wfm->getFrameCount();
+        m_takeLatency.recordingRate = wfm->getSampleRate();
     }
 
     // The take is over: the tracker goes first, so that the recording's
@@ -6795,14 +7650,20 @@ MainWindow::commitData(bool mayAskUser)
             if (!QFileInfo(svDir).isDir()) return false;
         }
         
-        // This name doesn't have to be unguessable
+        // This name doesn't have to be unguessable. Its extension is the
+        // one this application opens as a session -- .ton, not Sonic
+        // Visualiser's .sv, which Tony would try to open as audio
+        QString extension = InteractiveFileFinder::getInstance()
+            ->getApplicationSessionExtension();
 #ifndef _WIN32
-        QString fname = QString("tmp-%1-%2.sv")
+        QString fname = QString("tmp-%1-%2.%3")
             .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"))
-            .arg(QProcess().processId());
+            .arg(QProcess().processId())
+            .arg(extension);
 #else
-        QString fname = QString("tmp-%1.sv")
-            .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"));
+        QString fname = QString("tmp-%1.%2")
+            .arg(QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz"))
+            .arg(extension);
 #endif
         QString fpath = QDir(svDir).filePath(fname);
         if (saveSessionFile(fpath)) {
@@ -7490,11 +8351,7 @@ MainWindow::octaveShift(bool up)
 void
 MainWindow::togglePitchCandidates()
 {
-    CommandHistory::getInstance()->startCompoundOperation(tr("Toggle Pitch Candidates"), true);
-
     m_analyser->showPitchCandidates(!m_analyser->arePitchCandidatesShown());
-
-    CommandHistory::getInstance()->endCompoundOperation();
 
     updateMenuStates();
 }
@@ -8174,6 +9031,28 @@ MainWindow::analyseNewMainModel()
              << m_alternatePitch->getOctaves() << " octave(s)" << endl;
         syncAlternatePitchTrack();
     }
+
+    // Lyrics saved with the session are there too.  The load put their
+    // model into the play source when it added the layer to the view, as
+    // it does for every layer, and words past the end of the reference
+    // would hold playback open: out again, as after an import
+    if (pane && m_lyrics->adopt(m_document, pane)) {
+        cerr << "analyseNewMainModel: found the lyrics of the session" << endl;
+        if (m_playSource && !m_lyrics->getModelId().isNone()) {
+            m_playSource->removeModel(m_lyrics->getModelId());
+        }
+        // The word at the cursor, without waiting for playback to move it
+        m_lyrics->setPlaybackFrame(m_viewManager->getPlaybackFrame());
+        // Remove Lyrics; Show Lyrics is set by updateLayerStatuses() below
+        updateMenuStates();
+    }
+
+    // Whether there were lyrics or not.  The waveform's colour is saved
+    // with its layer, and the analyser, which took the layer over before
+    // the lyrics were looked for, gave it the fade it knew of then:
+    // faded if lyrics were found on show, and otherwise grey, even in a
+    // session saved faded whose lyrics have gone since
+    updateWaveformFade();
 
     if (!m_withSpectrogram) {
         m_analyser->setVisible(Analyser::Spectrogram, false);

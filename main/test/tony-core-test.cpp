@@ -27,6 +27,14 @@
 #include "TestTakesFile.h"
 #include "TestTakeTiming.h"
 #include "TestVerticalZoom.h"
+#include "TestLyrics.h"
+#include "TestLyricsTtml.h"
+#include "TestLyricsEdit.h"
+#include "TestLatencyCheck.h"
+#include "TestLatencyCalibration.h"
+#include "TestTakeDiff.h"
+#include "TestModelChangeThrottle.h"
+#include "TestRunSuite.h"
 
 #include "RunSuite.h"
 
@@ -143,6 +151,54 @@ int main(int argc, char *argv[])
 
     {
         TestVerticalZoom t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyrics t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsTtml t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsEdit t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLatencyCheck t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLatencyCalibration t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeDiff t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestModelChangeThrottle t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestRunSuite t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

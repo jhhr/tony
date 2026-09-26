@@ -55,6 +55,11 @@ public:
         // Frames of silence before the input
         int inputDelay = 0;
 
+        // The one channel the input arrives on, the others silent, as a
+        // microphone on input 2 of an interface is channel 1; -1 for
+        // every channel
+        int inputChannel = -1;
+
         // Start the input clock at the first audible output sample
         // instead of at resume. With inputDelay equal to the reported
         // round trip, this is a singer who is exactly on time.
@@ -229,7 +234,13 @@ private:
         bool kept = !m_config.inputIsKept || m_config.inputIsKept();
         long keptBefore = m_sinceResume;
 
+        std::vector<float> silence(n, 0.f);
         std::vector<const float *> inPtrs(ch, in.data());
+        if (m_config.inputChannel >= 0) {
+            for (int c = 0; c < ch; ++c) {
+                if (c != m_config.inputChannel) inPtrs[c] = silence.data();
+            }
+        }
         m_target->putSamples(inPtrs.data(), ch, n);
         if (kept) m_sinceResume += n;
 
