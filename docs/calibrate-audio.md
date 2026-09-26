@@ -290,13 +290,15 @@ marked "Done" when it is committed.
    - **B2** Storing the measured round trip and using it in takes (`LatencyCalibration`,
      `recordingStarted()`, staleness). This was step 3 below; it moved up because the
      dialog needs it.
-   - **B3** The Calibrate Audio dialog and menu entry.
+   - **B3** The check's playback: the reference centred at −12 dBFS, the sonification
+     silent, and a progress signal.
+   - **B4** The Calibrate Audio dialog and menu entry.
 
    **Then you run it on your PC.** Its numbers settle three things: how wrong the
    driver's figure is, whether the offset holds across stream restarts on MME, and
    whether your device's rate hits the takes. Work goes on meanwhile: only the
    thresholds and the restart-jitter remedy wait on those numbers.
-3. **Calibration in use:** built in B2 (Use this latency and Forget in B3).
+3. **Calibration in use:** built in B2 (Use this latency and Forget in B4).
 4. **Dev-check framework:**
    - **C0** `TakeDiff`, pure.
    - **C1** Build flag, `DevChecks`, `TakeObserver`, report, friend access. First

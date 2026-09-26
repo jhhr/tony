@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
@@ -275,11 +275,114 @@ reuse". In `MainWindow.cpp`, read by range: `record()`, the deferred lambda in
 
 ### B2 — Measured round trip in use (spec §5 `LatencyCalibration`, "MainWindow")
 
-To be refined by the lead after B1.
+Read also: `docs/recording.md` "Latency"; `main/LatencyUtils.h` whole; in
+`MainWindow.cpp`, the deferred lambda in `recordingStarted()` (search
+`m_takeLatency.roundTrip`) and `refineRecordingLatency()`; `AudioCheckRunner.h`
+(`AudioCheckResult`, `calibrationUsable()`).
 
-### B3 — Calibrate Audio dialog and menu (spec §2)
+- **New `main/LatencyCalibration.{h,cpp}`** in `tony_core`:
+  - **Key.** The three Preferences values `createAudioIO()` reads (`audio-target`,
+    then `audio-playback-device` and `audio-record-device`, each suffixed with the
+    implementation when one is pinned; see `audioDeviceSettingKey()` in
+    `MainWindow.cpp`) and the recording's rate. Device names can hold `/` and non-ASCII
+    characters: encode them, so that QSettings does not make subgroups.
+  - **Stored:** round trip and spread in seconds, the date, and the reported output
+    and input latency, each **in seconds**. The reported pair is the staleness
+    fingerprint: a stored figure is stale when either differs by more than a named
+    tolerance.
+  - `store`, `load`, `forget`, and a staleness test. QSettings group
+    `LatencyCalibration`.
+- **Use in `recordingStarted()`.** The round trip is the stored one when there is one
+  for this key and it is not stale; otherwise the reported sum. Either way it is
+  **converted to frames at the recording's rate**, from seconds.
+  - Fix the reported sum's units while you are there. `getTargetPlayLatency()` counts
+    frames at the session's rate (`ResamplerWrapper` converts it), and
+    `getSystemRecordLatency()` at the device's. Today the two are added as they come;
+    B1 measured 242 ms instead of 256 at 48 kHz.
+  - The recording's model (`m_currentRecordingModelId`) exists by the time the lambda
+    runs, and gives the rate.
+  - Keep in `m_takeLatency` which source was used (reported or measured), and log it.
+  - The start gap and everything downstream stay as they are.
+- **MainWindow API for B4.** Store a check's result, forget the stored figure, and
+  describe the figure in use (source, milliseconds, date).
+- **Not in this phase:** any dialog, menu entry or playback change.
+- **Tests:**
+  - **Core.** Store, load and forget round trip, with a device name holding `/` and
+    `ä`; the staleness tolerance on both sides; different keys stay apart. Use a
+    QSettings scope the tests own and clear.
+  - **App.**
+    - `latency_end_to_end`'s recipe with wrong reported latencies and a stored figure
+      equal to `inputDelay`: the sung step lands on the reference's. **The same test
+      without the stored figure must fail**; show it.
+    - A stale stored figure (fingerprint differs): the reported sum is used.
+    - 48 kHz fake: the reported sum, in recording frames, equals
+      `playbackLatency + recordLatency`, both device frames, to within a frame or two.
+    - Check, store, check again (short plan): the second check's median offset is
+      within a few frames of 0. This is the strongest test in the feature, and it
+      takes about 25 s.
 
-To be refined by the lead after B2.
+### B3 — The check's playback, and progress (spec §2, §8 "Loudness")
+
+Read also: `docs/architecture.md` on play parameters and on `Analyser::setAudible()`
+(search "audible"); in `Analyser.cpp`, where the reference's pan and the
+sonification's audibility are set (search `setPlayPan`, `PlayParameters`).
+
+- For the check's session only, the reference plays **centred** and at **−12 dBFS
+  peak** after normalisation: the model is normalised to full scale when it is read, so
+  the gain has to come off at playback. The pitch-track sonification is **silent**.
+  - Do it through the play parameters of the check session's models and layers, never
+    `Analyser::setAudible()`, which writes the shared settings (see `AGENTS.md`).
+  - Make sure nothing puts them back later in the run, for example the analysis
+    finishing, or the next take.
+  - Nothing of the user's own sessions changes.
+- **A progress signal** on the runner: step, punch-in *k* of *n*, and the seconds left
+  where known, for B4's dialog.
+- **Tests:**
+  - During a check the reference's play parameters are centred at the planned gain,
+    and the sonification is not audible.
+  - Afterwards, a newly opened ordinary file plays as before: reference pan and
+    sonification as the settings say.
+  - The sweeps reach `FakeAudioIO`'s captured output at about −12 dBFS on the mixed
+    channel.
+  - Progress reports each punch-in in order.
+
+### B4 — Calibrate Audio dialog and menu (spec §2)
+
+Read also: how an existing Tony dialog is built and tested (search
+`confirmRecordingOverTake` and `askForTakeName` in `MainWindow.cpp` and
+`TestRecordWorkflow.h`).
+
+- **`main/CalibrateAudioDialog.{h,cpp}`**, non-modal and thin. Its pages:
+  1. **Instructions:** the output and input device names, the latency in use with its
+     source, "hold one earcup against the mic, off your ears", moderate volume.
+  2. **Progress,** from B3's signal, with Cancel.
+  3. **Result:**
+     - the verdict in plain words, with the fix for each failure (spec §2 and §8);
+     - the measured round trip against the driver's figure;
+     - the spread;
+     - both rates, with a plain sentence when they differ;
+     - the input peak;
+     - the echo, if one was heard.
+
+     **Use this latency** (only when `calibrationUsable()`), **Check Again** and
+     **Close**.
+- **Menu, Playback:**
+  - **Calibrate Audio…**, disabled while recording;
+  - a disabled line saying the latency in use ("Latency: measured 187 ms, 25 Sep" or
+    "Latency: driver's figure, 400 ms");
+  - **Forget Measured Latency**.
+- The calibration plan is 4 punch-ins × 3 events on the calibration layout; it fits
+  since the lead's spacing change.
+- Anything that asks the user goes through a virtual seam, as
+  `confirmRecordingOverTake()` does. The app tests drive the dialog's slots directly;
+  the dialog watchdog fails a test on any unexpected modal dialog.
+- **Tests:**
+  - the menu starts a check;
+  - Use this latency stores (B2's API), and the menu line changes;
+  - Forget clears it;
+  - the dialog's result words for NoSignal and for a rate mismatch;
+  - Calibrate Audio is disabled during an ordinary take.
+- **After B4 the user runs it on Windows** (the checkpoint in spec §7).
 
 ### C0 — TakeDiff (spec §5 "tony_core")
 
@@ -373,3 +476,8 @@ The next phase must know:
 - 48 kHz fake: Scattered, 3 of 3 found, offsets −200 ms median, as A2 foresaw.
 - No progress signal yet; B3's dialog may want one (`m_punchIn`).
 Left open: no test deletes the window mid-check. Seen while proving the session-close hook: closing a session during an **ordinary** take, then pressing Stop, hangs (pre-existing).
+
+### Lead — 2026-09-26, after B1
+- Reordered the calibration spacings to `{21,16,25,19,17,23,26,20,24,18,22}` (B1's suggestion) so that 4 × 3 punch-ins fit; `punch_ins_hold_the_events_asked_for` now asks for 4 × 3 and failed on the old order. `judge_only_events_inside_a_punch_in` names its events from the layout instead of 9.1 and 11.4 s.
+- Split B3 into B3 (the check's playback and progress) and B4 (dialog and menu), after B1 needed 370k tokens.
+- Calibration sweeps now at 1.0, 3.1, 4.7, 7.2, 9.1, 10.8, 13.1, 15.7, 17.7, 20.1, 21.9, 24.1 s.
