@@ -1,31 +1,34 @@
 # Testing
 
 QtTest suites in `main/test/`, in two executables that mirror the two libraries
-(see [architecture.md](architecture.md)), plus one for the development checks and one for
-the real device. The commands are in [AGENTS.md](../AGENTS.md).
+(see [architecture.md](architecture.md)), plus one for the development checks. The
+commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
 | `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 9 minutes in one process, a minute and a half in eight (measured 2026-09-26 on Linux), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
-| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about a minute and growing: each test records several takes in real time |
-| `test-tony-device` | as `test-tony-app`, but with the **real** audio device | `TestRealDevice` | about a minute; run by hand only, see the [manual checklist](manual-checklist.md) |
+| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 4 minutes in one process, a little over one in eight (2026-09-26, Linux): each test records a dev run's takes, or part of them, in real time |
 
-`meson test` / `build.bat test` runs the first three plus four svcore suites. `test-tony-device`
-is built with them and never run by `meson test`: it needs a microphone that hears the
-speakers. `test-tony-dev` is apart from `test-tony-app` so that the everyday runs stay
-shorter: run it when a change touches what the development checks drive (see
+`meson test` / `build.bat test` runs these three (`test-tony-dev` where it is built) plus
+four svcore suites. No suite uses the
+real audio device: that is checked in the app itself, by Calibrate Audio with the
+development checks (section 1 of the [manual checklist](manual-checklist.md)).
+`test-tony-dev` is apart from `test-tony-app` so that the everyday runs stay shorter: run
+it when a change touches what the development checks drive (see
 [AGENTS.md](../AGENTS.md)).
 
-- The `tony-app` meson test has `timeout: 900`; the suite took about 277 s unloaded when
-  that was set. Every workflow test adds real time, so if the suite comes near it, raise it
-  in `meson.build`: `meson test` reports a timeout even when every test passes. Running the
-  executable by hand has no timeout.
-- `main()` of the app suite replaces `VAMP_PATH` with the executable's directory, so an
-  installed pYIN is never the one tested; the meson test `depends:` on `pyin_plugin`
-  because nothing else builds `pyin.dll`. Build `pyin.dll` too when running by hand after
-  a clean.
-- Both mains set the organisation/application names to `tony-tests` / `test-tony-*` and
+- The `tony-app` and `tony-dev` meson tests have `timeout: 900`; the app suite took about
+  277 s unloaded when that was set, and about 550 s on Linux on 2026-09-26. Every workflow
+  test adds real time, so if a suite comes near it, raise it in `meson.build`: `meson test`
+  reports a timeout even when every test passes. Running the executable by hand has no
+  timeout.
+- `main()` of the app and dev suites replaces `VAMP_PATH` with the executable's directory,
+  so an installed pYIN is never the one tested; their meson tests `depends:` on
+  `pyin_plugin` because nothing else builds `pyin.dll`. Build `pyin.dll` (`pyin.so` on
+  Linux) too when running by hand after a clean: without it every test that waits for an
+  analysis hangs until QtTest's five-minute watchdog aborts the run.
+- The mains set the organisation/application names to `tony-tests` / `test-tony-*` and
   every suite works in a `QTemporaryDir`, so the user's QSettings and record directory
   are never touched.
 - `Tony.exe` links both libraries with `link_whole:`. A new source file that is in neither
@@ -35,7 +38,9 @@ shorter: run it when a change touches what the development checks drive (see
 
 Suites are header-only classes (`TestX.h`). A new suite needs: the header, an `#include`
 and a `runSuite()` block in `tony-core-test.cpp` or `tony-app-test.cpp`, and the header in
-the matching `*_test_moc_files` list in `meson.build`. A new test function in an existing
+the matching `*_test_moc_files` list in `meson.build`. `tony-dev-test.cpp` runs
+`TestDevChecks` alone, and its moc list is inside meson's `if dev_checks` with the
+`TONY_DEV_CHECKS` define for moc. A new test function in an existing
 suite needs nothing but itself (a private slot). **Every private slot runs as a test**, so
 helpers must not be slots; connect to lambdas instead. For access to private statics use
 `friend class TestX;`, as `RealtimePitchTracker.h` does.
@@ -52,7 +57,8 @@ Windows path would start an escape in the C string.
 - Test function names on the command line are passed to **every** suite in the
   executable. The ones that do not have the function report it as unknown and fail, so
   the exit status of a run with names is always 1. Only a run with no names has a
-  meaningful exit status.
+  meaningful exit status; `test-tony-dev` has one suite, so there a run with names has one
+  too.
 - `QT_QPA_PLATFORM=offscreen` is set by `main()` when not given.
 - **Shards.** With `TONY_TEST_SHARD=i/n` each suite runs only every n-th of its test
   functions, from the i-th, in declaration order, and a suite with none in the shard does
@@ -66,21 +72,27 @@ Windows path would start an escape in the C string.
   for Linux. Do not combine shards with test names on the command line.
 - A sharded run is a whole run of the suites, but the tests that share a process are other
   ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
-  run the one-process run as well.
+  run the one-process run as well. It also loads the machine more: built against Ubuntu's
+  Qt 6.4, `TestUiChecks`' `live_dots_under_the_cursor` failed in both of two runs in eight
+  processes (the tracker itself 313 and 325 ms behind the cursor, over the test's 300 ms)
+  and passed with `-j 4`. Judge a failure of it there by running it alone.
 - **On Linux some tests fail whatever the change.** With the Qt of the cloud setup,
   conda-forge's 6.11 ([building.md](building.md#building-on-linux)), only
   `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and
   `in_folder`, which test Windows paths (`C:\...`, case-insensitive). Built against
-  Ubuntu's Qt 6.4 instead, these fail too:
-  `TestRecordWorkflow`'s `take_analysis_covers_the_range_it_lost`,
-  `range_analysis_torn_down_while_running`, `save_during_ranged_analysis`,
-  `undo_during_analysis_then_redo` and `analyse_now_reanalyses_the_take`, and
-  `TestUiChecks`' `menus_follow_the_take_by_themselves` and
-  `stop_then_close_the_window_at_once` (the latter nearly every time), where the analysis
-  finishes before the race they need can be set up. Which of those seven fail changes from
-  run to run, and so can where: `undo_during_analysis_then_redo` fails
-  either before the undo, with no ranged analysis left running, or after the redo, with
-  `analysedRangeStart()` already 0 — the same race.
+  Ubuntu's Qt 6.4 instead, `TestRecordWorkflow`'s `undo_during_analysis_then_redo` and
+  `analyse_now_reanalyses_the_take` failed now and then, where the analysis finished
+  before the race they need could be set up: before the undo, with no ranged analysis
+  left running, or after the redo, with `analysedRangeStart()` already 0. Since
+  `analyseRange()` looks at completion from the event loop ("Timing and races") that
+  should not happen, but they have not been run on Qt 6.4 since.
+- **Qt 6.4's watchdog times the whole suite**, not one test function: with
+  `QTEST_FUNCTION_TIMEOUT=20000` it ended `TestRecordWorkflow` 20 s after the suite began,
+  2.5 s into a test. That suite runs for longer than the five-minute default, so
+  `runSuite()` raises the limit to 30 minutes when built against a Qt older than 6.5.
+  After such a fatal error the executable does not exit: it spins, or waits for the gdb
+  that Qt starts for a backtrace. A run that has written nothing for minutes has
+  stopped; kill it.
 
 ## Design principles
 
@@ -88,7 +100,8 @@ Windows path would start an escape in the C string.
   (`LatencyUtils.h`, `TakeTiming` — core suite) and, separately, as "the application applies
   the number it was given" (app suite, with `FakeAudioIO` reporting latencies chosen by the
   test and delaying its input by exactly that much). The real figure of a real device is
-  for the [manual checklist](manual-checklist.md).
+  measured in the app, by Calibrate Audio ([manual checklist](manual-checklist.md),
+  section 1).
 - **Pure logic goes in `tony_core`** so that it can have many cheap tests. The app suite is
   for order-of-events and ownership: what is in the document, the pane, the play source
   and the undo history after a workflow.
@@ -108,13 +121,20 @@ Windows path would start an escape in the C string.
   callback in real time, input first and then output, as PortAudio and JACK do. `Config`
   sets rate, block size, reported latencies, a programmed mono input, its delay, and
   whether the input clock starts at the first audible output sample ("a singer exactly on
-  time"), `loopback` (the output fed back into the input, as speakers into a microphone),
-  and `inputChannel` (the input on one channel only, as a microphone on input 2). It
-  captures the output, so tests can assert what reached the speakers.
-- `TestMainWindow` (`TestMainWindow.h`, shared by the three suites that drive a window):
-  subclass of `MainWindow` that exposes protected operations as `doRecord()`,
-  `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on, installs the fake device
-  through `createAudioIO()` (or the real one, `setUseRealDevice()`), and **answers dialogs
+  time"), `loopback` (the output, the mean of its channels, fed back into the input
+  `inputDelay` frames late, as speakers into a microphone), `echoDelay` / `echoGain` (a
+  second arrival of the loopback, as an input played back out and heard again),
+  `inputChannel` (the input on one channel only, as a microphone on input 2),
+  `reportLevels` (the peaks of each block, as `PortAudioIO` reports them for the meters)
+  and `neverCallsBack` (a device that opens and then delivers nothing). It captures the
+  output, so tests can assert what reached the speakers.
+- `TestMainWindow` (`TestMainWindow.h`, shared by the four suites that drive a window:
+  `TestRecordWorkflow`, `TestUiChecks` and `TestAudioCheck` in `test-tony-app`,
+  `TestDevChecks` in `test-tony-dev`): subclass of `MainWindow` that exposes protected
+  operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
+  and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
+  Playback menu's actions). It installs the fake device through `createAudioIO()`, or no
+  device at all when made with `installDevice` false, and **answers dialogs
   through virtual seams**: `confirmRecordingOverTake()`, `confirmDeleteTake()`,
   `askForTakeName()`, `askForLyricsFile()`, `askForLyricsExportFile()` (which also keeps
   the path it was offered), each with a `set...Answer()` and a counter of questions asked.
@@ -205,6 +225,9 @@ The rules of the edits themselves are tested without a window, in `TestLyricsEdi
   on the test thread.
 - In `TestMainWindow` override only `createAudioIO()`: `~MainWindowBase` calls
   `deleteAudioIO()` non-virtually.
+- The app and dev mains draw text without sub-pixel anti-aliasing. Ubuntu's fontconfig asks
+  for it and Qt 6.4 follows it: the scale's labels then have orange fringes, which
+  `TestUiChecks` takes for live dots. A new main that shows a window needs the same.
 - With `FakeAudioIO`'s `inputFollowsPlayback`, `inputDelay` must be at least one block.
   The device delivers about two blocks before the application sets its recording flag;
   `inputIsKept` counts only input that was kept, which exact start-gap tests need.
@@ -251,6 +274,16 @@ it; the marker goes in the commit that fixes it. There are none at present.
 - A take's analysis lands in two steps, `rangedAnalysisMerged()` then
   `initialAnalysisCompleted()`. Read results after the merge (`analysingRange()` false),
   not after some other signal that happens to come at about the same time.
+- `analyseRange()` looks at a range's completion from the event loop, so the take's range
+  is always being analysed when Stop returns; but pYIN may finish a short one by the next
+  turn of the loop. A test that lets the loop run and then acts during that analysis calls
+  `holdRangedMerges(true)` on its `TestMainWindow` before Stop
+  (`Analyser::setRangedMergeHeld()`), and `false` before it waits for `analysed()`, or
+  from a timer where a save's own wait has to let the merge go.
+- A take stopped as soon as it started can have nothing in it under load: the fake device
+  has delivered nothing yet, the take is dropped, and no analysis comes for `stopTake()`
+  to wait for. A test that only looks at something during a take calls
+  `waitForSomethingRecorded()` before `stopTake()`.
 - The status bar is written by three base-class timers; a test that reads it must go
   through what `showTakeCountdown()` controls.
 - Deleting a derived layer does not stop its transform; only
@@ -303,6 +336,67 @@ it draws is judged by pixels:
 
 With `TONY_TEST_SHOT_DIR` set, the suite saves the images it judged, and some of the whole
 window, as `<test>-<what>.png`, for the [manual checklist](manual-checklist.md)'s look.
+
+## The audio check and the dev checks (`TestAudioCheck`, `TestDevChecks`)
+
+What they cover is in [calibrate-audio.md](calibrate-audio.md), section 11. Both fixtures
+follow `TestRecordWorkflow`'s (a `TestMainWindow`, the dialog watchdog, the user's toggles
+reset in `init()`), and `TestDevChecks`' is a copy of `TestAudioCheck`'s, not shared: each
+class keeps its own. `cleanup()` also removes any round trip a test stored, which would
+place the next test's takes. How they are built, and what to keep in mind when adding to
+them:
+
+- **The loopback fake.** Both record through `FakeAudioIO` with `loopback` on (their
+  `loopback()`). The device reports 2 × 4096 frames out and 4096 in, and the true round
+  trip (`inputDelay`) is 123 frames longer: a check that works measures the true one, and
+  with it every sweep lands at 0 frames, while a run placed with the reported pair lands
+  2.8 ms off. `TestDevChecks`' loopback also has `reportLevels` on, for the observer's
+  output levels.
+- **Keep them short.** Every run records in real time.
+  - `TestAudioCheck`'s `shortPlan()` is two punch-ins of two sweeps on the calibration
+    reference cut short after its fifth event (10.8 s), about 13 s a run.
+  - A dev run takes `DevChecks::Options`, which `options()` fills in: the round trip for
+    the run, the report and scratch directories of the test's own, and the long song's
+    length (`longSeconds`). The passing run's long song is 60 s, not 240: long enough that
+    its whole analysis takes well over twice a punch-in's (item 9), and about 50 s for the
+    whole run. Runs that look at other things leave the long song out (0), and a fault run
+    may cancel the run once the stage it needs is done (at "Pre-roll near the start", for
+    the re-record's faults): the checks of the stages it got through are worked out all the
+    same. `runDevChecks()` waits up to 120 s.
+- **A dev check is not a QtTest function.** Each returns a `CheckResult`; a test runs a
+  dev run, or part of one, and asserts on its report: `check(item)` gives a check,
+  `number(check, label)` one of its numbers by its label, `describe()` every check's
+  verdict, message and numbers for a failure message (QtTest cuts a long one: pass the
+  item). Each check has a run where it passes and one where it fails, from a fault given to
+  the fake or the window, or was seen failing with the code broken for a moment. The
+  faults: the round trip given 20 ms off; `echoDelay` / `echoGain` with the input on
+  channel 2 (`inputChannel`); the take made audible as the re-record's punch-in starts
+  recording (a lambda on the runner's `progress()` that sets its play parameters); a stall.
+- **A noise floor for the output checks.** On a noiseless loopback the take holds the
+  reference and nothing else, silent wherever the reference is, so a take played back out
+  shows in no silent gap, and items 4 and 12 cannot fail. `loopbackInARoom()` adds a
+  programmed input of white noise at −60 dBFS, as a room gives a microphone: too quiet for
+  the sweep finder, and no pitch for the live tracker or pYIN. The passing run and the
+  lead-in's fault and stall runs use it.
+- **Holding the GUI thread up on purpose** (`stallTheReRecording()`,
+  `dev_checks_lead_in_through_a_stall`): a busy-wait in the slot of a 5 ms timer, due by
+  where the reference is being handed out (playback start plus the frames received), not by
+  the take's recorded duration, which is counted on the GUI thread and stands still while
+  it is held up.
+- **Where files go.** `TestAudioCheck`'s plans name a reference file in the test's own
+  directory; its tests of the check's own directory, and all of `TestDevChecks`, write
+  references where the check writes them, the application data directory, with
+  `QStandardPaths::setTestModeEnabled()` on so that it is Qt's test location. Reports and
+  scratch folders go to the test's own directory, never `TONY_TEST_LOG_DIR`: a failing
+  run's `DevChecks.txt` would land among the suites' result files, which are grepped for
+  `^FAIL` and `Totals`. The passing test prints the report line by line after `report:`, so
+  that its Totals never begins a line of the suite's log.
+- **`TestAudioCheck`'s windows have no dev checks.** Its fixture deletes each window's
+  `DevChecks` (`doDeleteDevChecks()`): in a development build its dialog tests would
+  otherwise carry on into them, the checkbox being on. So it runs the same in a `release`
+  build, where it is the only test of the button.
+- **No device, and a dead one.** `makeWindow(config, false)` makes a window with no audio
+  device at all; `neverCallsBack` a device that opens and delivers nothing.
 
 ## What stays manual
 

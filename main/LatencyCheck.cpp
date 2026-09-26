@@ -45,7 +45,6 @@ const int firstSweepTenths = 10;
 
 const double calibrationSeconds = 26.0;
 const double devSeconds = 40.0;
-const double longSeconds = 240.0;
 
 // The silence after the last event, as the calibration layout has it
 const double tailSeconds = 0.8;
@@ -141,7 +140,7 @@ LatencyCheck::devLayout(sv_samplerate_t rate)
 }
 
 LatencyCheck::Layout
-LatencyCheck::longLayout(sv_samplerate_t rate)
+LatencyCheck::longLayout(sv_samplerate_t rate, double seconds)
 {
     Layout layout;
     layout.rate = rate;
@@ -149,13 +148,13 @@ LatencyCheck::longLayout(sv_samplerate_t rate)
     const double eventSeconds = kSweepSeconds + kPauseSeconds + kToneSeconds;
 
     int at = firstSweepTenths;
-    for (int i = 0; at / 10.0 + eventSeconds + tailSeconds <= longSeconds;
+    for (int i = 0; at / 10.0 + eventSeconds + tailSeconds <= seconds;
          ++i) {
         addEvent(layout, at, kToneSeconds);
         at += calibrationSpacings[i % calibrationSpacingCount];
     }
 
-    layout.length = framesAt(longSeconds, rate);
+    layout.length = framesAt(seconds, rate);
     return layout;
 }
 

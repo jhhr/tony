@@ -46,6 +46,7 @@
 #include <QtTest>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMenu>
 #include <QMessageBox>
 #include <QSettings>
@@ -717,6 +718,61 @@ private slots:
         QVERIFY(!m_window->audioCheckTakes());
     }
 
+    // A device that opens but never calls back: not one frame comes in.
+    // Once the take should have been over, and not before, so that a
+    // device slow to start is not taken for one that delivers nothing,
+    // the run stops the take through the Stop path and ends saying that
+    // the device delivered no input, not that the take did not stop. No
+    // take is left, and no harm: the next file opened is analysed
+    void check_ends_when_the_device_delivers_nothing() {
+        FakeAudioIO::Config config = loopback();
+        config.neverCallsBack = true;
+        makeWindow(config);
+
+        // How long after the take began to record the run ended; the
+        // connections go with the guard when the test returns
+        QObject guard;
+        QElapsedTimer recording;
+        qint64 endedAfterMs = -1;
+        connect(m_window->audioCheck(), &AudioCheckRunner::progress, &guard,
+                [&recording](const AudioCheckRunner::Progress &p) {
+                    if (p.step == AudioCheckRunner::Step::Recording &&
+                        !recording.isValid()) {
+                        recording.start();
+                    }
+                });
+        connect(m_window->audioCheck(), &AudioCheckRunner::finished, &guard,
+                [&](const AudioCheckResult &) {
+                    if (recording.isValid()) {
+                        endedAfterMs = recording.elapsed();
+                    }
+                });
+
+        runCheck(onePunchIn());
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_result.failure.contains("delivered no input"),
+                 describe(m_result).constData());
+        const qint64 takeMs =
+            qint64((AudioCheckRunner::kPreRollSeconds + 2.0) * 1000.0);
+        QVERIFY2(endedAfterMs >= takeMs + AudioCheckRunner::kNoInputTimeoutMs -
+                 AudioCheckRunner::kPollMs,
+                 qPrintable(QString("ended %1 ms into a take of %2 ms")
+                            .arg(endedAfterMs).arg(takeMs)));
+
+        QVERIFY(!m_result.calibrationUsable());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(!m_window->recordingInProgress());
+        QVERIFY(!m_window->recordingAsSingingTrack());
+        QVERIFY(!m_window->audioCheckTakes());
+        QVERIFY2(!m_window->takes()->haveTake(),
+                 "a recording of nothing was kept as a take");
+
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_finished, 1);
+    }
+
     // With automatic analysis switched off the reference is never
     // analysed, and the check does not wait for it: it needs none
     void check_runs_without_automatic_analysis() {
@@ -1035,6 +1091,34 @@ private slots:
         const LatencyCalibration::InUse inUse = m_window->latencyInUse();
         QVERIFY(inUse.source == LatencyCalibration::Source::Measured);
         QCOMPARE(inUse.roundTrip, 0.3);
+    }
+
+    // A plan asks for a pre-roll of its own, the check's unless it says
+    // otherwise: its take has that lead-in, and is placed right with it.
+    // A negative one is refused
+    void check_uses_the_pre_roll_it_is_given() {
+        makeWindow(loopback());
+        QCOMPARE(AudioCheckRunner::Plan().preRoll,
+                 AudioCheckRunner::kPreRollSeconds);
+
+        AudioCheckRunner::Plan refused = onePunchIn();
+        refused.preRoll = -0.5;
+        QVERIFY(!m_window->audioCheck()->start(refused));
+        QVERIFY(!m_window->audioCheck()->isRunning());
+
+        AudioCheckRunner::Plan plan = onePunchIn();
+        plan.roundTrip = roundTrip / rate;
+        plan.preRoll = 0.5;
+        runCheck(plan);
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 1);
+        QVERIFY2(std::fabs(r.summary.medianOffset * rate) <= 4.0,
+                 describe(r).constData());
+        QCOMPARE(m_window->takePreRoll(), sv::sv_frame_t(0.5 * rate));
+        QVERIFY(!m_window->audioCheckTakes());
     }
 
     // A run that keeps the session records into the one open, the

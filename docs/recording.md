@@ -15,7 +15,7 @@ Symbols used throughout, all in frames on the reference's timeline
 | **E** | where it stops itself (`m_takeEnd`), -1 when the user presses Stop |
 | **R** | pre-roll lead-in actually available before P (`m_takePreRoll`), 0 without one |
 | **S** | where playback starts: P − R |
-| **L** | recording latency: output + input latency + start gap (`m_recordingLatencyFrames`) |
+| **L** | recording latency: round trip (measured, or output + input latency as reported) + start gap (`m_recordingLatencyFrames`) |
 
 The recording's own file always begins at the press of Record. What was sung in answer to
 the reference at P is therefore at file frame **L + R**, and the splice reads from there.
@@ -53,8 +53,8 @@ the reference at P is therefore at file frame **L + R**, and the splice reads fr
    makes the cursor run with the reference instead of crawling from frame 0.
 7. `recordStatusChanged(true)` → `recordingStarted()` fires *inside* the base call, before
    the model is in the document. It defers with `QTimer::singleShot(0)`:
-   `setupRealtimePitchLayer()`, and, if Play Reference While Recording is on, the latency
-   estimate and `m_playSource->play(S)`.
+   `setupRealtimePitchLayer()`, and, if Play Reference While Recording is on (or the take
+   is the audio check's, below), the latency estimate and `m_playSource->play(S)`.
 8. `modelAdded()` sees `m_recordingAsSingingTrack`, stores `m_currentRecordingModelId` and
    returns. The recording is raw material, not the singing track; no analyser is made.
 9. After the base call: if `isRecording()` is false (no device, device busy) the take
@@ -100,10 +100,25 @@ dot model outlives the take.
 
 ## Latency
 
-- **Estimate** (GUI thread, in the deferred lambda):
-  `computeRecordingLatency(getTargetPlayLatency(), getSystemRecordLatency())` plus
-  `m_recordTarget->getFramesReceived()` just before `play()` — the *start gap*, the part
-  of the recording made before the reference began to play.
+L is the **round trip** plus the **start gap**, both in frames of the recording.
+
+- **The round trip** (GUI thread, in the deferred lambda): `roundTripAt()` gives the figure
+  Calibrate Audio measured and the user kept for these devices and the recording's rate,
+  unless it is stale, and otherwise the sum of the output and input latency the device
+  reports ([calibrate-audio.md](calibrate-audio.md), §5). It is worked out in seconds and
+  then turned into frames of the recording, whose rate its model gives, because the two
+  reported latencies count frames at different rates: `getTargetPlayLatency()` at the play
+  source's `getDeviceSampleRate()` (the session's, when bqaudioio's `ResamplerWrapper`
+  converted it; the device's own when the device was opened before any file, when the
+  wrapper passes the figure through and tells the play source 0), and
+  `getSystemRecordLatency()` at the device's. They differ only when the device is not at
+  44.1 kHz. `computeRecordingLatency()` is no longer used here; the tests keep it as the
+  reported sum to compare with.
+- A run of the audio check may bring a round trip of its own for its takes (the dev checks,
+  with the one the calibration before them measured). Nothing is stored, and the Playback
+  menu goes on describing the window's own figure.
+- **Start gap estimate** (same place): `m_recordTarget->getFramesReceived()` just before
+  `play()`, the part of the recording made before the reference began to play.
 - **Measurement** (audio callback): the lambda given to
   `m_playSource->setPlayStartCallback()` runs with the first block after `play()` and
   stores `getFramesReceived() − blockFrames` in an atomic. Drivers deliver a block's input
@@ -120,7 +135,13 @@ dot model outlives the take.
   `setStartFrame(-L)` on the model is the old route; `TestLatencyShift` and
   `shift_aligns_onset` still cover it, and the svapp fork still restores the `start`
   attribute so that older `.ton` files open right.
-- L is per take, not per device: each recording measures its start gap afresh.
+- L is per take, not per device: each recording measures its start gap afresh. The round
+  trip is per device and rate, but every take restarts the stream, and on MME the offset
+  between input and output moves by about 13 ms from one start to the next, which the start
+  gap does not see ([calibrate-audio.md](calibrate-audio.md), §10).
+- `m_takeLatency` keeps what the last take was placed with: the round trip, whether it was
+  measured, the reported pair in seconds, the recording's rate, and the start gap and
+  whether it was measured. The audio check reads it for each of its takes.
 
 ## Pre-roll and Record into Selection
 
@@ -145,6 +166,21 @@ dot model outlives the take.
   scroll). All three are routed through `MainWindow::showTakeCountdown()` first. Anything
   written to the status bar from a timer of your own will be overwritten before it can be
   read.
+
+## The audio check's takes
+
+Calibrate Audio and the dev checks ([calibrate-audio.md](calibrate-audio.md)) record
+through this same path, so that what they measure is what a take does. Their takes record
+into the selection the runner makes, play the reference and have a lead-in of the run's
+own, whatever the toolbar says: the three toggles write QSettings when they are toggled, so
+the runner never touches them. It sets an override instead (`m_audioCheckTakes`, with the
+run's pre-roll and round trip), which `record()`, the deferred lambda and
+`wantedPreRollFrames()` read, and clears it when the take stops.
+
+Record's action goes to `recordPressed()`, which ignores a press while a check runs (the
+button is greyed then as well). The guard is not in `record()`: the runner and
+`pollTakeProgress()` start and stop the check's takes through `record()`, and it cannot tell
+their calls from a press.
 
 ## The live tracker
 

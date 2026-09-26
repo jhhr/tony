@@ -1197,6 +1197,10 @@ private slots:
         QVERIFY(!select->isEnabled());
         m_window->clearSelections();
 
+        // The merge of the take's analysis is held until the menus have
+        // been looked at: pYIN may analyse the range before Stop returns
+        m_window->holdRangedMerges(true);
+
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(200);
@@ -1218,6 +1222,7 @@ private slots:
                  "Erase can be used while the take is being analysed");
 
         // ... and everything back, by itself
+        m_window->holdRangedMerges(false);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
         QTRY_VERIFY2(erase->isEnabled(),
                      "Erase did not come back after the analysis");
@@ -1477,6 +1482,10 @@ private slots:
         if (QTest::currentTestFailed()) return;
         openReference(writeWav(tone(lowHz, 3.0)));
         if (QTest::currentTestFailed()) return;
+
+        // Held, so that the merge is still to come when the window goes,
+        // however quickly pYIN analyses the range
+        m_window->holdRangedMerges(true);
 
         startTake();
         if (QTest::currentTestFailed()) return;

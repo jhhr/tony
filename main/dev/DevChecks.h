@@ -22,6 +22,7 @@
 #include "../Coverage.h"
 #include "../LatencyCalibration.h"
 #include "../LatencyCheck.h"
+#include "TakeObserver.h"
 
 #include "base/Event.h"
 
@@ -47,7 +48,9 @@ struct CheckResult
 {
     enum class Verdict { Pass, Fail, Measured, Skipped };
 
-    /// The item of docs/manual-checklist.md it settles, and its name
+    /// The item it settles, in the manual checklist's numbering from
+    /// before default's rewrite of it (docs/calibrate-audio.md explains),
+    /// and its name
     int item;
     QString name;
 
@@ -98,17 +101,38 @@ struct DevReport
  * replaced, at any moment, and a run ends cleanly then.
  *
  * The stages:
- *  1. Fresh punch-ins: a run of the audio check on the dev layout, in
- *     a reference of its own (replacing the calibration's session
- *     without asking), with the two punch-ins of freshPunchIns() and
- *     the round trip given.
- *  2. Save and reopen: the session saved into a scratch folder of this
+ *  1. Long song: a run of the audio check on a long reference of its
+ *     own (Options::longSeconds; replacing the calibration's session
+ *     without asking), with the two punch-ins far apart of
+ *     longPunchIns().  First, so that the next stage replaces this
+ *     session as a check's own, unsaved, and no saved one is ever
+ *     replaced.
+ *  2. Fresh punch-ins: a run on the dev layout, in a reference of its
+ *     own, with the two punch-ins of freshPunchIns() and the round trip
+ *     given.
+ *  3. Re-record: a run into the same session and take, with the one
+ *     punch-in of reRecording(), over part of stage 2's second.
+ *  4. Pre-roll near the start: the same with nearTheStart(), and a
+ *     pre-roll longer than the song before it.
+ *  5. Joins: the same with the two punch-ins of joinPunchIns(), which
+ *     meet in the middle of a held tone.
+ *  6. Save and reopen: the session saved into a scratch folder of this
  *     run, the way Save As saves once it has a name, then opened again
  *     and its take's file judged again.
  *
  * The checks are worked out when the run ends, from what the stages
- * kept: item 1 (latency, also after save and reopen) and item 2
- * (several phrases in one take).
+ * kept: items 1 (latency, also after save and reopen) and 2 (several
+ * phrases in one take) over every punch-in of the run; from what a
+ * TakeObserver saw of each of stage 2's punch-ins, items 3 (live dots,
+ * and how far behind the cursor they appear) and 5 (the mic on input
+ * 2); from what it saw of every punch-in, item 4 (nothing of the take
+ * in the speakers); from stage 1, item 9 (Stop on a long song); from
+ * the take before and after stage 3, items 7 (record from a position)
+ * and 12 (the lead-in); from stage 4, item 13 (pre-roll near the
+ * start); from stages 3 and 4, item 14 (Record into Selection stops by
+ * itself); and from stage 5, item 10 (the joins).  A run that ends
+ * early works out each check whose stages it got through, and has the
+ * rest Skipped.
  *
  * The session saved stays open afterwards, so that the takes can be
  * looked at; its scratch folder stays with it, and the next run
@@ -128,6 +152,41 @@ public:
     /// Items 1 and 2: how far from where the reference has it a sweep
     /// may land, either way
     static constexpr double kPlacementSeconds = 0.002;
+
+    /// Item 3: more live dots than this in every punch-in
+    static constexpr int kMinDots = 10;
+
+    /// Item 3: a dot is on one of the reference's sounds when it lies
+    /// from the sound's start to half the live tracker's window past
+    /// its end, give or take this many of its hops (liveDotsCheck()),
+    /// and on a tone, within this many cents of its pitch
+    static constexpr int kDotHops = 1;
+    static constexpr double kDotCents = 50.0;
+
+    /// Item 5: an input carries the mic when its peak is no more than
+    /// this far below the loudest input's
+    static constexpr double kMicChannelDb = 20.0;
+
+    /// Stage 3's pre-roll, in seconds: a lead-in from 16.8 s, where
+    /// stage 2's second punch-in begins, so that it plays over two of
+    /// the reference's silent gaps in what that punch-in recorded (16.8
+    /// to 17.7 s and 18.8 to 19.2 s).  Item 12 looks at the output in
+    /// both: a window held up over one still has the other to be judged
+    /// in
+    static constexpr double kReRecordPreRollSeconds = 2.4;
+
+    /// Stage 4's pre-roll, in seconds: more than there is room for
+    /// before nearTheStart()
+    static constexpr double kNearStartPreRollSeconds = 3.0;
+
+    /// Item 14: how far past the end of its selection a take may record
+    /// before it stops itself, besides a look of the window's take timer
+    /// and a block of the device, as the checklist asks
+    static constexpr double kStopMarginSeconds = 0.25;
+
+    /// Item 9: each punch-in into the long song has its pitch merged
+    /// within this share of the time the whole song's analysis took
+    static constexpr double kStopShare = 0.5;
 
     /// How often a stage is looked at
     static constexpr int kPollMs = 50;
@@ -159,14 +218,30 @@ public:
         /// directory
         QString scratchDirectory;
 
-        Options() : roundTrip(-1.0) { }
+        /// How long the long song of stage 1 is, in seconds; 0 leaves
+        /// the stage out, and item 9 is Skipped (for tests that look at
+        /// the other stages, which it would only make longer)
+        double longSeconds;
+
+        Options() : roundTrip(-1.0),
+                    longSeconds(LatencyCheck::kLongSeconds) { }
     };
 
     DevChecks(MainWindow *window, AudioCheckRunner *runner);
     virtual ~DevChecks();
 
     /**
-     * Stage 1's punch-ins on the dev layout, in seconds: [6.3, 10.2]
+     * Stage 1's punch-ins into a long layout, in seconds: each the
+     * shortest range that judges one sweep, the first sweep from a
+     * quarter of the way into the song, and the first from five eighths
+     * (near 60 and 150 s of 4 minutes), so that each is far from the
+     * start and from the other.  Empty if the layout is too short.
+     */
+    static std::vector<LatencyCheck::PunchIn>
+    longPunchIns(const LatencyCheck::Layout &layout);
+
+    /**
+     * Stage 2's punch-ins on the dev layout, in seconds: [6.3, 10.2]
      * and [16.8, 21.2], each judging two sweeps (7.2 and 9.1 s; 17.7
      * and 20.1 s) with 50 ms to spare.  In two separate regions of the
      * calibration part, clear of what later stages need: the start
@@ -178,6 +253,37 @@ public:
      * the second.
      */
     static std::vector<LatencyCheck::PunchIn> freshPunchIns();
+
+    /**
+     * Stage 5's punch-ins, in seconds: [26.0, 28.7] and [28.7, 32.0],
+     * meeting at 28.7 s, the middle of the held tone from 27.2 to 30.2
+     * s, which reaches 1.5 s either side of the join: further than
+     * TakeDiff looks at the pitch and notes around it.  The first
+     * judges that tone's sweep at 26.9 s, and the second the next
+     * sweep, at 30.9 s; the second's 1 s lead-in plays over what the
+     * first recorded.  The shortest pair that does that, and clear of
+     * every other stage's range.
+     */
+    static std::vector<LatencyCheck::PunchIn> joinPunchIns();
+
+    /**
+     * Stage 3's punch-in, in seconds: [19.2, 21.2], over the end of
+     * stage 2's second and past its first sweep, judging the sweep at
+     * 20.1 s.  Its lead-in (kReRecordPreRollSeconds) plays over what
+     * stage 2 recorded from its start: a gap where the reference is
+     * silent and the take holds only what the mic heard besides (16.8
+     * to 17.7 s), the sweep at 17.7 s, the tone from 18 s, and another
+     * such gap from 18.8 s.  Starting this late keeps the range short
+     * and leaves a whole note of the take (18 to 18.8 s) before it for
+     * the ranged analysis to leave alone.
+     */
+    static LatencyCheck::PunchIn reRecording();
+
+    /**
+     * Stage 4's punch-in, in seconds: [1.0, 4.2], judging the sweep at
+     * 3.1 s, recorded with a pre-roll of kNearStartPreRollSeconds.
+     */
+    static LatencyCheck::PunchIn nearTheStart();
 
     /**
      * A new scratch folder in the directory, made: dev-checks-1,
@@ -254,29 +360,187 @@ private:
     QString m_sessionPath;
     bool m_saved;
 
-    /// Stage 1: the layout, what the runner found, and the take's
-    /// coverage straight after
+    /// What the observer saw of one of the runner's punch-ins, and the
+    /// peak of each channel of its raw recording, full scale 1, or why
+    /// that could not be read
+    struct Watched {
+        int punchIn;    ///< counting from 0
+        TakeObserver::Observation seen;
+        std::vector<float> channelPeaks;
+        QString channelError;
+        Watched() : punchIn(0) { }
+    };
+
+    /// Watches each punch-in of a run of the runner's that this run
+    /// started, from its Recording step until its analysis is done;
+    /// which punch-in, counting from 1, or 0; and what it saw
+    TakeObserver *m_observer;
+    int m_observedPunchIn;
+    std::vector<Watched> m_watched;
+
+    /// Stage 1, on a long song of its own: its layout, whether it got
+    /// through, what the runner found, the take's coverage straight
+    /// after, and what was seen of each punch-in.  The runner's steps
+    /// timed: the whole song's analysis, from the session open to the
+    /// analysis done (-1 if it was not seen through), and each
+    /// punch-in's, from the take stopped to its pitch merged, in the
+    /// order recorded; and the take's pitch as each punch-in began to
+    /// record, and after the last.  While the stage runs, the step and
+    /// punch-in the runner last reported, and when that began
+    struct LongSong {
+        LatencyCheck::Layout layout;
+        bool done;
+        AudioCheckResult result;
+        Coverage coverage;
+        std::vector<Watched> watched;
+        double wholeSongSeconds;
+        std::vector<double> stopSeconds;
+        std::vector<sv::EventVector> pitch;
+        bool timing;
+        QElapsedTimer clock;
+        AudioCheckRunner::Step step;
+        int punchIn;
+        qint64 stepFrom;
+        LongSong() : done(false), wholeSongSeconds(-1.0), timing(false),
+                     step(AudioCheckRunner::Step::Idle), punchIn(0),
+                     stepFrom(0) { }
+    };
+    LongSong m_long;
+
+    /// Stage 2: the dev layout, which later stages record into too, what
+    /// the runner found, the take's coverage straight after, and what was
+    /// seen of each punch-in
     LatencyCheck::Layout m_layout;
     bool m_haveFresh;
     AudioCheckResult m_fresh;
     Coverage m_coverageAfterFresh;
+    std::vector<Watched> m_freshWatched;
 
-    /// Stage 2: the take's pitch and notes before the save and after
-    /// the reopen, and its file judged again after it
+    /// The take as it was at one moment: its audio as its file holds it,
+    /// mixed to one channel (AudioCheckRunner::readTakeFile()), or why
+    /// it could not be read; its pitch and notes; and its coverage
+    struct Snapshot {
+        std::vector<float> audio;
+        QString audioError;
+        sv::EventVector pitch;
+        sv::EventVector notes;
+        Coverage coverage;
+    };
+
+    /// Stages 3, 4 and 5, each a run of the runner's into the take there
+    /// is: whether it got through, what the runner found, the take
+    /// before and after, what was seen of the punch-ins, the lead-in the
+    /// window gave the last, and how many frames the first one's raw
+    /// recording holds (-1, and why, if that could not be read)
+    struct PunchInStage {
+        bool done;
+        AudioCheckResult result;
+        Snapshot before;
+        Snapshot after;
+        std::vector<Watched> watched;
+        sv::sv_frame_t preRoll;
+        sv::sv_frame_t recorded;
+        QString recordedError;
+        PunchInStage() : done(false), preRoll(0), recorded(-1) { }
+    };
+    PunchInStage m_reRecord;
+    PunchInStage m_nearStart;
+    PunchInStage m_joins;
+
+    /// Stage 6: the take's pitch and notes before the save and after
+    /// the reopen, and its file judged, over every punch-in into it,
+    /// just before the save and again after the reopen
     sv::EventVector m_pitchBefore;
     sv::EventVector m_notesBefore;
     sv::EventVector m_pitchAfter;
     sv::EventVector m_notesAfter;
     bool m_reopened;
+    LatencyCheck::TakeSummary m_beforeSave;
     LatencyCheck::TakeSummary m_rejudged;
+
+    /// One of the runs of the runner's that the run got through, in
+    /// order: the layout of the reference it recorded against, what it
+    /// found, the take's coverage after it, and what was seen of its
+    /// punch-ins
+    struct Run {
+        const LatencyCheck::Layout *layout;
+        const AudioCheckResult *result;
+        const Coverage *coverage;
+        const std::vector<Watched> *watched;
+    };
+    std::vector<Run> runs() const;
+
+    /// What was seen of a run's punch-in i, counting from 0, or null
+    static const Watched *watchedOf(const Run &run, int i);
+
+    /// What the output levels read at a punch-in's looks say of the
+    /// reference's silent gaps (speakersCheck()).  Looks that reach past
+    /// "until", in seconds on the reference's timeline, are left out
+    struct GapLooks {
+        /// The start gap was measured, so that the looks could be placed
+        bool placed;
+
+        /// How far either side of a look what it read may lie, seconds
+        double margin;
+
+        /// The loudest level read at any look, and at any look lying
+        /// wholly in a gap, full scale 1; and how many looks did
+        double loudest;
+        double loudestInGaps;
+        int looks;
+
+        /// The first look in a gap that read anything: its level (0 if
+        /// none did) and where it lay, in seconds
+        double heard;
+        double heardFrom;
+        double heardTo;
+
+        /// The longest wait between two looks while recording, in
+        /// seconds, of those beginning before "until": the window held
+        /// up.  The frames received jump meanwhile, so the look across
+        /// the wait reaches over a sound, and is left out
+        double longestWait;
+
+        GapLooks() : placed(false), margin(0), loudest(0), loudestInGaps(0),
+                     looks(0), heard(0), heardFrom(0), heardTo(0),
+                     longestWait(0) { }
+    };
+    GapLooks gapLooks(const LatencyCheck::Layout &layout,
+                      const TakeObserver::Observation &seen,
+                      const TakeLatency &latency, sv::sv_samplerate_t rate,
+                      double until) const;
 
     void poll();
     void runnerFinished(const AudioCheckResult &result);
+    void runnerProgress(const AudioCheckRunner::Progress &state);
 
+    /// Stop the observer and keep what it saw
+    void finishObservation();
+
+    /// Stage 1: the runner has reported a step and punch-in (Idle and 0
+    /// when it finished); a step it had reported before ends
+    void longSongStep(AudioCheckRunner::Step step, int punchIn);
+
+    /// What was seen of stage 2's punch-in i, counting from 0, or null
+    const Watched *freshWatched(int i) const;
+
+    void beginLongSong();
+    bool longSongDone();
     void beginFreshPunchIns();
     bool freshPunchInsDone();
+    void beginPunchInStage(PunchInStage &stage,
+                           std::vector<LatencyCheck::PunchIn> ranges,
+                           double preRoll);
+    bool punchInStageDone(PunchInStage &stage);
     void beginReopen();
     bool reopenDone();
+
+    /// The take as it is now, its models looked up afresh
+    Snapshot snapshot() const;
+
+    /// Every punch-in into the dev reference's take so far, in the order
+    /// recorded
+    std::vector<LatencyCheck::PunchIn> punchInsSoFar() const;
 
     /// The events of the take's pitch track or notes, from its model
     /// as it is now
@@ -289,6 +553,15 @@ private:
     std::vector<CheckResult> evaluate(QString reason) const;
     CheckResult latencyCheck(QString reason) const;
     CheckResult phrasesCheck(QString reason) const;
+    CheckResult liveDotsCheck(QString reason) const;
+    CheckResult speakersCheck(QString reason) const;
+    CheckResult micChannelCheck(QString reason) const;
+    CheckResult positionCheck(QString reason) const;
+    CheckResult longSongCheck(QString reason) const;
+    CheckResult joinsCheck(QString reason) const;
+    CheckResult leadInCheck(QString reason) const;
+    CheckResult nearStartCheck(QString reason) const;
+    CheckResult stopsItselfCheck(QString reason) const;
 
     /// The report file written, or "" if it could not be
     QString writeReport(const DevReport &report) const;
