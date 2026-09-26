@@ -191,6 +191,11 @@ builds happen in the container.)
 - A12b — The dev run on the phone. Done.
 - A13 — Fixes from the dev runs on the phone: idle input latency, a stream disconnected
   while idle, tones a phone can play, pitch that cannot be judged. Done.
+- (Lead, 2026-09-26, from the fourth dev run, which ran the build before A13: the input
+  latency read 23219 frames, more than the input buffer holds, so what inflates it is input
+  lost to overruns, not input waiting. `OboeAudioIO` refuses a reading after an input
+  overrun (`getXRunCount()`), which A13's guard on waiting input did not see; the log's
+  first line gives the installed version name, with its commit.)
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container

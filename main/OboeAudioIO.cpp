@@ -302,7 +302,8 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
     m_recordSuppressed(false),
     m_startFailed(false),
     m_reopening(false),
-    m_outputXRuns(0)
+    m_outputXRuns(0),
+    m_inputXRunsAtStart(-1)
 {
     if (m_source && m_source->getApplicationChannelCount() > 0) {
         m_sourceChannels = m_source->getApplicationChannelCount();
@@ -611,6 +612,12 @@ OboeAudioIO::startStreams()
         (duplex ? m_engine->start() : m_output->requestStart());
     m_inputRunning = duplex;
 
+    m_inputXRunsAtStart = -1;
+    if (duplex && result == oboe::Result::OK) {
+        oboe::ResultWithValue<int32_t> xruns = m_input->getXRunCount();
+        if (xruns) m_inputXRunsAtStart = xruns.value();
+    }
+
     if (result != oboe::Result::OK) stopStreams();
     return result;
 }
@@ -628,7 +635,18 @@ OboeAudioIO::suspend()
     int backlog = 0;
     bool withInput = m_inputRunning;
     bool steady = (m_engine->processed.load() >= steadyCallbacks);
-    bool measured = steady && measureLatency(latency, backlog);
+
+    // Input lost to an overrun: the device's position ran on while the
+    // frames read did not, and the timestamps would give the loss as
+    // latency (the phone's logs had 244 and 484 ms, one and two buffers)
+    int overruns = 0;
+    if (withInput && m_inputXRunsAtStart >= 0) {
+        oboe::ResultWithValue<int32_t> xruns = m_input->getXRunCount();
+        if (xruns) overruns = xruns.value() - m_inputXRunsAtStart;
+    }
+
+    bool measured = steady && overruns == 0 &&
+        measureLatency(latency, backlog);
     int largestRead = m_engine->largestRead.load();
 
     stopStreams();
@@ -642,6 +660,11 @@ OboeAudioIO::suspend()
             cerr << "OboeAudioIO: latency now "
                  << describe(m_latency, m_input != nullptr, m_rate) << endl;
         }
+    } else if (overruns > 0) {
+        cerr << "OboeAudioIO: the input overran " << overruns
+             << " time(s) while running, and what was lost would read as "
+             << "latency, so the latency was not measured: kept at "
+             << describe(m_latency, m_input != nullptr, m_rate) << endl;
     } else if (steady && backlog > 0) {
         cerr << "OboeAudioIO: the input was " << backlog << " frames ("
              << describeMs(backlog, m_rate) << ") behind as the device "

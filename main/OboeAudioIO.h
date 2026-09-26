@@ -143,6 +143,11 @@ private:
     bool m_reopening;
     StreamLatency::Estimate m_latency;
     int m_outputXRuns;
+
+    // The input's overrun count as the streams last started, -1 if the
+    // input does not say: input lost to an overrun stays in the latency
+    // the timestamps give until the streams stop, a buffer's worth each
+    int m_inputXRunsAtStart;
     AudioRoute::Route m_route;
 
     // The callback: the input first, then the output
