@@ -194,7 +194,7 @@ coloured fringes on the scale's labels read as live dots in `TestUiChecks`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`).
 
 Also done: C1a (`4370131`), the merge of `default` (`c8b9585`), `test-tony-dev` (lead).
 
@@ -294,19 +294,46 @@ Read also: `main/dev/DevChecks.{h,cpp}` and `main/dev/TakeObserver.h`; `main/Tak
 
 ### C2 — Long song and joins; items 9, 10 (spec §4 rows 9, 10)
 
-To be refined by the lead after C1c. Outline:
+Read also: `main/dev/DevChecks.{h,cpp}` (its stages, `runs()`, `Snapshot`); `main/TakeDiff.h`
+(`stepAt()`, `pitchAcross()`, `notesAcross()`, `eventsOutside()`); `main/LatencyCheck.{h,cpp}`
+for `longLayout()` and the dev layout's held tones; `docs/takes.md` on ranged analysis and
+the merge window W; in `main/test/TestRealDevice.h`, `stop_is_quicker_than_a_whole_song`
+and how it times the whole-song analysis; spec §4 rows 9 and 10.
 
-- **9** After "Save and reopen": the long reference (`longLayout()`, 4 minutes) as a new
-  session; the whole-song analysis time; two punch-ins far apart (as `test-tony-device`,
-  about 60 s and 150 s), each timed from Stop to its pitch merged. Pass when each is under
-  half the whole-song time and pitch outside the range is unchanged (the ranged path ran).
-  These punch-ins also count for items 1 and 2: placement far into a song is where a
-  rate mismatch shows.
-- **10** Two punch-ins meeting in the middle of a held tone of the dev layout: `TakeDiff`'s
-  step, pitch and note checks at the join, and nothing moved outside ± 0.25 s. C0 found
-  (from the code) that the join is a 10 ms dip, and that the notes merge by onset may drop
-  or split the note: measure, report the result as it is, and if it fails on today's code
-  the app test is an expected failure with the reason, as `default` does for its defects.
+- **Stage "Long song", the first of the run**, before "Fresh punch-ins": the long
+  reference as a session of its own (a new reference, not `keepSession`), timed from the
+  session opening to the reference analysed; then two punch-ins far apart in one runner
+  run (as `test-tony-device`, near 60 s and 150 s), each timed from its Stop to its pitch
+  merged (the runner's `AnalysingTake` step). First, so that the dev reference then
+  replaces it as a check's own unsaved session, and the run still ends on the saved dev
+  session; no saved session is ever replaced.
+  - **9** Pass when each punch-in's Stop-to-merged time is under half the whole-song
+    analysis time, and the take's pitch outside the range ± 0.25 s is unchanged
+    (`eventsOutside()`), which shows the ranged path ran. Numbers: both times.
+  - These punch-ins join `runs()` for items 1, 2 and 4: placement far into a song is where
+    a rate mismatch shows.
+  - **Test time**: a 4-minute reference in every passing test is too slow. Give
+    `longLayout()` a length parameter (default 240 s, core test for it) and `Options` the
+    long reference's length; tests use about 60 s with punch-ins to match. Report what
+    that makes the whole-song and ranged times on the fake.
+- **Stage "Joins"**, after "Pre-roll near the start", keeping the session: two punch-ins
+  in one runner run that meet at J in the middle of one of the dev layout's held tones
+  (3 s tones after the sweeps at 26.9, 30.9 and 35.2 s). The first holds that tone's
+  sweep; the second runs on past the next event's sweep so that both are judged, and its
+  lead-in plays over the first's recording. Snapshots before and after.
+  - **10** At J: `stepAt()` on the take's file, `pitchAcross()` and `notesAcross()` on the
+    take's pitch and notes; and `eventsOutside()` over the two ranges together. Numbers:
+    the step in dB, the largest pitch gap, the notes at J and the nearest note edge.
+  - C0 found (from the code) that the join is a 10 ms dip, and that the notes merge by
+    onset may drop or split the note. **Measure and report the result as it is.** If it
+    fails on today's code, do not fix `Analyser` or the splice: the app test expects that
+    failure with `QEXPECT_FAIL` and the reason, as `default` does for its defects, and the
+    report says so.
+  - On the user's MME, two punch-ins carry different restart offsets (spec §8), so the
+    join may fail there for that reason too: the message should say which part failed.
+- **Tests**: the passing run gains both stages; keep `test-tony-dev` under about 3 minutes
+  in all (135 s now). Show failure for item 9 (e.g. Stop analysing the whole song) and one
+  part of item 10 by breaking the code, and undo by hand.
 
 ### C3 — Retire `test-tony-device`
 

@@ -312,7 +312,11 @@ marked "Done" when it is committed.
    thresholds and the restart-jitter remedy wait on those numbers.
    *First run, 2026-09-26* (MME, wired mic and headphones): round trip 301 and 295 ms
    with one earcup to the mic, verdict Unsteady both times (5–15 ms); Scattered with the
-   mic between both cups. The detailed figures are awaited.
+   mic between both cups. *A dev run (C1a's):* round trip 303.5 ms; the two sweeps of
+   each punch-in agree to 0.2–0.3 ms, but punch-in 1 landed at +0.6 ms and punch-in 2 at
+   −12.9 ms; the measured start gap was 0 frames both times. So the finder is precise, and
+   what moves is the stream's input-to-output offset at each restart, which the start gap
+   does not see. The decision is in §8, "Restart jitter".
 3. **Calibration in use:** built in B2 (Use this latency and Forget in B4).
 4. **Dev-check framework:**
    - **C0** `TakeDiff`, pure. Done.
@@ -334,16 +338,35 @@ marked "Done" when it is committed.
    - `recording.md`: the latency section.
    - `open-points.md`.
 
-**Separate task:** fix the device-rate mismatch. For example the record target could ask
-for the session's rate, a one-line change to
-`AudioCallbackRecordTarget::getApplicationSampleRate()` in the svapp fork; or the splice
-could convert. The button then shows the fix working on each device.
+**Next project, after this branch: a lower-latency driver** (the user's decision,
+2026-09-26, from the restart jitter in §8). In order:
+
+1. **The device-rate mismatch.** A take recorded at 48 kHz is placed frame for frame
+   into a 44.1 kHz session. The robust fix converts when the take is spliced, whatever
+   the device's rate; the other way, the record target asking for the session's rate
+   (`AudioCallbackRecordTarget::getApplicationSampleRate()` in the svapp fork), fails
+   where the device only runs at its mixer's rate. It comes first, because WASAPI opens
+   at the Windows mixer's rate, usually 48 kHz. The button then shows the fix working.
+2. **A `bqaudioio` fork**, `jhhr/bqaudioio` (created 2026-09-26, the remote `jhhr` in
+   `bqaudioio/`; `repoint-project.json` still takes sourcehut until this phase):
+   choosing the host API, WASAPI's automatic rate conversion, and the 0.2 s
+   `suggestedLatency` made settable.
+3. **Driver type in Tony:** MME, DirectSound or WASAPI; the device menus list that
+   type's devices only (today every host API's are listed, and `getDeviceIndex()` takes
+   the first name that matches, which is MME's); the stored round trip kept per type.
+4. **Measure** with Calibrate Audio and a dev run on each type, on the user's PC.
+
+**MME stays the default** until such a run shows WASAPI (or another type) better.
 
 ## 8. Risks
 
 - **Restart jitter.** If the spread across punch-ins is ≥ 10 ms, no stored figure fits
-  every take. The remedy would be to keep the stream running between takes instead of
-  suspending it in `stop()`, an svapp change. Decide on step 2's numbers.
+  every take. *Measured on the user's PC (MME):* about 13 ms between two takes, 5–20 ms
+  over three calibrations, 0.3 ms within a take (§7). Considered: tuning items 1 and 2
+  to ±15 ms, and keeping the stream running between takes (an svapp change, which would
+  make one session's takes agree with each other but not with the reference). Chosen: a
+  lower-latency driver, the next project (§7). Until then items 1 and 2 keep ±2 ms and
+  fail on MME, which is the true reading.
 - **Windows enhancements or echo cancellation** can remove the sweeps. Tony cannot ask for
   raw capture: bqaudioio is upstream and MME has no raw mode. The NoSignal and Fading
   verdicts point to *Sound settings ▸ device ▸ Audio enhancements: Off*.
@@ -386,6 +409,7 @@ could convert. The button then shows the fix working on each device.
 | Checkpoint after B3 | The user runs it on Windows when they can; C0 onwards does not wait |
 | Commits | The lead commits each phase after review and pushes `feat/calibrateaudiotests` |
 | `test-tony-device` (from `default`) | Its checks move into the dev run, and it is retired (C3) |
+| Restart jitter on MME (about 13 ms) | Not tuned away: a lower-latency driver project after this branch; MME the default until a run shows another type better |
 | Where the dev checks' tests run | `test-tony-dev`, a third executable in dev builds, run when a change touches the take path, the audio check or the dev checks |
 
 ## 11. Facts checked in the code
