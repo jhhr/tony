@@ -94,6 +94,12 @@ Windows path would start an escape in the C string.
   After such a fatal error the executable does not exit: it spins, or waits for the gdb
   that Qt starts for a backtrace. A run that has written nothing for minutes has
   stopped; kill it.
+- **Qt 6.4 takes a finger's press for a double click** whenever the press before it, on
+  any device, was with the same button and nothing has moved since: it compares the
+  press's time with its own. A touch test that ended on a tap made the next test's first
+  finger a double click, and the pane opened an item's edit dialog. `TestTouchGestures`'
+  `openWindow()` moves the mouse away first on that Qt; a new suite that touches needs
+  the same.
 - CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
   suite at a time. When a run fails, its `test-failures` step lists each failed test with
   the lines QTest indents under it, from meson's full log.
