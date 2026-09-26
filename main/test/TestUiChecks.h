@@ -1513,9 +1513,22 @@ private slots:
 
             startTake();
             if (QTest::currentTestFailed()) return;
+
+            // Lifted for the take, and not to be put back during it
+            QTest::qWait(300);
+            QVERIFY2(!constrain->isChecked(),
+                     "playback is constrained to the selection during a take");
+            QVERIFY2(!constrain->isEnabled(),
+                     "playback can be constrained to the selection during a "
+                     "take");
+
             QTRY_VERIFY_WITH_TIMEOUT
                 (!m_window->recordTarget()->isRecording(), 8000);
             QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+            // ... and as it was afterwards
+            QCOMPARE(constrain->isChecked(), constrained);
+            QVERIFY(constrain->isEnabled());
 
             double from = -1.0, to = -1.0;
             for (const auto &e : sv::ModelById::getAs<sv::SparseTimeValueModel>
@@ -1528,12 +1541,6 @@ private slots:
             qInfo("playback %s: the high note is in the take from %.3f to "
                   "%.3f s", constrained ? "constrained" : "not constrained",
                   from, to);
-            if (constrained) {
-                QEXPECT_FAIL("", "with playback constrained to the "
-                             "selection the lead-in is not played: playback "
-                             "starts at the selection, and what is sung to it "
-                             "is placed a whole pre-roll too early", Continue);
-            }
             QVERIFY2(std::fabs(from - 2.0) < 0.05 && std::fabs(to - 2.75) < 0.05,
                      qPrintable(QString("the high note of the reference, "
                                         "2.000 to 2.750 s, is in the take "

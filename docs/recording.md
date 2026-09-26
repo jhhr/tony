@@ -127,6 +127,12 @@ dot model outlives the take.
 - **Pre-roll**: R = `MainWindow/prerollseconds` (3 s, no UI on purpose) clipped to the
   start of the song. The device records from the press of Record as always; the splice
   simply starts R frames later. With Play Reference off it is just a pause.
+- **Constrain Playback to Selection is lifted for a take** (`liftPlaySelectionForTake()`,
+  just before `play(S)`) and put back in `recordingFinishedFull()` and `closeSession()`.
+  Constrained, the play source starts in the selection rather than at S and stops or loops
+  at its end, while the take counts the reference as playing on from S without a break:
+  with a pre-roll, what was sung landed a whole pre-roll early. Done through `ViewManager`,
+  which writes no settings; the button follows, and is greyed out during the take.
 - **Record into Selection**: the take stops itself when `getFramesReceived()` reaches
   `L + R + (E − P) + 0.25 s` (`autoStopFrames()`). `pollTakeProgress()` calls `record()` —
   the same path as the Stop button, so everything that ends a take is in one place. The

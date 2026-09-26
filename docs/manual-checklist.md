@@ -83,5 +83,5 @@ harm. On the fake: +0.0 ms at both places with `n = 0`, and +50.0 ms, failing, w
    smoothly, and neither they nor the cursor stutter, in a maximised window. Each batch of
    dots, 25 a second, has the whole pane drawn again; see open points.
 
-The defects the automated checks found, and the facts they established for the decisions
-above, are in [open-points.md](open-points.md).
+The questions the automated checks raised, and the facts they established for the
+decisions above, are in [open-points.md](open-points.md).

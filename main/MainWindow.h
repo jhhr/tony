@@ -775,6 +775,13 @@ protected:
     bool m_singingAudioAfterTake;
     void restoreSingingAudioAfterTake();
 
+    // Playback constrained to the selection is lifted while the reference
+    // plays for a take, and put back when the take is over: true while it
+    // is lifted
+    bool m_playSelectionLiftedForTake;
+    void liftPlaySelectionForTake();
+    void restorePlaySelectionAfterTake();
+
     // The main model last handed to m_analyser by analyseNewMainModel().
     // audioFileLoaded() is emitted for additional models too (a singing
     // track, background music), and the reference must not be set up again

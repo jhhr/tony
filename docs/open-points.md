@@ -10,11 +10,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   Is 3 s right, and should there be a control?
 - **No overwrite question when recording into a selection**: the selection is taken as the
   consent. Right in use?
-- **Constrain Playback to Selection + pre-roll**: worse than a short lead-in. The play
-  source starts playback at the selection, so none of the lead-in is played, and the splice,
-  which takes playback to have started a pre-roll earlier, places what was sung a whole
-  pre-roll too early (`preroll_with_playback_constrained_to_the_selection`, expected to
-  fail). Keep the two apart, or start playback at the lead-in regardless?
 - **Take operations clear the undo history with no prompt** (all but Rename).
 - **A selection is an entry of the undo history**: making one re-analyses the reference in
   it (upstream Tony's pitch candidates) and pushes "Re-Analyse Selection". Selecting for
@@ -43,7 +38,9 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   (`ModelChangeThrottle`): on the cloud machine, a 1920 px window, the GUI thread went from
   29 % to about 54 % of a core. A HiDPI screen makes each redraw dearer. A way in svgui to
   keep a layer out of a view's cache would make it nearly free ([forks.md](forks.md)).
-
+- **Loop Playback is left on during a take**, unlike Constrain Playback to Selection: a
+  take that runs past the end of the reference would hear it start again while the take
+  places what is sung after the end. Not tried.
 - After playback the pane's own cache of what it drew holds the translucent note boxes
   painted twice over themselves, darker, until the next zoom or scroll. Seen with the
   offscreen platform, through the window's backing store; whether it shows on a real screen

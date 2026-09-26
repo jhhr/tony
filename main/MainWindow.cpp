@@ -194,6 +194,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingAsSingingTrack(false),
     m_singingAudioMutedForTake(false),
     m_singingAudioAfterTake(true),
+    m_playSelectionLiftedForTake(false),
     m_paneCountBeforeRecording(0),
     m_currentRecordingModelId(),
     m_recordingLayer(nullptr),
@@ -2200,6 +2201,10 @@ MainWindow::updateMenuStates()
     emit canEraseSinging(haveCoverage && !inTake && haveSelection &&
                          !analysingRange);
 
+    // Nor can playback be constrained to the selection during a take:
+    // see liftPlaySelectionForTake()
+    if (inTake) emit canPlaySelection(false);
+
     // The takes of the session: switching and making one need a session
     // and nothing running, and the rest need a take to act on as well
     bool canChange = takeOperationsAllowed();
@@ -2551,6 +2556,7 @@ MainWindow::closeSession()
     m_currentRecordingModelId = {};
     m_recordingAsSingingTrack = false;
     m_singingAudioMutedForTake = false;
+    restorePlaySelectionAfterTake();
     m_analysedMainModelId = {};
 
     // Nothing is left waiting for a merge, and the history that holds the
@@ -3498,6 +3504,29 @@ MainWindow::restoreSingingAudioAfterTake()
 }
 
 void
+MainWindow::liftPlaySelectionForTake()
+{
+    // Playback constrained to the selection starts in the selection, not
+    // at the lead-in of a pre-roll or at a playhead outside it, and stops
+    // or loops at its end while the recording runs on. What was sung would
+    // then not be where the take puts it: the take counts the reference
+    // as playing on from playbackStart() without a break. Through the
+    // view manager, which writes no settings; the button follows it, and
+    // is greyed out meanwhile (updateMenuStates())
+    if (!m_viewManager->getPlaySelectionMode()) return;
+    m_viewManager->setPlaySelectionMode(false);
+    m_playSelectionLiftedForTake = true;
+}
+
+void
+MainWindow::restorePlaySelectionAfterTake()
+{
+    if (!m_playSelectionLiftedForTake) return;
+    m_playSelectionLiftedForTake = false;
+    m_viewManager->setPlaySelectionMode(true);
+}
+
+void
 MainWindow::teardownSingingTrackAnalyser()
 {
     // m_singingAudioMutedForTake is deliberately not cleared here: the
@@ -4205,6 +4234,7 @@ MainWindow::recordingStarted()
             m_recordingStartGapMeasured = -1;
             m_awaitingReferenceStart = true;
 
+            liftPlaySelectionForTake();
             m_viewManager->setPlaybackFrame(playbackStart);
             m_playSource->play(playbackStart);
         }
@@ -4376,6 +4406,7 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
         if (m_audioIO) m_audioIO->suspend();
         else if (m_playTarget) m_playTarget->suspend();
     }
+    restorePlaySelectionAfterTake();
 
     updateLayerStatuses();
     updateMenuStates();
