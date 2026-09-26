@@ -201,6 +201,9 @@ since 2026-09-26 `.github/workflows/android.yml` builds the APK on CI as well.)
   the MMAP stream and no input waiting. A reading whose input latency is more than the
   input's buffer holds is now refused as input lost, `StreamLatency::inputLatencyPossible()`;
   the driver is named "Oboe" on the result page and in the report, not "(unknown)".)
+- A14 — (Lead) The audio stream kept running between takes on Android, suspended once idle.
+  Done.
+- A15 — The song scroll bar: a thin navigator in the compact layout.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -745,6 +748,68 @@ calibration was steady (276 ms measured, 12 of 12 sweeps, punch-ins within 2.4 m
 
 Not changed without the user's word: the ±2 ms of items 1 and 2 (the runs had +3.2, +2.3 and
 +2.4 ms with Bluetooth).
+
+### A15 — The song scroll bar: a thin navigator in the compact layout
+
+The user (2026-09-26): "I think the way the current Compact layout hides the song navigator
+should be reworked a bit. The navigator is quite important to quickly go from one part of
+the track to another but it takes too much space to always be displayed. Could it be
+replaced with a much thinner bar that can be dragged, basically merely a scroll bar, which
+could display just a bit of the pitch track so at least one could discern the parts with
+singing and silent parts of the song within the scroll bar."
+
+Read [architecture.md](architecture.md) (the layers and panes), the compact layout's
+class (`main/CompactLayout.{h,cpp}`) and `TestCompactLayout`, and svgui's
+`view/Overview.cpp` for the behaviour to match (read only; no fork change is needed).
+
+What is there: the navigator is svgui's `Overview` (`m_overview`), 60 px high, a merged
+waveform of the reference with a box for each pane's visible range, created in
+`MainWindow`'s constructor (grid row 0, above the pane stack's scroll area). The compact
+layout hides it (`parts.hiddenWidgets = { m_overview }` in `MainWindow`'s compact setup;
+`CompactLayout::switchOn()`/`switchOff()` hide and restore it). Pressing and dragging in it
+moves the panes' centre (`centreFrameChanged` to the `ViewManager`); a double-click also
+moves the playhead. On Android Qt's logical pixels are dp.
+
+Build:
+
+- **A widget of Tony's own**, `SongScrollBar` (a `QWidget` in `main/`, the app library),
+  shown **only in the compact layout**, where the navigator is hidden, in the navigator's
+  place; the desktop's ordinary layout keeps the `Overview` as it is. The compact layout
+  shows and restores it as it hides and restores the navigator (for instance a
+  `Parts::shownWidgets`); `MainWindow` only creates and wires it. About **24 dp** high
+  (the navigator's 60 gives way to the panes); say in the report if a finger needs more.
+- **What it draws**: the whole song across its width, with a faint contour of the
+  **reference's pitch track** (the `Analyser`'s pitch layer's `SparseTimeValueModel`; its
+  unvoiced frames are absent, so silent parts show empty): per pixel column the lowest to
+  highest pitch there, on a log scale over the song's range, as a short line. The panes'
+  visible range as a **thumb** (the rest dimmed, as the navigator does), and the playhead
+  as a thin line. Colours from the palette, so dark mode works. The contour is drawn into a
+  cached image at the device pixel ratio and rebuilt only when the model changes (pYIN
+  fills it in steps: coalesce), on resize and on a ratio change; a paint is the image, the
+  thumb and the playhead. Nothing of the singing track or the takes (the simpler option;
+  the report may suggest them).
+- **Input**: pressing on the thumb and dragging moves the panes by the drag, relative to
+  where it was grabbed; pressing elsewhere centres the panes there, and a drag carries on
+  from that point. Through the `ViewManager`, as the navigator does, so every pane
+  follows. The playhead is left alone (the simpler option: say so in the report). A finger
+  arrives as mouse events already (`TouchGestures`): check that a touch drag works as a
+  mouse drag does.
+- **Following**: the thumb follows the panes' scrolling and zoom (the `ViewManager`'s
+  centre and zoom signals) and playback's paging, which moves the panes without a signal
+  (read the pane's start and end frames when painting; repaint only when the thumb or the
+  playhead moves by a pixel). A session closed, a reference replaced or re-analysed: no
+  crash, no stale contour.
+- **Pure logic in `tony_core`** (a `SongScroll` of plain functions, as `PinchZoom` is):
+  frame to x and back, the thumb's geometry with a minimum width, clamped to the strip at
+  both ends, the drag's new centre, whether a press hits the thumb, and the pitch columns
+  from a list of (frame, value) events.
+
+Tests: core tests of `SongScroll` (round trips and clamping, a thumb at either end and one
+wider than the song, a drag's movement, a jump, empty columns for a gap in the pitch);
+app tests in `TestCompactLayout` (the strip shown when compact is on and hidden when off,
+alongside the navigator's state; a mouse drag and a touch drag move pane 0 alike; a press
+outside the thumb centres there; Zoom In narrows the thumb; playback's paging moves it;
+closing the session). Show two of them failing with the code broken.
 
 ### A8 — Documentation pass
 
