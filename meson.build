@@ -1388,6 +1388,7 @@ tony_core_test_exe = executable(
 tony_app_test_moc_files = qt.preprocess(
   moc_headers: [
   'main/test/TestSingingDocument.h',
+  'main/test/TestViewCache.h',
   'main/test/TestSingingAnalysis.h',
   'main/test/TestRecordWorkflow.h',
   'main/test/TestUiChecks.h',

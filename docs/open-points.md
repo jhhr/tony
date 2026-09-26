@@ -34,10 +34,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 ## Weak spots
 
-- **The live dots cost a redraw of the whole pane 25 times a second** during a take
-  (`ModelChangeThrottle`): on the cloud machine, a 1920 px window, the GUI thread went from
-  29 % to about 54 % of a core. A HiDPI screen makes each redraw dearer. A way in svgui to
-  keep a layer out of a view's cache would make it nearly free ([forks.md](forks.md)).
 - **Loop Playback is left on during a take**, unlike Constrain Playback to Selection: a
   take that runs past the end of the reference would hear it start again while the take
   places what is sung after the end. Not tried.

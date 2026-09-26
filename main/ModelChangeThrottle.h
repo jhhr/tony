@@ -26,10 +26,9 @@
  * made to hold back its own change notices (notifyOnAdd false), such as
  * the live pitch dots of a take.
  *
- * A pane that is told of a change to one of its layers' models draws
- * every layer again, so a notice for each of the ~170 dots a second
- * kept the GUI thread busy for three quarters of its time. Told
- * nothing, a pane never draws the dots at all.
+ * A pane draws itself again for every notice it is told, and the dots
+ * come about 170 a second. Told nothing, a pane never draws the dots
+ * at all.
  *
  * The first change after a quiet interval is told at once; changes
  * that follow within the interval are told together at its end. Lives

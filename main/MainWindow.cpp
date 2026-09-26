@@ -3659,11 +3659,10 @@ MainWindow::setupRealtimePitchLayer()
     // Unit "Hz" is required so TimeValueLayer::shouldAutoAlign() defers to
     // the pane's log-frequency coordinate system (same as the pYIN pitch track).
     //
-    // notifyOnAdd false: a pane told of a change to one of its layers'
-    // models draws all of them again, and a notice for each of the ~170
-    // dots a second kept the GUI thread busy most of the time. The model
-    // then tells nobody of a dot, though, so m_realtimeDotsNotifier tells
-    // the pane of what was added, 25 times a second
+    // notifyOnAdd false: a notice for each of the ~170 dots a second
+    // would be a redraw for each. The model then tells nobody of a dot,
+    // though, so m_realtimeDotsNotifier tells the pane of what was added,
+    // 25 times a second
     auto pitchModel = std::make_shared<SparseTimeValueModel>
         (sr, RealtimePitchTracker::kHopSize, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
@@ -3693,6 +3692,11 @@ MainWindow::setupRealtimePitchLayer()
     m_realtimeDotsNotifier.setModel(m_realtimePitchModelId);
     m_realtimePitchLayer->setVerticalScale(TimeValueLayer::AutoAlignScale);
     m_realtimePitchLayer->setPlotStyle(TimeValueLayer::PlotPoints);
+
+    // Out of the pane's cache: told of a change to the model of a layer
+    // in it, the pane draws every layer in it again -- the reference's
+    // pitch track, notes and waveform, 25 times a second
+    m_realtimePitchLayer->setCachedInView(false);
 
     // Singing/recording track uses the "Orange" colour so it is visually
     // distinct from the reference track (black) and notes (blue).

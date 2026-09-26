@@ -871,6 +871,8 @@ private slots:
         QVERIFY(m_window->realtimeTracker());
         QVERIFY(m_window->realtimeLayer());
         QVERIFY(paneHasLayer(0, m_window->realtimeLayer()));
+        // Drawn by itself as dots come, not with every layer of the pane
+        QVERIFY(!m_window->realtimeLayer()->isCachedInView());
         auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
             (m_window->realtimeModelId());
         QVERIFY(model);

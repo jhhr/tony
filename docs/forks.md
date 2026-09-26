@@ -82,6 +82,12 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   progress, whose end crawls along behind the playback cursor. `MainWindow` names the
   reference instead.
 - `Layer::setSavedInSession(false)`: `View::toXml()` leaves the layer out.
+- `Layer::setCachedInView(false)`: `View` draws the layer, and every layer in front of it,
+  at every paint instead of keeping it in its cache, and a change to its model leaves the
+  cache alone. For the live dots ([recording.md](recording.md)).
+- `View::paintEvent()` on a cache hit no longer has the cached layers draw into its buffer,
+  where the cache then covered them. Upstream has done that since 2018, so the cache saved
+  nothing and every paint, down to the play pointer's few pixels, drew every layer.
 
 ## Known defects in the forks, not fixed
 
@@ -95,9 +101,6 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 
 ## Changes that would tidy Tony up but were not made
 
-- A way to keep a layer out of `View`'s cache (a view told of a change to a cached layer's
-  model draws every cached layer again) would let the live dots be drawn as they come,
-  where `ModelChangeThrottle` now has the pane redrawn in full 25 times a second.
 - `Document::setModelSource()` (or any way to set or clear a derivation record) would
   replace `MainWindow::adoptTakeLayers()` setting source models by hand.
 - A hook in `MainWindowBase::toXml()` would save `MainWindow::toXml()` buffering the whole

@@ -6,7 +6,7 @@ QtTest suites in `main/test/`, in two executables that mirror the two libraries
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
 | `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestModelChangeThrottle` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestSingingAnalysis`, `TestRecordWorkflow`, `TestUiChecks` | about 5 minutes (measured 2026-09-25 on Linux), nearly all of it `TestRecordWorkflow` and `TestUiChecks`: takes are recorded in real time |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestRecordWorkflow`, `TestUiChecks` | about 5 minutes (measured 2026-09-25 on Linux), nearly all of it `TestRecordWorkflow` and `TestUiChecks`: takes are recorded in real time |
 | `test-tony-device` | as `test-tony-app`, but with the **real** audio device | `TestRealDevice` | about a minute; run by hand only, see the [manual checklist](manual-checklist.md) |
 
 `meson test` / `build.bat test` runs the first two plus four svcore suites. `test-tony-device`

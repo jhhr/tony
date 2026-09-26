@@ -12,6 +12,7 @@
 */
 
 #include "TestSingingDocument.h"
+#include "TestViewCache.h"
 #include "TestSingingAnalysis.h"
 #include "TestRecordWorkflow.h"
 #include "TestUiChecks.h"
@@ -55,6 +56,12 @@ int main(int argc, char *argv[])
 
     {
         TestSingingDocument t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestViewCache t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

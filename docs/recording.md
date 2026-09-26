@@ -153,14 +153,21 @@ dot model outlives the take.
 there is not a full window yet. `kHopSize` is also the resolution of the dot model, whose
 unit must be `"Hz"` for the layer to align to the pane's log-frequency scale.
 
-**Telling the pane of the dots.** A pane told of a change to one of its layers' models
-draws every layer again. A notice for each dot, about 170 a second, took the GUI thread
-from 29 % to nearly 80 % of a core (cloud machine, 1920 px window). So the dot model is
-made with `notifyOnAdd` false, and then it tells nobody of a dot at all: the dots were
-drawn only when one widened the model's pitch range, and stalled within half a second on a
+**Telling the pane of the dots.** Every notice of a change to the dot model is a redraw of
+the pane, and a notice for each dot would be about 170 a second. So the dot model is made
+with `notifyOnAdd` false, and then it tells nobody of a dot at all: the dots were drawn
+only when one widened the model's pitch range, and stalled within half a second on a
 steady note. `onRealtimePitchDetected()` hands each dot's frames to
 `m_realtimeDotsNotifier` (`ModelChangeThrottle`, `tony_core`), which tells the pane at
-once and then at most every 40 ms (about 54 % of a core in the same test).
+once and then at most every 40 ms.
+
+**The dots are kept out of the pane's cache** (`Layer::setCachedInView(false)`, svgui
+fork). Told of a change to the model of a layer in its cache, a pane draws every layer in
+the cache again: the reference's waveform, pitch track and notes, 25 times a second. Kept
+out, each notice costs a copy of the cache and the dots. During a take in a 1920 px window
+on the cloud machine the GUI thread used about 22 % of a core, against 35 % with the dots
+in the cache. Every layer in front of the dots is drawn at every paint as well: only cheap
+ones, such as the coverage strip, may be raised above them.
 
 Correct as they are, though they look wrong:
 
