@@ -106,10 +106,11 @@ The environment's settings:
 Then, from the repository root:
 
 ```sh
-ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app > tmp/build.log 2>&1
+ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-tony-dev > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 deploy/linux/run-tests.sh test-tony-core     # about a second
-deploy/linux/run-tests.sh test-tony-app      # about a minute
+deploy/linux/run-tests.sh test-tony-app      # a minute and a half
+deploy/linux/run-tests.sh test-tony-dev      # when AGENTS.md says to run it
 ```
 
 No `.exe` on Linux; the plugin target is `pyin.so`. `run-tests.sh` runs an executable as
@@ -123,8 +124,9 @@ Measured on 2026-09-26:
 | Full build, nothing in ccache | 6.6 minutes: 1570 CPU-seconds, nearly all compiling |
 | Full build, everything in ccache | 4 to 6 seconds |
 | A session's first build, with the setup script's ccache | 3.7 minutes, in the background |
-| Linking Tony and the three test executables | 3 s with mold, 12 s with GNU ld |
-| App suite | 356 s in one process, 54 s in eight |
+| Linking `tony`, `test-tony-core`, `test-tony-app` and `test-tony-device` | 3 s with mold, 12 s with GNU ld |
+| App suite | 488 s in one process, 87 s in eight |
+| Development checks' suite | 68 s in one process, 18 s in eight |
 
 Why each part is as it is:
 

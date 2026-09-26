@@ -13,7 +13,7 @@
 # Builds Tony in the background at the start of a cloud session, so that
 # the build runs while the session reads and edits instead of after: the
 # library directories at their pins and build/ configured
-# (container-setup.sh), then Tony, the pYIN plugin and the three test
+# (container-setup.sh), then Tony, the pYIN plugin and the four test
 # executables.
 #
 # The environment's setup script (cloud-environment.sh) has installed the
@@ -22,9 +22,9 @@
 # when the session builds again. The build runs at low priority, so that
 # the session's own commands come first.
 #
-# build/ links with mold when it is installed: the four executables link
-# in about a second instead of about twelve with GNU ld, which every
-# change to main/ pays.
+# build/ links with mold when it is installed: Tony and the test
+# executables link in a few seconds instead of about twelve with GNU ld,
+# which every change to main/ pays.
 #
 # Usage, from anywhere:
 #   deploy/linux/cloud-session.sh start   start the build and return at
@@ -50,7 +50,9 @@ log=$root/tmp/cloud-session.log
 lock=$root/tmp/cloud-session.lock
 script=$root/deploy/linux/cloud-session.sh
 
-targets="tony pyin.so test-tony-core test-tony-app test-tony-device"
+# As AGENTS.md's. test-tony-dev is in every build but a release one, and
+# container-setup.sh configures debugoptimized
+targets="tony pyin.so test-tony-core test-tony-app test-tony-dev test-tony-device"
 
 case "${1:-} ${2:-}" in
     "start "|"start --if-cloud")

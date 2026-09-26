@@ -204,7 +204,7 @@ fill_ccache() {
             # svcore, then svgui and svapp (in libtonyapp.a with main/),
             # then the rest; each step until the deadline
             svlibs=$(ninja -t targets all | sed -n 's/^\(libtonyapp\.a\.p\/sv\(gui\|app\)_[^:]*\.o\):.*/\1/p')
-            for step in libsvcore.a "$svlibs" "tony pyin.so test-tony-core test-tony-app test-tony-device"; do
+            for step in libsvcore.a "$svlibs" "tony pyin.so test-tony-core test-tony-app test-tony-dev test-tony-device"; do
                 [ -n "$step" ] || continue
                 [ "$(left)" -gt 10 ] || break
                 until_deadline nice ninja -j "$(nproc)" $step > /dev/null
