@@ -88,7 +88,8 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   the view's at the least, up to four times, and never more than an eighth of the view's
   height; it grows with the **square root** of the zoom, so that zooming in gives the
   words room (their boxes grow with the zoom itself). No vertical scale, no feature
-  description, not editable.
+  description, and not editable by the pane's tools: Tony's `LyricsEditor` edits the
+  model itself.
   `setHighlightFrame()` draws the region at that frame in amber (the latest to start, where
   regions overlap) and emits `layerParametersChanged()` only when that region changes: the
   highlight is painted into the view's cache, so each new word repaints the view, a few
@@ -102,6 +103,17 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   lets the layer stay **scrollable**: `View::getNonScrollableFrontLayers()` treats every
   layer in front of a non-scrollable one as non-scrollable too, so the pitch tracks above
   the lyrics would repaint on every cursor update.
+  The layout is made again, the highlighted region found again and the whole view
+  repainted on **any** change to the model (member-pointer connections to `modelChanged`
+  and `modelChangedWithin`): an edited word keeps the count of regions and often the
+  extent of the whole, which with the zoom and the font is all the cache otherwise checks;
+  a label that changes or moves can move the labels before it and the rows of those after,
+  anywhere in the view; and the word being sung may be the one edited, or another one now.
+  `getLyricsBoxRow(view)` says where the boxes' row was last painted in that view, empty
+  before the first paint, for Tony's editor to tell whether the pointer is over a box. It
+  is in the view's own **logical** coordinates, the ones a mouse event has: on a high-DPI
+  screen the layer paints through a proxy at twice the size, so the row cannot be worked
+  out again from the pane.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
 - `Pane::setWorkModel()` / `getWorkModel()`: which model's extents are blocked off at the

@@ -504,9 +504,11 @@ LyricsEditor::dragTo(int x)
 {
     if (!m_dragging || !m_pane || m_dragModel.isNone()) return;
 
-    // The model can change under a drag: an undo from the keyboard, or
-    // the lyrics removed or replaced.  The word being dragged is then not
-    // what the drag last made it, and nothing it would do now is right
+    // The model can change under a drag: a keyboard undo that takes the
+    // word away, or the lyrics removed or replaced.  The word being
+    // dragged is then not what the drag last made it, and nothing it
+    // would do now is right.  An undo that leaves the word as the drag
+    // made it goes unnoticed: see docs/open-points.md
     auto model = dragModel();
     if (!model || !model->containsEvent(m_dragCurrent)) {
         abandonDrag();

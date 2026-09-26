@@ -127,31 +127,35 @@ Launch with `.\build.bat run`.
 41. **The left edge**: a word in the first ~30 px of the view is under the pane's vertical
     scale, at the bottom left (scroll so that a word is at the left edge). How much does
     that matter in use?
-42. **Inferred ends**: the exporter writes no end times. With word timing the last word of
-    a line ends at the next line but at most 2 s after it starts, unless a `♪` line marks
-    the end; with line timing a line lasts until the next one, and the last line 5 s. Do
-    those boxes mislead, and does the last word of a line stay highlighted too
-    long? The start times are exact.
+42. **Inferred ends**, with an LRC file, which has no end times (the exporter's TTML has
+    them). With word timing the last word of a line ends at the next line but at most 2 s
+    after it starts, unless a `♪` line marks the end; with line timing a line lasts until
+    the next one, and the last line 5 s. Do those boxes mislead, and does the last word of
+    a line stay highlighted too long? The start times are exact.
 43. **Hover readout**: with the lyrics shown, hovering over the pitch tracks gives the same
     readout and the same vertical scale as without them, also after turning the alternate
     pitch track off and after deleting a take.
-44. **A real Moises export** of one of your songs (exporter offset 0, gap threshold low),
+44. **A real Moises export** of one of your songs, as TTML, word by word, offset 0,
     imported onto the Moises stem or the original mix: the words line up with the vocal, by
-    eye and while playing, and the highlight moves with the voice. All early or late by the
-    same amount means the reference is not the recording Moises timed; an `[offset:]` line
-    in the file moves them.
+    eye and while playing, each box ends where the word does, and the highlight moves with
+    the voice and goes off in the gaps. A word Moises split into syllables is one box;
+    punctuation is on its word. All early or late by the same amount means the reference
+    is not the recording Moises timed (Tony cannot shift the whole song; an `[offset:]`
+    line added to an LRC file can). Compare with an LRC export of the same song, gap
+    threshold low.
 45. **Finnish text**: ä and ö come out right in the pane, and again after save and reopen.
 46. **Show Lyrics and Remove Lyrics**: hiding keeps the words for later, Remove takes them
     out, a second import replaces the first; each makes Close ask whether to save. The
     waveform is pale while the words are on show and grey again when they are hidden or
     removed. The status bar after an import counts words and lines and names anything
-    skipped.
+    skipped (a TTML file's background vocals and translations, say). Edit Lyrics goes off
+    and is greyed out when the words are hidden or removed.
 47. **Session**: save and reopen: the same words, hidden or shown as saved, and the
     waveform pale or grey to match; playback still ends at the end of the song, even with
     words past it.
 48. **During a take**: the words stay on show and readable while recording, with the
-    countdown and the live dots, and the take's waveform is pale as well; Import Lyrics is
-    greyed out while recording.
+    countdown and the live dots, and the take's waveform is pale as well; Import Lyrics
+    and Edit Lyrics are greyed out while recording, and Edit Lyrics is off after it.
 49. **The highlight while playing**: the word being sung turns amber as the reference
     reaches it and light again when it ends, in step with the voice, without flicker or
     visible lag. With playback stopped, a click or seek into a word highlights it at once,
@@ -160,3 +164,39 @@ Launch with `.\build.bat run`.
     reference through the lead-in, while the countdown is on the status bar, and on
     through the take from its position; after Stop it is back on the word at the take's
     position. The same with Play Reference While Recording off.
+
+## Lyrics: import and export dialogs, editing
+
+51. **The file dialogs on Windows.** Import Lyrics opens beside the reference and offers
+    "Lyrics (*.ttml *.lrc)" first, then TTML, LRC and all files. Export Lyrics offers
+    the reference's name with `.ttml`, beside it; a name typed without `.ttml` gets it
+    from the dialog (Tony adds none); replacing a file asks first. A folder that cannot
+    be written gives "Could not export lyrics" and leaves any file there as it was. After
+    an export the status bar says how many words and lines, and Close does not ask to
+    save because of it.
+52. **Export after edits, imported again**: edit a few words, Export Lyrics, Remove
+    Lyrics, import the file: the same words, times, bold line starts and title. Does
+    another tool (AMLL TTML Tool, say) read the file?
+53. **Edit mode**: with Edit > Edit Lyrics on, the pointer over a box edge in the row
+    shows the horizontal-resize cursor and nowhere else; the status bar says what the
+    mouse does there and clears when the pointer leaves the row. A click still moves the
+    playback cursor, and above the row, or with edit mode off, the mouse does what it
+    always did. Is Edit Lyrics easy to find, with no shortcut?
+54. **Dragging an edge**: where two words touch, just left of the line moves the earlier
+    word's end and just right of it the later word's start. Is the grab (6 px each side)
+    right? An edge stops at the neighbouring word and a word at 20 ms, without jumping;
+    the words, their labels and the highlight follow the pointer; one Ctrl+Z takes back
+    one whole drag, and Close asks whether to save.
+55. **The text dialog and the words' menu**: a double-click in a word asks for its text
+    (the first click of it also moves the playback cursor there: acceptable?); empty text
+    or Cancel changes nothing. A right-click in the row gives "Edit Word Text..." and
+    "Delete Word" on a word, "Add Word..." between words (greyed where the gap is under
+    20 ms); a new word is 0.5 s long or reaches the next word, joins the nearer
+    neighbour's line and is bold if it starts it. A right-click above the row still gives
+    Tony's own menu. Is the wording right?
+56. **High-DPI**: on a screen scaled to 150 % or 200 %, the resize cursor appears exactly
+    over the box edges, the row the mouse edits is the row of boxes (not above or below
+    it), and a drag keeps the edge under the pointer.
+57. **Drag smoothness**: with a whole song's words (hundreds) in view, and again while the
+    reference plays, a drag follows the pointer without stutter and playback does not
+    break up.

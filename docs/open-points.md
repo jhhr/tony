@@ -13,8 +13,11 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **Constrain Playback to Selection + pre-roll**: the play source constrains playback to
   the selection, the lead-in is outside it, so it is cut short. Nothing keeps the two apart.
 - **Take operations clear the undo history with no prompt** (all but Rename).
-- **A shortcut for Show Lyrics?** There is none; one would have to be checked against
-  `KeyReference` for clashes first.
+- **A shortcut for Show Lyrics or Edit Lyrics?** There is none; one would have to be
+  checked against `KeyReference` for clashes first.
+- **The editing constants** were defaults taken without the user: the 20 ms shortest
+  word, the 0.5 s new word, the 6 px grab on each side of an edge, the menu's wording,
+  and Edit Lyrics living in the Edit menu.
 - None of the [manual checklist](manual-checklist.md) has been run.
 
 ## Not built
@@ -24,15 +27,14 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - Background music is not saved in the session; it is reloaded by hand.
 - An old session (before takes) loses its singing track without telling the user why.
 - Recording that starts before frame 0 of the reference.
-- **Lyrics cannot be shifted or edited in Tony.** The remedy is to edit the LRC file and
-  import it again; its `[offset:]` tag is the only shift. That includes lyrics that are
-  all off by the same amount because the reference is not the recording they were timed
-  to. Import and Remove are not undoable, and a new import replaces the lyrics without
-  asking.
-- **LRC only**: no SRT, TTML or Moises JSON. The exporter's TTML carries real word (and
-  syllable) end times where its LRC has none, so it is the natural second format if the
-  inferred ends turn out misleading; another format is another function beside
-  `parseLrc()`.
+- **Lyrics are edited a word at a time**: no shifting of a line or of the whole song, no
+  splitting or merging of words, no editing of line breaks, no syllables (a file's
+  syllables are joined into their word). Not wanted for now. Lyrics that are all off by
+  the same amount, because the reference is not the recording they were timed to, can
+  only be moved by an LRC file's `[offset:]` tag. Import and Remove are not undoable, and
+  a new import replaces the lyrics, edits made in Tony included, without asking.
+- **TTML and LRC only**: no SRT or Moises JSON. Another format is another parser that
+  `parseLyrics()` chooses.
 
 ## Weak spots
 
@@ -66,6 +68,23 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   made-up but realistic timing (about three words a second) and a 26 px font: one row at
   200 px/s and above, a few words in the second row at 150 px/s, many in it and some left
   out at 100 px/s. Only the word being sung is always drawn.
+- **An undo from the keyboard in the middle of a lyrics drag can leave the word twice**:
+  once the word has moved, undoing an earlier step of the same word (Ctrl+Z with the
+  mouse button still held) removes the word as that step left it, which is not in the
+  model, and adds the old one back beside the moved one. The word the drag made is still
+  there, so the drag's own check does not see the change. There is no hook before an
+  undo to end the drag first.
+- **The first click of a double-click on a word moves the playback cursor** there, as
+  any click does; only the second is the editor's. Accepted for now.
+- **A double-click the pane handles itself** (edit mode off, or between words in edit
+  mode) can open the edit dialog of the pitch point under it: upstream Tony's Navigate
+  mode, not new, but easier to meet now that double-clicks are in use there.
+- **Lyrics steps left on the history after Remove Lyrics or an import do nothing** when
+  undone or redone: their model is gone (the command logs a warning). The menu still
+  offers them.
+- **Pane 0 of a reference has no context-help connection**: only `newSession()` connects
+  its pane to the status bar, so the pane's own help never shows there; the lyrics editor
+  sends its help itself and clears it on leaving the row.
 - **Right after `closeSession()`, Show Lyrics and the alternate pitch actions keep their
   enabled and checked states** until the next reference or session opens: nothing there
   calls `updateLayerStatuses()`. Show Lyrics then does nothing when chosen.

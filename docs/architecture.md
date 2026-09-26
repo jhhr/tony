@@ -15,8 +15,9 @@ Upstream Tony analyses the pitch of one recording. This fork makes it a singing 
    the rest, erase, undo, and keep several takes. See [takes.md](takes.md).
 5. Around that: play the reference while recording, latency compensation, pre-roll,
    record into selection, an octave-shifted "alternate" pitch track to follow, timed
-   lyrics along the bottom of the pane with the word being sung highlighted, and a
-   background music track that is played but never analysed.
+   lyrics along the bottom of the pane with the word being sung highlighted and every
+   word editable in place, and a background music track that is played but never
+   analysed.
 
 The user-facing description is in the [README](../README.md).
 
@@ -31,8 +32,8 @@ only what they need:
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LatencyUtils.h` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `TakeCommands`, `TakeLayers`, `PaneUtils` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `TakeCommands`, `TakeLayers`, `PaneUtils` |
 
 When adding a file: put it in the right `*_files` list, and in the matching `*_moc_files`
 list **only if** it has `Q_OBJECT`. Logic that can be written as pure functions or a plain
@@ -56,7 +57,8 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`. All three watch
   `Document::layerAboutToBeDeleted` in case someone else deletes their layer, and all
   three must be deleted in `~MainWindow` **before** the base class deletes the document
-  (as must `m_analyser2`).
+  (as must `m_analyser2`). `LyricsEditor` owns no layer: it finds the lyrics through
+  `LyricsTrack` at every event, and is deleted before it.
 - `RealtimePitchTracker` is a `QThread` that only **reads** the recording's
   `WritableWaveFileModel` and emits `pitchDetected(frame, hz)`. It never touches the pitch
   model; `MainWindow::onRealtimePitchDetected()` writes it on the GUI thread (queued
@@ -205,10 +207,11 @@ after `openPath()`, and only then prune the extra pane — the imported waveform
 is the only reference to the model until `m_analyser2` has a layer of its own. It ends with
 `clearTakeHistory()`, which also disposes of the "Import" command for the pruned pane.
 
-**Lyrics** (`Lyrics` parses the LRC file, `LyricsTrack` owns the layer): one `RegionModel`
-in pane 0 on the reference's timeline, a region per word (or per line, for a line with no
-word times): frame = start, duration = end - start (at least one frame), label = the word,
-value = the line's index, which is what the bold line starts go by. It is drawn by the
+**Lyrics** (`Lyrics` and `LyricsTtml` read the file, `LyricsTrack` owns the layer,
+`LyricsEditor` edits the words): one `RegionModel` in pane 0 on the reference's timeline,
+a region per word (or per line, for a line with no word times): frame = start,
+duration = end - start (at least one frame), label = the word, value = the line's index,
+which is what the bold line starts go by. It is drawn by the
 svgui fork's `PlotLyrics` style ([forks.md](forks.md)), in boxes along the bottom of the
 pane just above the coverage strip, because a session restores only layers
 `LayerFactory` can make. Found again after a session load by its untranslated object
@@ -223,10 +226,38 @@ because that layer is still in the pane when `layerAboutToBeDeleted` arrives. No
 takes: the take code finds layers by take name, source model or extra pane, so it never
 finds this one, and it stays on show during a take, when the singer needs the words most.
 Import and Remove push no command and leave the undo history alone, like Load Background
-Music: the simpler option, and the file is still there to import again. Show Lyrics is the layer's own
-visibility, which the session saves, not a QSettings key. The parser strips control
-characters (and U+FFFE, U+FFFF, which the UTF-8 decoder lets through) from every label:
-XML 1.0 cannot hold them, and one in a label would make the `.ton` unreadable.
+Music: the simpler option, and the file is still there to import again (edits made in
+Tony since are not: Export Lyrics keeps them). Show Lyrics is the layer's own
+visibility, which the session saves, not a QSettings key. Both parsers strip control
+characters (and U+FFFE, U+FFFF, which the UTF-8 decoder lets through) from every label,
+and the editor cleans a typed text the same way: XML 1.0 cannot hold them, and one in a
+label would make the `.ton` unreadable.
+
+**Lyrics files.** `parseLyrics()` reads the file as TTML if its first character that is
+not blank, after a byte order mark, is `<`, and as LRC otherwise: an LRC file never
+starts with `<`, so the content decides whatever the file is called. TTML is read as
+Apple Music, the Moises-Lyric-Exporter and AMLL TTML Tool write it, a `<p>` per line and
+a timed `<span>` per word, with elements matched by local name in any namespace (files
+without the TTML namespace exist). Its times are read as **absolute**: strict TTML makes
+a child's time relative to its parent's, but no lyrics tool writes them so, and read that
+way every word would move by its line's start. Timed spans with no white space between
+them are syllables of one word and are joined: Tony edits words, and the exporter writes
+punctuation as a span of its own straight after the word. Background vocals,
+translations and romanisations (`ttm:role` `x-bg`, `x-translation`, `x-roman`,
+`x-romanization`) are skipped with a warning: a translation is not what is sung, and
+background vocals overlap the lead's words in a row that has room for one word at a time.
+A `<p>` with no timed spans is one word, the whole line. Ends the file does not give are
+inferred as for LRC; the exporter's TTML gives them all, which is why the README says to
+set the exporter to TTML. A file with a `<!DOCTYPE` is refused: TTML has none, and it is
+how entity tricks get in.
+
+**Export Lyrics** writes the words as the model has them now, edits included
+(`lyricsFromEvents()`, then `writeTtml()` in the exporter's Apple style), through a
+`QSaveFile`, so that a file already there is replaced only by a complete one. It is **not
+a command and does not mark the session modified**: nothing in the session changes. The
+title is not in the model; it comes from the layer's name, which an import sets from the
+file's title. Read back, an export gives the same words, texts and lines, the times to
+half a millisecond.
 
 The word being sung is highlighted. `MainWindow::playbackFrameChanged()` passes every
 frame the view manager reports to `LyricsTrack::setPlaybackFrame()`, which passes it to
@@ -250,3 +281,66 @@ Track and session load goes through with a new waveform; in `analyseNewMainModel
 whether or not lyrics were adopted, because the analyser took the saved layer over before
 the lyrics were looked for; and in `closeSession()`, because `m_analyser` lives on for the
 next file.
+
+**Editing the lyrics** (`LyricsEdit` in `tony_core` says what an edit may do,
+`LyricsEditor` does it). The lyrics layer is never the pane's top layer, and the pane's
+tools act only on the top layer (`PlotLyrics` also calls itself not editable), so no tool
+mode can reach the words. The editor is therefore an **event filter on the lyrics' pane**,
+installed only while Edit > Edit Lyrics is on. In the box row it keeps from the pane only
+what it acts on: a left press on an edge and the drag it starts, up to the release; a
+double-click inside a word; a right press, for the words' menu; and moves with no button
+held, where the cursor and the context help are its own. Everything else reaches the pane
+as it would without edit mode, so a click still moves the playback cursor. Editing needs
+a mode because words touch: the row is edges nearly everywhere, and an editor always on
+would take the clicks meant for the cursor.
+
+- **Edit mode goes off in one place**, `updateMenuStates()`, whenever
+  `lyricsEditAllowed()` is false: the lyrics removed or hidden, recording started, the
+  session closed (through `documentRestored()`). Each of those ends in
+  `updateMenuStates()`. An import switches it off itself, before the words there go.
+  Going off finishes a drag in progress, as a release would, and so pushes its command;
+  when the lyrics have gone first (closing the session deletes the document before
+  `updateMenuStates()` runs), the drag is dropped unpushed instead, as below.
+  `updateMenuStates()` runs during undo and redo too, where a push would delete the
+  command running, so nothing an undo or redo does may make `lyricsEditAllowed()` false:
+  the lyrics' presence and visibility stay out of commands.
+- **One `ChangeEventsCommand` per edit** ("Move Word Start", "Move Word End", "Change Word
+  Text", "Add Word", "Delete Word"), holding the model's id and `Event` values, pushed
+  done with `addCommand(command, false)`; `CommandHistory` marks the session modified, and
+  the session saves the model as it is. A drag changes the model at every move, so that
+  the word follows the pointer and the layer lays the words out again (svgui fork), and
+  its command is pushed **only at the release**; a drag that ends where it began pushes
+  nothing. The editor pushes only from a mouse event or a menu choice, never from
+  anything an undo or redo reaches. Take operations clear the history, lyrics steps with
+  it; Import and Remove do not, and a lyrics step left from before them does nothing, its
+  model being gone.
+- **The drag rules are fed the words as they were at the press**, at every move: the
+  limits (the neighbour, the 20 ms minimum) come from where the word was then, so a drag
+  back puts the word back. Fed the moved words, the limits would travel with the word.
+  The edge moves as far as the pointer has, in frames, since the press, so a press a few
+  pixels off the edge makes no jump, and a view that scrolls in the middle of a drag
+  changes nothing.
+- **The model can change under a drag** (a keyboard undo that takes the word away, the
+  lyrics removed or replaced). The editor finds the layer and model through `LyricsTrack` at every event
+  and checks that the word is still what the drag made it; if not, the drag's command is
+  deleted unpushed and the rest of the drag, to the release, is swallowed, as the pane
+  never saw its press.
+- **The box row is the layer's** (`getLyricsBoxRow()`), never worked out again from the
+  pane: the layer knows where it painted, in the pane's logical coordinates, the ones a
+  mouse event has, which on a high-DPI screen are half those of the proxy it paints
+  through. The row is empty before the first paint, and hidden lyrics keep the row they
+  were last painted in, so the editor checks visibility as well. The boxes' x come from
+  the pane's `getXForFrame()`, as the layer paints them.
+- **After a question, look again.** The text dialog runs an event loop of its own, in
+  which anything can happen: an import, a session closed, an undo. So after it the edit
+  looks the model up again (the same id, edit mode still on) and the word in it (still
+  there, unchanged), and does nothing if either has gone; Add Word works its span and line
+  out again from the words as they are then. The words' menu is `popup()`ed, as Tony's
+  own menu is, so that the question is not asked from inside the pane's event handling;
+  its entries hold values (the model's id, the word, a frame) and are looked up again
+  when chosen.
+- Add Word goes at the **last** frame of the column clicked: the first can be inside the
+  word before, whose end lies in the column after its box.
+- Pane 0 of a reference has no context-help connection (only `newSession()` makes one),
+  so the editor's help goes straight to the status bar, and the editor clears it itself
+  when the pointer leaves the row.

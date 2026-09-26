@@ -56,8 +56,12 @@ orange pitch track to compare with it.
    hides them, File -> Remove Lyrics takes them out, and File -> Export
    Lyrics... writes them, as they are now, to a TTML file. The reference must
    be the recording the lyrics were timed to (a Moises stem and its original
-   mix share a timeline); to change a word or its time, edit the file and
-   import it again
+   mix share a timeline)
+ * the lyrics can be corrected by ear, with the song there to listen to: with
+   Edit -> Edit Lyrics on, drag the start or end of a word in its box,
+   double-click a word to change its text, or right-click to delete a word or
+   add one between words. Each edit can be undone; the edits are saved with
+   the session, and Export Lyrics writes them
  * lyrics can be exported from Moises with the Moises-Lyric-Exporter browser
    extension. Set it to TTML, word by word, with the offset at 0 (otherwise
    every line is 0.2 s early, and Tony cannot tell): TTML gives every word

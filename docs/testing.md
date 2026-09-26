@@ -5,7 +5,7 @@ QtTest suites in `main/test/`, in two executables that mirror the two libraries
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow` | about 4.5 minutes (measured 2026-09-20), nearly all of it `TestRecordWorkflow`: takes are recorded in real time |
 
 `meson test` / `build.bat test` runs both plus four svcore suites.
@@ -55,7 +55,9 @@ Windows path would start an escape in the C string.
   `range_analysis_torn_down_while_running`, `save_during_ranged_analysis`,
   `undo_during_analysis_then_redo` and `analyse_now_reanalyses_the_take`, where the
   analysis finishes before the race they need can be set up. Which of those five fail
-  changes from run to run.
+  changes from run to run, and so can where: `undo_during_analysis_then_redo` fails
+  either before the undo, with no ranged analysis left running, or after the redo, with
+  `analysedRangeStart()` already 0 — the same race.
 
 ## Design principles
 
@@ -88,13 +90,18 @@ Windows path would start an escape in the C string.
   `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on, installs the
   fake device through `createAudioIO()`, and **answers dialogs through virtual seams**:
   `confirmRecordingOverTake()`, `confirmDeleteTake()`, `askForTakeName()`,
-  `askForLyricsFile()`, each with a `set...Answer()` and a counter of questions asked. A
+  `askForLyricsFile()`, `askForLyricsExportFile()` (which also keeps the path it was
+  offered), each with a `set...Answer()` and a counter of questions asked.
+  `askForLyricsWordText()` takes a queue of answers (`answerWordText()`,
+  `cancelWordText()`; none left is Cancel) and can run something while the question is
+  open (`whileAskingWordText()`), as a real dialog's event loop lets anything happen. A
   test cannot answer a real dialog: anything new that asks the user needs such a virtual.
 - Fixture helpers: `makeWindow(config)`, `writeWav()`, `openReference()`, `startTake()` /
   `stopTake()` / `take(ms)`, `verifyPlaySourceClean()`, `layersOnModel()`,
   `paneHasLayer()`, `documentHasLayer()`, `reopenAsSession()` / `reopenSession()`,
   `verifyEventsSurvived()`; for the lyrics `lyricsFixture()`, `writeLrc()`,
-  `verifyLyricsUntouched()`.
+  `verifyLyricsUntouched()`; for editing them `lyricsEditFixture()` and the mouse helpers
+  below.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
   dialogs a test does expect.
@@ -107,14 +114,52 @@ Windows path would start an escape in the C string.
   of its own because the Vamp *plugin* SDK headers must not meet the *host* SDK headers
   svcore uses.
 - `testdata/happy_birthday_gp_masked.wav`: a real sung recording.
-- `testdata/lyrics/`: LRC files with invented text. Two are in the exact format of the
-  Moises lyrics exporter (word timing and line timing: no end times, a `♪` gap line, a
-  word with punctuation glued to the one before, a line its clamp stamped 0); the third is
-  a generic LRC that does give ends.
+- `testdata/lyrics/`: LRC and TTML files with invented text. Two LRC files are in the
+  exact format of the Moises lyrics exporter (word timing and line timing: no end times, a
+  `♪` gap line, a word with punctuation glued to the one before, a line its clamp stamped
+  0); the third is a generic LRC that does give ends. `moises-exporter-words.ttml` and
+  `moises-exporter-lines.ttml` are the exporter's TTML, word by word and line by line,
+  offset 0, **made by the exporter's own code**: a small node script copied its input
+  handling and TTML branch verbatim and ran them on an invented Moises-style JSON (segment
+  format, one word in syllables, punctuation as a word of its own). The script is not in
+  the repository, because it is the exporter's code; to make the files again, do the same
+  from the exporter's reviewed commit. `amll-style.ttml` is written by hand in the style
+  of AMLL TTML Tool: times `mm:ss.mmm`, two agents, a background-vocal span and
+  translation spans.
 
 Prefer signals that describe themselves: `TestTakeAudio` uses constants and ramps so that
 every sample says where it came from. Assert **identity** as well as equality where the
 point is that something survived: the same layer and model objects before and after.
+
+### The mouse in pane 0 (`lyrics_edit_*`)
+
+The lyrics editor is an event filter on pane 0, so its tests send it real mouse events.
+The rules of the edits themselves are tested without a window, in `TestLyricsEdit`.
+
+- **`QApplication::sendEvent()` to the pane** (`sendMouse()`, and `hoverAt()`,
+  `pressAt()`, `moveHeldTo()`, `releaseAt()`, `dragFromTo()`, `doubleClickAt()`,
+  `rightPressAt()` on top of it): an event sent so goes to the pane's event filters first
+  and then to the pane, as real input does. Not `QTest::mouseMove`, which does not carry
+  the buttons held. A double-click is sent as Qt makes one: a press and a release, then
+  `MouseButtonDblClick` in place of the second press, and its release.
+- **Positions from what was painted**: y from `getLyricsBoxRow()`, x from the pane's
+  `getXForFrame()` (`inRow()`, `columnOf()`). The layer knows where the row is only once
+  it has painted it, so the helpers paint the pane first (`grab()`).
+- **The pane gets a size and a zoom of its own** (`showEditableLyrics()`: 1000 x 120,
+  128 frames a pixel). The test window is never shown, and its layout leaves pane 0 a few
+  pixels high, or never lays a new pane out at all. At that zoom every word is in view and
+  about a hundred pixels wide, so an edge's grab never reaches across a word; the fixture
+  checks all of that before the test relies on it.
+- The words' menu: `menuEntriesAt()` / `choose()` are the seam for what it offers and
+  does (`menuAt()`, `chooseAt()`); `lyrics_edit_right_press` also finds the menu really
+  popped up (`wordsMenu()`) and triggers its entries. A popped-up menu has no event loop
+  to end and the dialog watchdog leaves it alone: close it with `closeMenus()`.
+- A double-click that the pane handles itself (edit mode off, or between words) can open
+  the edit dialog of the pitch point there, as upstream Tony does in Navigate mode. The
+  watchdog closes it, and a test that sends one takes it with `takeDialogs()`, or
+  `cleanup()` fails it.
+- `lyricsModel()` changes the words straight in the model, as setup: no command, nothing
+  marked modified.
 
 ### Setup that fails confusingly when it is missing
 
