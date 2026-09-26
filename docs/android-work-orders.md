@@ -159,7 +159,7 @@ builds happen in the container.)
 - A4 — Touch gestures on the panes. Done.
 - A5 — Compact touch mode. Done.
 - A6 — Oboe audio backend. Done.
-- A7 — Sessions in place on the phone, and fixes from the first phone test.
+- A7 — Sessions in place on the phone, and fixes from the first phone test. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -560,3 +560,29 @@ Choices / deviations:
 The next phase must know: once a take is recorded the device stays duplex (svapp), so Play
 opens the microphone too; nothing calls `suppressRecordSide()`. Logcat tag Tony: "OboeAudioIO:".
 Left open: not run on a phone; the first Record press blocks for the open (up to ~1 s).
+
+### Phase A7 — 2026-09-26
+Built: `AndroidFiles` (core): `pathFromContentUri()` (externalstorage `primary:`/volume-UUID ids,
+alone or under a tree; downloads `raw:`; split before decoding; `..` refused), `suggestedSessionName()`,
+`sessionFileName()`, `removeIfEmpty()`. `AndroidStorage` (Android only): `isExternalStorageManager()`,
+the root, `ask()` (a box, Settings' page for Tony or else the list, then a Qt box that closes when Tony
+is back with access). `TouchMenuStyle` (app; main() installs it on Android only). `MainWindow` on
+Android: Open maps a pick to its path (asks with a session, once with audio), else copies audio or
+refuses a session; Save As runs its own QFileDialog; `applicationStateChanged()`. Manifest:
+MANAGE_EXTERNAL_STORAGE (`tools:ignore="ScopedStorage"`; debug builds run no lint). Chained `.arg()`
+with paths or names made single calls in main/: TakesFile wrote a take named "a %1" or "%3" wrong.
+Choices / deviations:
+- Qt 6.11 (androidjnimain.cpp): on Suspended Qt posts the event, then stops the GUI dispatcher until
+  Active (no `android.app.background_running`): a nested loop in the slot blocks until Tony is back.
+  So nothing there waits; a save that needs a take's ranged analysis merged is made after return.
+  A never-saved session is not saved. No save while a dialog or the picker is up (`loopLevel() > 1`).
+- QMenu wraps a tall menu into columns (off the side on a phone); scrollable, it has hover arrows
+  (a tap scrolls to the end), so a finger's drag scrolls it too, through wheel events.
+- Save As: `selectFile()` gives EXTRA_TITLE; no default suffix (Qt appends it to the URI's decoded
+  path); MIME octet-stream. Exports still go through svgui's dialog and the URI. `build-apk.sh`
+  now deletes Gradle's last APK (incremental packaging left 7 MB holes).
+The next phase must know: Android's native QMessageBox cannot be closed from code (its helper's
+hide() does not end exec()): DontUseNativeDialog. `activeModalWidget()` misses native dialogs.
+Left open: not run on a phone. Below Android 11 no in-place sessions. Downloads (`msf:` ids)
+refused for sessions. Save to Audio Path with copied audio saves into app storage. For A8:
+port-android.md "Files, storage..." (bundle superseded) and "Permissions and lifecycle".
