@@ -350,7 +350,10 @@ them:
   `loopback()`). The device reports 2 × 4096 frames out and 4096 in, and the true round
   trip (`inputDelay`) is 123 frames longer: a check that works measures the true one, and
   with it every sweep lands at 0 frames, while a run placed with the reported pair lands
-  2.8 ms off. `TestDevChecks`' loopback also has `reportLevels` on, for the observer's
+  2.8 ms off. With the fake at 48 kHz (`sampleRate`) the delay and the reported latencies
+  count its own frames, so work the true round trip out in seconds at that rate; bqaudioio's
+  `ResamplerWrapper` then adds about 1.1 ms that nothing reports, which the check measures
+  with the rest. `TestDevChecks`' loopback also has `reportLevels` on, for the observer's
   output levels.
 - **Keep them short.** Every run records in real time.
   - `TestAudioCheck`'s `shortPlan()` is two punch-ins of two sweeps on the calibration

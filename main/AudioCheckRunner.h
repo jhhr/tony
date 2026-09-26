@@ -53,15 +53,12 @@ struct AudioCheckResult
     double reportedInputLatency;
 
     /// The rate the device recorded at, and the session's, which the
-    /// reference was made at
+    /// reference was made at.  They may differ: a recording is converted
+    /// to the reference's rate before it is spliced, and the round trip
+    /// is counted in seconds, so a check at another rate is judged, and
+    /// its figure kept, like any other
     sv::sv_samplerate_t recordingRate;
     sv::sv_samplerate_t referenceRate;
-
-    /// The two rates differ.  Set from the rates, whatever the sweeps
-    /// say: a take recorded at another rate is placed frame for frame
-    /// (a known bug), so it lands further off the further into the
-    /// reference it is, soon further than the finder looks
-    bool rateMismatch;
 
     /// The round trip that would have placed the takes right
     /// (LatencyCheck::calibratedRoundTrip()); see calibrationUsable()
@@ -75,13 +72,12 @@ struct AudioCheckResult
     LatencyCalibration::Key key;
 
     /// Whether calibratedRoundTrip means anything: the run was judged
-    /// Ok or Unsteady, at the reference's rate
+    /// Ok or Unsteady
     bool calibrationUsable() const;
 
     AudioCheckResult() : usedRoundTrip(0), reportedOutputLatency(0),
                          reportedInputLatency(0), recordingRate(0),
-                         referenceRate(0), rateMismatch(false),
-                         calibratedRoundTrip(0) { }
+                         referenceRate(0), calibratedRoundTrip(0) { }
 };
 
 /**
@@ -286,8 +282,9 @@ public:
     static bool analysing(Analyser *analyser);
 
     /**
-     * A take's audio file, mixed to one channel, at the rate it was
-     * recorded at.  The file, and not the take's model: the model is
+     * A take's audio file, mixed to one channel, at the file's rate
+     * (the reference's: a recording at another rate is converted before
+     * it is spliced).  The file, and not the take's model: the model is
      * normalised to full scale as it is read (the "normalise audio"
      * preference), which would have every take clipped, and resampled
      * to the session's rate.  "" on success, else what went wrong.

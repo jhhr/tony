@@ -608,86 +608,73 @@ CalibrateAudioDialog::calibrationHtml() const
     const QString measured = milliseconds(r.calibratedRoundTrip);
     const QString timing = milliseconds(timingSpread(s));
 
-    // The verdict in plain words, and what to do about it.  A rate that
-    // differs comes first, whatever the sweeps say: they are misplaced
-    // by it, further the later they come
+    // The verdict in plain words, and what to do about it
     QString html;
-    if (r.rateMismatch) {
-        html += paragraph(bold(tr("The recording device runs at %1 Hz; takes "
-                                  "cannot line up until that is fixed.")
-                               .arg(hertz(r.recordingRate))));
+    switch (s.verdict) {
+    case Verdict::Ok:
+        html += paragraph(bold(tr("The test sounds came back steadily, "
+                                  "%1 after they were played.")
+                               .arg(measured)));
         html += paragraph
-            (tr("The test reference runs at %1 Hz, as everything Tony plays "
-                "does. A take recorded at another rate lands further off the "
-                "later in the song it is, so no one latency places it right.")
-             .arg(hertz(r.referenceRate)));
-    } else {
-        switch (s.verdict) {
-        case Verdict::Ok:
-            html += paragraph(bold(tr("The test sounds came back steadily, "
-                                      "%1 after they were played.")
-                                   .arg(measured)));
-            html += paragraph
-                (tr("Press Use this latency to place your takes with it."));
-            break;
-        case Verdict::NoSignal:
-            html += paragraph(bold(tr("Tony could not hear the test sounds: "
-                                      "it found %1 of %2.")
-                                   .arg(s.found).arg(s.judged)));
-            html += "<ul><li>" +
-                tr("Turn the volume up, and hold the earcup right against "
-                   "the microphone.") + "</li><li>" +
-                tr("Check that the microphone is not muted, and that it is "
-                   "the one Tony records from (Playback ▸ Audio Input "
-                   "Device).") + "</li><li>" +
-                tr("In Windows, turn off Sound settings ▸ your microphone ▸ "
-                   "Audio enhancements.") + "</li><li>" +
-                tr("Do not record through a Bluetooth headset's "
-                   "\"Hands-Free\" device: it records at telephone quality.") +
-                "</li></ul>";
-            break;
-        case Verdict::Clipped:
-            html += paragraph(bold(tr("The test sounds were too loud: the "
-                                      "recording reached full scale.")));
-            html += paragraph(tr("Turn the volume down, or hold the earcup a "
-                                 "little away from the microphone, and "
-                                 "check again."));
-            break;
-        case Verdict::Fading:
-            html += paragraph(bold(tr("The test sounds got quieter as the "
-                                      "check went on, by %1 dB.")
-                                   .arg(QLocale().toString
-                                        (s.fadingDb, 'f', 0))));
-            html += paragraph
-                (tr("Something is filtering the microphone, such as echo "
-                    "cancellation or audio enhancements. In Windows, turn "
-                    "off Sound settings ▸ your microphone ▸ Audio "
-                    "enhancements, and check again."));
-            break;
-        case Verdict::PositionDependent:
-            html += paragraph(bold(tr("The delay grew from one punch-in to "
-                                      "the next.")));
-            html += paragraph
-                (tr("The recording seems to run at another speed than the "
-                    "playback, so no one latency places every take right."));
-            break;
-        case Verdict::Scattered:
-            html += paragraph(bold(tr("The driver's timing varies from take "
-                                      "to take by %1.").arg(timing)));
-            html += paragraph
-                (tr("No one latency places every take right when it varies "
-                    "that much. Close other programs that use sound, and "
-                    "check again."));
-            break;
-        case Verdict::Unsteady:
-            html += paragraph(bold(tr("The driver's timing varies from take "
-                                      "to take by %1.").arg(timing)));
-            html += paragraph
-                (tr("That is small enough to use: the measured round trip, "
-                    "%1, is the middle of it. Press Use this latency to place "
-                    "your takes with it.").arg(measured));
-            break;
-        }
+            (tr("Press Use this latency to place your takes with it."));
+        break;
+    case Verdict::NoSignal:
+        html += paragraph(bold(tr("Tony could not hear the test sounds: "
+                                  "it found %1 of %2.")
+                               .arg(s.found).arg(s.judged)));
+        html += "<ul><li>" +
+            tr("Turn the volume up, and hold the earcup right against "
+               "the microphone.") + "</li><li>" +
+            tr("Check that the microphone is not muted, and that it is "
+               "the one Tony records from (Playback ▸ Audio Input "
+               "Device).") + "</li><li>" +
+            tr("In Windows, turn off Sound settings ▸ your microphone ▸ "
+               "Audio enhancements.") + "</li><li>" +
+            tr("Do not record through a Bluetooth headset's "
+               "\"Hands-Free\" device: it records at telephone quality.") +
+            "</li></ul>";
+        break;
+    case Verdict::Clipped:
+        html += paragraph(bold(tr("The test sounds were too loud: the "
+                                  "recording reached full scale.")));
+        html += paragraph(tr("Turn the volume down, or hold the earcup a "
+                             "little away from the microphone, and "
+                             "check again."));
+        break;
+    case Verdict::Fading:
+        html += paragraph(bold(tr("The test sounds got quieter as the "
+                                  "check went on, by %1 dB.")
+                               .arg(QLocale().toString
+                                    (s.fadingDb, 'f', 0))));
+        html += paragraph
+            (tr("Something is filtering the microphone, such as echo "
+                "cancellation or audio enhancements. In Windows, turn "
+                "off Sound settings ▸ your microphone ▸ Audio "
+                "enhancements, and check again."));
+        break;
+    case Verdict::PositionDependent:
+        html += paragraph(bold(tr("The delay grew from one punch-in to "
+                                  "the next.")));
+        html += paragraph
+            (tr("The recording seems to run at another speed than the "
+                "playback, so no one latency places every take right."));
+        break;
+    case Verdict::Scattered:
+        html += paragraph(bold(tr("The driver's timing varies from take "
+                                  "to take by %1.").arg(timing)));
+        html += paragraph
+            (tr("No one latency places every take right when it varies "
+                "that much. Close other programs that use sound, and "
+                "check again."));
+        break;
+    case Verdict::Unsteady:
+        html += paragraph(bold(tr("The driver's timing varies from take "
+                                  "to take by %1.").arg(timing)));
+        html += paragraph
+            (tr("That is small enough to use: the measured round trip, "
+                "%1, is the middle of it. Press Use this latency to place "
+                "your takes with it.").arg(measured));
+        break;
     }
 
     if (s.echo.heard) {
@@ -711,9 +698,8 @@ CalibrateAudioDialog::calibrationHtml() const
             "</td></tr>";
     };
     // What the sweeps found says how far the driver's figure is out even
-    // when it cannot be used, as long as enough of them were found and
-    // at the right rate
-    const bool haveMeasurement = s.found > 0 && !r.rateMismatch &&
+    // when it cannot be used, as long as enough of them were found
+    const bool haveMeasurement = s.found > 0 &&
         s.verdict != Verdict::NoSignal;
 
     html += "<table cellspacing=\"4\">";
@@ -742,8 +728,12 @@ CalibrateAudioDialog::calibrationHtml() const
     html += row(tr("Spread between punch-ins:"), milliseconds(s.spread));
     html += row(tr("Test sounds found:"),
                 tr("%1 of %2").arg(s.found).arg(s.judged));
+    // A device at another rate than the reference's is a fact, not a
+    // fault: its recordings are converted as they are spliced
     html += row(tr("Sample rates:"),
-                tr("recorded at %1 Hz, reference at %2 Hz")
+                (r.recordingRate != r.referenceRate ?
+                 tr("recorded at %1 Hz, converted to the reference's %2 Hz") :
+                 tr("recorded at %1 Hz, reference at %2 Hz"))
                 .arg(hertz(r.recordingRate)).arg(hertz(r.referenceRate)));
     html += row(tr("Input peak:"),
                 s.inputPeak > 0.0 ?
