@@ -194,7 +194,7 @@ coloured fringes on the scale's labels read as live dots in `TestUiChecks`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`), C2 (`fbdce6c`), C2b (`4fb73ac`), C2c (`5f7b2b8`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`), C2 (`fbdce6c`), C2b (`4fb73ac`), C2c (`5f7b2b8`), C3 (`e03f9d2`).
 
 Also done: C1a (`4370131`), the merge of `default` (`c8b9585`), `test-tony-dev` (lead).
 
@@ -448,9 +448,40 @@ A build directory of type `release`: it must compile and link with no `main/dev/
     the Calibrate Audio "Not built" item and add what is left open, the svapp
     `aboutToBeDeleted()` warning included.
 - Make `docs/calibrate-audio.md` describe what was built, with a "Known limitations and
-  open points" section.
-- Delete this work-orders file and the log file, and remove the spec's links to them.
-- No code. Suspected bugs go in the report.
+  open points" section. It is a plan today, with "Found in …" and "Since …" notes
+  layered on (§2's note that 4 × 3 does not fit is out of date; §4's table uses the
+  checklist's old numbering; §5's `waitUntil()` and modal dialog are gone). Rewrite it as
+  the design as built: the button, calibration, the dev run's stages and items, the
+  architecture, the tests, and the decisions table; keep the facts of §11 that still
+  hold, and the user's runs as dated notes. Say plainly what each verdict and each dev
+  check means, and which numbers the user should send back.
+- **`AGENTS.md`**: a row in its "Read … before …" table for `docs/calibrate-audio.md`
+  (touching the audio check, the dev checks, or latency calibration), if you judge it
+  earns one; nothing else there unless it is false.
+- **Open points to carry** into `open-points.md` (and the spec's limitations), each
+  checked against the code first:
+  - the next project, a lower-latency driver (spec §7): the rate fix first, the
+    `jhhr/bqaudioio` fork (created, attached, not yet pinned), a driver type in Tony, MME
+    the default until a run shows better;
+  - MME's restart jitter and what it fails today (spec §8, `manual-checklist.md` §1);
+  - items 4 and 12 read Pass when their gap part was "not judged" (C2b): the Totals line
+    then overstates; the user has not decided whether it should count otherwise;
+  - `AudioCheckRunner::kReferenceTimeoutMs` (60 s) against the long song's analysis
+    (10.4 s here): a PC six times slower ends the dev run at its first stage;
+  - the countdown reads 1, 2, 1 at P = 1 s with a 3 s pre-roll (C1c);
+  - live dots trail the cursor by about the round trip (C1b), spec §8 "Cursor versus
+    dots";
+  - items 3 and 5 judge the fresh punch-ins only; item 14 cannot see an overwrite
+    question (asked inside `record()`, before the observer starts);
+  - not covered by the dev run (C3's list);
+  - the svapp `aboutToBeDeleted()` warning (merge log).
+- **`forks.md`**: whether `jhhr/bqaudioio` belongs in its table yet (it is not used by
+  the build) or only in open points; say which you chose.
+- Do not rewrite what `default` wrote in the shared docs beyond what this work made false;
+  C3 already rewrote `manual-checklist.md` §1: review it, keep it.
+- Delete this work-orders file and the log file, and remove every link to them.
+- No code, no builds, no test runs (the lead is building a release configuration at the
+  same time). Suspected bugs go in the report.
 
 ## 5. Log (newest last; 25 lines at most per entry)
 
