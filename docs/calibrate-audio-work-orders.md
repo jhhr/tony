@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (see git log).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
