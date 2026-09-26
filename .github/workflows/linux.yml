@@ -43,12 +43,13 @@ jobs:
       run: meson test -C build --print-errorlogs --num-processes 1
     # meson shows at most the last 100 lines of a failing log, and one
     # test executable runs several QTest suites: name every failed test,
-    # with where it failed and the totals of each suite that failed
+    # with the lines QTest indents under it (compared values, where it
+    # failed) and the totals of each suite that failed
     - name: test-failures
       if: failure() && steps.test.outcome == 'failure'
       run: |
         awk '/^test:/ { print; next }
              /^Totals:/ { if ($0 !~ /, 0 failed/) print; next }
              /^(FAIL!|XPASS|QFATAL)|Received signal/ { print; fail = 1; next }
-             fail && /^   Loc:/ { print }
-             { fail = 0 }' build/meson-logs/testlog.txt
+             /^[A-Z!]+ *: / { fail = 0 }
+             fail && /^   / { print }' build/meson-logs/testlog.txt
