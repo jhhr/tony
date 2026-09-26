@@ -52,7 +52,7 @@ script=$root/deploy/linux/cloud-session.sh
 
 # As AGENTS.md's. test-tony-dev is in every build but a release one, and
 # container-setup.sh configures debugoptimized
-targets="tony pyin.so test-tony-core test-tony-app test-tony-dev test-tony-device"
+targets="tony pyin.so test-tony-core test-tony-app test-tony-dev"
 
 case "${1:-} ${2:-}" in
     "start "|"start --if-cloud")

@@ -1160,9 +1160,11 @@ tony_app_moc_headers = [
 if dev_checks
   tony_app_files += [
     'main/dev/DevChecks.cpp',
+    'main/dev/TakeObserver.cpp',
   ]
   tony_app_moc_headers += [
     'main/dev/DevChecks.h',
+    'main/dev/TakeObserver.h',
   ]
 endif
 
@@ -1471,37 +1473,6 @@ tony_app_test_exe = executable(
     feature_defines,
     general_defines,
     '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
-# The checks that need a real audio device, with its microphone hearing
-# its speakers. Built with the rest, run only by hand: not a meson test
-tony_device_test_moc_files = qt.preprocess(
-  moc_headers: [
-  'main/test/TestRealDevice.h',
-])
-
-tony_device_test_exe = executable(
-  'test-tony-device',
-  tony_device_test_moc_files,
-  'main/test/tony-device-check.cpp',
-  dependencies: [
-    tony_app_dep,
-    tony_core_dep,
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    os_dep,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
   ],
   link_args: [
     feature_additional_libs,

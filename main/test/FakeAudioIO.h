@@ -27,6 +27,7 @@
 #include <bqaudioio/ApplicationPlaybackSource.h>
 #include <bqaudioio/ApplicationRecordTarget.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -71,6 +72,22 @@ public:
         // speakers bleeding into the microphone. Again inputDelay
         // must be at least a block
         bool loopback = false;
+
+        // A second arrival of the loopback, echoDelay frames after the
+        // first, at echoGain times its level: the input played back out
+        // somewhere (Windows' "Listen to this device") and heard again.
+        // No second arrival while echoGain is 0
+        int echoDelay = 0;
+        float echoGain = 0.f;
+
+        // Tell the application the peak of each block's input and output,
+        // left and right, as PortAudioIO does for its level meters
+        bool reportLevels = false;
+
+        // The device opens, and suspends and resumes as asked, but never
+        // calls back: no input comes in and no output is asked for, as
+        // with a driver whose stream starts and then delivers nothing
+        bool neverCallsBack = false;
 
         // Whether the application keeps the input it is given just
         // now. It discards input until its recording file is open,
@@ -196,13 +213,19 @@ private:
             next += period;
             std::this_thread::sleep_until(next);
             std::lock_guard<std::mutex> guard(m_mutex);
-            if (m_suspended) {
+            if (m_suspended || m_config.neverCallsBack) {
                 // don't try to catch up on the time spent suspended
                 next = steady_clock::now();
                 continue;
             }
             process();
         }
+    }
+
+    static float peak(const float *samples, int count) {
+        float p = 0.f;
+        for (int i = 0; i < count; ++i) p = std::max(p, std::fabs(samples[i]));
+        return p;
     }
 
     // The input at a position in the captured output's timeline
@@ -228,6 +251,12 @@ private:
             if (m_config.loopback) {
                 long j = base + i - m_config.inputDelay;
                 if (j >= 0 && j < base) in[i] += m_captured[size_t(j)];
+                if (m_config.echoGain != 0.f) {
+                    j -= m_config.echoDelay;
+                    if (j >= 0 && j < base) {
+                        in[i] += m_config.echoGain * m_captured[size_t(j)];
+                    }
+                }
             }
         }
 
@@ -243,11 +272,19 @@ private:
         }
         m_target->putSamples(inPtrs.data(), ch, n);
         if (kept) m_sinceResume += n;
+        if (m_config.reportLevels) {
+            m_target->setInputLevels(peak(inPtrs[0], n),
+                                     peak(inPtrs[ch > 1 ? 1 : 0], n));
+        }
 
         std::vector<std::vector<float>> out(ch, std::vector<float>(n, 0.f));
         std::vector<float *> outPtrs;
         for (auto &v : out) outPtrs.push_back(v.data());
         int got = m_source->getSourceSamples(outPtrs.data(), ch, n);
+        if (m_config.reportLevels) {
+            m_source->setOutputLevels(peak(outPtrs[0], got),
+                                      peak(outPtrs[ch > 1 ? 1 : 0], got));
+        }
 
         for (int i = 0; i < n; ++i) {
             float mix = 0.f;

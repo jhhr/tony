@@ -68,6 +68,7 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedMergeStart(0),
     m_rangedMergeEnd(0),
     m_rangedClippedEnd(false),
+    m_rangedMergeHeld(false),
     m_waveformFaded(false)
 {
     QSettings settings;
@@ -1233,7 +1234,21 @@ Analyser::rangedAnalysisCompletionChanged(ModelId)
     // at 100 in both means a result
     if (!newPitch->isReady() || !newNotes->isReady()) return;
 
+    // Finished, but a test is holding it (setRangedMergeHeld()); never
+    // so in the application
+    if (m_rangedMergeHeld) return;
+
     mergeRangedAnalysis();
+}
+
+void
+Analyser::setRangedMergeHeld(bool held)
+{
+    m_rangedMergeHeld = held;
+
+    // A run that finished while held gets no second completion signal:
+    // look now, as that signal would have
+    if (!held) rangedAnalysisCompletionChanged({});
 }
 
 void
@@ -1366,44 +1381,74 @@ Analyser::mergeRangedAnalysis()
         }
     }
 
-    for (const Event &e : oldNotes) {
-        sv_frame_t f = e.getFrame();
-        if (f >= wFrom && f < noteTo) {
-            notes->remove(e);
-            m_rangedNotesChange.removed.push_back(e);
-        } else if (f < wFrom && firstAdded >= 0 &&
-                   f + e.getDuration() > firstAdded) {
-            // A note that runs into the window from before it is left as
-            // it is unless one of the new notes starts inside it, when it
-            // is cut back to that onset.  Where the audio has not
-            // changed the run finds that note going on from before the
-            // window, has nothing to add inside it, and the one note
-            // stays one note
-            notes->remove(e);
-            notes->add(e.withDuration(firstAdded - f));
-            m_rangedNotesChange.removed.push_back(e);
-            m_rangedNotesChange.added.push_back(e.withDuration(firstAdded - f));
-        }
-    }
-    for (Event e : adding) {
+    // Where a new note of the run ends in the models
+    auto newNoteEnd = [&](const Event &e) {
+        sv_frame_t end = e.getFrame() + e.getDuration();
         // A note that the end of the run cut off goes on to where the
         // old note it belongs to ended.  A few hops of slack: the run's
         // last note ends within a block or so of where it stopped
         if (endBeyondRun > 0) {
-            sv_frame_t end = e.getFrame() + e.getDuration();
             sv_frame_t slack = 4 * analysisStepSize;
             if (end > m_rangedEnd - slack && end < m_rangedEnd + slack &&
                 endBeyondRun > end) {
-                e = e.withDuration(endBeyondRun - e.getFrame());
+                end = endBeyondRun;
             }
         }
         // The far edge the same way round: an old note that begins at or
         // after the window keeps its onset, and a new note that would run
         // over it is cut back
-        if (nextOldOnset > e.getFrame() &&
-            e.getFrame() + e.getDuration() > nextOldOnset) {
-            e = e.withDuration(nextOldOnset - e.getFrame());
+        if (nextOldOnset > e.getFrame() && end > nextOldOnset) {
+            end = nextOldOnset;
         }
+        return end;
+    };
+
+    // The new note sounding where the window begins.  It began before
+    // the window, so it is not added, but the audio there has not
+    // changed: an old note sounding at the same frame is the same note,
+    // and the run knows better where it ends
+    sv_frame_t carriedEnd = -1;
+    for (const Event &e : newNoteEvents) {
+        if (e.getFrame() < wFrom && e.getFrame() + e.getDuration() > wFrom) {
+            carriedEnd = newNoteEnd(e);
+            break;
+        }
+    }
+
+    for (const Event &e : oldNotes) {
+        sv_frame_t f = e.getFrame();
+        if (f >= wFrom && f < noteTo) {
+            notes->remove(e);
+            m_rangedNotesChange.removed.push_back(e);
+            continue;
+        }
+        if (f >= wFrom) continue;
+
+        // A note that runs into the window from before it keeps its
+        // onset.  If it also ends inside the window, where it ends is the
+        // run's to say: it takes the end of the new note sounding at the
+        // start of the window, so that a note held across the start of a
+        // punch-in is one note, not the old one stopping where the old
+        // recording did.  One that runs on past the window keeps its end,
+        // in audio that has not changed.  Either way it is cut back to the
+        // onset of a new note that starts inside it
+        sv_frame_t end = f + e.getDuration();
+        sv_frame_t to = end;
+        if (carriedEnd > 0 && end > wFrom && end < noteTo) {
+            to = carriedEnd;
+        }
+        if (firstAdded >= 0 && to > firstAdded) {
+            to = firstAdded;
+        }
+        if (to != end) {
+            notes->remove(e);
+            notes->add(e.withDuration(to - f));
+            m_rangedNotesChange.removed.push_back(e);
+            m_rangedNotesChange.added.push_back(e.withDuration(to - f));
+        }
+    }
+    for (Event e : adding) {
+        e = e.withDuration(newNoteEnd(e) - e.getFrame());
         notes->add(e);
         m_rangedNotesChange.added.push_back(e);
     }
