@@ -32,11 +32,9 @@ jobs:
              /^(FAIL!|XPASS|QFATAL)|Received signal/ { print; fail = 1; next }
              /^[A-Z!]+ *: / { fail = 0 }
              fail && /^   / { print }' build/meson-logs/testlog.txt
-    - name: deploy-app
-      run: |
-        ls -lR /usr/local/opt
-        QTDIR=/usr/local/opt/qt6 ./deploy/macos/deploy.sh "Tony"
+    # No app bundle: the packaging scripts in deploy/osx are qmake's,
+    # and this build makes none. The app it does build has to start
     - name: check
       run: |
-        otool -L ./"Tony.app/Contents/MacOS/Tony"
-        ./"Tony.app/Contents/MacOS/Tony" --version
+        otool -L build/tony
+        build/tony --version
