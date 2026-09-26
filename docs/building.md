@@ -1,9 +1,9 @@
 # Building on Windows (MSYS2 MinGW-w64)
 
 The development machine builds with meson + ninja under MSYS2's `mingw64` toolchain
-(default prefix `C:\msys64\mingw64`) into `build_mingw/`. The CI workflows in
-`.github/workflows/` build the upstream way on Linux, macOS and MSVC and are not what is
-described here.
+(default prefix `C:\msys64\mingw64`) into `build_mingw/`. The Windows CI workflow in
+`.github/workflows/` builds the same way, from MSYS2's packages; the Linux and macOS ones
+build the upstream way.
 
 ## From cmd or PowerShell: `build.bat`
 
