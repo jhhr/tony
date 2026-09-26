@@ -118,11 +118,13 @@ page's text, and copy `DevChecks.txt` to a name that says which run it was
 (`DevChecks-wasapi-20.txt`, say): the next run writes over it. Send back each pair,
 and whether anything crackled or dropped out during a run. Press **Use this latency** on
 the driver and latency you will sing with: the figure is kept for that driver only.
-Runs 1 to 3 were before the stream was kept running between takes, run 4 after. Run 4's
-second time failed item 3 on four dots from the room's noise, which the live tracker has
-no level floor to keep out. Still to try: a run with the microphone and the headphones on
-one sound card, which should neither drift nor slip; and, on two cards, whether the
-playback's gap at a slip (about every 100 s once a take has been made) is heard.
+Runs 1 to 3 were before the stream was kept running between takes, run 4 after, three
+times. Its second time failed item 3 on four dots from the room's noise, which the live
+tracker's level floor (−60 dBFS) now keeps out; its third passed item 3, and failed items
+1 and 2, calibrated near a slip. The user took that as good enough (2026-09-27). Not
+tried: a run with the microphone and the headphones on one sound card, which should
+neither drift nor slip; and, on two cards, whether the playback's gap at a slip (about
+every 100 s once a take has been made) is heard.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and
@@ -196,7 +198,9 @@ Not tried yet.
    `commitData()` writes into the real profile. Afterwards `~/.sv1/tmp-*.ton` is on the
    Recent Files list, opens, and its takes play.
 7. **Live dots on this machine**: during a take the dots keep up with the cursor and grow
-   smoothly, and neither they nor the cursor stutter, in a maximised window.
+   smoothly, and neither they nor the cursor stutter, in a maximised window. None appear
+   between phrases, and none are lost on soft singing: the tracker ignores what is quieter
+   than −60 dBFS.
 
 ## 4. Lyrics
 

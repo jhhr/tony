@@ -105,6 +105,13 @@ public:
         // must still be at least a block. 0 for none
         int restartShift = 0;
 
+        // A steady sine added to the input all along, humGain its peak,
+        // on every channel the input arrives on: a room's fans or a
+        // mains hum, which the microphone hears between the sounds as
+        // well. None while humGain is 0
+        double humHz = 0.0;
+        float humGain = 0.f;
+
         // Tell the application the peak of each block's input and output,
         // left and right, as PortAudioIO does for its level meters
         bool reportLevels = false;
@@ -298,6 +305,12 @@ private:
         std::vector<float> in(n, 0.f);
         for (int i = 0; i < n; ++i) {
             in[i] = inputAt(base + i);
+            if (m_config.humGain != 0.f) {
+                const double pi = 3.14159265358979323846;
+                in[i] += m_config.humGain * float(std::sin
+                    (2.0 * pi * m_config.humHz * double(base + i) /
+                     m_config.sampleRate));
+            }
             if (m_config.loopback) {
                 long j = base + i - m_loopbackDelay;
                 if (j >= 0 && j < base) in[i] += m_captured[size_t(j)];
