@@ -1,0 +1,94 @@
+name: Android CI
+
+on: [push, pull_request]
+
+# The APK, built by the scripts in deploy/android/ as the cloud container
+# builds it (docs/building.md). Qt for Android and the C libraries are
+# built from source there, which takes most of an hour: each is cached,
+# keyed on the script that builds it and the toolchain's, and saved as
+# soon as it is built, so that a later step's failure does not cost it
+
+env:
+  # The runner's own SDK and NDK are other versions; everything that
+  # looks for one in the environment is to find the scripts'
+  ANDROID_HOME: /opt/android/sdk
+  ANDROID_SDK_ROOT: /opt/android/sdk
+  ANDROID_NDK: /opt/android/sdk/ndk/27.2.12479018
+  ANDROID_NDK_HOME: /opt/android/sdk/ndk/27.2.12479018
+  ANDROID_NDK_ROOT: /opt/android/sdk/ndk/27.2.12479018
+  ANDROID_NDK_LATEST_HOME: /opt/android/sdk/ndk/27.2.12479018
+
+jobs:
+  build:
+
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        # build-apk.sh counts the commits for the version code
+        fetch-depth: 0
+    # The runner's own Android SDK and .NET take disk the Qt build needs
+    - name: free-disk
+      run: |
+        df -h /
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+        df -h /
+    - name: prepare
+      run: |
+        sudo mkdir -p /opt/android
+        sudo chown "$(id -u):$(id -g)" /opt/android
+    - name: install-packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git mercurial smlnj
+    - name: repoint
+      run: ./repoint install
+    - name: setup-toolchain
+      run: deploy/android/setup-toolchain.sh
+    - name: restore-qt
+      id: qt
+      uses: actions/cache/restore@v4
+      with:
+        path: /opt/android/qt
+        key: android-qt-${{ hashFiles('deploy/android/build-qt.sh', 'deploy/android/setup-toolchain.sh') }}
+    - name: build-qt
+      run: deploy/android/build-qt.sh
+    - name: save-qt
+      if: steps.qt.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /opt/android/qt
+        key: ${{ steps.qt.outputs.cache-primary-key }}
+    - name: restore-deps
+      id: deps
+      uses: actions/cache/restore@v4
+      with:
+        path: /opt/android/deps-arm64-v8a
+        key: android-deps-${{ hashFiles('deploy/android/build-deps.sh', 'deploy/android/setup-toolchain.sh') }}
+    - name: build-deps
+      run: deploy/android/build-deps.sh
+    - name: save-deps
+      if: steps.deps.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /opt/android/deps-arm64-v8a
+        key: ${{ steps.deps.outputs.cache-primary-key }}
+    - name: build-tony
+      run: deploy/android/build-tony.sh
+    - name: build-apk
+      run: deploy/android/build-apk.sh
+    - name: upload-apk
+      uses: actions/upload-artifact@v4
+      with:
+        name: Tony-debug-apk
+        path: build-android/apk/Tony-debug.apk
+        if-no-files-found: error
+    # The scripts show the end of a failing log; the whole of each is here
+    - name: upload-logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-logs
+        path: /opt/android/logs
+        if-no-files-found: ignore
