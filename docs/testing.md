@@ -87,6 +87,13 @@ Windows path would start an escape in the C string.
   left running, or after the redo, with `analysedRangeStart()` already 0 — the same race.
   Five other tests failed so as well until they held the take's merge ("Timing and
   races"), which these two do not yet.
+- **Qt 6.4's watchdog times the whole suite**, not one test function: with
+  `QTEST_FUNCTION_TIMEOUT=20000` it ended `TestRecordWorkflow` 20 s after the suite began,
+  2.5 s into a test. That suite runs for longer than the five-minute default, so
+  `runSuite()` raises the limit to 30 minutes when built against a Qt older than 6.5.
+  After such a fatal error the executable does not exit: it spins, or waits for the gdb
+  that Qt starts for a backtrace. A run that has written nothing for minutes has
+  stopped; kill it.
 
 ## Design principles
 

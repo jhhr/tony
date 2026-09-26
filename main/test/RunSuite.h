@@ -91,6 +91,15 @@ runSuite(QObject *suite, int argc, char *argv[])
             (QString("%1.txt").arg(suite->metaObject()->className()));
         args << "-o" << (file + ",txt") << "-o" << "-,txt";
     }
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+    // Qt 6.4's watchdog, meant to end a test function that runs for five
+    // minutes, can time the whole suite instead: it ended TestRecordWorkflow
+    // 300 s after the suite began, one second into a test that passes.
+    // That suite runs for longer, so on that Qt the limit goes beyond it
+    if (qEnvironmentVariableIsEmpty("QTEST_FUNCTION_TIMEOUT")) {
+        qputenv("QTEST_FUNCTION_TIMEOUT", "1800000");
+    }
+#endif
     return QTest::qExec(suite, args) == 0;
 }
 
