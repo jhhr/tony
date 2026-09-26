@@ -84,6 +84,11 @@ public:
         // left and right, as PortAudioIO does for its level meters
         bool reportLevels = false;
 
+        // The device opens, and suspends and resumes as asked, but never
+        // calls back: no input comes in and no output is asked for, as
+        // with a driver whose stream starts and then delivers nothing
+        bool neverCallsBack = false;
+
         // Whether the application keeps the input it is given just
         // now. It discards input until its recording file is open,
         // which is some time after it resumes the device. If unset,
@@ -208,7 +213,7 @@ private:
             next += period;
             std::this_thread::sleep_until(next);
             std::lock_guard<std::mutex> guard(m_mutex);
-            if (m_suspended) {
+            if (m_suspended || m_config.neverCallsBack) {
                 // don't try to catch up on the time spent suspended
                 next = steady_clock::now();
                 continue;

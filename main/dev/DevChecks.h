@@ -151,8 +151,7 @@ public:
     /// may land, either way
     static constexpr double kPlacementSeconds = 0.002;
 
-    /// Item 3: more live dots than this in every punch-in, as
-    /// test-tony-device asked
+    /// Item 3: more live dots than this in every punch-in
     static constexpr int kMinDots = 10;
 
     /// Item 3: a dot is on one of the reference's sounds when it lies
@@ -184,8 +183,7 @@ public:
     static constexpr double kStopMarginSeconds = 0.25;
 
     /// Item 9: each punch-in into the long song has its pitch merged
-    /// within this share of the time the whole song's analysis took, as
-    /// test-tony-device asked
+    /// within this share of the time the whole song's analysis took
     static constexpr double kStopShare = 0.5;
 
     /// How often a stage is looked at

@@ -13,8 +13,9 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **Take operations clear the undo history with no prompt** (all but Rename).
 - **The alternate pitch track at ±3 octaves** of a 220 Hz reference (28 Hz, 1.8 kHz) is
   outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
-- Of the [manual checklist](manual-checklist.md), the device check has been run only in
-  the cloud (no sound card, and the fake device); nothing yet on real hardware.
+- Of the [manual checklist](manual-checklist.md), the device check (Calibrate Audio with
+  the dev checks) has been run on real hardware only in part: Calibrate Audio, and a dev
+  run with items 1 and 2 only (the user's PC, MME, 2026-09-26). The whole dev run not yet.
 
 ## Not built
 

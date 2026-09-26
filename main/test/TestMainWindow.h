@@ -15,7 +15,7 @@
 #define TEST_MAIN_WINDOW_H
 
 // The real MainWindow for the suites that drive it: TestRecordWorkflow,
-// TestUiChecks, TestAudioCheck, TestDevChecks and the real-device check
+// TestUiChecks, TestAudioCheck and TestDevChecks
 
 #include "FakeAudioIO.h"
 
@@ -41,7 +41,6 @@
 /**
  * MainWindow with the fake device in place of a real one, and the
  * protected state of the singing workflow opened up for inspection.
- * The real device can be asked for instead (setUseRealDevice()).
  */
 class TestMainWindow : public MainWindow
 {
@@ -52,16 +51,6 @@ public:
         m_installDevice(installDevice) { }
 
     FakeAudioIO *fake() { return dynamic_cast<FakeAudioIO *>(m_audioIO); }
-
-    // The audio device Tony itself would open, from the settings, in
-    // place of the fake: for the checks that need real hardware. Set
-    // before the first file is opened, which is when the device is made
-    void setUseRealDevice(bool on) { m_useRealDevice = on; }
-    bool haveAudioDevice() { return m_audioIO || m_playTarget; }
-
-    // A device that records as well: without one there is only a play
-    // target (MainWindowBase::createAudioIO())
-    bool haveRecordingDevice() { return m_audioIO != nullptr; }
 
     void doRecord() { record(); }
     void doPlay() { play(); } // and again to stop
@@ -239,10 +228,6 @@ public:
 protected:
     void createAudioIO() override {
         if (m_audioIO || m_playTarget) return;
-        if (m_useRealDevice) {
-            MainWindow::createAudioIO();
-            return;
-        }
         if (!m_installDevice) return;
         m_fakeConfig.inputIsKept = [this]() {
             return m_recordTarget->isRecording();
@@ -276,7 +261,6 @@ protected:
 private:
     FakeAudioIO::Config m_fakeConfig;
     bool m_installDevice;
-    bool m_useRealDevice = false;
     bool m_recordOverAnswer = true;
     bool m_recordOverInDialog = false;
     int m_recordOverQuestions = 0;

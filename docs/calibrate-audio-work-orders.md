@@ -54,7 +54,7 @@ MinGW setup.
 - Build:
 
       cd /home/user/tony
-      ninja -j 4 -C build_linux tony test-tony-core test-tony-app test-tony-dev test-tony-device pyin.so > tmp/build.log 2>&1; echo "exit:$?" >> tmp/build.log; tail -5 tmp/build.log
+      ninja -j 4 -C build_linux tony test-tony-core test-tony-app test-tony-dev pyin.so > tmp/build.log 2>&1; echo "exit:$?" >> tmp/build.log; tail -5 tmp/build.log
 
   Search the log for `error:`; never read it whole. meson reconfigures by itself after
   `meson.build` changes. Targets have no `.exe`.
@@ -583,3 +583,29 @@ beginning within 4 hops of its end, and the cut at the first added onset off).
 Left open (`docs/takes.md`, known limits): a note running on past W keeps its old end where
 the new audio stopped it inside W; a note whose onset in the run and in the models lie a hop
 or two either side of W's start is lost (pre-existing, found by reading).
+
+### Phase C3 — 2026-09-26
+Built: `test-tony-device` gone (`TestRealDevice.h`, `tony-device-check.cpp`, its target;
+`TestMainWindow`'s `setUseRealDevice()`, `haveAudioDevice()`, `haveRecordingDevice()`, used by
+it alone). `AudioCheckRunner::deliveredNothing()`: not one frame received (the count restarts
+with each take) `kNoInputTimeoutMs` (2 s) past the take's lead-in and range: the take is
+stopped through the Stop path (`finishSingingTake()` finds nothing to use, so no take) and the
+run ends "The audio device delivered no input ...". `FakeAudioIO::Config::neverCallsBack`.
+`TestAudioCheck::check_ends_when_the_device_delivers_nothing` (not before length + 2 s − one
+poll; no take; the next file analysed). Docs: AGENTS.md, building.md, testing.md, checklist
+§1 rewritten, `DevChecks.h`; one line each in open-points.md and docs/README.md.
+Coverage: `device()` → report header, its "can record" → the runner's "The take did not
+start"; `record_the_reference_through_the_air` → stage 1 (near 61 and 151 s), channel levels
+→ item 5, a range per recording → "A take was not added"; `takes_line_up_with_the_reference`
+→ items 1, 2 (±2 ms against its ±10 ms and 5 ms; "match < 0.1" → NoSignal);
+`nothing_of_the_take_comes_back_out` → 4; `stop_is_quicker_than_a_whole_song` → 9 (same 0.5);
+`live_dots_were_drawn` → 3, 5 (same > 10); `no_input_does_no_harm` → the new ending and test,
+and `check_fails_without_a_device`. Not in the dev run (not ported): a take with no lead-in and
+not into a selection, stopped by hand; "no dialog" over every take (item 14: stages 3, 4 only);
+with no device, the "Couldn't open audio device" warning per file opened (a dated note now).
+Choices: not a fixed time after `record()`: a device slow to start (a Bluetooth headset
+switching to its mic) is never taken for a dead one, and a working take has stopped itself by
+then. One frame leaves the old limit in charge. No `TakeLatency` pushed (no take).
+Seen failing: the new test before the change ("did not stop", 14 s); with the rule cut to 2 s
+after `record()`, its timing (ended 2104 ms into a 3000 ms take).
+Found: items 7 and 13 judge placement as 1 and 2 do (`offsetsOf()`): on MME they fail too.

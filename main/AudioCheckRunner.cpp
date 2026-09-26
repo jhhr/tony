@@ -69,7 +69,8 @@ AudioCheckRunner::AudioCheckRunner(MainWindow *window) :
     m_punchIn(0),
     m_openingReference(false),
     m_inPoll(false),
-    m_stepLimitMs(0)
+    m_stepLimitMs(0),
+    m_takeMs(0)
 {
     m_timer->setInterval(kPollMs);
     connect(m_timer, &QTimer::timeout, this, &AudioCheckRunner::poll);
@@ -295,6 +296,14 @@ AudioCheckRunner::poll()
         if (!m_window->m_recordTarget ||
             !m_window->m_recordTarget->isRecording()) {
             takeStopped();
+        } else if (deliveredNothing()) {
+            // Such a take never stops itself: it stops when what it has
+            // received reaches the end of its range
+            stopTake();
+            end(tr("The audio device delivered no input: it opened, but in "
+                   "%1 s of recording not one frame came from it. Is the "
+                   "microphone connected, and allowed to be used?")
+                .arg(double(m_stepClock.elapsed()) / 1000.0, 0, 'f', 1));
         } else if (stepTimedOut()) {
             stopTake();
             end(tr("A take did not stop at the end of its range."));
@@ -483,7 +492,8 @@ AudioCheckRunner::startPunchIn()
     // take to see that it has reached the end
     const double seconds =
         double(m_window->m_takePreRoll + (to - from)) / m_result.referenceRate;
-    setStep(Step::Recording, qint64(seconds * 1000.0) + kTakeStopTimeoutMs);
+    m_takeMs = qint64(seconds * 1000.0);
+    setStep(Step::Recording, m_takeMs + kTakeStopTimeoutMs);
 }
 
 void
@@ -651,6 +661,17 @@ bool
 AudioCheckRunner::stepTimedOut() const
 {
     return m_stepLimitMs > 0 && m_stepClock.elapsed() > m_stepLimitMs;
+}
+
+bool
+AudioCheckRunner::deliveredNothing() const
+{
+    // The count starts again at 0 with every take (startRecording()).
+    // One frame is enough to wait for the take as usual: a device that
+    // delivers late or too little is what stepTimedOut() is for
+    return m_step == Step::Recording && m_window->m_recordTarget &&
+        m_window->m_recordTarget->getFramesReceived() == 0 &&
+        m_stepClock.elapsed() > m_takeMs + kNoInputTimeoutMs;
 }
 
 void

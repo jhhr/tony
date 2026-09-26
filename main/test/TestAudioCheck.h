@@ -46,6 +46,7 @@
 #include <QtTest>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMenu>
 #include <QMessageBox>
 #include <QSettings>
@@ -715,6 +716,61 @@ private slots:
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->recordingAsSingingTrack());
         QVERIFY(!m_window->audioCheckTakes());
+    }
+
+    // A device that opens but never calls back: not one frame comes in.
+    // Once the take should have been over, and not before, so that a
+    // device slow to start is not taken for one that delivers nothing,
+    // the run stops the take through the Stop path and ends saying that
+    // the device delivered no input, not that the take did not stop. No
+    // take is left, and no harm: the next file opened is analysed
+    void check_ends_when_the_device_delivers_nothing() {
+        FakeAudioIO::Config config = loopback();
+        config.neverCallsBack = true;
+        makeWindow(config);
+
+        // How long after the take began to record the run ended; the
+        // connections go with the guard when the test returns
+        QObject guard;
+        QElapsedTimer recording;
+        qint64 endedAfterMs = -1;
+        connect(m_window->audioCheck(), &AudioCheckRunner::progress, &guard,
+                [&recording](const AudioCheckRunner::Progress &p) {
+                    if (p.step == AudioCheckRunner::Step::Recording &&
+                        !recording.isValid()) {
+                        recording.start();
+                    }
+                });
+        connect(m_window->audioCheck(), &AudioCheckRunner::finished, &guard,
+                [&](const AudioCheckResult &) {
+                    if (recording.isValid()) {
+                        endedAfterMs = recording.elapsed();
+                    }
+                });
+
+        runCheck(onePunchIn());
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_result.failure.contains("delivered no input"),
+                 describe(m_result).constData());
+        const qint64 takeMs =
+            qint64((AudioCheckRunner::kPreRollSeconds + 2.0) * 1000.0);
+        QVERIFY2(endedAfterMs >= takeMs + AudioCheckRunner::kNoInputTimeoutMs -
+                 AudioCheckRunner::kPollMs,
+                 qPrintable(QString("ended %1 ms into a take of %2 ms")
+                            .arg(endedAfterMs).arg(takeMs)));
+
+        QVERIFY(!m_result.calibrationUsable());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(!m_window->recordingInProgress());
+        QVERIFY(!m_window->recordingAsSingingTrack());
+        QVERIFY(!m_window->audioCheckTakes());
+        QVERIFY2(!m_window->takes()->haveTake(),
+                 "a recording of nothing was kept as a take");
+
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_finished, 1);
     }
 
     // With automatic analysis switched off the reference is never

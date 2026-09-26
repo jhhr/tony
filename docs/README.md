@@ -18,5 +18,5 @@ methods, and they do not tell the story of fixed bugs.
 | [takes.md](takes.md) | Takes: decisions, the audio swap, ranged analysis and merge, undo, the coverage strip, files and sessions, limitations |
 | [forks.md](forks.md) | The `jhhr/*` library forks: how to change one, what each adds, known defects |
 | [open-points.md](open-points.md) | Decisions waiting for the user, things not built, weak spots |
-| [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes — none of it tried yet |
+| [manual-checklist.md](manual-checklist.md) | What needs a real device, real ears or real eyes — little of it tried yet |
 | [calibrate-audio.md](calibrate-audio.md) | Plan, not built: a Calibrate Audio button that measures the round trip through a speaker-to-mic loopback, and dev checks that automate most of the manual checklist |

@@ -141,6 +141,15 @@ public:
     static constexpr int kTakeAnalysisTimeoutMs = 30000;
     static constexpr int kTakeStopTimeoutMs = 10000;
 
+    /// How long past its own length (lead-in and range) a take may go
+    /// without a single frame from the device before the run says the
+    /// device delivered no input.  Not sooner: a stream that is only slow
+    /// to start (a Bluetooth headset switching to its microphone, say)
+    /// delivers its first block within a second or two, and a device
+    /// that has sent nothing for the whole length of the take plus this
+    /// has recorded none of it anyway
+    static constexpr int kNoInputTimeoutMs = 2000;
+
     /// What a run records
     struct Plan {
         LatencyCheck::Layout layout;
@@ -321,6 +330,13 @@ private:
 
     QElapsedTimer m_stepClock;
     qint64 m_stepLimitMs;
+
+    /// The length of the take being recorded, lead-in and range, in ms
+    qint64 m_takeMs;
+
+    /// The take has gone kNoInputTimeoutMs past its length with not one
+    /// frame from the device
+    bool deliveredNothing() const;
 
     void poll();
     void openReference();

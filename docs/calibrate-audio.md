@@ -334,7 +334,7 @@ marked "Done" when it is committed.
    - **C2b** Item 12 robust against a stalled event loop (a flake C2 found). Done.
    - **C2c** The notes merge keeps one note across a join: the defect item 10 found (the
      user chose to fix it on this branch). Done.
-6. **C3** Retire `test-tony-device`, once all it checks is in the dev run.
+6. **C3** Retire `test-tony-device`, once all it checks is in the dev run. Done.
 7. **Release build** by the lead (§8, "Release builds must stay clean").
 8. **D** Docs, from the code and the phase log:
    - `manual-checklist.md`: an automated item keeps its text and gets "*automated:
