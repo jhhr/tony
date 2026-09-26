@@ -740,7 +740,10 @@ So that later work does not derive them again.
   Items 4, 9, 10 and 12 passed on all three; 1, 2, 7 and 13 failed on the restart jitter
   on all three; 3 failed on dots at a sound's onset, and 14 on WASAPI on its own misreading
   of a 48 kHz take, both since fixed in the checks.
-- **2026-09-26 and 2026-09-27**, whole dev runs on WASAPI at 20 ms with the stream kept
-  running between takes, each after Calibrate Audio: [audio-drivers.md](audio-drivers.md),
-  §7. Takes drift and slip within 10 ms; items 1, 2, 7 and 13 pass at ±6 ms. Item 3 failed
-  first on dots at a tone's end, since set apart, then on four dots in silence (§10).
+- **2026-09-26 and 2026-09-27**, three whole dev runs on WASAPI at 20 ms with the stream
+  kept running between takes, each after Calibrate Audio:
+  [audio-drivers.md](audio-drivers.md), §7. Takes drift and slip within 10 ms; items 1, 2,
+  7 and 13 pass at ±6 ms when the calibration lands in the middle of that window, as it
+  did twice; the third run's landed at its edge, and items 1 and 2 failed. Item 3 failed
+  first on dots at a tone's end, since set apart, then on four dots in silence (§10), and
+  passed with the live tracker's level floor.

@@ -237,8 +237,7 @@ take starts with a click, were not watched for.
 - **The same course as the run before**, take by take within 0.3 ms, although the two
   calibrations read 6.7 ms apart: each run placed its takes against its own calibration.
   Both runs began with Calibrate Audio, and in both it measured about 5 ms from either
-  edge of the window, so the drift and the slip seem to run the same course from the
-  stream's start.
+  edge of the window; the third, below, did not.
 - **A slip can fall inside a take**: this time between the fourth punch-in's two sweeps,
   which landed 9.8 ms apart. Items 1, 2, 7 and 13 passed; the largest offset, −5.3 ms, was
   0.7 ms inside the limit.
@@ -266,6 +265,19 @@ user sent, show what the report could not:
   tracker has had a level floor of −60 dBFS since
   ([recording.md](recording.md#the-live-tracker)).
 
+**Kept running, a third time**, WASAPI at 20 ms, 2026-09-27, with the level floor. Round
+trip 85.4 ms. The sweeps, in the order taken: +6.9, +6.4, +5.6, +5.4, +5.0, +4.7, +4.1,
++3.5, +3.0, then +12.4 ms after a slip. 8 passed, 2 failed, 1 measured.
+
+- **Calibrated near a slip**: the takes lay within 9.4 ms, as before, but the calibration
+  sat at the window's lower edge, not in its middle. Items 1 and 2 failed on the first two
+  punch-ins and the last; 7 and 13, whose takes happened to lie within 6 ms, passed. Which
+  place in the window a calibration lands in is not in Tony's hands.
+- Item 3 passed: no dot off the reference's sounds.
+
+**Decided** (the user, 2026-09-27): good enough; the work on the drivers and the dev
+checks' placement ends here.
+
 ## 8. Open points
 
 - **A round trip is kept per driver, not per latency.** After a latency change the kept
@@ -280,9 +292,10 @@ user sent, show what the report could not:
   take the device from every other program; not built.
 - **Kept running on two sound cards** the alignment drifts and slips by a period (§7):
   every take within 10 ms of the others, and each slip is a period of silence in the
-  playback, about every 100 s on the user's cards. In two runs that began with Calibrate
-  Audio, it measured in the middle of that window. On one device it should not drift; not
-  measured.
+  playback, about every 100 s on the user's cards. Of three runs that began with Calibrate
+  Audio, two measured in the middle of that window and passed items 1, 2, 7 and 13; the
+  third measured at its edge and failed items 1 and 2. On one device it should not drift;
+  not measured.
   Opening the device again still moves it, so a figure kept from an earlier session is up
   to about 8 ms off: calibrate at the start of a session for the best placement. The
   microphone shows as in use from the first take until Tony quits.

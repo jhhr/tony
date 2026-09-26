@@ -144,8 +144,10 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   by up to about 8 ms either way on the user's PC, on MME and WASAPI alike, and items 1,
   2, 7 and 13 failed on it. The stream is now kept running between takes on desktop
   ([recording.md](recording.md#latency)), and on WASAPI at 20 ms, with the microphone and
-  the headphones on two sound cards, takes drift and slip within 10 ms and pass at ±6 ms;
-  each slip is a period of silence in the playback, about every 100 s
+  the headphones on two sound cards, takes drift and slip within 10 ms and pass at ±6 ms
+  when Calibrate Audio lands in the middle of that window (two runs of three; the user
+  took that as good enough); each slip is a period of silence in the playback, about
+  every 100 s
   ([audio-drivers.md](audio-drivers.md), §7). Opening the device again (a driver,
   latency or device chosen, a device menu opened, Tony started again) still moves the
   alignment, so a figure kept from an earlier session is up to about 8 ms off: calibrate
