@@ -181,6 +181,10 @@ builds happen in the container.)
 - A10 — Plot elements sized for the screen. Done.
 - A11 — Fixes from the fifth phone test: the cursor at a 48 kHz device, Save Log. Done.
 - A4c — Vertical zoom keeps the pitch in view. Done.
+- (Lead, 2026-09-26: lyrics at 65 % on Android, svgui `setLyricsTextScale()`; `feat/wasapi`
+  merged in for Calibrate Audio at 48 kHz.)
+- A12 — Calibrate Audio on the phone.
+- A12b — The dev run on the phone.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -584,6 +588,71 @@ when zooming in."
   staying in view as the range narrows.
 - Not asked, so not built: following the pitch vertically during playback, a "fit the
   pitch" action. Say in the report if either looks needed.
+
+### A12 — Calibrate Audio on the phone
+
+The user (2026-09-26): the calibration and dev-check framework that came from `default`
+"should be developed for Android too, to set the latency variables and perform the
+hardware dev-test for my phone too". It is described in `docs/calibrate-audio.md` (read
+sections 1, 2, 5, 9 and 10; the rest as needed). This phase: Playback > Calibrate Audio on
+the phone, up to a stored, usable figure that places takes. A12b: the dev run.
+
+Known before starting:
+
+- **48 kHz**: `feat/wasapi`'s fix is merged: a device at another rate than the reference
+  is measured like any other. Check the phone's path through it (Oboe records at 48 kHz
+  only).
+- **The key** (`LatencyCalibration::currentKey()`) is the driver and the playback and
+  record devices as the Preferences name them. On Android `OboeAudioIO` opens whatever
+  route the phone has (speaker, wired or USB headset, Bluetooth; A6), and none of that is
+  in the settings: one figure would serve every route, and a Bluetooth route is 100-200 ms
+  longer than the speaker's. The key must name the route Oboe opened (the output and input
+  device: AAudio's device id, and its type and product name from `AudioManager`), so that
+  each route is calibrated and used on its own. A6 reopens the device when the route
+  changes: the menu line follows.
+- **Staleness**: a stored figure is stale when a reported latency differs by more than
+  1 ms from what was reported when it was measured. Oboe's latencies come from timestamps
+  and move between starts: the fifth phone test's log has output 252 then 401 frames
+  (5.2 then 8.4 ms), input 134, 154 and 222 frames. With 1 ms every figure would be stale
+  at the next take. On Android the fingerprint should be what the stream was opened with
+  (MMAP or not, sharing and performance mode, burst, buffer size and capacity, the
+  devices), or a tolerance the measurements justify: choose, and test it in `tony_core`.
+- **The dialog on a phone**: reachable in the compact layout; fits a landscape phone
+  (about 923 x 411 logical px, the log's "popups within ... of 923x411"), touch-sized
+  buttons, text that scrolls; the result's text copyable, and on Android a **Save
+  Report...** through the picker as Help > Save Log... writes (share that code rather than
+  copy it; A11's `AndroidStorage::Document`).
+- **Instructions for a phone**: the loopback is an earcup of wired headphones held to the
+  phone's microphone, or the phone's own speaker and microphone in a quiet room. A headset
+  with a microphone of its own moves the input to it; say which input and output are in use
+  (the route) on the instructions page. Android's input processing: Tony opens the input
+  with the VoicePerformance preset (A6); say if the check sees anything that suggests echo
+  cancellation or noise suppression.
+- Timeouts that assume a desktop's speed (`AudioCheckRunner`'s 60 s for the reference's
+  analysis, 30 s for a take's): the calibration reference is short; say whether they hold
+  on a phone several times slower, and scale them if not.
+
+Tests on the desktop as far as they go (the fake device at 48 kHz, the key and staleness
+rules in core); the JNI for the route compiles only for Android. Say what the phone test
+should do and send back.
+
+### A12b — The dev run on the phone
+
+After A12: the dev checks (`main/dev/`, compiled in the Android build, which is
+`debugoptimized`) run after a usable calibration on the phone and their report reaches the
+user. Read `docs/calibrate-audio.md` sections 6 to 8.
+
+- The report, `DevChecks.txt` in the application data directory, cannot be reached on a
+  phone: the result page's Save Report... (A12) saves it as well, or with the calibration's
+  text, and the log names where it is.
+- Timeouts that assume a desktop (the long song's 240 s reference analysed within 60 s,
+  4 minutes a stage): scale them for a phone from what a phone takes (the log's pYIN
+  times, if any, or a margin stated in the report).
+- Go through the stages and checks for what differs on a phone: one input channel (item
+  5), the output and input levels through `OboeAudioIO`, the save and reopen of stage 6 in
+  the application data directory, anything that opens a dialog or a picker, the scratch
+  folders.
+- Tests on the desktop where the change is not Android-only; `test-tony-dev` whole.
 
 ### A8 — Documentation pass
 
