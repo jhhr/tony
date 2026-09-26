@@ -43,6 +43,8 @@
 #   bzip2          svcore's BZipFileDevice, which includes bzlib.h
 #                  whatever the defines say; the NDK has no bzip2
 #   Boost          headers only: pYIN's boost/math
+#   Oboe           Google's audio library over AAudio and OpenSL ES, for
+#                  Tony's audio backend (main/OboeAudioIO)
 # Left out, as on a phone they have no use: oggz and fishsound (Ogg
 # Vorbis), JACK, PulseAudio, ALSA and PortAudio, liblo (never enabled).
 #
@@ -341,6 +343,37 @@ build_boost() {
     grep -q '^#define BOOST_LIB_VERSION "1_83"' "$prefix/include/boost/version.hpp"
 }
 
+build_oboe() {
+    # The newest 1.x release. Oboe opens libaaudio.so and libOpenSLES.so
+    # with dlopen() and defines OpenSL ES's interface IDs itself, so it
+    # links against liblog alone. Its CMake install puts the library in
+    # lib/<abi>/, moved here to lib/ beside the others; it writes no .pc
+    # file.
+    git clone -q -c advice.detachedHead=false --depth 1 --branch 1.11.0 \
+        "$github/google/oboe.git" "$work/oboe"
+    if [ "$(git -C "$work/oboe" rev-parse HEAD)" != b115f47593969fd67a21e9f63640ffef749b5067 ]; then
+        echo "ERROR: tag 1.11.0 of oboe is not at the expected commit" 1>&2
+        exit 1
+    fi
+    rm -rf "$prefix/include/oboe" "$prefix/lib/$abi"
+    cmake_build "$work/oboe"
+    mv "$prefix/lib/$abi/liboboe.a" "$prefix/lib/liboboe.a"
+    rmdir "$prefix/lib/$abi"
+    cat > "$prefix/lib/pkgconfig/oboe.pc" <<EOF
+prefix=$prefix
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: oboe
+Description: C++ library for low-latency audio on Android
+Version: 1.11.0
+Libs: -L\${libdir} -loboe
+Libs.private: -llog
+Cflags: -I\${includedir}
+EOF
+}
+
 install_lib() {
     local name="$1" version="$2"
     local stamp=$prefix/share/tony-deps/$name
@@ -381,6 +414,7 @@ install_lib serd 0.32.2
 install_lib sord 0.16.16
 install_lib rubberband 3.3.0
 install_lib boost 1.83.0
+install_lib oboe 1.11.0
 
 shared=$(find "$prefix/lib" -name "*.so*")
 if [ -n "$shared" ]; then
@@ -401,7 +435,7 @@ cat > "$check/meson.build" <<'EOF'
 project('tony-deps-check', 'cpp', default_options: ['cpp_std=c++17'])
 deps = [dependency('boost')]
 foreach name : ['sndfile', 'samplerate', 'fftw3', 'rubberband', 'sord-0',
-                'serd-0', 'mad', 'id3tag', 'opusfile', 'bzip2']
+                'serd-0', 'mad', 'id3tag', 'opusfile', 'bzip2', 'oboe']
   deps += dependency(name, static: true)
 endforeach
 shared_library('tonydepscheck', 'check.cpp', dependencies: deps)
@@ -418,6 +452,7 @@ cat > "$check/check.cpp" <<'EOF'
 #include <opusfile.h>
 #include <bzlib.h>
 #include <boost/math/distributions.hpp>
+#include <oboe/Oboe.h>
 
 // Something from each library, so that the static linker has to find it
 extern "C" int tony_deps_check(const unsigned char *data, int size)
@@ -464,6 +499,14 @@ extern "C" int tony_deps_check(const unsigned char *data, int size)
     boost::math::normal_distribution<double> normal(0.0, 1.0);
     n += int(boost::math::cdf(normal, double(size)) * 10);
 
+    std::shared_ptr<oboe::AudioStream> audio;
+    oboe::AudioStreamBuilder builder;
+    builder.setDirection(oboe::Direction::Output);
+    if (size > 0 && builder.openStream(audio) == oboe::Result::OK) {
+        n += audio->getSampleRate();
+        audio->close();
+    }
+
     return n;
 }
 EOF
@@ -493,7 +536,7 @@ case "$kind" in
 esac
 for lib in $needed; do
     case "$lib" in
-        libc.so|libm.so|libdl.so|libz.so|libc++_shared.so) ;;
+        libc.so|libm.so|libdl.so|libz.so|liblog.so|libc++_shared.so) ;;
         *) echo "ERROR: it loads $lib, which is not part of Android or the NDK" 1>&2; exit 1 ;;
     esac
 done
