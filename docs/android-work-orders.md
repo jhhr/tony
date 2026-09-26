@@ -189,6 +189,8 @@ builds happen in the container.)
   size drawn is logged.)
 - A12c — The Calibrate Audio dialog: small, and out of the way while a check runs. Done.
 - A12b — The dev run on the phone. Done.
+- A13 — Fixes from the dev runs on the phone: idle input latency, a stream disconnected
+  while idle, tones a phone can play, pitch that cannot be judged.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -694,6 +696,45 @@ user. Read `docs/calibrate-audio.md` sections 6 to 8.
   the application data directory, anything that opens a dialog or a picker, the scratch
   folders.
 - Tests on the desktop where the change is not Android-only; `test-tony-dev` whole.
+
+### A13 — Fixes from the dev runs on the phone
+
+Three dev runs on the user's Pixel 9a (2026-09-26), Bluetooth earphones (WF-1000XM6, A2DP)
+for output and the phone's microphone for input, an earbud held to the microphone. The
+calibration was steady (276 ms measured, 12 of 12 sweeps, punch-ins within 2.4 ms, spread
+1.9 ms); items 4, 13 and 14 passed; 5 Measured. Faults, from the reports and the log:
+
+- **Idle input latency.** After a take stops, `OboeAudioIO` reports input latencies of
+  11691-11752 frames (244 ms), against 100-190 frames during a take: nothing reads the input
+  while not recording, and its buffer (11424 of 11520 frames) fills. That figure went into
+  the dev report's header ("Record latency reported") and into the next take's round trip
+  ("round trip 12098 frames at 48000 Hz (252.044 ms), reported"): a take on a route with
+  no measured figure, started after an idle spell, would be placed 244 ms off. Measure the
+  latency only while the input is being read, or keep reading and discarding it while not
+  recording (say which, and why).
+- **A stream disconnected while idle.** Three times the first take after an idle spell
+  logged `OboeAudioIO: failed to start: ErrorDisconnected`; the take recorded 0 frames
+  ("nothing to use"), and only then did `checkAudioDevice` reopen the device. `resume()`
+  should reopen the streams and start again at once when a start fails because they were
+  disconnected, logged, so that the take (or playback) goes ahead.
+- **Tones a phone can play.** No run found pitch on the reference's tones: 0-4 live dots a
+  punch-in, all on sweeps; `mergeRangedAnalysis: 0 pitch event(s)` for every punch-in; even
+  with the input peak at -12.7 dBFS. The tones are pure sines at 196-262 Hz
+  (`LatencyCheck`), and an in-ear earbud without the seal of an ear canal, like a phone's
+  speaker, gives out almost no bass: the sweeps, which reach higher, come through; the
+  tones do not. Give the tones harmonics (a voice-like spectrum), so that their period is
+  there even when the fundamental is lost; keep their pitches, timing and level; the sweeps
+  and the calibration's measurement unchanged. pYIN and the live tracker must still find the
+  fundamental (tests with the fundamental filtered out).
+- **Pitch that cannot be judged.** Items 7, 9, 10 and 12 failed with "the take had no pitch
+  outside the range to compare" while their audio parts passed. A part that has nothing to
+  judge says so ("not judged: ..."), and the verdict comes from the rest, as items 4 and 12
+  already do with their gaps ([calibrate-audio.md](calibrate-audio.md) section 10). Item 3
+  keeps failing when no dots appear: that is what it checks.
+- **Small**: the report's "Audio drivers built in:" is empty on Android; it should name Oboe.
+
+Not changed without the user's word: the ±2 ms of items 1 and 2 (the runs had +3.2, +2.3 and
++2.4 ms with Bluetooth).
 
 ### A8 — Documentation pass
 
