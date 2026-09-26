@@ -100,4 +100,17 @@ guess(int outputBufferFrames, int inputBurstFrames)
     return e;
 }
 
+int
+inputFramesToRead(int asked, int available, int room)
+{
+    return std::max(0, std::min(room, std::max(asked, available)));
+}
+
+bool
+inputKeptUp(int backlogFrames, int outputBufferFrames, int inputBurstFrames)
+{
+    return backlogFrames <= std::max(0, outputBufferFrames) +
+        2 * std::max(0, inputBurstFrames);
+}
+
 }

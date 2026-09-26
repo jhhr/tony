@@ -140,6 +140,16 @@ describeDevice(const AudioRoute::Device &device)
 }
 
 std::string
+describeMs(int frames, int rate)
+{
+    std::ostringstream os;
+    os.setf(std::ios::fixed);
+    os.precision(1);
+    os << (rate > 0 ? double(frames) * 1000.0 / rate : 0.0) << " ms";
+    return os.str();
+}
+
+std::string
 describe(StreamLatency::Estimate latency, bool withInput, int rate)
 {
     auto ms = [rate](int frames) { return double(frames) * 1000.0 / rate; };
@@ -181,6 +191,38 @@ public:
     // callback of its own, as the input has not
     std::atomic<bool> inputFailed { false };
 
+    // The most input frames one callback has read since the last start,
+    // once FullDuplexStream was done draining: more than a callback
+    // leaves between reads is input that piled up while the callbacks
+    // were held up, and was read back up at once
+    std::atomic<int> largestRead { 0 };
+
+    // Where the input is read to: room for all the input stream holds.
+    // Allocated before the streams start, never in the callback
+    void setInputRoom(int frames, int channels) {
+        m_inputRoom = std::max(0, frames);
+        m_inputChannels = std::max(1, channels);
+        m_inputBuffer.assign(size_t(m_inputRoom) * m_inputChannels, 0.f);
+    }
+
+    // FullDuplexStream reads only as many input frames as the output
+    // asks for, so input that piles up while the callbacks are held up
+    // (the phone busy, as after a take) stays piled up for as long as
+    // the streams run, the input that much later all the while, until
+    // the input buffer is full. Everything there is is read instead,
+    // into a buffer of this class's, since FullDuplexStream's has room
+    // for one output buffer only
+    oboe::ResultWithValue<int32_t> readInput(int32_t numFrames) override {
+        oboe::AudioStream *input = getInputStream();
+        oboe::ResultWithValue<int32_t> available = input->getAvailableFrames();
+        int32_t wanted = StreamLatency::inputFramesToRead
+            (numFrames, available ? available.value() : 0, m_inputRoom);
+        oboe::ResultWithValue<int32_t> read =
+            input->read(m_inputBuffer.data(), wanted, 0 /* no wait */);
+        m_inputRead = read ? read.value() : 0;
+        return read;
+    }
+
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream *stream,
                                           void *audioData,
                                           int32_t numFrames) override {
@@ -202,13 +244,19 @@ public:
         return result;
     }
 
-    oboe::DataCallbackResult onBothStreamsReady(const void *inputData,
+    // The input FullDuplexStream hands over is in its own buffer, which
+    // readInput() above does not fill: what it read, and how much, is
+    // in this class's
+    oboe::DataCallbackResult onBothStreamsReady(const void *,
                                                 int numInputFrames,
                                                 void *outputData,
                                                 int numOutputFrames)
         override {
-        m_io->process(static_cast<const float *>(inputData),
-                      numInputFrames,
+        int frames = std::min(numInputFrames, m_inputRead);
+        if (frames > largestRead.load(std::memory_order_relaxed)) {
+            largestRead.store(frames, std::memory_order_relaxed);
+        }
+        m_io->process(m_inputBuffer.data(), frames,
                       static_cast<float *>(outputData), numOutputFrames);
         processed.fetch_add(1, std::memory_order_relaxed);
         return oboe::DataCallbackResult::Continue;
@@ -216,6 +264,10 @@ public:
 
 private:
     OboeAudioIO *m_io;
+    std::vector<float> m_inputBuffer;
+    int m_inputRoom = 0;
+    int m_inputChannels = 1;
+    int m_inputRead = 0;
 };
 
 // The output stream's error callback. Oboe calls it on a thread of its
@@ -234,8 +286,6 @@ public:
 OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
                          ApplicationPlaybackSource *source) :
     SystemAudioIO(target, source),
-    m_engine(new Engine(this)),
-    m_errors(std::make_shared<ErrorFlag>()),
     m_epoch(std::chrono::steady_clock::now()),
     m_rate(0),
     m_sourceChannels(2),
@@ -251,11 +301,44 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
     m_inputRunning(false),
     m_recordSuppressed(false),
     m_startFailed(false),
+    m_reopening(false),
     m_outputXRuns(0)
 {
     if (m_source && m_source->getApplicationChannelCount() > 0) {
         m_sourceChannels = m_source->getApplicationChannelCount();
     }
+
+    if (!openStreams()) return;
+
+    if (!measureOnceOpen()) {
+        // Without the input, the caller can still have playback
+        m_startupError = "Failed to start the audio streams";
+        cerr << "OboeAudioIO: " << m_startupError << endl;
+        if (m_input) {
+            m_input->close();
+            m_input.reset();
+        } else {
+            m_output->close();
+            m_output.reset();
+        }
+    }
+}
+
+OboeAudioIO::~OboeAudioIO()
+{
+    closeStreams();
+    m_engine.reset();
+    freeBuffers();
+}
+
+bool
+OboeAudioIO::openStreams()
+{
+    // A fresh engine and error flag for each pair of streams: an old
+    // stream's error callback may yet come, and must not mark these
+    m_engine.reset(new Engine(this));
+    m_errors = std::make_shared<ErrorFlag>();
+    m_outputXRuns = 0;
 
     // The output first, at the device's own rate; the input is opened
     // at the same rate, the lowest latency path for both. Exclusive
@@ -284,7 +367,7 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
             oboe::convertToText(result);
         cerr << "OboeAudioIO: " << m_startupError << endl;
         m_output.reset();
-        return;
+        return false;
     }
 
     m_rate = m_output->getSampleRate();
@@ -309,8 +392,10 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
             (m_output->getBufferCapacityInFrames() * 2);
 
         result = inBuilder.openStream(m_input);
-        // FullDuplexStream reads the input into a buffer that has room
-        // for as many channels as the output has
+        // At the output's rate, in float, and with no more channels than
+        // the output has, which FullDuplexStream's own input buffer had
+        // room for: Engine::readInput() reads into one of its own now,
+        // but no more has been tried
         if (result == oboe::Result::OK &&
             (m_input->getSampleRate() != m_rate ||
              m_input->getFormat() != oboe::AudioFormat::Float ||
@@ -323,11 +408,12 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
                 oboe::convertToText(result);
             cerr << "OboeAudioIO: " << m_startupError << endl;
             m_input.reset();
-            return;
+            return false;
         }
-        m_inputChannels = m_input->getChannelCount();
     }
 
+    freeBuffers();
+    m_inputChannels = (m_input ? m_input->getChannelCount() : 0);
     int burst = m_output->getFramesPerBurst();
     m_maxFrames = std::max({ m_output->getBufferCapacityInFrames(),
                              burst, 1024 });
@@ -337,12 +423,14 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
     if (m_input) {
         m_inBuffers = allocate_and_zero_channels<float>
             (m_inputChannels, m_maxFrames);
+        m_engine->setInputRoom(m_input->getBufferCapacityInFrames(),
+                               m_inputChannels);
         m_engine->setSharedInputStream(m_input);
     }
     m_engine->setSharedOutputStream(m_output);
 
     // All of this before the first callback, as PortAudioIO does. The
-    // latency is a guess until it is measured below
+    // latency is a guess until it is measured
     m_latency = StreamLatency::guess
         (m_output->getBufferSizeInFrames(),
          m_input ? m_input->getFramesPerBurst() : 0);
@@ -367,33 +455,55 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
     logStream("output", m_output.get());
     if (m_input) logStream("input", m_input.get());
     findRoute();
+    return true;
+}
 
+void
+OboeAudioIO::closeStreams()
+{
+    if (!m_suspended) stopStreams();
+    m_suspended = true;
+
+    // Closing waits for a callback that is running; none comes after
+    if (m_output) m_output->close();
+    if (m_input) m_input->close();
+    m_output.reset();
+    m_input.reset();
+}
+
+void
+OboeAudioIO::freeBuffers()
+{
+    if (m_outBuffers) deallocate_channels(m_outBuffers, m_outBufferChannels);
+    if (m_inBuffers) deallocate_channels(m_inBuffers, m_inputChannels);
+    m_outBuffers = nullptr;
+    m_inBuffers = nullptr;
+}
+
+bool
+OboeAudioIO::measureOnceOpen()
+{
     // Run the streams until they can say what their latency is, so that
     // the first take is compensated by a measurement too, and leave
     // them suspended: the application suspends a new device at once
     // anyway (MainWindowBase::createAudioIO() does)
     auto started = std::chrono::steady_clock::now();
-    resume();
-    if (m_startFailed) {
-        // Without the input, the caller can still have playback
-        m_startupError = "Failed to start the audio streams";
-        cerr << "OboeAudioIO: " << m_startupError << endl;
-        if (m_input) {
-            m_input->close();
-            m_input.reset();
-        } else {
-            m_output->close();
-            m_output.reset();
-        }
-        return;
+    oboe::Result result = startStreams();
+    if (result != oboe::Result::OK) {
+        cerr << "OboeAudioIO: failed to start: "
+             << oboe::convertToText(result) << endl;
+        m_startFailed = true;
+        return false;
     }
+    m_suspended = false;
 
     bool measurable = waitUntilMeasurable(openWaitMillis);
     int waited = int(std::chrono::duration_cast<std::chrono::milliseconds>
                      (std::chrono::steady_clock::now() - started).count());
     StreamLatency::Estimate latency;
+    int backlog = 0;
     bool withInput = m_inputRunning;
-    bool measured = measurable && measureLatency(latency);
+    bool measured = measurable && measureLatency(latency, backlog);
     stopStreams();
     m_suspended = true;
 
@@ -407,19 +517,22 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
              << " ms after starting; latency guessed: "
              << describe(m_latency, m_input != nullptr, m_rate) << endl;
     }
+    return true;
 }
 
-OboeAudioIO::~OboeAudioIO()
+bool
+OboeAudioIO::reopen()
 {
-    if (!m_suspended) stopStreams();
-
-    // Closing waits for a callback that is running; none comes after
-    if (m_output) m_output->close();
-    if (m_input) m_input->close();
-    m_engine.reset();
-
-    if (m_outBuffers) deallocate_channels(m_outBuffers, m_outBufferChannels);
-    if (m_inBuffers) deallocate_channels(m_inBuffers, m_inputChannels);
+    // Whatever route Android has now: the one that went may have gone
+    // for good (headphones out), or come back with another id
+    m_reopening = true;
+    closeStreams();
+    bool ok = openStreams() && measureOnceOpen();
+    m_reopening = false;
+    if (!ok) {
+        cerr << "OboeAudioIO: the streams could not be opened again" << endl;
+    }
+    return ok;
 }
 
 bool
@@ -456,9 +569,41 @@ OboeAudioIO::resume()
 {
     if (!m_suspended || !m_output || hasFailed()) return;
 
+    oboe::Result result = startStreams();
+
+    // Streams that Android disconnected while they were stopped (after
+    // an idle spell, or a route that went away) are opened afresh and
+    // started at once, so that what was asked for goes ahead rather than
+    // recording nothing until the window reopens the device
+    if (result == oboe::Result::ErrorDisconnected && !m_reopening) {
+        cerr << "OboeAudioIO: failed to start: "
+             << oboe::convertToText(result)
+             << "; the streams were disconnected while stopped, so they "
+             << "are opened again" << endl;
+        if (!reopen()) {
+            m_startFailed = true;
+            return;
+        }
+        result = startStreams();
+    }
+
+    if (result != oboe::Result::OK) {
+        cerr << "OboeAudioIO: failed to start: "
+             << oboe::convertToText(result) << endl;
+        m_startFailed = true;
+        return;
+    }
+
+    m_suspended = false;
+}
+
+oboe::Result
+OboeAudioIO::startStreams()
+{
     bool duplex = (m_input && !m_recordSuppressed);
     m_engine->duplex.store(duplex);
     m_engine->processed.store(0);
+    m_engine->largestRead.store(0);
 
     // FullDuplexStream starts the input, then the output, and starts
     // draining the input again
@@ -466,15 +611,8 @@ OboeAudioIO::resume()
         (duplex ? m_engine->start() : m_output->requestStart());
     m_inputRunning = duplex;
 
-    if (result != oboe::Result::OK) {
-        cerr << "OboeAudioIO: failed to start: "
-             << oboe::convertToText(result) << endl;
-        stopStreams();
-        m_startFailed = true;
-        return;
-    }
-
-    m_suspended = false;
+    if (result != oboe::Result::OK) stopStreams();
+    return result;
 }
 
 void
@@ -487,9 +625,11 @@ OboeAudioIO::suspend()
     // The application reads the figures when a take starts, so the next
     // take is compensated by what the device did now
     StreamLatency::Estimate latency;
+    int backlog = 0;
     bool withInput = m_inputRunning;
-    bool measured = (m_engine->processed.load() >= steadyCallbacks &&
-                     measureLatency(latency));
+    bool steady = (m_engine->processed.load() >= steadyCallbacks);
+    bool measured = steady && measureLatency(latency, backlog);
+    int largestRead = m_engine->largestRead.load();
 
     stopStreams();
     m_suspended = true;
@@ -502,6 +642,22 @@ OboeAudioIO::suspend()
             cerr << "OboeAudioIO: latency now "
                  << describe(m_latency, m_input != nullptr, m_rate) << endl;
         }
+    } else if (steady && backlog > 0) {
+        cerr << "OboeAudioIO: the input was " << backlog << " frames ("
+             << describeMs(backlog, m_rate) << ") behind as the device "
+             << "stopped, so the latency was not measured: kept at "
+             << describe(m_latency, m_input != nullptr, m_rate) << endl;
+    }
+
+    // Input that piled up while the callbacks were held up, or that
+    // comes in bursts, and was read at once: FullDuplexStream would have
+    // left it waiting, the input that much later for the rest of the run
+    if (withInput && !keptUp(largestRead)) {
+        cerr << "OboeAudioIO: one callback read " << largestRead
+             << " frames (" << describeMs(largestRead, m_rate)
+             << ") of input at once while running, more than a callback "
+             << "leaves: the callbacks were held up, or come in bursts"
+             << endl;
     }
 
     oboe::ResultWithValue<int32_t> xruns = m_output->getXRunCount();
@@ -567,15 +723,20 @@ OboeAudioIO::waitUntilMeasurable(int maxMillis) const
 }
 
 bool
-OboeAudioIO::measureLatency(StreamLatency::Estimate &latency) const
+OboeAudioIO::measureLatency(StreamLatency::Estimate &latency,
+                            int &backlog) const
 {
     // Readings are taken here, not in the callback: Oboe advises
     // against timestamps there before Android 11. A reading that a
     // callback ran through is thrown away, as it would pair one
     // callback's output count with another's input count; so is one
     // taken just after a callback returned and before Oboe counted what
-    // it wrote, by the median.
+    // it wrote, by the median. So is one taken while the input was not
+    // being read as it came in, the callbacks held up: its input latency
+    // is how far behind they were, not the device's (backlog says the
+    // most that was waiting then)
     bool withInput = m_inputRunning;
+    backlog = 0;
     std::vector<StreamLatency::Estimate> readings;
     for (int attempt = 0;
          attempt < readingsWanted * 5 && int(readings.size()) < readingsWanted;
@@ -590,7 +751,13 @@ OboeAudioIO::measureLatency(StreamLatency::Estimate &latency) const
 
         StreamLatency::Position output, input;
         output.appFrames = m_output->getFramesWritten();
-        if (withInput) input.appFrames = m_input->getFramesRead();
+        int waiting = 0;
+        if (withInput) {
+            input.appFrames = m_input->getFramesRead();
+            auto available = m_input->getAvailableFrames();
+            if (!available) continue;
+            waiting = available.value();
+        }
 
         auto outputStamp = m_output->getTimestamp(CLOCK_MONOTONIC);
         if (!outputStamp) continue;
@@ -609,6 +776,11 @@ OboeAudioIO::measureLatency(StreamLatency::Estimate &latency) const
             continue;
         }
 
+        if (withInput && !keptUp(waiting)) {
+            backlog = std::max(backlog, waiting);
+            continue;
+        }
+
         readings.push_back(StreamLatency::fromReading
                            (StreamLatency::outputLatency(output, now, m_rate),
                             withInput ?
@@ -617,6 +789,14 @@ OboeAudioIO::measureLatency(StreamLatency::Estimate &latency) const
     }
 
     return StreamLatency::median(readings, m_rate, latency);
+}
+
+bool
+OboeAudioIO::keptUp(int waiting) const
+{
+    return StreamLatency::inputKeptUp
+        (waiting, m_output ? m_output->getBufferSizeInFrames() : 0,
+         m_input ? m_input->getFramesPerBurst() : 0);
 }
 
 void

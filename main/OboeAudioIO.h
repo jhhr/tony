@@ -21,11 +21,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 
 namespace oboe {
 class AudioStream;
+enum class Result : int32_t;
 }
 
 /**
@@ -46,6 +48,10 @@ class AudioStream;
  * start draining and discarding input, with the output silent, so that
  * input is read as soon as it comes in: output starts some 100 ms
  * after resume(), and the first input the target gets is from then.
+ * After that each callback reads all the input there is, not only as
+ * much as the output asks for, as FullDuplexStream would: input that
+ * piled up while a callback was held up would otherwise stay piled up,
+ * and run late, for as long as the streams run.
  *
  * Latency, in frames at the device's rate like PortAudioIO's, is
  * worked out from the streams' timestamps (StreamLatency): when the
@@ -53,7 +59,10 @@ class AudioStream;
  * they have timestamps and leaves them suspended, and again each time
  * it is suspended after running, so that the next take is compensated
  * by what the device did last. Timestamps are read on the calling
- * thread, never in the callback.
+ * thread, never in the callback. A reading taken while the input was
+ * not being read as it came in (more waiting than a callback leaves) is
+ * of how far behind the reading was, not of the device, and is not
+ * used: the figures stay as they were.
  *
  * The route, the devices Android opened (the speaker and the phone's
  * microphone, a headset, Bluetooth) and how their streams were opened,
@@ -62,7 +71,11 @@ class AudioStream;
  *
  * A stream that fails (a device disconnected: headphones plugged in
  * or out) is stopped by Oboe; hasFailed() then says so, and the owner
- * must delete this and open another. Every method but the callback's
+ * must delete this and open another. Streams that Android disconnected
+ * while they were stopped say so only when started again: resume()
+ * then opens them afresh, on whatever route there is now, measures
+ * them as the constructor does, and starts those, so that the take or
+ * the playback asked for goes ahead. Every method but the callback's
  * is for the GUI thread, which is the only one that logs, to stderr.
  */
 class OboeAudioIO : public breakfastquay::SystemAudioIO,
@@ -127,6 +140,7 @@ private:
     bool m_inputRunning;
     bool m_recordSuppressed;
     bool m_startFailed;
+    bool m_reopening;
     StreamLatency::Estimate m_latency;
     int m_outputXRuns;
     AudioRoute::Route m_route;
@@ -136,9 +150,17 @@ private:
     void process(const float *input, int inputFrames,
                  float *output, int outputFrames);
 
+    bool openStreams();
+    void closeStreams();
+    void freeBuffers();
+    bool measureOnceOpen();
+    bool reopen();
+    oboe::Result startStreams();
     void stopStreams();
     bool waitUntilMeasurable(int maxMillis) const;
-    bool measureLatency(StreamLatency::Estimate &latency) const;
+    bool measureLatency(StreamLatency::Estimate &latency,
+                        int &backlog) const;
+    bool keptUp(int waiting) const;
     void report(StreamLatency::Estimate latency, bool withInput);
     void logStream(std::string name, oboe::AudioStream *stream) const;
     void findRoute();
