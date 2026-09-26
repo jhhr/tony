@@ -428,6 +428,22 @@ class TestRecordWorkflow : public QObject
         return matching;
     }
 
+    // As dialogsMatching(), for message boxes with this title as well.
+    // Not on macOS, which shows no title on a message box, and Qt keeps
+    // none there: the text alone must tell the box apart
+    QStringList messagesMatching(QString title, QString text) {
+        QStringList matching;
+        for (const QString &dialog : dialogsMatching(text)) {
+#ifdef Q_OS_MACOS
+            Q_UNUSED(title);
+            matching.push_back(dialog);
+#else
+            if (dialog.startsWith(title + ": ")) matching.push_back(dialog);
+#endif
+        }
+        return matching;
+    }
+
     // Audio in the session besides the reference: one model per take that
     // is on show, and nothing left over from a session load
     int audioModelsBesidesReference() {
@@ -6278,7 +6294,8 @@ private slots:
         for (const auto &f : failures) {
             QVERIFY2(!m_window->doImportLyricsFrom(f.first),
                      qPrintable(f.first));
-            QStringList dialogs = dialogsMatching("Could not import lyrics");
+            QStringList dialogs =
+                messagesMatching("Could not import lyrics", f.second);
             QCOMPARE(dialogs.size(), 1);
             QVERIFY2(dialogs[0].contains(f.second), qPrintable(dialogs[0]));
             QVERIFY(!lyrics->isShown());
@@ -6293,7 +6310,8 @@ private slots:
         m_window->discardModifications();
 
         QVERIFY(!m_window->doImportLyricsFrom(untimed));
-        QCOMPARE(dialogsMatching("Could not import lyrics").size(), 1);
+        QCOMPARE(messagesMatching("Could not import lyrics",
+                                  "No timed lyrics were found").size(), 1);
         QVERIFY(lyrics->getModelId() == model);
         QCOMPARE(lyricsEvents(), events);
         QCOMPARE(lyricsLayersInDocument(), 1);
@@ -6565,7 +6583,8 @@ private slots:
         for (QString path : { noFolder, folder }) {
             m_window->setLyricsExportAnswer(path);
             m_window->exportLyricsAction()->trigger();
-            QStringList dialogs = dialogsMatching("Could not export lyrics");
+            QStringList dialogs =
+                messagesMatching("Could not export lyrics", path);
             QCOMPARE(dialogs.size(), 1);
             QVERIFY2(dialogs[0].contains(path), qPrintable(dialogs[0]));
             QCOMPARE(m_window->statusText(), status);
