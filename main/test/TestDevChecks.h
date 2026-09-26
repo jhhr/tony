@@ -108,6 +108,7 @@ class TestDevChecks : public QObject
         config.recordLatency = reportedIn;
         config.inputDelay = roundTrip;
         config.loopback = true;
+        config.reportLevels = true;
         return config;
     }
 
@@ -168,6 +169,14 @@ class TestDevChecks : public QObject
         bool ok = false;
         double ms = text.endsWith(" ms") ? text.chopped(3).toDouble(&ok) : 0.0;
         return ok ? ms : std::nan("");
+    }
+
+    // Item 3's "279: 274 on the tones, 5 on the sweeps, 0 elsewhere" as
+    // 279; -1 for anything else
+    static int dotCount(QString text) {
+        bool ok = false;
+        int n = text.section(':', 0, 0).toInt(&ok);
+        return ok ? n : -1;
     }
 
     QString reportText() {
@@ -257,13 +266,13 @@ class TestDevChecks : public QObject
         QVERIFY(!m_window->audioCheck()->isRunning());
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->audioCheckTakes());
-        QCOMPARE(int(m_report.checks.size()), 2);
+        QCOMPARE(int(m_report.checks.size()), 5);
         for (const CheckResult &c : m_report.checks) {
             QVERIFY2(c.verdict == CheckResult::Verdict::Skipped, describe());
             QVERIFY2(c.message.contains(m_report.failure), describe());
         }
         QCOMPARE(lastReportLine(),
-                 QString("Totals: 0 passed, 0 failed, 0 measured, 2 skipped"));
+                 QString("Totals: 0 passed, 0 failed, 0 measured, 5 skipped"));
 
         QTest::qWait(500);
         QCOMPARE(m_finished, 1);
@@ -418,7 +427,7 @@ private slots:
             qDebug().noquote() << "report:" << line;
         }
         QVERIFY2(m_report.failure == "", describe());
-        QCOMPARE(int(m_report.checks.size()), 2);
+        QCOMPARE(int(m_report.checks.size()), 5);
         const CheckResult *latency = check(1);
         const CheckResult *phrases = check(2);
         QVERIFY(latency && phrases);
@@ -430,6 +439,52 @@ private slots:
                  QString("%1 ms").arg(roundTrip * 1000.0 / rate, 0, 'f', 1));
         QVERIFY2(number(*latency, "pitch after reopening")
                  .endsWith("pitch events, the same"), describe());
+
+        // What was seen of each punch-in: the live dots on the
+        // reference's sounds, and behind the cursor by the round trip at
+        // least, since the cursor runs with what has been recorded;
+        // nothing played where the reference is silent, though the
+        // reference itself was heard; and the loopback on both inputs
+        const CheckResult *dots = check(3);
+        const CheckResult *speakers = check(4);
+        const CheckResult *mic = check(5);
+        QVERIFY(dots && speakers && mic);
+        QCOMPARE(dots->name, QString("live_dots"));
+        QCOMPARE(speakers->name,
+                 QString("nothing_of_the_take_in_the_speakers"));
+        QCOMPARE(mic->name, QString("mic_on_input_2"));
+        QVERIFY2(dots->verdict == CheckResult::Verdict::Pass, describe());
+        QVERIFY2(speakers->verdict == CheckResult::Verdict::Pass, describe());
+        QVERIFY2(mic->verdict == CheckResult::Verdict::Measured, describe());
+        for (QString label : { QString("dots, punch-in 1 (6.30 to 10.20 s)"),
+                               QString("dots, punch-in 2 (16.80 to 21.20 "
+                                       "s)") }) {
+            QVERIFY2(dotCount(number(*dots, label)) > DevChecks::kMinDots,
+                     describe());
+            QVERIFY2(number(*dots, label).endsWith(", 0 elsewhere"),
+                     describe());
+        }
+        QVERIFY2(milliseconds(number(*dots, "dots behind the cursor, median"))
+                 >= roundTrip * 1000.0 / rate, describe());
+        QCOMPARE(number(*speakers, "second arrival"), QString("none heard"));
+        const QString gaps =
+            number(*speakers, "largest output level in the silent gaps");
+        QVERIFY2(gaps.startsWith("silence, over ") &&
+                 !gaps.endsWith(" 0 looks"), describe());
+        QCOMPARE(number(*speakers, "largest output level"),
+                 QString("-12.0 dBFS"));
+        QVERIFY2(number(*mic, "the mic is on").startsWith("inputs 1 and 2, "),
+                 describe());
+        QVERIFY2(mic->message.startsWith("Not applicable here"), describe());
+
+        // What the device says of itself, at the head of the report
+        for (QString words : { QString("Audio drivers built in: "),
+                               QString("Playback latency reported: 8192 "
+                                       "frames (185.8 ms)"),
+                               QString("Record latency reported: 4096 "
+                                       "frames (92.9 ms)") }) {
+            QVERIFY2(reportText().contains(words), qPrintable(words));
+        }
 
         QCOMPARE(m_stages, QStringList() << "1 of 2: Fresh punch-ins"
                  << "2 of 2: Save and reopen");
@@ -445,7 +500,7 @@ private slots:
         QVERIFY(QFileInfo(m_report.reportPath).fileName() == "DevChecks.txt");
         QVERIFY(TakesFile::isInFolder(reportDirectory(), m_report.reportPath));
         QCOMPARE(lastReportLine(),
-                 QString("Totals: 2 passed, 0 failed, 0 measured, 0 skipped"));
+                 QString("Totals: 4 passed, 0 failed, 1 measured, 0 skipped"));
 
         QVERIFY(m_report.sessionPath != "");
         QCOMPARE(m_window->sessionFile(), m_report.sessionPath);
@@ -501,8 +556,60 @@ private slots:
             QVERIFY2(text.contains(words), qPrintable(words + " not in:\n" +
                                                       text));
         }
+
+        // Items 4 and 5 do not depend on where the take is placed.  The
+        // dots are 20 ms early too, which is about as far as item 3 lets
+        // them be: whether they pass depends on where the tracker's hops
+        // fall
+        QVERIFY2(check(4) && check(4)->verdict == CheckResult::Verdict::Pass,
+                 describe());
+        QVERIFY2(check(5) &&
+                 check(5)->verdict == CheckResult::Verdict::Measured,
+                 describe());
+        const bool dotsPass =
+            check(3) && check(3)->verdict == CheckResult::Verdict::Pass;
         QCOMPARE(lastReportLine(),
-                 QString("Totals: 0 passed, 2 failed, 0 measured, 0 skipped"));
+                 QString("Totals: %1 passed, %2 failed, 1 measured, 0 skipped")
+                 .arg(dotsPass ? 2 : 1).arg(dotsPass ? 2 : 3));
+    }
+
+    // The loopback heard a second time, 50 ms later at half the level, as
+    // a mic hears an input that the system plays back out; and the input
+    // on channel 2 only, as a mic on input 2 of an interface.  Item 4
+    // fails on the second arrival; item 5 names input 2, and passes
+    // because the live dots were drawn all the same
+    void dev_checks_echo_and_the_mic_on_input_2() {
+        FakeAudioIO::Config config = loopback();
+        config.echoDelay = 2205;
+        config.echoGain = 0.5f;
+        config.inputChannel = 1;
+        makeWindow(config);
+
+        runDevChecks(roundTrip / rate);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_report.failure == "", describe());
+        const CheckResult *speakers = check(4);
+        const CheckResult *mic = check(5);
+        QVERIFY(speakers && mic);
+        QVERIFY2(speakers->verdict == CheckResult::Verdict::Fail, describe());
+        QVERIFY2(speakers->message.contains("arrived a second time"),
+                 describe());
+        const QString echo = number(*speakers, "second arrival");
+        const double delayMs = milliseconds(echo.section(" after", 0, 0));
+        const double levelDb = echo.section(", ", 1, 1).chopped(3).toDouble();
+        QVERIFY2(std::fabs(delayMs - 50.0) <= 1.0, describe());
+        QVERIFY2(std::fabs(levelDb + 6.0) <= 1.0, describe());
+
+        // Tony played nothing more than without the echo
+        QVERIFY2(number(*speakers, "largest output level in the silent gaps")
+                 .startsWith("silence, "), describe());
+
+        QVERIFY2(mic->verdict == CheckResult::Verdict::Pass, describe());
+        QVERIFY2(number(*mic, "the mic is on").startsWith("input 2, "),
+                 describe());
+        QVERIFY2(number(*mic, "input peaks, punch-in 1")
+                 .startsWith("input 1 silence, input 2 -"), describe());
     }
 
     // Cancelled during a take: the take stops, the run ends once with

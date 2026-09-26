@@ -108,7 +108,7 @@ The numbers are those of `docs/manual-checklist.md` before that merge.
 | --- | --- | --- | --- |
 | 1 | Latency on this machine, also after save and reopen | **Automated** | Every sweep of every punch-in lands within ±2 ms (§6). Save the test session to a temp `.ton`, reopen it, analyse again: unchanged. |
 | 2 | Several phrases in one take | **Automated** | Punch-ins at four positions of one take, each placed right. Each measures its own start gap. |
-| 3 | Live dots | **Measured** | *Automated:* dots sit on the reference's tones on the timeline (±1 hop); they stay after Stop until the pitch track arrives, then go; the status bar stops changing; the take's own pitch and notes are hidden during the take and back after. *Reported:* how far behind the cursor a dot appears, in ms. *Eyes:* does it look right. |
+| 3 | Live dots | **Measured** | *Automated:* dots sit on the reference's tones on the timeline (±1 hop; *found in C1b:* a dot trails the sound it heard by up to half the tracker's window, so from a tone's start to half a window past its end, ±1 hop); they stay after Stop until the pitch track arrives, then go; the status bar stops changing; the take's own pitch and notes are hidden during the take and back after. *Reported:* how far behind the cursor a dot appears, in ms. *Eyes:* does it look right. |
 | 4 | Nothing of the take in the speakers | **Automated** | Re-record over earlier material. Tony's output peak (`getOutputLevels()`) is exactly zero in the reference's silent gaps, so no take audio and no synth. The mic hears no second arrival of each sweep; one would mean the input is monitored somewhere (Windows "Listen to this device", or an interface's direct monitor). Play Singing Audio keeps its state. |
 | 5 | Mic on input 2 of a stereo interface | **Measured** | Per-channel input peaks show which input the mic is on. If it is input 2, dots appearing is the check; otherwise "not applicable here". |
 | 6 | No input device / device in use | **Manual** | Needs the device gone or busy. |
@@ -321,7 +321,7 @@ marked "Done" when it is committed.
    - *After the merge of `default`:* `TestDevChecks` moved into an executable of its
      own, `test-tony-dev`, run when a change touches what the checks drive (the user's
      decision). The phases below were cut again (§4).
-   - **C1b** `TakeObserver`. Items 3, 4, 5 (and 8's number).
+   - **C1b** `TakeObserver`. Items 3, 4, 5 (and 8's number). Done.
    - **C1c** Re-record and pre-roll stages. Items 7, 12, 13, 14.
 5. **C2** Long song and joins: items 9 and 10.
 6. **C3** Retire `test-tony-device`, once all it checks is in the dev run.
@@ -456,7 +456,12 @@ Checked on 2026-09-25, so that phases do not re-derive them.
   - Coverage is `m_takes->getCoverage().getRanges()`.
   - The take is analysed when `analysed(analyser2())` holds.
 - **Levels.** `getOutputLevels()` and `getInputLevels()`, on the play source and record
-  target, return per-channel peaks since the last call.
+  target, return per-channel peaks since the last call. *Found in C1b:* while recording,
+  lead-in included, `ViewManager::checkPlayStatus()` reads the input levels only, so the
+  observer is then the output levels' one reader. They are of what is handed to the
+  device, before its output latency. `FakeAudioIO` reports levels only with
+  `reportLevels`. The play source's `getTargetBlockSize()` is always its default 1024:
+  bqaudioio's `ResamplerWrapper` does not pass the device's block on.
 - **Fake device.** `FakeAudioIO::Config::loopback` adds the output to the input
   `inputDelay` frames late; `TestAudioCheck` uses it. The reported latencies are
   independent of the real delay. `TestMainWindow::createAudioIO()` installs the fake.

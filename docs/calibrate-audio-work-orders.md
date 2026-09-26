@@ -326,3 +326,29 @@ Template:
     Choices / deviations: ...
     The next phase must know: ...
     Left open: ...
+
+### Phase C1b — 2026-09-26
+Built: `main/dev/TakeObserver` (a sample every 20 ms: cursor frame, frames received just
+before and after the output-level read, output levels while recording only, input levels
+from `monitoringLevelsChanged`, status text, modal; each dot on first sight with the cursor
+then; the raw recording's path; when it stopped; Play Singing Audio before and after).
+`DevChecks` starts one on the runner's `Recording` progress, keeps it (`Watched`) when the
+next punch-in records or the runner finishes; items 3 `live_dots`, 4
+`nothing_of_the_take_in_the_speakers`, 5 `mic_on_input_2` from stage 1; report header
+with drivers and reported latencies. `FakeAudioIO`: `echoDelay`/`echoGain`, opt-in
+`reportLevels`. `TestDevChecks`: 5 checks; `dev_checks_echo_and_the_mic_on_input_2`.
+Choices / deviations: output is placed from frames received and the measured start gap
+(input, then output, per callback), not from time or the output latency, which the levels
+precede. Margin one block either side; the block bounded by the most frames received
+between two looks not held up (35 ms on the fake). Item 3: dots from a sound's start
+−1 hop to its end + half the tracker window +1 hop (±1 hop failed the clean fake: dots run
+440 frames past a tone); sweep ends make 2–3 dots at 860–980 Hz, counted apart, pitch not
+judged. Cursor = the ViewManager's frame (S + recorded), read only while recording: dots
+trail it by the round trip + about 40 ms (+322 ms at 281 ms on the fake). Item 5 "not
+applicable" is Measured; on input 2 alone it passes on more than 10 dots per punch-in.
+Echo and input 2 share one run.
+The next phase must know: an observer runs for every punch-in of a runner run DevChecks
+starts (`m_watched`, cleared per stage); stage 1's kept in `m_freshWatched`.
+Left open: at −20 ms item 3 passes or fails with the hop phase (the test allows both).
+The gap check was seen failing on a non-silent reference, not a take played back out:
+stage 1 has no take audio where it plays (C1c's re-record has). Dot spread 40–230 ms.

@@ -22,6 +22,7 @@
 #include "../Coverage.h"
 #include "../LatencyCalibration.h"
 #include "../LatencyCheck.h"
+#include "TakeObserver.h"
 
 #include "base/Event.h"
 
@@ -107,8 +108,11 @@ struct DevReport
  *     and its take's file judged again.
  *
  * The checks are worked out when the run ends, from what the stages
- * kept: item 1 (latency, also after save and reopen) and item 2
- * (several phrases in one take).
+ * kept: item 1 (latency, also after save and reopen), item 2 (several
+ * phrases in one take), and from what a TakeObserver saw of each of
+ * stage 1's punch-ins, items 3 (live dots, and how far behind the
+ * cursor they appear), 4 (nothing of the take in the speakers) and 5
+ * (the mic on input 2).
  *
  * The session saved stays open afterwards, so that the takes can be
  * looked at; its scratch folder stays with it, and the next run
@@ -128,6 +132,21 @@ public:
     /// Items 1 and 2: how far from where the reference has it a sweep
     /// may land, either way
     static constexpr double kPlacementSeconds = 0.002;
+
+    /// Item 3: more live dots than this in every punch-in, as
+    /// test-tony-device asked
+    static constexpr int kMinDots = 10;
+
+    /// Item 3: a dot is on one of the reference's sounds when it lies
+    /// from the sound's start to half the live tracker's window past
+    /// its end, give or take this many of its hops (liveDotsCheck()),
+    /// and on a tone, within this many cents of its pitch
+    static constexpr int kDotHops = 1;
+    static constexpr double kDotCents = 50.0;
+
+    /// Item 5: an input carries the mic when its peak is no more than
+    /// this far below the loudest input's
+    static constexpr double kMicChannelDb = 20.0;
 
     /// How often a stage is looked at
     static constexpr int kPollMs = 50;
@@ -254,12 +273,31 @@ private:
     QString m_sessionPath;
     bool m_saved;
 
-    /// Stage 1: the layout, what the runner found, and the take's
-    /// coverage straight after
+    /// What the observer saw of one of the runner's punch-ins, and the
+    /// peak of each channel of its raw recording, full scale 1, or why
+    /// that could not be read
+    struct Watched {
+        int punchIn;    ///< counting from 0
+        TakeObserver::Observation seen;
+        std::vector<float> channelPeaks;
+        QString channelError;
+        Watched() : punchIn(0) { }
+    };
+
+    /// Watches each punch-in of a run of the runner's that this run
+    /// started, from its Recording step until its analysis is done;
+    /// which punch-in, counting from 1, or 0; and what it saw
+    TakeObserver *m_observer;
+    int m_observedPunchIn;
+    std::vector<Watched> m_watched;
+
+    /// Stage 1: the layout, what the runner found, the take's coverage
+    /// straight after, and what was seen of each punch-in
     LatencyCheck::Layout m_layout;
     bool m_haveFresh;
     AudioCheckResult m_fresh;
     Coverage m_coverageAfterFresh;
+    std::vector<Watched> m_freshWatched;
 
     /// Stage 2: the take's pitch and notes before the save and after
     /// the reopen, and its file judged again after it
@@ -272,6 +310,13 @@ private:
 
     void poll();
     void runnerFinished(const AudioCheckResult &result);
+    void runnerProgress(const AudioCheckRunner::Progress &state);
+
+    /// Stop the observer and keep what it saw
+    void finishObservation();
+
+    /// What was seen of stage 1's punch-in i, counting from 0, or null
+    const Watched *freshWatched(int i) const;
 
     void beginFreshPunchIns();
     bool freshPunchInsDone();
@@ -289,6 +334,9 @@ private:
     std::vector<CheckResult> evaluate(QString reason) const;
     CheckResult latencyCheck(QString reason) const;
     CheckResult phrasesCheck(QString reason) const;
+    CheckResult liveDotsCheck(QString reason) const;
+    CheckResult speakersCheck(QString reason) const;
+    CheckResult micChannelCheck(QString reason) const;
 
     /// The report file written, or "" if it could not be
     QString writeReport(const DevReport &report) const;

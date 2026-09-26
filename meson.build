@@ -1153,9 +1153,11 @@ tony_app_moc_headers = [
 if dev_checks
   tony_app_files += [
     'main/dev/DevChecks.cpp',
+    'main/dev/TakeObserver.cpp',
   ]
   tony_app_moc_headers += [
     'main/dev/DevChecks.h',
+    'main/dev/TakeObserver.h',
   ]
 endif
 

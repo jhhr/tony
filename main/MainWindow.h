@@ -63,6 +63,9 @@ class MainWindow : public sv::MainWindowBase
     // The development checks save and reopen the session, and read the
     // take's pitch and notes; see DevChecks
     friend class DevChecks;
+    // What the development checks see of a take, only looking; see
+    // TakeObserver
+    friend class TakeObserver;
 #endif
 
 public:
