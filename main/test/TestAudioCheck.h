@@ -213,6 +213,10 @@ private slots:
     }
 
     void cleanup() {
+        // A round trip a test stored would place the next test's takes.
+        // First, as the waits below return early when they fail
+        QSettings().remove("LatencyCalibration");
+
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
                 m_window->doRecord();
@@ -289,6 +293,49 @@ private slots:
         QVERIFY(!m_window->audioCheckTakes());
     }
 
+    // The round trip the check measured, kept: a second check places its
+    // takes with it, and finds them where they belong. Forgotten, the
+    // reported pair is in use again
+    void check_stored_round_trip_is_used() {
+        makeWindow(loopback());
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());
+        const double measured = m_result.calibratedRoundTrip;
+
+        QVERIFY(m_window->storeMeasuredLatency(m_result));
+        LatencyCalibration::InUse inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Measured);
+        QCOMPARE(inUse.roundTrip, measured);
+        QVERIFY(inUse.date.isValid());
+
+        m_result = AudioCheckResult();
+        m_finished = 0;
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+        QVERIFY2(std::fabs(r.summary.medianOffset * rate) <= 4.0,
+                 describe(r).constData());
+        QCOMPARE(int(r.takes.size()), 2);
+        for (const TakeLatency &t : r.takes) {
+            QVERIFY(t.measured);
+            QCOMPARE(t.roundTrip, sv::sv_frame_t(std::llround(measured * rate)));
+        }
+        QVERIFY2(std::fabs(r.calibratedRoundTrip * rate - roundTrip) <= 4.0,
+                 describe(r).constData());
+
+        m_window->forgetMeasuredLatency();
+        inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Reported);
+        QVERIFY(!inUse.stale);
+        QCOMPARE(inUse.roundTrip, (reportedOut + reportedIn) / rate);
+    }
+
     // A device at 48 kHz: the takes are recorded at a rate other than the
     // reference's, which is reported with both rates, whatever the sweeps
     // say. What Tony does with such takes is a known bug of its own, so
@@ -307,6 +354,11 @@ private slots:
         QCOMPARE(m_result.referenceRate, rate);
         QVERIFY(!m_result.calibrationUsable());
         QVERIFY(!m_window->audioCheckTakes());
+
+        // and such a figure is not kept
+        QVERIFY(!m_window->storeMeasuredLatency(m_result));
+        QSettings settings;
+        QVERIFY(!settings.childGroups().contains("LatencyCalibration"));
     }
 
     // Cancel during a take stops it through the Stop path, clears the

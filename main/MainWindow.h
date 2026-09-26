@@ -25,6 +25,7 @@
 #include "TakeCommands.h"
 #include "TakeTiming.h"
 #include "LatencyUtils.h"
+#include "LatencyCalibration.h"
 
 #include <vector>
 #include <string>
@@ -37,6 +38,7 @@ class QComboBox;
 class QActionGroup;
 
 class AudioCheckRunner;
+struct AudioCheckResult;
 
 namespace sv {
 class VersionTester;
@@ -88,6 +90,23 @@ public:
     // element is read from the file and the takes put back from it
     void toXml(QTextStream &out, bool asTemplate) override;
     FileOpenStatus openSession(sv::FileSource source) override;
+
+    // The round trip takes are placed with (see LatencyCalibration).
+    // Keep the one an audio check measured, for the devices the
+    // Preferences name and the rate the check recorded at; false, with
+    // nothing kept, unless the check's figure is usable
+    bool storeMeasuredLatency(const AudioCheckResult &result);
+
+    // Drop the figure latencyInUse() describes
+    void forgetMeasuredLatency();
+
+    // What the next take will be placed with, as far as it is known
+    // before the take starts: the device's rate is known only once it
+    // has recorded, so until a take has been recorded on these devices
+    // this assumes the session's rate, the only one a usable check
+    // stores a figure at.  The reported pair is 0 until the device is
+    // open
+    LatencyCalibration::InUse latencyInUse() const;
 
 signals:
     void canExportPitchTrack(bool);
@@ -829,9 +848,10 @@ protected:
     // what the singer sang would be left unanalysed.
     Coverage::Range m_takeAnalysisRange;
 
-    // Round-trip hardware latency (output + input, in frames at the model
-    // sample rate) stored when a singing-track recording is made with the
-    // "play reference while recording" toggle on.  The recording is read
+    // Round-trip hardware latency (the figure the audio check measured,
+    // or else output + input as the device reports them, in frames of the
+    // recording; see roundTripAt()) stored when a singing-track recording
+    // is made with the "play reference while recording" toggle on.  The recording is read
     // from this frame on when it is spliced into the take's audio, so that
     // what the singer sang in answer to the reference at m_takePosition
     // lands there; and the live dots are placed with it during the take.
@@ -864,6 +884,26 @@ protected:
     // record(), recordingStarted() and wantedPreRollFrames() consult it
     AudioCheckRunner *m_audioCheck;
     bool m_audioCheckTakes;
+
+    // The rate the device recorded at, the last time a take was placed
+    // with a round trip; 0 until then, and again once another device is
+    // chosen
+    sv::sv_samplerate_t m_lastRecordingRate;
+
+    // The session's rate, from the play source, or the fixed rate every
+    // file is read at before there is one
+    sv::sv_samplerate_t sessionRate() const;
+
+    // The rate the next take is expected to record at: the last one's,
+    // or before there is one, the session's
+    sv::sv_samplerate_t expectedRecordingRate() const;
+
+    // The round trip for a take recorded at the given rate, in seconds,
+    // and where it came from: a stored figure for these devices and this
+    // rate, unless the latencies the device reports have changed since
+    // it was measured; otherwise the reported pair, each converted from
+    // the frames it counts
+    LatencyCalibration::InUse roundTripAt(sv::sv_samplerate_t recordingRate) const;
 
     void refineRecordingLatency();
 

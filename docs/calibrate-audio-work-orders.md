@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (see git log).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
@@ -337,6 +337,15 @@ sonification's audibility are set (search `setPlayPan`, `PlayParameters`).
   - Nothing of the user's own sessions changes.
 - **A progress signal** on the runner: step, punch-in *k* of *n*, and the seconds left
   where known, for B4's dialog.
+- **Two runner fixes from B2's report:**
+  - **Reference file name.** The reference WAV gets a new name each run (a counter or a
+    timestamp), and old ones are removed when no session holds them. **Check Again**
+    otherwise rewrites the file that the check session it replaces still has open; on
+    Windows that write can fail. Linux cannot show it.
+  - **Reported output latency.** `AudioCheckRunner` divides the reported output latency
+    by the reference's rate. Have `TakeLatency` carry both reported figures **in
+    seconds**, as `MainWindow::roundTripAt()` works them out, and have the result use
+    those. Then the take path and the check can never disagree.
 - **Tests:**
   - During a check the reference's play parameters are centred at the planned gain,
     and the sonification is not audible.
@@ -373,6 +382,10 @@ Read also: how an existing Tony dialog is built and tested (search
   - **Forget Measured Latency**.
 - The calibration plan is 4 punch-ins × 3 events on the calibration layout; it fits
   since the lead's spacing change.
+- **The device key is taken when the check starts.** Carry it in `AudioCheckResult`,
+  and have `storeMeasuredLatency()` use it, not the Preferences at the moment the
+  button is pressed. The dialog is non-modal, so the user could change device in
+  between (B2's report). Also disable both Audio Device menus while a check runs.
 - Anything that asks the user goes through a virtual seam, as
   `confirmRecordingOverTake()` does. The app tests drive the dialog's slots directly;
   the dialog watchdog fails a test on any unexpected modal dialog.
@@ -481,3 +494,18 @@ Left open: no test deletes the window mid-check. Seen while proving the session-
 - Reordered the calibration spacings to `{21,16,25,19,17,23,26,20,24,18,22}` (B1's suggestion) so that 4 × 3 punch-ins fit; `punch_ins_hold_the_events_asked_for` now asks for 4 × 3 and failed on the old order. `judge_only_events_inside_a_punch_in` names its events from the layout instead of 9.1 and 11.4 s.
 - Split B3 into B3 (the check's playback and progress) and B4 (dialog and menu), after B1 needed 370k tokens.
 - Calibration sweeps now at 1.0, 3.1, 4.7, 7.2, 9.1, 10.8, 13.1, 15.7, 17.7, 20.1, 21.9, 24.1 s.
+
+### Phase B2 — 2026-09-26
+Built: `main/LatencyCalibration.{h,cpp}` (`tony_core`, namespace): `Key`, `currentKey(settings, rate)`, `Figure`, `store`/`load`/`forget` (all take a `QSettings &`), `isStale`, `kStaleToleranceSeconds` = 1 ms, `Source`, `InUse {source, roundTrip, date, stale}`, `roundTripInUse()`, `reportedSeconds()`, `toFrames()`. `TakeLatency::measured`. `MainWindow`: `roundTripAt(rate)`, used by the `recordingStarted()` lambda; B4's API `storeMeasuredLatency(result)`, `forgetMeasuredLatency()`, `latencyInUse()`. Core class `TestLatencyCalibration` (6 tests); app tests `latency_measured_round_trip_used`, `latency_stale_round_trip_ignored`, `latency_reported_at_the_device_rate`, `latency_reported_with_device_opened_first` (TestRecordWorkflow), `check_stored_round_trip_is_used` (TestAudioCheck, 25 s).
+Choices / deviations:
+- Settings: `LatencyCalibration/<driver>|<playback>|<record>/<rate>/`. In names only `%`, `/`, `\` and `|` are percent-encoded. Registry key names stop at 255 characters, and full encoding of long non-ASCII names could pass that. Values are stored as text (`'g'`, 17 digits) and the date as ISO UTC.
+- The key follows `createAudioIO()`, not `audioDeviceSettingKey()`: they differ for `audio-target` = "auto", which Tony never writes.
+- **The output latency's unit** (spec §11, corrected): frames at `m_playSource->getDeviceSampleRate()`, or at the recording's rate when that is 0. This is not always the session's rate. If a device is chosen before any file is opened (or a standalone take is the first action), `ResamplerWrapper` has no source rate yet. It passes the device's figure through unconverted and tells the play source 0. Using the session's rate there gave 13012 frames instead of 12288 at 48 kHz (`latency_reported_with_device_opened_first`).
+- `storeMeasuredLatency()` stores only when `calibrationUsable()`. The key uses the current Preferences, the rate is the result's, and the fingerprint is the result's reported pair.
+- `latencyInUse()`/`forget` use the rate of the last take placed with a round trip. Before any take they use the session's rate, the only rate at which a usable check stores. That rate is reset when a device is chosen from the menu. The device's rate cannot be known before a take: `AudioCallbackRecordTarget` has no getter for it.
+- A stale figure is not deleted; it becomes valid again if the driver goes back to reporting the old pair.
+The next phase must know:
+- With no figure stored at 44.1 kHz, the round trip is exactly the old sum; this is tested in core across a grid of values. At 48 kHz the check now uses 256 ms, not 242.
+- The runner's `reportedOutputLatency` still divides by the reference's rate. It matches the take path at 44.1 kHz, the only rate that is stored.
+- `storeMeasuredLatency()` reads the device from the Preferences when "Use this latency" is pressed. If B4's non-modal dialog lets the device change in between, the figure is stored under the new device.
+Left open: `computeRecordingLatency()` is unused outside `TestLatencyShift`. The svapp fork could add `AudioCallbackRecordTarget::getRecordSampleRate()` so that `latencyInUse()` knows the rate before the first take.

@@ -21,6 +21,7 @@
 #include "TestTakesFile.h"
 #include "TestTakeTiming.h"
 #include "TestLatencyCheck.h"
+#include "TestLatencyCalibration.h"
 
 #include "RunSuite.h"
 
@@ -101,6 +102,12 @@ int main(int argc, char *argv[])
 
     {
         TestLatencyCheck t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLatencyCalibration t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

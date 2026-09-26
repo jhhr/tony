@@ -289,7 +289,7 @@ marked "Done" when it is committed.
    - **B1** The alignment check runner and its app tests. Done.
    - **B2** Storing the measured round trip and using it in takes (`LatencyCalibration`,
      `recordingStarted()`, staleness). This was step 3 below; it moved up because the
-     dialog needs it.
+     dialog needs it. Done.
    - **B3** The check's playback: the reference centred at −12 dBFS, the sonification
      silent, and a progress signal.
    - **B4** The Calibrate Audio dialog and menu entry.
@@ -376,7 +376,15 @@ Checked on 2026-09-25, so that phases do not re-derive them.
   measurement. *Found in B1:* `getTargetPlayLatency()` counts frames of the session's
   rate (bqaudioio's `ResamplerWrapper` converts it), `getSystemRecordLatency()` the
   device's, and L is taken off the recording, in the device's. They differ only when
-  the device is not at 44.1 kHz.
+  the device is not at 44.1 kHz. *Found in B2:* the wrapper converts only if the
+  session had a rate when the device was opened. A device chosen before any file is
+  opened gets its figure passed on in its own frames, and the play source is told a
+  device rate of 0. So the output latency counts frames at the play source's
+  `getDeviceSampleRate()`, or at the device's rate when that is 0.
+  *Since B2* the round trip is the stored figure (`LatencyCalibration`) when one is
+  valid, otherwise the reported pair, each converted to seconds at its own rate. It
+  is then turned into recording frames. `computeRecordingLatency()` is no longer
+  called.
 - **Where the reference is heard** (found in B1). `Analyser` pans the reference hard
   left and its pitch and notes sonification hard right, so only the left earcup
   carries the sweeps; the right one carries the synth.

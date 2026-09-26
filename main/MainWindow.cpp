@@ -203,7 +203,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_awaitingReferenceStart(false),
     m_takeLatency(),
     m_audioCheck(nullptr),
-    m_audioCheckTakes(false)
+    m_audioCheckTakes(false),
+    m_lastRecordingRate(0)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -1454,6 +1455,9 @@ MainWindow::audioDeviceSelected(QAction *action)
     if (m_playSource && m_playSource->isPlaying()) {
         stop();
     }
+
+    // Another device may record at another rate
+    m_lastRecordingRate = 0;
 
     recreateAudioIO();
 }
@@ -4174,7 +4178,9 @@ MainWindow::recordingStarted()
             // The singer's response to the reference where playback starts
             // arrives in the recording at approximately frame
             // (outputLatency + inputLatency), so that is the frame the splice
-            // reads the recording from.
+            // reads the recording from.  Drivers often report those two
+            // wrong; a round trip the audio check measured on this device
+            // is used instead, while there is one (roundTripAt()).
             // With a pre-roll, playback starts at the beginning of the
             // lead-in rather than at the take's position, and the splice
             // skips the lead-in as well (TakeTiming::spliceOffset()).
@@ -4193,14 +4199,47 @@ MainWindow::recordingStarted()
             // figure, and refineRecordingLatency() picks it up.
             m_recordingStartGapEstimate =
                 m_recordTarget ? m_recordTarget->getFramesReceived() : 0;
+
+            // The round trip is taken off the front of the recording, so it
+            // is counted in frames of the recording, at the device's rate.
+            // The reported latencies are not both counted so: the play
+            // source usually has the output latency in frames of the
+            // session.  They differ when the device is not at 44.1 kHz, so
+            // the round trip goes through seconds
+            sv_samplerate_t recordingRate = 0;
+            if (auto wfm = ModelById::getAs<WritableWaveFileModel>
+                (m_currentRecordingModelId)) {
+                recordingRate = wfm->getSampleRate();
+            }
+            if (recordingRate <= 0) {
+                recordingRate = sessionRate();
+                cerr << "MainWindow::recordingStarted: the recording's rate "
+                     << "is not known; taking the session's, "
+                     << recordingRate << " Hz" << endl;
+            }
+            m_lastRecordingRate = recordingRate;
+
+            LatencyCalibration::InUse inUse = roundTripAt(recordingRate);
             sv_frame_t roundTrip =
-                computeRecordingLatency(outputLatency, inputLatency);
+                LatencyCalibration::toFrames(inUse.roundTrip, recordingRate);
             m_recordingLatencyFrames = roundTrip + m_recordingStartGapEstimate;
 
             m_takeLatency.roundTrip = roundTrip;
             m_takeLatency.reportedOutput = outputLatency;
             m_takeLatency.reportedInput = inputLatency;
-            cerr << "MainWindow::recordingStarted: output latency=" << outputLatency
+            m_takeLatency.measured =
+                (inUse.source == LatencyCalibration::Source::Measured);
+            cerr << "MainWindow::recordingStarted: round trip " << roundTrip
+                 << " frames at " << recordingRate << " Hz ("
+                 << inUse.roundTrip * 1000.0 << " ms), "
+                 << LatencyCalibration::sourceName(inUse.source);
+            if (inUse.source == LatencyCalibration::Source::Measured) {
+                cerr << " on " << inUse.date.toString(Qt::ISODate).toStdString();
+            } else if (inUse.stale) {
+                cerr << ": the measured one is stale, the device reports "
+                     << "other latencies now";
+            }
+            cerr << "; output latency=" << outputLatency
                  << " input latency=" << inputLatency
                  << " estimated start gap=" << m_recordingStartGapEstimate
                  << " total compensation=" << m_recordingLatencyFrames << " frames" << endl;
@@ -4238,6 +4277,91 @@ MainWindow::currentRecordingLatency() const
     sv_frame_t measured = m_recordingStartGapMeasured;
     if (measured < 0) return m_recordingLatencyFrames;
     return m_recordingLatencyFrames + (measured - m_recordingStartGapEstimate);
+}
+
+sv_samplerate_t
+MainWindow::sessionRate() const
+{
+    sv_samplerate_t rate = m_playSource ? m_playSource->getSourceSampleRate() : 0;
+    if (rate <= 0) rate = Preferences::getInstance()->getFixedSampleRate();
+    return rate;
+}
+
+LatencyCalibration::InUse
+MainWindow::roundTripAt(sv_samplerate_t recordingRate) const
+{
+    // The play source counts its output latency in frames at the rate it
+    // was told the device runs at, as its own getCurrentPlayingFrame()
+    // does.  bqaudioio's ResamplerWrapper tells it the session's rate and
+    // converts the device's figure to it, when the session had a rate by
+    // the time the device was opened.  If it had none yet (a device chosen
+    // before any file was opened), the wrapper passed the figure on as the
+    // device counts it and told the play source 0: the recording's frames
+    sv_samplerate_t outputRate =
+        m_playSource ? m_playSource->getDeviceSampleRate() : 0;
+    if (outputRate <= 0) outputRate = recordingRate;
+
+    double output = m_playSource ?
+        LatencyCalibration::reportedSeconds
+        (m_playSource->getTargetPlayLatency(), outputRate) : 0.0;
+    double input = m_recordTarget ?
+        LatencyCalibration::reportedSeconds
+        (m_recordTarget->getSystemRecordLatency(), recordingRate) : 0.0;
+
+    QSettings settings;
+    LatencyCalibration::Figure figure;
+    bool stored = LatencyCalibration::load
+        (settings, LatencyCalibration::currentKey(settings, recordingRate),
+         figure);
+    return LatencyCalibration::roundTripInUse
+        (stored ? &figure : nullptr, output, input);
+}
+
+sv_samplerate_t
+MainWindow::expectedRecordingRate() const
+{
+    return m_lastRecordingRate > 0 ? m_lastRecordingRate : sessionRate();
+}
+
+LatencyCalibration::InUse
+MainWindow::latencyInUse() const
+{
+    return roundTripAt(expectedRecordingRate());
+}
+
+bool
+MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
+{
+    if (!result.calibrationUsable()) return false;
+
+    LatencyCalibration::Figure figure;
+    figure.roundTrip = result.calibratedRoundTrip;
+    figure.spread = result.summary.spread;
+    figure.date = QDateTime::currentDateTimeUtc();
+    figure.reportedOutput = result.reportedOutputLatency;
+    figure.reportedInput = result.reportedInputLatency;
+
+    QSettings settings;
+    LatencyCalibration::store
+        (settings, LatencyCalibration::currentKey(settings, result.recordingRate),
+         figure);
+    cerr << "MainWindow::storeMeasuredLatency: round trip "
+         << figure.roundTrip * 1000.0 << " ms at " << result.recordingRate
+         << " Hz, the device reporting " << figure.reportedOutput * 1000.0
+         << " ms out and " << figure.reportedInput * 1000.0 << " ms in"
+         << endl;
+    return true;
+}
+
+void
+MainWindow::forgetMeasuredLatency()
+{
+    QSettings settings;
+    LatencyCalibration::forget
+        (settings, LatencyCalibration::currentKey(settings,
+                                                  expectedRecordingRate()));
+    cerr << "MainWindow::forgetMeasuredLatency: at "
+         << expectedRecordingRate() << " Hz" << endl;
 }
 
 TakeTiming
