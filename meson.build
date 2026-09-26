@@ -1406,6 +1406,7 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestLatencyCalibration.h',
   'main/test/TestTakeDiff.h',
   'main/test/TestModelChangeThrottle.h',
+  'main/test/TestRunSuite.h',
 ])
 
 # Where the suites find the files in testdata/. Forward slashes: a

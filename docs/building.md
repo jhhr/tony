@@ -2,7 +2,7 @@
 
 The development machine builds with meson + ninja under MSYS2's `mingw64` toolchain
 (default prefix `C:\msys64\mingw64`) into `build_mingw/`: that is most of this page. An
-agent in a cloud session builds on Linux instead, into `build_linux/`: see
+agent in a cloud session builds on Linux instead, into `build/`: see
 [Building on Linux](#building-on-linux) at the end. The CI workflows in
 `.github/workflows/` build the upstream way on Linux, macOS and MSVC and are not what is
 described here.
@@ -70,31 +70,6 @@ meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 3 -C build_mingw
 echo "exit:$?" >> tmp/build.log
 ```
 
-## On Linux (a cloud session)
-
-Not how the project is developed, but it builds and both suites run; this is how it was done
-on 2026-09-25 (Ubuntu 24.04, no sound card):
-
-- Packages: the `apt-get install` list of `.github/workflows/linux.yml` (`smlnj` and
-  `mercurial` are not needed, and `libboost-dev` does for `libboost-all-dev`), plus
-  `librubberband-dev`, `libjack-jackd2-dev`, `libasound2-dev`, `libopusenc-dev`, `meson`.
-- **Qt 6.11 from conda-forge, not Ubuntu's 6.4.** Under 6.4 the string-based connects of
-  `Analyser` with `sv::` types do not resolve ("No such slot
-  Analyser::layerCompletionChanged(ModelId)"), so pYIN's completion never arrives and every
-  analysing test times out. download.qt.io's mirrors are blocked by the session's proxy;
-  conda-forge is not:
-  `micromamba create -p /opt/qt611 -c conda-forge qt6-main=6.11.1`, then a directory with
-  links to only its `Qt6*.pc` files, so that nothing else of conda's is picked up:
-  `PKG_CONFIG_PATH=<that directory> meson setup build_qt611`, and
-  `LD_LIBRARY_PATH=/opt/qt611/lib` to run.
-- The libraries by `git clone` at the pins of `repoint-lock.json`. sourcehut (the `hg`
-  ones) was unreachable; their GitHub mirrors (`github.com/breakfastquay/...`) are at the
-  same tips.
-- `-j 4` on four cores; the whole build takes about 20 minutes. Run the app suite with
-  nothing else building: it records in real time.
-- Four tests of `TestTakesFile` fail on Linux and nowhere else: they are about Windows
-  paths (backslashes, drive letters, case).
-
 ## What is particular about this `meson.build`
 
 - A MinGW/GCC win64 branch that upstream does not have: msys2 system libraries,
@@ -111,86 +86,98 @@ on 2026-09-25 (Ubuntu 24.04, no sound card):
 
 # Building on Linux
 
-For a cloud session (Ubuntu 24.04, root, no Windows): a fresh container has none of the
-libraries, and repoint does not run there either, so everything below is done by hand.
-A clean build takes 15 to 20 minutes with `-j 4`.
+For a cloud session: Ubuntu 24.04, 4 cores, 16 GB, root, no sound card, and no Windows.
+repoint does not run there, and hg.sr.ht, where six of the libraries live, cannot be
+reached. Three scripts in `deploy/linux/` do the work:
 
-## Packages
+- **`cloud-environment.sh` is the cloud environment's setup script.** Its text is pasted
+  into the environment's settings, with the network access and variables below; the copy in
+  the repository does nothing by itself. The platform runs it once and keeps a snapshot of
+  the disk, which later sessions start from, until the script or the allowed hosts change
+  or about a week has passed. It installs the packages, Qt, ccache and mold, the Android SDK
+  and NDK when `dl.google.com` is reachable, and spends what is left of four minutes filling
+  ccache from a build of the libraries. It also writes an `autoMode` entry to
+  `/root/.claude/settings.json` by which auto mode trusts the four library forks as it does
+  Tony's own repository ([forks.md](forks.md#changing-a-fork)): auto mode reads that from
+  the user's settings, never from the repository's `.claude/settings.json`. The snapshot is kept only when the script ends
+  within about five minutes, so any change to it has to keep to that. Its logs are in
+  `/var/log/tony-environment/`.
+- **`container-setup.sh`** makes any fresh Ubuntu 24.04 able to build: packages, Qt, the
+  library directories at their pins, `meson setup build`. Safe to run again. After the
+  environment's snapshot it only checks out the libraries and configures.
+- **`cloud-session.sh start` runs at the start of every cloud session**, from the
+  SessionStart hook in `.claude/settings.json` (`start --if-cloud`, which does nothing
+  outside the cloud). It runs `container-setup.sh` and then builds everything into `build/`
+  in the background, at low priority: about 4 minutes, while the session reads. The hook
+  itself returns at once. The log is `tmp/cloud-session.log`. `cloud-session.sh wait`
+  waits for it and exits as it did. **Wait before the first build or test**: two ninjas
+  must not work in one build directory. A session with several repositories runs no
+  repository's hooks; there, run `cloud-session.sh start` by hand.
 
-```sh
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential meson ninja-build \
-  qt6-base-dev qt6-base-dev-tools qt6-tools-dev-tools qt6-pdf-dev libqt6svg6-dev \
-  libboost-all-dev libbz2-dev libfftw3-dev libsndfile-dev libsamplerate-dev \
-  librubberband-dev libsord-dev raptor2-utils liboggz2-dev libfishsound1-dev \
-  libmad0-dev libid3tag0-dev libopus-dev libopusfile-dev libopusenc-dev liblo-dev \
-  liblrdf0-dev libjack-jackd2-dev libpulse-dev libasound2-dev portaudio19-dev \
-  capnproto libcapnp-dev libglib2.0-dev libxml2-utils mercurial
-```
+The environment's settings:
 
-Ubuntu 24.04 gives Qt **6.4** and rubberband 3.3; the Windows machine has Qt 6.11. See the
-traps below.
+- Network access **Custom**, with the default list of package hosts, and `dl.google.com`
+  added for the Android branch (the SDK, the NDK, and Gradle's Google repository, which
+  `maven.google.com` redirects to). GitHub, conda-forge and Ubuntu's archive are in the
+  default list; hg.sr.ht, download.qt.io and Qt's mirrors are not. A push to one of the
+  forks is another matter: with this Custom access it is refused (HTTP 403) until the fork
+  is attached to the session, and goes through once it is
+  ([forks.md](forks.md#changing-a-fork)).
+- Variables `BASH_DEFAULT_TIMEOUT_MS=600000` and `BASH_MAX_TIMEOUT_MS=1800000`, so that a
+  build or a suite run is not moved to the background after the tool's default two minutes,
+  and a 30-minute timeout can be given at all.
 
-## The libraries
-
-Check out every library of `repoint-project.json` at its pin in `repoint-lock.json`, into
-the directory of the same name at the top of the repository (`icons/scalable` included).
-The git ones:
-
-```sh
-cd /path/to/tony
-python3 -c '
-import json
-p = json.load(open("repoint-project.json"))["libraries"]
-l = json.load(open("repoint-lock.json"))["libraries"]
-for name, lib in p.items():
-    if lib["vcs"] == "git":
-        repo = lib.get("repository", name.split("/")[-1])
-        print(name, "https://github.com/%s/%s" % (lib["owner"], repo), l[name]["pin"])
-' | while read dir url pin; do
-  [ -d "$dir/.git" ] || git clone -q "$url" "$dir"
-  git -C "$dir" checkout -q "$pin" && echo "$dir $pin"
-done
-```
-
-The six Mercurial ones (`dataquay`, `bqvec`, `bqfft`, `bqresample`, `bqaudioio`,
-`bqthingfactory`) live on `hg.sr.ht/~breakfastquay`. **A cloud session's network proxy
-refuses that host**, so use the git mirrors at `github.com/breakfastquay/<name>` instead.
-The mirrors' hashes are not the hg pins: take each mirror's `HEAD`, which matched the pins
-when this was written (for `bqaudioio`, its "Merge from branch toggle-record-in-io" is
-hg `017ab3ed3a33`, which `FakeAudioIO` needs). If a pin moves past a mirror's `HEAD`, the
-build or the tests will say so.
+Then, from the repository root:
 
 ```sh
-for r in dataquay bqvec bqfft bqresample bqaudioio bqthingfactory; do
-  [ -d "$r" ] || git clone -q "https://github.com/breakfastquay/$r" "$r"
-done
-```
-
-Where `hg.sr.ht` can be reached, `hg clone` and `hg update -r <pin>` are the real thing. If
-`hg` fails with `ImportError: cannot import name parsers`, a Python on `PATH` other than the
-system's is picking it up: run it as `/usr/bin/python3.12 /usr/bin/hg`.
-
-## Configure, build, test
-
-```sh
-meson setup build_linux --buildtype release > tmp/configure.log 2>&1
-ninja -j 4 -C build_linux tony test-tony-core test-tony-app pyin.so > tmp/build.log 2>&1
+ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-tony-dev > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
+deploy/linux/run-tests.sh test-tony-core     # about a second
+deploy/linux/run-tests.sh test-tony-app      # a minute and a half
+deploy/linux/run-tests.sh test-tony-dev      # when AGENTS.md says to run it
 ```
 
-Targets have no `.exe`, and `pyin.so` has to be named: nothing else builds the plugin the
-app suite loads. The rules above still hold: log to a file, never pipe ninja, write the exit
-status into the log. Tests run from `build_linux/` exactly as [testing.md](testing.md)
-says, with `./test-tony-core` and `./test-tony-app`.
+No `.exe` on Linux; the plugin target is `pyin.so`. `run-tests.sh` runs an executable as
+several processes, each with a shard of every suite ([testing.md](testing.md#running)).
+The one-process runs of AGENTS.md work too, from `build/`.
 
-## Traps
+Measured on 2026-09-26:
 
-- **Some tests fail on Linux whatever the change**: the list is in
-  [testing.md](testing.md#running). Record the baseline before changing anything.
-- **Qt 6.4 does not match a `SIGNAL()`/`SLOT()` string saying `ModelId` or `sv_frame_t`
-  against a slot moc recorded with `sv::`**, where Qt 6.11 does. Such a connection fails
-  silently here and works on Windows. Use member-pointer `connect` (AGENTS.md asks for it
-  anyway), and use no Qt API newer than 6.4.
-- Several tests race the analysis against the take; this machine finishes the analysis
-  sooner than the Windows one does, which is why some of them fail here.
+| | |
+| --- | --- |
+| Full build, nothing in ccache | 6.6 minutes: 1570 CPU-seconds, nearly all compiling |
+| Full build, everything in ccache | 4 to 6 seconds |
+| A session's first build, with the setup script's ccache | 3.7 minutes, in the background |
+| Linking `tony`, `test-tony-core`, `test-tony-app` and `test-tony-device` | 3 s with mold, 12 s with GNU ld |
+| App suite | 550 s in one process, 95 s in eight |
+| Development checks' suite | 69 s in one process, 18 s in eight |
+
+Why each part is as it is:
+
+- **Qt 6.11 from conda-forge, not Ubuntu's 6.4**: the Qt of the Windows machine. Qt 6.4
+  does not match a `SIGNAL()`/`SLOT()` string naming `ModelId` or `sv_frame_t` against a
+  slot moc recorded with `sv::`, so such a connection fails silently there and works on
+  Windows (member-pointer connects, which AGENTS.md asks for, work on both). And with 6.4
+  several of the tests that race the analysis against a take fail whatever the change
+  ([testing.md](testing.md#running)); with 6.11 none do. download.qt.io's mirrors are
+  blocked by the session's proxy; conda-forge is not. Only Qt's own `.pc` files are put on meson's pkg-config path
+  (`/opt/qt6-conda/tony-pkgconfig`), so that nothing else of conda's is picked up; meson
+  puts Qt's library directory in the executables' RPATH.
+- **The Mercurial libraries come from their GitHub mirrors.** hg.sr.ht is blocked, and
+  `repoint-lock.json` pins them by Mercurial hash, which the mirrors do not carry.
+  `container-setup.sh` has a table from pin to mirror commit and stops at a pin it does not
+  know.
+- **ccache**, which meson uses by itself when it is installed, with `hash_dir = false`
+  (`/etc/ccache.conf`). With `-g` every result's key otherwise holds the build directory,
+  and a second build directory or a worktree found 0.4 % of a full cache. The compiler's
+  name is part of the key too: a directory configured with `CC=gcc CXX=g++` finds nothing
+  that meson's own `cc` and `c++` put there. Configure through `container-setup.sh`.
+- **mold**: `cloud-session.sh` has `meson setup` take it (`CC_LD=mold CXX_LD=mold`) for a
+  new `build/`; a build directory keeps the linker it was set up with. Every change to
+  `main/` relinks all four executables.
+- **Run the app suite with nothing else building**: it records in real time.
+- Four tests of `TestTakesFile` fail on Linux and nowhere else: they are about Windows
+  paths (backslashes, drive letters, case).
+- Measured and left alone: `-g1` compiles svcore in 19 % less time than `-g`, but Windows
+  builds `debugoptimized`, with full debug information; clang is no faster than GCC; and a
+  unity build fails in the libraries, which define the same names in several files.

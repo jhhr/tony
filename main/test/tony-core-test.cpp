@@ -27,6 +27,7 @@
 #include "TestLatencyCalibration.h"
 #include "TestTakeDiff.h"
 #include "TestModelChangeThrottle.h"
+#include "TestRunSuite.h"
 
 #include "RunSuite.h"
 
@@ -143,6 +144,12 @@ int main(int argc, char *argv[])
 
     {
         TestModelChangeThrottle t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestRunSuite t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

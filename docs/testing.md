@@ -6,8 +6,8 @@ the real device. The commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestModelChangeThrottle`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 8 minutes (measured 2026-09-26 on Linux), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestTakeDiff`, `TestModelChangeThrottle`, `TestRunSuite` | seconds |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 9 minutes in one process, a minute and a half in eight (measured 2026-09-26 on Linux), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about a minute and growing: each test records several takes in real time |
 | `test-tony-device` | as `test-tony-app`, but with the **real** audio device | `TestRealDevice` | about a minute; run by hand only, see the [manual checklist](manual-checklist.md) |
 
@@ -54,9 +54,24 @@ Windows path would start an escape in the C string.
   the exit status of a run with names is always 1. Only a run with no names has a
   meaningful exit status.
 - `QT_QPA_PLATFORM=offscreen` is set by `main()` when not given.
-- **Built on Linux with Qt 6.4**, some tests are expected to fail, whatever the change.
-  Core: `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and
-  `in_folder`, which test Windows paths (`C:\...`, case-insensitive). App:
+- **Shards.** With `TONY_TEST_SHARD=i/n` each suite runs only every n-th of its test
+  functions, from the i-th, in declaration order, and a suite with none in the shard does
+  not run. The app suite nearly only waits on `FakeAudioIO`'s real-time clock, so n
+  processes at once take about 1/n of the time: on four cores the load stayed under 2 with
+  eight, and reached 3.5 with twelve. `deploy/linux/run-tests.sh` starts them and adds up
+  their results. Each process needs a `HOME` and XDG directories of its own: the suites'
+  QSettings are per user, and processes sharing them clear each other's settings.
+  `TestDevChecks` turns on `QStandardPaths`' test mode, which keeps them in `~/.qttest`
+  whatever the XDG variables say. On Windows QSettings is the registry, so the script is
+  for Linux. Do not combine shards with test names on the command line.
+- A sharded run is a whole run of the suites, but the tests that share a process are other
+  ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
+  run the one-process run as well.
+- **On Linux some tests fail whatever the change.** With the Qt of the cloud setup,
+  conda-forge's 6.11 ([building.md](building.md#building-on-linux)), only
+  `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and
+  `in_folder`, which test Windows paths (`C:\...`, case-insensitive). Built against
+  Ubuntu's Qt 6.4 instead, these fail too:
   `TestRecordWorkflow`'s `take_analysis_covers_the_range_it_lost`,
   `range_analysis_torn_down_while_running`, `save_during_ranged_analysis`,
   `undo_during_analysis_then_redo` and `analyse_now_reanalyses_the_take`, and
