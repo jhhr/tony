@@ -14,7 +14,9 @@
 
 #include "CalibrateAudioDialog.h"
 
+#include "AudioCheckIndicator.h"
 #include "MainWindow.h"
+#include "PopupArea.h"
 
 #include <QClipboard>
 #include <QCoreApplication>
@@ -26,17 +28,20 @@
 #include <QLocale>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
 #include <QSettings>
 #include <QStackedWidget>
 #include <QTextDocument>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #ifdef TONY_DEV_CHECKS
 #include <QCheckBox>
 #endif
 
 #ifdef Q_OS_ANDROID
-#include <QPointer>
+#include <QScroller>
 #endif
 
 #include <algorithm>
@@ -92,6 +97,41 @@ bold(QString html)
     return "<b>" + html + "</b>";
 }
 
+// A page's text, scrolling where it is longer than the dialog can be
+// tall.  It asks for the text's height at the width it is given, so that
+// the dialog is no taller than its text needs, and for a few lines at
+// the least, so that the dialog can be as short as a phone's window
+class TextArea : public QScrollArea
+{
+public:
+    TextArea(QLabel *text) {
+        setWidget(text);
+        setWidgetResizable(true);
+        setFrameShape(QFrame::NoFrame);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+#ifdef Q_OS_ANDROID
+        // A finger dragged over the text scrolls it, as on a phone; Qt's
+        // own gesture on the viewport wants two
+        QScroller::grabGesture(viewport(), QScroller::LeftMouseButtonGesture);
+#endif
+    }
+
+    bool hasHeightForWidth() const override {
+        return true;
+    }
+
+    int heightForWidth(int width) const override {
+        const int frame = 2 * frameWidth();
+        return widget()->heightForWidth(width - frame) + frame;
+    }
+
+    QSize minimumSizeHint() const override {
+        const QFontMetrics metrics(widget()->font());
+        return QSize(metrics.averageCharWidth() * 20,
+                     metrics.lineSpacing() * 3 + 2 * frameWidth());
+    }
+};
+
 }
 
 CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
@@ -103,7 +143,8 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     m_running(false),
     m_latencyKept(false),
     m_expectedSeconds(0),
-    m_shownPermille(0)
+    m_shownPermille(0),
+    m_collapsed(false)
 #ifdef TONY_DEV_CHECKS
     ,
     m_devChecksBox(nullptr),
@@ -114,11 +155,28 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     setWindowTitle(tr("Calibrate Audio"));
     setModal(false);
 
+#ifdef Q_OS_ANDROID
+    // A phone's widget font is sized for text read on its own: in a
+    // window 400 px high the pages show more of themselves at a little
+    // less, and scroll less
+    QFont smaller = font();
+    if (smaller.pixelSize() > 0) {
+        smaller.setPixelSize
+            (std::max(10, int(std::lround(smaller.pixelSize() * 0.85))));
+    } else if (smaller.pointSizeF() > 0) {
+        smaller.setPointSizeF(smaller.pointSizeF() * 0.85);
+    }
+    setFont(smaller);
+    cerr << "CalibrateAudioDialog: text " << QFontInfo(font()).pixelSize()
+         << " px, the window's " << QFontInfo(window->font()).pixelSize()
+         << " px" << endl;
+#endif
+
     QVBoxLayout *layout = new QVBoxLayout;
     setLayout(layout);
 
     m_pages = new QStackedWidget;
-    layout->addWidget(m_pages);
+    layout->addWidget(m_pages, 1);
 
     auto textLabel = []() {
         QLabel *label = new QLabel;
@@ -133,17 +191,18 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     instructionsLayout->setContentsMargins(0, 0, 0, 0);
     instructions->setLayout(instructionsLayout);
     m_instructions = textLabel();
-    instructionsLayout->addWidget(m_instructions);
+    m_instructionsArea = new TextArea(m_instructions);
+    instructionsLayout->addWidget(m_instructionsArea, 1);
 #ifdef TONY_DEV_CHECKS
     m_devChecksBox = new QCheckBox(tr("Run the dev checks after calibrating"));
     m_devChecksBox->setChecked(true);
     instructionsLayout->addWidget(m_devChecksBox);
 #endif
-    instructionsLayout->addStretch(1);
     m_pages->addWidget(instructions);
 
     QWidget *progress = new QWidget;
     QVBoxLayout *progressLayout = new QVBoxLayout;
+    progressLayout->setContentsMargins(0, 0, 0, 0);
     progress->setLayout(progressLayout);
     m_step = new QLabel;
     m_step->setWordWrap(true);
@@ -157,30 +216,58 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     progressLayout->addStretch(1);
     m_pages->addWidget(progress);
 
-    // Selectable, so that the figures can be copied and passed on
+    // Selectable, so that the figures can be copied and passed on.  Not
+    // on a phone, whose selection cannot be copied (Copy does it), and
+    // where a finger dragged over the text scrolls it
     m_resultText = textLabel();
+#ifndef Q_OS_ANDROID
     m_resultText->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_pages->addWidget(m_resultText);
+#endif
+    m_resultArea = new TextArea(m_resultText);
+    m_pages->addWidget(m_resultArea);
 
-    QHBoxLayout *buttons = new QHBoxLayout;
+    m_buttons = new QHBoxLayout;
     m_useButton = new QPushButton(tr("Use this latency"));
     m_againButton = new QPushButton(tr("Check Again"));
     m_startButton = new QPushButton(tr("Start"));
+    m_smallButton = new QPushButton(tr("Make Small"));
     m_cancelButton = new QPushButton(tr("Cancel"));
     m_closeButton = new QPushButton(tr("Close"));
     m_copyButton = new QPushButton(tr("Copy"));
-    buttons->addWidget(m_useButton);
-    buttons->addStretch(1);
-    buttons->addWidget(m_copyButton);
+    m_buttons->addWidget(m_useButton);
+    m_buttons->addStretch(1);
+    m_buttons->addWidget(m_copyButton);
 #ifdef Q_OS_ANDROID
     m_saveButton = new QPushButton(tr("Save Report..."));
-    buttons->addWidget(m_saveButton);
+    m_buttons->addWidget(m_saveButton);
 #endif
-    buttons->addWidget(m_againButton);
-    buttons->addWidget(m_startButton);
-    buttons->addWidget(m_cancelButton);
-    buttons->addWidget(m_closeButton);
-    layout->addLayout(buttons);
+    m_buttons->addWidget(m_againButton);
+    m_buttons->addWidget(m_startButton);
+    m_buttons->addWidget(m_smallButton);
+    m_buttons->addWidget(m_cancelButton);
+    m_buttons->addWidget(m_closeButton);
+    layout->addLayout(m_buttons);
+
+#ifdef Q_OS_ANDROID
+    // Tall enough for a finger, whatever the font
+    if (QScreen *screen = QGuiApplication::primaryScreen()) {
+        const int height =
+            PopupArea::fingerWidth(screen->physicalDotsPerInchY()) * 3 / 4;
+        for (QPushButton *button : { m_useButton, m_againButton,
+                                     m_startButton, m_smallButton,
+                                     m_cancelButton, m_closeButton,
+                                     m_copyButton, m_saveButton }) {
+            button->setMinimumHeight(height);
+        }
+    }
+#endif
+
+    // Put in the window's status bar by the window, and shown there while
+    // the check runs with the dialog hidden
+    m_indicator = new AudioCheckIndicator;
+    m_indicator->hide();
+    connect(m_indicator, &AudioCheckIndicator::clicked,
+            this, &CalibrateAudioDialog::expand);
 
     connect(m_startButton, &QPushButton::clicked,
             this, &CalibrateAudioDialog::startCheck);
@@ -188,6 +275,8 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
             this, &CalibrateAudioDialog::startCheck);
     connect(m_cancelButton, &QPushButton::clicked,
             this, &CalibrateAudioDialog::cancelCheck);
+    connect(m_smallButton, &QPushButton::clicked,
+            this, &CalibrateAudioDialog::collapse);
     connect(m_useButton, &QPushButton::clicked,
             this, &CalibrateAudioDialog::useLatency);
     connect(m_closeButton, &QPushButton::clicked,
@@ -205,12 +294,13 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     connect(m_runner, &AudioCheckRunner::finished,
             this, &CalibrateAudioDialog::runnerFinished);
 
-    setMinimumWidth(520);
     showPage(Page::Instructions);
 }
 
 CalibrateAudioDialog::~CalibrateAudioDialog()
 {
+    // The window's status bar holds it, unless the window is gone first
+    delete m_indicator;
 }
 
 void
@@ -277,6 +367,7 @@ CalibrateAudioDialog::startDevChecks(const AudioCheckResult &calibration)
     m_step->setText(tr("Calibrated. Starting the dev checks..."));
     m_timeLeft->setText(QString());
     m_bar->setRange(0, 0);
+    indicate(tr("Calibrated. Starting the dev checks"), -1);
     return true;
 }
 
@@ -287,6 +378,8 @@ CalibrateAudioDialog::devProgress(QString stage, int stageNumber, int stages)
     m_step->setText(tr("Dev checks, stage %1 of %2: %3...")
                     .arg(stageNumber).arg(stages).arg(stage));
     m_timeLeft->setText(QString());
+    indicate(tr("Dev checks, stage %1 of %2: %3")
+             .arg(stageNumber).arg(stages).arg(stage), -1);
 }
 
 void
@@ -295,11 +388,10 @@ CalibrateAudioDialog::devFinished(const DevReport &report)
     // Only those that carried on from a calibration of this dialog's
     if (!m_devRunning) return;
     m_devRunning = false;
-    m_running = false;
     m_devReport = report;
     m_haveDevReport = true;
     m_bar->setRange(0, 1000);
-    showResultPage();
+    runEnded();
 }
 
 QString
@@ -373,9 +465,38 @@ CalibrateAudioDialog::present()
 #endif
         showPage(Page::Instructions);
     }
+    expand();
+}
+
+void
+CalibrateAudioDialog::collapse()
+{
+    if (!m_running || !m_indicator) return;
+    m_collapsed = true;
+    m_indicator->show();
+    hide();
+}
+
+void
+CalibrateAudioDialog::expand()
+{
+    m_collapsed = false;
+    if (m_indicator) m_indicator->hide();
+    fitToWindow();
     show();
+    // Again, with the frame a desktop gives it when shown, if it is known
+    // by now: the dialog stays where it is, made smaller if it must be
+    fitToWindow();
     raise();
     activateWindow();
+}
+
+void
+CalibrateAudioDialog::indicate(QString text, int permille)
+{
+    if (!m_indicator) return;
+    m_indicator->setText(text);
+    m_indicator->setProgress(permille);
 }
 
 void
@@ -411,6 +532,7 @@ CalibrateAudioDialog::startCheck()
 #endif
     m_step->setText(tr("Starting the check..."));
     m_timeLeft->setText(QString());
+    indicate(tr("Starting the check"), 0);
 
     // The runner says nothing from inside start(), so the page is set
     // for what comes after it either way
@@ -424,7 +546,12 @@ CalibrateAudioDialog::startCheck()
                              "is being recorded. Stop the recording, then "
                              "try again.");
         showResult(refused);
+        return;
     }
+
+    // Out of the way of the takes it records, which are the thing to
+    // watch while it runs
+    collapse();
 }
 
 void
@@ -438,8 +565,7 @@ CalibrateAudioDialog::cancelCheck()
         } else {
             // Gone with nothing said (the window is going)
             m_devRunning = false;
-            m_running = false;
-            showResultPage();
+            runEnded();
         }
         return;
     }
@@ -515,6 +641,15 @@ CalibrateAudioDialog::showResultPage()
 }
 
 void
+CalibrateAudioDialog::runEnded()
+{
+    m_running = false;
+    showResultPage();
+    // Back from small by itself, to say how the run went
+    if (m_collapsed) expand();
+}
+
+void
 CalibrateAudioDialog::reject()
 {
     // Nothing else would show how the run went, and a check left running
@@ -532,22 +667,30 @@ CalibrateAudioDialog::runnerProgress(const AudioCheckRunner::Progress &p)
     if (m_devRunning) return;
 #endif
 
-    QString step;
+    // The step in full for the progress page, and in a few words for the
+    // indicator, whose line has the time left too
+    QString step, brief;
     switch (p.step) {
     case AudioCheckRunner::Step::Idle:
         return;
     case AudioCheckRunner::Step::OpeningReference:
         step = tr("Opening the test session...");
+        brief = tr("Opening the test session");
         break;
     case AudioCheckRunner::Step::AnalysingReference:
         step = tr("Getting the test reference ready...");
+        brief = tr("Getting the test reference ready");
         break;
     case AudioCheckRunner::Step::Recording:
         step = tr("Recording punch-in %1 of %2. Keep the earcup against the "
                   "microphone.").arg(p.punchIn).arg(p.punchIns);
+        brief = tr("Recording punch-in %1 of %2")
+            .arg(p.punchIn).arg(p.punchIns);
         break;
     case AudioCheckRunner::Step::AnalysingTake:
         step = tr("Analysing punch-in %1 of %2...")
+            .arg(p.punchIn).arg(p.punchIns);
+        brief = tr("Analysing punch-in %1 of %2")
             .arg(p.punchIn).arg(p.punchIns);
         break;
     }
@@ -568,8 +711,9 @@ CalibrateAudioDialog::runnerProgress(const AudioCheckRunner::Progress &p)
             std::max(m_shownPermille, std::min(1000, std::max(0, permille)));
         m_bar->setValue(m_shownPermille);
     }
-    m_timeLeft->setText(tr("About %1 seconds left")
-                        .arg(int(std::ceil(left))));
+    const int seconds = int(std::ceil(left));
+    m_timeLeft->setText(tr("About %1 seconds left").arg(seconds));
+    indicate(tr("%1, %2 s left").arg(brief).arg(seconds), m_shownPermille);
 }
 
 void
@@ -587,8 +731,7 @@ CalibrateAudioDialog::runnerFinished(const AudioCheckResult &result)
 #else
     m_result = result;
 #endif
-    m_running = false;
-    showResultPage();
+    runEnded();
 }
 
 void
@@ -597,6 +740,7 @@ CalibrateAudioDialog::showPage(Page page)
     m_pages->setCurrentIndex(int(page));
 
     m_startButton->setVisible(page == Page::Instructions);
+    m_smallButton->setVisible(page == Page::Progress);
     m_cancelButton->setVisible(page == Page::Progress);
     m_againButton->setVisible(page == Page::Result);
     m_closeButton->setVisible(page != Page::Progress);
@@ -611,6 +755,91 @@ CalibrateAudioDialog::showPage(Page page)
 
     if (page == Page::Instructions) m_startButton->setDefault(true);
     if (page == Page::Result) m_closeButton->setDefault(true);
+
+    fitToWindow();
+}
+
+void
+CalibrateAudioDialog::fitToWindow()
+{
+    ensurePolished();
+
+    const QRect area = windowArea();
+    if (!area.isValid()) return;
+
+    // The layouts keep the text areas' heights for a width until told
+    // that they may have changed, which a new text does not tell them
+    m_instructionsArea->updateGeometry();
+    m_resultArea->updateGeometry();
+    m_buttons->invalidate();
+
+    // A desktop's window frame, once the dialog has been shown in one; a
+    // phone draws none
+    const QSize frame =
+        (frameGeometry().size() - size()).expandedTo(QSize(0, 0));
+    const QSize room = area.size() - frame;
+
+    const int wanted = std::max(fontMetrics().averageCharWidth() *
+                                preferredWidth,
+                                minimumSizeHint().width());
+    const int width = std::max(1, std::min(wanted, room.width()));
+    const int height = std::max(1, std::min(heightFor(width), room.height()));
+    resize(width, height);
+
+    // Centred when it is about to be shown, as Qt would centre it, but
+    // clear of a phone's bars, which Qt's centring is not; where the user
+    // put it when it is on show
+    const QRect placed =
+        PopupArea::place(size() + frame, area, pos(), !isVisible());
+    move(placed.topLeft());
+
+    // Said when it changes, for a report from a phone
+    const QRect now(pos(), size());
+    if (now != m_fitted) {
+        m_fitted = now;
+        cerr << "CalibrateAudioDialog: " << now.width() << "x"
+             << now.height() << " at " << now.x() << "," << now.y()
+             << " within " << area.x() << "," << area.y() << " "
+             << area.width() << "x" << area.height() << endl;
+    }
+}
+
+QRect
+CalibrateAudioDialog::windowArea() const
+{
+    QScreen *screen = m_window->screen();
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    if (!screen) return QRect();
+
+    // As TouchMenuStyle keeps menus inside it: on a phone the available
+    // geometry is the whole screen, bars and all, and the window's safe
+    // area margins are the bars
+    QRect window;
+    QMargins safeArea;
+    if (m_window->isVisible()) {
+        window = QRect(m_window->mapToGlobal(QPoint(0, 0)), m_window->size());
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+        if (QWindow *handle = m_window->windowHandle()) {
+            safeArea = handle->safeAreaMargins();
+        }
+#endif
+    }
+    return PopupArea::usable(screen->availableGeometry(), window, safeArea, 0);
+}
+
+int
+CalibrateAudioDialog::heightFor(int width) const
+{
+    const QMargins margins = layout()->contentsMargins();
+    const int inner = width - margins.left() - margins.right();
+
+    // The page on show only: the stack would give the tallest page's
+    QWidget *page = m_pages->currentWidget();
+    const int pageHeight = page->hasHeightForWidth() ?
+        page->heightForWidth(inner) : page->sizeHint().height();
+
+    return margins.top() + pageHeight + std::max(0, layout()->spacing()) +
+        m_buttons->sizeHint().height() + margins.bottom();
 }
 
 QString

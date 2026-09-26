@@ -5918,6 +5918,10 @@ MainWindow::calibrateAudio()
 #ifdef TONY_DEV_CHECKS
         m_calibrateAudioDialog->setDevChecks(m_devChecks);
 #endif
+        // Where the dialog goes while its check runs: the right end of
+        // the status bar, a corner the panes never reach, clear of the
+        // status line at its left
+        statusBar()->addPermanentWidget(m_calibrateAudioDialog->indicator());
     }
     m_calibrateAudioDialog->present();
 }

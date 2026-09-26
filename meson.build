@@ -1220,6 +1220,7 @@ endif
 
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
+  'main/AudioCheckIndicator.cpp',
   'main/AudioCheckRunner.cpp',
   'main/CalibrateAudioDialog.cpp',
   'main/CompactLayout.cpp',
@@ -1255,6 +1256,7 @@ tony_app_moc_headers = [
   'main/MainWindow.h',
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
+  'main/AudioCheckIndicator.h',
   'main/AudioCheckRunner.h',
   'main/CalibrateAudioDialog.h',
   'main/CompactLayout.h',

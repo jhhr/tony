@@ -127,6 +127,34 @@ private slots:
         QCOMPARE(PopupArea::fit(QRect(1, 2, 3, 4), QRect()), QRect(1, 2, 3, 4));
     }
 
+    // The phone of the Calibrate Audio test, as its log has it: a window
+    // of 923 by 411, the camera's cutout at the left, the status bar at
+    // the top and the navigation buttons at the right
+    void a_dialog_is_centred_in_the_safe_area_and_kept_inside() {
+        const QRect window(0, 0, 923, 411);
+        QRect usable = PopupArea::usable
+            (window, window, QMargins(58, 24, 48, 0), 0);
+        QCOMPARE(usable, QRect(58, 24, 817, 387));
+
+        // Shown afresh: centred in the safe area, not over the bars, as
+        // Qt's own centring on the window would put it
+        QCOMPARE(PopupArea::place(QSize(517, 301), usable, QPoint(0, 0), true),
+                 QRect(208, 67, 517, 301));
+        // Taller than the safe area: as tall as it, below the status bar
+        QCOMPARE(PopupArea::place(QSize(517, 450), usable, QPoint(0, 0), true),
+                 QRect(208, 24, 517, 387));
+        // On show: left where it is, unless it sticks out
+        QCOMPARE(PopupArea::place(QSize(300, 200), usable, QPoint(100, 150),
+                                  false),
+                 QRect(100, 150, 300, 200));
+        QCOMPARE(PopupArea::place(QSize(300, 200), usable, QPoint(700, 300),
+                                  false),
+                 QRect(575, 211, 300, 200));
+        // Nowhere to go
+        QCOMPARE(PopupArea::place(QSize(3, 4), QRect(), QPoint(1, 2), true),
+                 QRect(1, 2, 3, 4));
+    }
+
     void millimetres_become_pixels() {
         QCOMPARE(PopupArea::pixels(8, 160), 50);
         QCOMPARE(PopupArea::pixels(25.4, 96), 96);

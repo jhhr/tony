@@ -187,7 +187,7 @@ builds happen in the container.)
   lead's change of scope).
 - (Lead, 2026-09-26: View > Lyrics Size, 35-100 %, 50 % by default on Android; the
   size drawn is logged.)
-- A12c — The Calibrate Audio dialog: small, and out of the way while a check runs.
+- A12c — The Calibrate Audio dialog: small, and out of the way while a check runs. Done.
 - A12b — The dev run on the phone.
 - A8 — Documentation pass.
 
@@ -1132,3 +1132,26 @@ Tests seen failing: placement not counted (core Unsteady, app Unsteady 10 ms); s
 passed (a route's figure unused once reported latency moved).
 For A8: calibrate-audio.md §5 (route key, streams rule), recording.md "Latency", §3 judging.
 Left open: none of it on a phone; which input an output-only device will open is a guess.
+
+### Phase A12c — 2026-09-26
+Built: `CalibrateAudioDialog` sized by `fitToWindow()` at each page and show: 64 average
+characters wide (wider if the buttons need it), as tall as the page's text, never more than
+`windowArea()` (the window less its safe area margins, within the screen), centred there when
+shown (`PopupArea::place()`, core, tested), kept where it is when on show. The texts in scroll
+areas that report the text's height for a width; the stack is not asked (it gives the tallest
+page's). Android: font at 85 %, buttons 3/4 of a finger high, one-finger scroll (QScroller),
+the result not selectable (Copy). `AudioCheckIndicator` (app): a bar and one elided line
+("Recording punch-in 2 of 4, 25 s left", "Dev checks, stage 1 of 6: ..."); `MainWindow::
+calibrateAudio()` puts it at the right end of the status bar. A started check collapses the
+dialog to it; a tap expands to the progress page (Make Small, Cancel); the run's end expands.
+Choices: the corner is the status bar's right end: the pane fills all between toolbar and status
+bar, the status line (countdown, sung note) is at the left; it grows the bar (a phone: 2/3 of a
+finger), covers nothing. Closing still cancels, but a small dialog is hidden: expand first.
+Dialogs at 817x387, compact, fonts 12/15/17 px: message boxes, take name, Open Location, Edit
+Display Extents, lyrics word and shift fit. What's New does not (minimum 520x450 scaled by font,
+~624x540 at a phone's); About at 17 px (537x393); Key Reference is sized from the screen
+(600x274 here) but has no parent (placed by Qt). No Preferences dialog. No generic cause: none
+fixed.
+Tests seen failing: fit off (fits_a_phone); no collapse (3); no expand at the end (from_the_menu).
+For A8: calibrate-audio.md §2 (small, Make Small, not selectable on Android), §9, §11.
+Left open: not on a phone (the font, the finger scroll, the dialog's place under the bars).

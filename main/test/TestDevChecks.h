@@ -1122,6 +1122,8 @@ private slots:
                                  30000);
         dialog->cancelCheck();
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isCollapsed());
         QVERIFY2(dialog->pageText().contains("The dev checks did not run"),
                  qPrintable(dialog->pageText()));
         QVERIFY(!m_window->devChecks()->isRunning());
@@ -1135,6 +1137,14 @@ private slots:
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
         QTRY_VERIFY_WITH_TIMEOUT
             (dialog->pageText().contains("Dev checks, stage 1 of 6"), 10000);
+        // Still small, carrying on from the calibration, the indicator
+        // following the stages
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(!dialog->isVisible());
+        QVERIFY2(dialog->indicator()->text()
+                 .startsWith("Dev checks, stage 1 of 6: "),
+                 qPrintable(dialog->indicator()->text()));
+        QCOMPARE(dialog->indicator()->progress(), -1);
         QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
                                  30000);
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
@@ -1145,6 +1155,8 @@ private slots:
         QVERIFY(!m_window->devChecks()->isRunning());
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->indicator()->isHidden());
 
         const QString words = dialog->pageText();
         for (QString w : { QString("came back steadily"),

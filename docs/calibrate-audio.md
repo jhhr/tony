@@ -50,8 +50,14 @@ Audacity's measurements) was a separate report, not kept in the repository.
 While a check runs, Record and both device submenus are disabled as well.
 
 **The dialog** is not modal: the check's session is in the window and can be looked at
-meanwhile. Closing the dialog while its check runs cancels the check, since nothing else
-would show how the run ended. Three pages:
+meanwhile. It is as small as its page allows and fits the window less a phone's bars, its
+text scrolling. **Once a check starts it hides**, and `AudioCheckIndicator`, a bar and one
+line of status at the right end of the status bar, clear of the pane, stands in for it; a
+tap or click brings back the progress page, which has **Make Small** as well as Cancel, and
+the end of the run brings the dialog back on the result page. Closing the dialog while its
+check runs cancels the check, since nothing else would show how the run ended. On Android
+its text is 85 % of the phone's font, its buttons finger-sized, and it scrolls with one
+finger. Three pages:
 
 1. **Instructions:** one earcup against the microphone, off your ears; a moderate volume
    and a quiet room; the output and input devices and the latency in use; how long it

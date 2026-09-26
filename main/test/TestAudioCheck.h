@@ -51,8 +51,14 @@
 #include <QGuiApplication>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPointingDevice>
+#include <QPushButton>
+#include <QRegularExpression>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -80,6 +86,9 @@ class TestAudioCheck : public QObject
     TestMainWindow *m_window = nullptr;
     QTimer m_watchdog;
     QStringList m_dialogs;
+
+    // The application's font, which a test may make a phone's
+    QFont m_font;
 
     // What the runner said when the run ended, and how often it said it;
     // and every progress it reported
@@ -488,6 +497,88 @@ class TestAudioCheck : public QObject
         return "";
     }
 
+    // The window as a phone shows it: the compact layout, in the part of
+    // the phone's window clear of its bars (817 by 387 of 923 by 411, as
+    // the log of the user's phone has it; this platform has no bars)
+    void showAsAPhone() {
+        m_window->setCompactLayout(true);
+        m_window->resize(817, 387);
+        m_window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(m_window));
+        settle();
+    }
+
+    // Let the windows lay themselves out again
+    void settle() {
+        QCoreApplication::sendPostedEvents();
+        QTest::qWait(20);
+    }
+
+    static QString describe(QRect r) {
+        return QString("%1x%2 at %3,%4").arg(r.width()).arg(r.height())
+            .arg(r.x()).arg(r.y());
+    }
+
+    static QRect onScreen(QWidget *widget) {
+        return QRect(widget->mapToGlobal(QPoint(0, 0)), widget->size());
+    }
+
+    // The dialog inside the window, with every button it shows inside
+    // both, and its text, if it has more than there is room for,
+    // scrolling to its end; scrolls says whether it had to
+    void verifyFits(CalibrateAudioDialog *dialog, QString page,
+                    bool *scrolls = nullptr) {
+        settle();
+        const QRect window = onScreen(m_window);
+        QVERIFY2(dialog->isVisible(), qPrintable(page));
+        QVERIFY2(window.contains(dialog->frameGeometry()),
+                 qPrintable(QString("%1 page %2 is not inside the window, %3")
+                            .arg(page).arg(describe(dialog->frameGeometry()))
+                            .arg(describe(window))));
+        int buttons = 0;
+        for (QPushButton *button : dialog->findChildren<QPushButton *>()) {
+            if (!button->isVisible()) continue;
+            ++buttons;
+            const QRect r = onScreen(button);
+            QVERIFY2(window.contains(r) && onScreen(dialog).contains(r),
+                     qPrintable(QString("%1 page: %2 at %3 is off the dialog, "
+                                        "%4, or the window")
+                                .arg(page).arg(button->text()).arg(describe(r))
+                                .arg(describe(onScreen(dialog)))));
+        }
+        QVERIFY2(buttons > 0, qPrintable(page));
+
+        if (scrolls) *scrolls = false;
+        for (QScrollArea *area : dialog->findChildren<QScrollArea *>()) {
+            if (!area->isVisible()) continue;
+            QWidget *text = area->widget();
+            const int beyond =
+                std::max(0, text->heightForWidth(text->width()) -
+                         area->viewport()->height());
+            QVERIFY2(text->height() >= text->heightForWidth(text->width()),
+                     qPrintable(page + ": the text is cut short"));
+            QCOMPARE(area->verticalScrollBar()->maximum(), beyond);
+            if (beyond > 0 && scrolls) *scrolls = true;
+        }
+    }
+
+    // A finger's tap, which Qt makes into a mouse press and release when
+    // the widget under it takes no touch, as on a phone
+    void tap(QWidget *widget) {
+        QPointingDevice *finger = QTest::createTouchDevice();
+        const QPoint centre = widget->rect().center();
+        QTest::touchEvent(widget->window(), finger).press(0, centre, widget);
+        QTest::touchEvent(widget->window(), finger).release(0, centre, widget);
+        settle();
+    }
+
+    static QPushButton *button(QWidget *dialog, QString text) {
+        for (QPushButton *b : dialog->findChildren<QPushButton *>()) {
+            if (b->text() == text) return b;
+        }
+        return nullptr;
+    }
+
     // Not a slot: QtTest would run it as a test. As TestRecordWorkflow's
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -514,6 +605,7 @@ class TestAudioCheck : public QObject
 private slots:
     void initTestCase() {
         QVERIFY(m_dir.isValid());
+        m_font = QApplication::font();
 
         QSettings().clear();
 
@@ -571,6 +663,7 @@ private slots:
             delete m_window;
             m_window = nullptr;
         }
+        QApplication::setFont(m_font);
         QVERIFY2(m_dialogs.isEmpty(),
                  qPrintable("unexpected dialog: " + m_dialogs.join(" | ")));
     }
@@ -1569,6 +1662,15 @@ private slots:
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
         setDevices("Speakers B", "Microphone B");
 
+        // Small while the check runs: the dialog hidden, and its
+        // indicator, which the window's status bar holds, on show there
+        AudioCheckIndicator *indicator = dialog->indicator();
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(!dialog->isVisible());
+        QCOMPARE(indicator->parentWidget(),
+                 static_cast<QWidget *>(m_window->statusBar()));
+        QVERIFY(!indicator->isHidden());
+
         QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
                                  30000);
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
@@ -1576,9 +1678,18 @@ private slots:
         QVERIFY(!m_window->audioInputMenu()->menuAction()->isEnabled());
         QVERIFY2(dialog->pageText().contains("Recording punch-in 1 of 2"),
                  qPrintable(dialog->pageText()));
+        // The step, the punch-in and the time left, on one line
+        QVERIFY2(QRegularExpression("^Recording punch-in 1 of 2, \\d+ s "
+                                    "left$").match(indicator->text())
+                 .hasMatch(), qPrintable(indicator->text()));
+        QVERIFY(indicator->progress() >= 0);
 
+        // Back by itself at the end, with the result
         QTRY_VERIFY_WITH_TIMEOUT
             (dialog->page() == CalibrateAudioDialog::Page::Result, 60000);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isCollapsed());
+        QVERIFY(indicator->isHidden());
         QCOMPARE(m_finished, 1);
         QVERIFY(m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(m_window->audioOutputMenu()->menuAction()->isEnabled());
@@ -1815,8 +1926,15 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
                                  30000);
 
+        // Small, it has nothing to close: brought back as a tap on its
+        // indicator brings it, then closed
+        QVERIFY(!dialog->isVisible());
+        emit dialog->indicator()->clicked();
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
         QVERIFY(dialog->close());
         QVERIFY(!dialog->isVisible());
+        QVERIFY(dialog->indicator()->isHidden());
         QVERIFY(!m_window->audioCheck()->isRunning());
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->audioCheckTakes());
@@ -1827,6 +1945,141 @@ private slots:
         m_window->calibrateAudioAction()->trigger();
         QVERIFY(dialog->isVisible());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Instructions);
+    }
+
+    // Every page fits a phone held in landscape, all its buttons on
+    // screen and its text scrolling where it is longer: at this desktop's
+    // font and at a phone's size of font, which scrolls
+    void calibrate_audio_fits_a_phone() {
+        for (int pixels : { 0, 17 }) {
+            if (pixels > 0) {
+                QFont font = m_font;
+                font.setPixelSize(pixels);
+                QApplication::setFont(font);
+            }
+            const QString size = (pixels > 0 ? QString("%1 px").arg(pixels) :
+                                  QString("the desktop's font"));
+            if (m_window) {
+                QTRY_VERIFY_WITH_TIMEOUT
+                    (!sv::ModelTransformerFactory::getInstance()
+                     ->haveRunningTransformers(), 30000);
+                m_window->doCloseSession();
+            }
+            // A phone's route, and its instructions, once a file is open
+            FakeAudioIO::Config config = loopback();
+            config.route = phoneRoute();
+            makeWindow(config);
+            showAsAPhone();
+            if (QTest::currentTestFailed()) return;
+            openSong();
+            if (QTest::currentTestFailed()) return;
+
+            m_window->calibrateAudioAction()->trigger();
+            CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+            QVERIFY(dialog);
+            verifyFits(dialog, "instructions, " + size);
+            if (QTest::currentTestFailed()) return;
+
+            // Started, and brought back from small
+            dialog->setPlan(shortPlan());
+            m_window->discardModifications();
+            dialog->startCheck();
+            QVERIFY(dialog->isCollapsed());
+            emit dialog->indicator()->clicked();
+            QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
+            verifyFits(dialog, "progress, " + size);
+            if (QTest::currentTestFailed()) return;
+            dialog->cancelCheck();
+            QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+            verifyFits(dialog, "result of a cancelled check, " + size);
+            if (QTest::currentTestFailed()) return;
+
+            // As long as a result gets: a phone's, every paragraph there is
+            AudioCheckResult result =
+                judgedResult(LatencyCheck::Verdict::Unsteady);
+            result.summary.spread = 0.008;
+            result.summary.echo.heard = true;
+            result.summary.echo.delaySeconds = 0.045;
+            result.summary.echo.levelDb = -12.0;
+            result.route = phoneRoute();
+            result.key = LatencyCalibration::routeKey(phoneRoute(), rate);
+            dialog->showResult(result);
+            dialog->useLatency();
+            bool scrolls = false;
+            verifyFits(dialog, "result, " + size, &scrolls);
+            if (QTest::currentTestFailed()) return;
+            if (pixels > 0) {
+                QVERIFY2(scrolls, "the result fitted without scrolling: the "
+                         "test shows nothing");
+            }
+
+            m_window->discardModifications();
+        }
+    }
+
+    // While the check runs the dialog is a bar and a line of text at the
+    // right end of the status bar, clear of the pane its takes are drawn
+    // in. A tap brings the dialog back on the progress page, with Cancel
+    // and Make Small; Make Small hides it again, the check going on; and
+    // after Cancel it shows the result, the indicator gone
+    void calibrate_audio_small_during_a_check() {
+        makeWindow(loopback());
+        showAsAPhone();
+        if (QTest::currentTestFailed()) return;
+        CalibrateAudioDialog *dialog = startCheckFromMenu();
+        QVERIFY(dialog);
+        QVERIFY(m_window->audioCheck()->isRunning());
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(!dialog->isVisible());
+
+        AudioCheckIndicator *indicator = dialog->indicator();
+        settle();
+        QVERIFY(indicator->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
+                                 30000);
+        QVERIFY2(indicator->text().startsWith("Recording punch-in 1 of 2"),
+                 qPrintable(indicator->text()));
+
+        // In the window's bottom right corner, in its status bar, clear
+        // of the pane; and not so wide as to leave the status line no room
+        const QRect window = onScreen(m_window);
+        const QRect corner = onScreen(indicator);
+        QVERIFY2(onScreen(m_window->statusBar()).contains(corner),
+                 qPrintable(describe(corner)));
+        QVERIFY2(!corner.intersects(onScreen(m_window->paneStack())),
+                 qPrintable(describe(corner) + " and " +
+                            describe(onScreen(m_window->paneStack()))));
+        QVERIFY2(corner.left() > window.center().x() &&
+                 corner.bottom() >= onScreen(m_window->paneStack()).bottom(),
+                 qPrintable(describe(corner) + " in " + describe(window)));
+
+        tap(indicator);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isCollapsed());
+        QVERIFY(indicator->isHidden());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
+        QPushButton *cancel = button(dialog, "Cancel");
+        QPushButton *small = button(dialog, "Make Small");
+        QVERIFY(cancel && cancel->isVisible());
+        QVERIFY(small && small->isVisible());
+
+        QTest::mouseClick(small, Qt::LeftButton);
+        settle();
+        QVERIFY(!dialog->isVisible());
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(indicator->isVisible());
+        QVERIFY(m_window->audioCheck()->isRunning());
+        QCOMPARE(m_finished, 0);
+
+        tap(indicator);
+        QVERIFY(dialog->isVisible());
+        QTest::mouseClick(cancel, Qt::LeftButton);
+        QCOMPARE(m_finished, 1);
+        QVERIFY(!m_window->audioCheck()->isRunning());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(indicator->isHidden());
     }
 };
 
