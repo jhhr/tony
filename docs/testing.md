@@ -72,6 +72,12 @@ Windows path would start an escape in the C string.
   paths (`C:\...`, case-insensitive) on Windows only, and the tests that race the analysis
   of a take hold it ("Timing and races"): on a fast machine they used to fail with "the
   race was not set up".
+- **Qt 6.4's QTest watchdog can time out a test that did not take long.** It can miss the
+  end of a quick test function and then times out whichever one is running five minutes
+  later: a suite that runs longer than that (`TestRecordWorkflow` does) fails at random
+  with "Test function timed out", its totals at about 300 s, and the process then hangs.
+  `meson.build` sets `QTEST_FUNCTION_TIMEOUT` to meson's own timeout for the app and dev
+  suites; set it by hand for a one-process run of those built against that Qt.
 - CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
   suite at a time. When a run fails, its `test-failures` step lists each failed test with
   the lines QTest indents under it, from meson's full log.

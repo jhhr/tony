@@ -1511,10 +1511,14 @@ tony_device_test_exe = executable(
 )
 
 test('tony-core', tony_core_test_exe)
+# QTEST_FUNCTION_TIMEOUT as long as meson's own timeout: Qt 6.4's watchdog
+# can miss the end of a quick test function and time out whichever one
+# is running five minutes later, so a suite longer than that fails at
+# random, and the process then hangs until meson kills it
 test('tony-app', tony_app_test_exe,
      depends: pyin_plugin,
      timeout: 900,
-     env: [ 'QT_QPA_PLATFORM=offscreen' ])
+     env: [ 'QT_QPA_PLATFORM=offscreen', 'QTEST_FUNCTION_TIMEOUT=900000' ])
 
 # The development checks' suite, only where the checks are built. Its
 # own executable: every test records takes in real time, and it is run
@@ -1554,7 +1558,7 @@ if dev_checks
   test('tony-dev', tony_dev_test_exe,
        depends: pyin_plugin,
        timeout: 900,
-       env: [ 'QT_QPA_PLATFORM=offscreen' ])
+       env: [ 'QT_QPA_PLATFORM=offscreen', 'QTEST_FUNCTION_TIMEOUT=900000' ])
 endif
 
 test('svcore-base', svcore_base_test_exe)
