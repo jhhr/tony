@@ -43,10 +43,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y git mercurial smlnj
     - name: repoint
-      run: |
-        ./repoint install
-        git status --short
-        git diff
+      run: ./repoint install
     - name: setup-toolchain
       run: deploy/android/setup-toolchain.sh
     - name: restore-qt
