@@ -15,6 +15,7 @@
 #include "TestViewCache.h"
 #include "TestSingingAnalysis.h"
 #include "TestRecordWorkflow.h"
+#include "TestLyricsLayer.h"
 #include "TestUiChecks.h"
 #include "TestAudioCheck.h"
 
@@ -79,6 +80,12 @@ int main(int argc, char *argv[])
 
     {
         TestSingingAnalysis t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLyricsLayer t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

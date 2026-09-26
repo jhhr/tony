@@ -1112,6 +1112,9 @@ tony_core_files = [
   'main/Coverage.cpp',
   'main/LatencyCalibration.cpp',
   'main/LatencyCheck.cpp',
+  'main/Lyrics.cpp',
+  'main/LyricsEdit.cpp',
+  'main/LyricsTtml.cpp',
   'main/ModelChangeThrottle.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
@@ -1127,6 +1130,8 @@ tony_app_files = [
   'main/AudioCheckRunner.cpp',
   'main/CalibrateAudioDialog.cpp',
   'main/CoverageStrip.cpp',
+  'main/LyricsTrack.cpp',
+  'main/LyricsEditor.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
@@ -1148,6 +1153,8 @@ tony_app_moc_headers = [
   'main/AudioCheckRunner.h',
   'main/CalibrateAudioDialog.h',
   'main/CoverageStrip.h',
+  'main/LyricsTrack.h',
+  'main/LyricsEditor.h',
 ]
 
 if dev_checks
@@ -1392,11 +1399,19 @@ tony_core_test_moc_files = qt.preprocess(
   'main/test/TestSingingTakes.h',
   'main/test/TestTakesFile.h',
   'main/test/TestTakeTiming.h',
+  'main/test/TestLyrics.h',
+  'main/test/TestLyricsTtml.h',
+  'main/test/TestLyricsEdit.h',
   'main/test/TestLatencyCheck.h',
   'main/test/TestLatencyCalibration.h',
   'main/test/TestTakeDiff.h',
   'main/test/TestModelChangeThrottle.h',
+  'main/test/TestRunSuite.h',
 ])
+
+# Where the suites find the files in testdata/. Forward slashes: a
+# backslash of a Windows path would start an escape in the C string.
+tony_test_data_dir = import('fs').as_posix(meson.current_source_dir() / 'testdata')
 
 tony_core_test_exe = executable(
   'test-tony-core',
@@ -1415,6 +1430,7 @@ tony_core_test_exe = executable(
   cpp_args: [
     feature_defines,
     general_defines,
+    '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
   ],
   link_args: [
     feature_additional_libs,
@@ -1428,6 +1444,7 @@ tony_app_test_moc_headers = [
   'main/test/TestViewCache.h',
   'main/test/TestSingingAnalysis.h',
   'main/test/TestRecordWorkflow.h',
+  'main/test/TestLyricsLayer.h',
   'main/test/TestUiChecks.h',
   'main/test/TestAudioCheck.h',
 ]
@@ -1453,6 +1470,7 @@ tony_app_test_exe = executable(
   cpp_args: [
     feature_defines,
     general_defines,
+    '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
   ],
   link_args: [
     feature_additional_libs,

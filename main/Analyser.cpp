@@ -68,7 +68,8 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedMergeStart(0),
     m_rangedMergeEnd(0),
     m_rangedClippedEnd(false),
-    m_holdRangedMerge(false)
+    m_holdRangedMerge(false),
+    m_waveformFaded(false)
 {
     QSettings settings;
     settings.beginGroup("LayerDefaults");
@@ -489,6 +490,9 @@ Analyser::addWaveform()
         if (existing && existing->getModel() == m_fileModel) {
             cerr << "recording existing waveform layer (matching our file model)" << endl;
             m_layers[Audio] = existing;
+            // A session saves the colour with the layer, faded or not
+            // as it was then; it is to be what it is now
+            existing->setBaseColour(getWaveformColour());
             return "";
         }
     }
@@ -517,8 +521,7 @@ Analyser::addWaveform()
 
     waveform->setMiddleLineHeight(0.9);
     waveform->setShowMeans(false); // too small & pale for this
-    waveform->setBaseColour
-        (ColourDatabase::getInstance()->getColourIndex(tr("Grey")));
+    waveform->setBaseColour(getWaveformColour());
     auto params = waveform->getPlayParameters();
     if (params) {
         params->setPlayPan(-1);
@@ -529,6 +532,32 @@ Analyser::addWaveform()
 
     m_layers[Audio] = waveform;
     return "";
+}
+
+int
+Analyser::getWaveformColour() const
+{
+    ColourDatabase *cdb = ColourDatabase::getInstance();
+    int colour = -1;
+    if (m_waveformFaded) colour = cdb->getColourIndex(tr("Pale Grey"));
+    // MainWindow names the colours; without that one, grey will do
+    if (colour < 0) colour = cdb->getColourIndex(tr("Grey"));
+    return colour;
+}
+
+void
+Analyser::setWaveformFaded(bool faded)
+{
+    m_waveformFaded = faded;
+
+    // Straight on the layer, which only repaints: no command, no
+    // modified flag, and not saveState(), which is for the user's own
+    // choices and would write this to the settings both analysers share
+    if (Layer *audio = m_layers[Audio]) {
+        if (auto waveform = qobject_cast<WaveformLayer *>(audio)) {
+            waveform->setBaseColour(getWaveformColour());
+        }
+    }
 }
 
 QString
