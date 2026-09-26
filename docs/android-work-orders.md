@@ -153,12 +153,12 @@ builds happen in the container.)
 - A1 — Sample rate: a device that is not at 44.1 kHz. Done.
 - A2 — Android toolchain and C libraries. Done.
 - A3a — Tony builds for Android. Done.
-- A3b — Tony as an APK (no audio): the test port. Built but for the APK itself: Gradle
-  was blocked (`dl.google.com` refused); run `deploy/android/build-apk.sh` once it is
-  allowed (see the log).
+- A3b — Tony as an APK (no audio): the test port. Done; the lead built the APK once
+  `dl.google.com` was allowed again, and the user's first phone test passed (findings in
+  A7).
 - A4 — Touch gestures on the panes. Done.
 - A5 — Compact touch mode. Done.
-- A6 — Oboe audio backend.
+- A6 — Oboe audio backend. Done.
 - A7 — Sessions in place on the phone, and fixes from the first phone test.
 - A8 — Documentation pass.
 
@@ -534,3 +534,29 @@ The next phase must know: switching off restores what switching on saved; the to
 Left open: not seen on a phone: the take box's height (22 px in Fusion), popup menu rows, and
 under ~710 dp wide the last buttons go into the toolbar's extension. For A8: architecture.md,
 testing.md (icons in the app tests), mobile-port.md, manual-checklist.md.
+
+### Phase A6 — 2026-09-26
+Built: `build-deps.sh` builds Oboe 1.11.0 (`liboboe.a`, `oboe.pc` with `-llog`; Oboe dlopens
+AAudio and OpenSL ES). `main/OboeAudioIO` (Android only): stereo float output at the device's
+rate, mono float input at that rate (`VoicePerformance`), low latency, exclusive (AAudio falls
+back to shared), `FullDuplexStream`; each callback hands over its input, then asks for output.
+`main/StreamLatency` (tony_core, `TestStreamLatency`). `MainWindow` on Android: `createAudioIO()`
+(duplex once recording is asked for and the microphone allowed, else output only, as the base);
+`record()` asks for `QMicrophonePermission` first, starts the take on Granted, else says where
+to allow it; a 250 ms timer finds a failed device, stops the take (Stop path) or playback, and
+reopens it (3 times in 10 s at most). main.cpp: the `AUDIO_NONE` forcing is gone.
+Choices / deviations:
+- Latency in device frames at the device's rate, as PortAudioIO. Read from the timestamps on
+  the GUI thread (Oboe: not in the callback), 9 readings, those a callback ran through dropped,
+  median round trip. Each part is off by the time to the next callback, the sum is exact
+  (tested). Measured when opened (the constructor runs the streams up to 1 s and leaves them
+  suspended) and at every suspend(): a take uses the figures of the device's last run.
+- `setSystemPlaybackChannelCount()` gets the play source's count, not the stream's: svapp's
+  wrappers refuse (or throw on) any other count in `getSourceSamples()`. Mixed to 2 here.
+- FullDuplexStream drains and discards ~50 callbacks after each start: sound starts ~0.1-0.25 s
+  after Play or Record. A callback may read fewer input frames than it writes; the start gap
+  subtracts the output block, so it can be up to one burst (2-5 ms) short.
+- No error callback for the input (it has no callback): FullDuplexStream's Stop is flagged.
+The next phase must know: once a take is recorded the device stays duplex (svapp), so Play
+opens the microphone too; nothing calls `suppressRecordSide()`. Logcat tag Tony: "OboeAudioIO:".
+Left open: not run on a phone; the first Record press blocks for the open (up to ~1 s).
