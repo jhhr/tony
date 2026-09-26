@@ -11,7 +11,7 @@ described here.
 .\build.bat           build Tony.exe
 .\build.bat run       build, then launch
 .\build.bat launch    launch without building
-.\build.bat test      meson test: tony-core, tony-app and four svcore suites
+.\build.bat test      meson test: tony-core, tony-app, tony-dev and four svcore suites
 .\build.bat clean     wipe build_mingw and reconfigure (only for a broken build directory)
 ```
 
@@ -24,7 +24,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-device.exe > tmp/build.log 2>&1
+ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-tony-device.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```

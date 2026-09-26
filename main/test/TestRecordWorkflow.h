@@ -178,6 +178,22 @@ class TestRecordWorkflow : public QObject
         stopTake();
     }
 
+    // A round trip as the audio check would have kept it for the fake
+    // device (the default devices, the Preferences naming none) at 44.1
+    // kHz, measured while the device reported the given latencies, in
+    // frames. cleanup() forgets it
+    static void storeRoundTrip(int roundTrip, int reportedOutput,
+                               int reportedInput) {
+        LatencyCalibration::Figure figure;
+        figure.roundTrip = roundTrip / rate;
+        figure.date = QDateTime::currentDateTimeUtc();
+        figure.reportedOutput = reportedOutput / rate;
+        figure.reportedInput = reportedInput / rate;
+        QSettings settings;
+        LatencyCalibration::store
+            (settings, LatencyCalibration::currentKey(settings, rate), figure);
+    }
+
     static sv::EventVector pitchEvents(sv::Layer *layer) {
         if (!layer) return {};
         auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
@@ -787,6 +803,10 @@ private slots:
     }
 
     void cleanup() {
+        // A round trip a test stored would place the next test's takes.
+        // First, as the waits below return early when they fail
+        QSettings().remove("LatencyCalibration");
+
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
                 m_window->doRecord();
@@ -1025,10 +1045,14 @@ private slots:
         // it, so it would make a dot. The tracker may have queued
         // events of its own as well; the same goes for them
         QCOMPARE(m_window->recordingLatencyFrames(), sv::sv_frame_t(0));
+        // Queued as a functor: invoking the slot by name depends on the
+        // Qt version matching "sv::sv_frame_t" against what moc recorded,
+        // and Qt 6.4 does not
+        TestMainWindow *window = m_window;
         QVERIFY2(QMetaObject::invokeMethod
-                 (m_window, "onRealtimePitchDetected", Qt::QueuedConnection,
-                  Q_ARG(sv::sv_frame_t, sv::sv_frame_t(20000)),
-                  Q_ARG(double, 440.0)),
+                 (m_window, [window]() {
+                      window->doRealtimePitchDetected(20000, 440.0);
+                  }, Qt::QueuedConnection),
                  "the pitch event could not be queued");
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
@@ -1165,6 +1189,155 @@ private slots:
             .arg(gap).arg(assumedGap);
 
         QVERIFY2(std::llabs(error) <= 2 * hop, qPrintable(detail));
+    }
+
+    // latency_end_to_end with a device that reports 50 ms less than its
+    // round trip of K frames, and the round trip the audio check measured
+    // kept for it: the take is placed with the measured figure, and the
+    // two pitch tracks line up
+    void latency_measured_round_trip_used() {
+        const int K = 3 * 4096;
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096 - 2205;
+        FakeAudioIO::Config config;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = melody(0.75);
+        config.inputDelay = K;
+        config.inputFollowsPlayback = true;
+        storeRoundTrip(K, reportedOut, reportedIn);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(melody(0.75)));
+        if (QTest::currentTestFailed()) return;
+
+        take(2200);
+        if (QTest::currentTestFailed()) return;
+
+        sv::sv_frame_t refStep = stepFrame(pitchEvents(m_window->analyser()));
+        sv::sv_frame_t sungStep = stepFrame(pitchEvents(m_window->analyser2()));
+        QVERIFY(refStep > 0);
+        QVERIFY2(sungStep > 0, "the take never reached the second note");
+        sv::sv_frame_t error = sungStep - refStep;
+        QVERIFY2(std::llabs(error) <= 2 * hop,
+                 qPrintable(QString("sung step at %1, reference step at %2: "
+                                    "%3 frames (%4 ms) apart; the take was "
+                                    "placed with a round trip of %5 frames")
+                            .arg(sungStep).arg(refStep).arg(error)
+                            .arg(1000.0 * double(error) / rate, 0, 'f', 1)
+                            .arg(m_window->takeLatency().roundTrip)));
+
+        TakeLatency used = m_window->takeLatency();
+        QVERIFY(used.measured);
+        QCOMPARE(used.roundTrip, sv::sv_frame_t(K));
+        QCOMPARE(used.reportedOutput, reportedOut / rate);
+        QCOMPARE(used.reportedInput, reportedIn / rate);
+    }
+
+    // A round trip measured while the device reported other latencies
+    // (its buffers have been changed since) is stale: the take is placed
+    // with the reported pair. With the latencies it was measured with,
+    // the same figure would be in use
+    void latency_stale_round_trip_ignored() {
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096;
+        FakeAudioIO::Config config;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = tone(highHz, 2.0);
+        const int stale = reportedOut +
+            int(2 * LatencyCalibration::kStaleToleranceSeconds * rate);
+        storeRoundTrip(15000, stale, reportedIn);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency used = m_window->takeLatency();
+        QVERIFY(!used.measured);
+        QCOMPARE(used.roundTrip, sv::sv_frame_t(reportedOut + reportedIn));
+
+        LatencyCalibration::InUse inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Reported);
+        QVERIFY(inUse.stale);
+        QCOMPARE(inUse.roundTrip, (reportedOut + reportedIn) / rate);
+
+        storeRoundTrip(15000, reportedOut, reportedIn);
+        inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Measured);
+        QCOMPARE(inUse.roundTrip, 15000 / rate);
+    }
+
+    // A device at 48 kHz reporting 2 x 4096 frames out and 4096 in: the
+    // take is placed with those 3 x 4096 frames of the recording,
+    // although the play source has the output latency in frames of the
+    // session, converted as it resamples; the take keeps each latency in
+    // seconds, the output's from those converted frames
+    void latency_reported_at_the_device_rate() {
+        const double deviceRate = 48000.0;
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096;
+        FakeAudioIO::Config config;
+        config.sampleRate = int(deviceRate);
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = tone(highHz, 2.0);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency used = m_window->takeLatency();
+        QCOMPARE(used.recordingRate, deviceRate);
+        QVERIFY(!used.measured);
+        QCOMPARE(used.reportedOutput,
+                 std::lround(reportedOut * rate / deviceRate) / rate);
+        QCOMPARE(used.reportedInput, reportedIn / deviceRate);
+        QVERIFY2(std::llabs(used.roundTrip - (reportedOut + reportedIn)) <= 2,
+                 qPrintable(QString("placed with %1 frames at %2 Hz; the "
+                                    "device reports %3 + %4")
+                            .arg(used.roundTrip).arg(used.recordingRate)
+                            .arg(reportedOut).arg(reportedIn)));
+    }
+
+    // The same device, chosen before any file is open, as from the audio
+    // device menu at startup. The play source has no rate yet, so its
+    // resampler passes the output latency on as the device counts it,
+    // and tells the play source the device's rate is 0: the round trip
+    // is the same, and so is the output latency in seconds
+    void latency_reported_with_device_opened_first() {
+        const double deviceRate = 48000.0;
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096;
+        FakeAudioIO::Config config;
+        config.sampleRate = int(deviceRate);
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = tone(highHz, 2.0);
+        makeWindow(config);
+        m_window->recreateAudioIO();
+        QVERIFY(m_window->fake());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        m_window->setPlayReferenceWhileRecording(true);
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency used = m_window->takeLatency();
+        QCOMPARE(used.recordingRate, deviceRate);
+        QCOMPARE(used.reportedOutput, reportedOut / deviceRate);
+        QVERIFY2(std::llabs(used.roundTrip - (reportedOut + reportedIn)) <= 2,
+                 qPrintable(QString("placed with %1 frames at %2 Hz; the "
+                                    "device reports %3 + %4")
+                            .arg(used.roundTrip).arg(used.recordingRate)
+                            .arg(reportedOut).arg(reportedIn)));
     }
 
     void latency_zero_when_toggle_off() {
