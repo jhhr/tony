@@ -522,7 +522,8 @@ private slots:
     }
 
     // The loopback fake in a room, placed with its true round trip: every
-    // sweep of every punch-in lands within 2 ms, the session saved and
+    // sweep of every punch-in lands within item 1's 6 ms (the fake within
+    // a frame or two), the session saved and
     // opened again holds the same take, and each punch-in measured its own
     // start gap. The re-recording changed nothing outside its range and
     // nothing before it, and nothing of the take was heard during its
@@ -773,7 +774,7 @@ private slots:
     // the true round trip is roundTrip frames at 48 kHz; bqaudioio's
     // ResamplerWrapper holds the output back about 1.1 ms more, which
     // nothing reports, and the sweeps land that late, within item 1's
-    // 2 ms. Every item passes. Item 14 finds each take stopping about as
+    // 6 ms. Every item passes. Item 14 finds each take stopping about as
     // far past its selection as at 44.1 kHz, where it reads 0.25 to 0.35
     // s: with the round trip in the device's frames added to the lead-in
     // and the selection in the reference's, it read 0.34 s more, and
@@ -905,14 +906,17 @@ private slots:
     // take, so that every take shares one alignment, and every item
     // passes. Suspended at each Stop, as svapp does unless told
     // otherwise, the takes land 10 ms apart in turn, and items 1, 2, 7
-    // and 13 fail
+    // and 13 fail. The round trip is 4 ms more than the true one, as a
+    // calibration leaves it when a stream on two sound cards has drifted
+    // since: every take lands 4 ms early, within those items' 6 ms (with
+    // the 2 ms they had, they fail)
     void dev_checks_pass_with_the_stream_kept_running() {
         FakeAudioIO::Config config = loopbackInARoom();
         config.restartShift = restartShift;
         makeWindow(config);
         m_window->keepAudioRunning(true);
 
-        runDevChecks(roundTrip / rate);
+        runDevChecks(roundTrip / rate + 0.004);
         if (QTest::currentTestFailed()) return;
 
         QVERIFY2(m_report.failure == "", describe());
@@ -926,6 +930,10 @@ private slots:
         }
         QCOMPARE(lastReportLine(),
                  QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+        QVERIFY(check(1));
+        const double largest =
+            milliseconds(number(*check(1), "largest offset"));
+        QVERIFY2(largest > -5.0 && largest < -3.0, describe(1));
         QVERIFY(check(10));
         QCOMPARE(number(*check(10), "second punch-in against the first"),
                  QString("0.0 ms"));

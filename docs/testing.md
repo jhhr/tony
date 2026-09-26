@@ -75,7 +75,9 @@ Windows path would start an escape in the C string.
   run the one-process run as well. It also loads the machine more: built against Ubuntu's
   Qt 6.4, `TestUiChecks`' `live_dots_under_the_cursor` failed in both of two runs in eight
   processes (the tracker itself 313 and 325 ms behind the cursor, over the test's 300 ms)
-  and passed with `-j 4`. Judge a failure of it there by running it alone.
+  and passed with `-j 4`. Judge a failure of it there by running it alone. So too the dev
+  checks' item 14, whose allowance is one look of the take timer: in eight processes a
+  take once stopped 0.400 s past its selection against 0.385 s allowed, and passed alone.
 - **On Linux some tests fail whatever the change.** With the Qt of the cloud setup,
   conda-forge's 6.11 ([building.md](building.md#building-on-linux)), only
   `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and

@@ -55,7 +55,7 @@ using namespace sv;
 
 namespace {
 
-// Signed, to a tenth of a millisecond: the tolerance is 2 ms
+// Signed, to a tenth of a millisecond: the tolerance is 6 ms
 QString
 signedMs(double seconds)
 {
