@@ -161,7 +161,7 @@ builds happen in the container.)
 - A6 — Oboe audio backend. Done.
 - A7 — Sessions in place on the phone, and fixes from the first phone test. Done.
 - A7b — Fixes from the second phone test: menus, the picker, Downloads. Done.
-- A4b — Vertical zoom and scroll by touch.
+- A4b — Vertical zoom and scroll by touch. Done.
 - A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session.
 - A8 — Documentation pass.
 
@@ -674,4 +674,29 @@ URI, so `QFileInfo::exists()` and `QFile` fail for such names; hence descriptors
 ContentResolver with the URI exactly as Android wrote it.
 Tests seen failing: `the_uri_is_opened_as_android_wrote_it` with `PrettyDecoded` (lead).
 Left open: none of it run on a phone. Layer import still goes through svgui's dialog.
+
+### Phase A4b — 2026-09-26
+Built: `main/VerticalZoom` (tony_core; `TestVerticalZoom`): value at y and back on a log or
+linear scale (svgui's CoordinateScale mapping), zoom about a value held at y, `limited()`
+(`pitchLimits()`: A0 to C8, a major third at the narrowest). `PinchZoom::AxisMovement`: a
+movement along an axis counts past a dead zone (2x slop) if at least half that across, then
+less the dead zone. `TouchGestures`: each axis zooms by the fingers' spread along it (never
+under 4x slop); the time axis as A4 had it, with the spread across in place of the distance;
+the range about the value between the fingers, following them up and down past the dead zone;
+held at a limit, re-anchored. `TouchGestures::VerticalRange` (get/set/limits); `paneAdded()`
+gives it the reference analyser's `get/setDisplayFrequencyExtents()`, in its pane only, and
+only while the pane draws Hz on that range. 8 app tests in `TestTouchGestures`.
+Found: the range is the primary analyser's `SpectrogramLayer` (MelodicRange: log, 40-1500 Hz,
+dormant). Pitch, notes, the take's layers, live dots, the alternate track are AutoAlignScale:
+they defer to the topmost "Hz" layer with a scale of its own, dormant or not (View::
+getEffectiveVerticalExtents), which is it. Not undoable, no modified flag; saved in the session
+(the spectrogram's minFrequency/maxFrequency) and restored with it; a new reference resets it.
+Choices / deviations:
+- The spectrogram keeps whole Hz (int, lrint): steps of up to ~12 px at a major third about
+  110 Hz on a 300 px pane. svgui fork change to fix: `m_minFrequency`/`m_maxFrequency` double,
+  no lrint in `setDisplayExtents()`, `toDouble()` in `setProperties()`. Not made.
+- Time scroll keeps A4's (no dead zone); the range is sticky: a drag within ~27 degrees of
+  across never moves it.
+Tests seen failing: across rule removed; zoom about the middle; no limits; spectrogram unsaved.
+Left open: not on a phone. A drag up may also scroll the pane stack, if it can scroll.
 
