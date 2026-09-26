@@ -284,6 +284,15 @@ AudioCheckRunner::poll()
 
     case Step::AnalysingReference:
         if (!analysing(m_window->m_analyser)) {
+            // How fast this machine analyses, for the limits in the
+            // header.  A session kept has its analysis done already
+            if (!m_plan.keepSession) {
+                cerr << "AudioCheckRunner: the reference, "
+                     << double(m_plan.layout.length) / m_plan.layout.rate
+                     << " s, was analysed in "
+                     << double(m_stepClock.elapsed()) / 1000.0 << " s"
+                     << endl;
+            }
             startPunchIn();
         } else if (stepTimedOut()) {
             end(tr("The test reference was not analysed in time."));
@@ -312,6 +321,10 @@ AudioCheckRunner::poll()
         // Not needed for the judgement, which reads the take's audio: it
         // keeps pYIN's load out of the timing of the next take
         if (!analysing(m_window->m_analyser2)) {
+            // From the take stopped to its pitch and notes merged
+            cerr << "AudioCheckRunner: punch-in " << (m_punchIn + 1)
+                 << " was analysed in "
+                 << double(m_stepClock.elapsed()) / 1000.0 << " s" << endl;
             if (++m_punchIn < int(m_starts.size())) {
                 startPunchIn();
             } else {

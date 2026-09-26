@@ -1702,6 +1702,15 @@ DevChecks::micChannelCheck(QString reason) const
         return c;
     }
 
+    // A phone's microphone, which OboeAudioIO opens as the one channel
+    // it records: there is no other input it could be on
+    if (loudest.size() == 1) {
+        c.verdict = CheckResult::Verdict::Measured;
+        c.message = tr("Not applicable here: the device records one input "
+                       "channel.");
+        return c;
+    }
+
     if (carrying != vector<int>{ 1 }) {
         c.verdict = CheckResult::Verdict::Measured;
         c.message = tr("Not applicable here: the mic is on %1, not on "
@@ -2409,10 +2418,15 @@ DevChecks::stopsItselfCheck(QString reason) const
             problems << tr("the take at %1: its rate is not known")
                 .arg(range);
         } else {
-            const sv_frame_t needed =
-                t.roundTrip + t.startGap + stage->preRoll + (end - start);
+            // The raw recording, the round trip and the start gap count
+            // the device's frames, the lead-in and the selection the
+            // session's: a device at another rate than the reference's,
+            // as a phone at 48 kHz is, records more or fewer frames in the
+            // same time
             const double past =
-                double(stage->recorded - needed) / t.recordingRate;
+                double(stage->recorded - t.roundTrip - t.startGap) /
+                t.recordingRate -
+                double(stage->preRoll + (end - start)) / rate;
             const double allowed = kStopMarginSeconds + poll + gapLooks
                 (m_layout, w->seen, t, rate,
                  std::numeric_limits<double>::max()).margin;
@@ -2518,6 +2532,19 @@ DevChecks::writeReport(const DevReport &report) const
     }
     out << "Audio drivers built in: " << drivers.join(", ") << "\n";
     const vector<Run> all = runs();
+
+    // A device that reports the route it opened, as OboeAudioIO does on
+    // a phone, is none of those: which it is, and how its streams opened
+    // for the first punch-in, on which the latencies below depend
+    const AudioRoute::Route route =
+        all.empty() ? AudioRoute::Route() : all.front().result->route;
+    if (route.driver != "") {
+        out << "Audio driver in use: " << route.driver << "\n";
+        out << "Output streams: " << route.outputStreams << "\n";
+        out << "Input streams: " << (route.inputStreams != "" ?
+                                     route.inputStreams :
+                                     QString("none open")) << "\n";
+    }
     const sv_samplerate_t recordingRate =
         all.empty() ? 0 : all.front().result->recordingRate;
     sv_samplerate_t outputRate = m_window->m_playSource ?

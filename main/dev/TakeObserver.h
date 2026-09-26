@@ -93,7 +93,11 @@ public:
         float inputLeft;
         float inputRight;
 
-        /// The status bar's text, and whether a modal dialog was up
+        /// The status bar's text, and whether a modal dialog was up: a
+        /// modal widget, or an event loop run deeper than the one the
+        /// observer started in, which is how a dialog Android draws
+        /// itself (a message box, the file picker) shows: Qt's widget for
+        /// it is never on screen, and is no active modal widget
         QString status;
         bool modal;
 
@@ -177,6 +181,10 @@ private:
 
     /// The dots seen so far, by frame and pitch
     std::set<std::pair<sv::sv_frame_t, float>> m_seen;
+
+    /// How deep in event loops the observer was started: a poll deeper
+    /// than that runs inside a dialog's
+    int m_loopLevel;
 
     /// What the level meter was told since the last poll, and last
     bool m_inputSince;

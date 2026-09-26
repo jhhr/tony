@@ -136,11 +136,26 @@ public:
     /// How often the runner looks at how a step is going
     static constexpr int kPollMs = 50;
 
+    /// How many times a desktop's the analyses a run waits for may take
+    /// here.  pYIN analysed the dev checks' long song, 240 s, in about
+    /// 10 s on the machine the limits below were set on, and the
+    /// calibration's reference in about 1.3 s.  A phone's core is 3 to 6
+    /// times slower, slower still when it is hot or the work lands on a
+    /// small core, and no phone has been timed yet: its log says how long
+    /// each analysis took ("was analysed in").  Four times leaves the
+    /// long song as long to be analysed as it plays
+#ifdef Q_OS_ANDROID
+    static constexpr int kAnalysisTimeFactor = 4;
+#else
+    static constexpr int kAnalysisTimeFactor = 1;
+#endif
+
     /// How long a step may take before the run gives up on it: the
     /// first analysis of the reference, a take's analysis, and a take
-    /// beyond its own length (lead-in and range) to stop itself
-    static constexpr int kReferenceTimeoutMs = 60000;
-    static constexpr int kTakeAnalysisTimeoutMs = 30000;
+    /// beyond its own length (lead-in and range) to stop itself.  The
+    /// last is in real time, whatever the machine
+    static constexpr int kReferenceTimeoutMs = 60000 * kAnalysisTimeFactor;
+    static constexpr int kTakeAnalysisTimeoutMs = 30000 * kAnalysisTimeFactor;
     static constexpr int kTakeStopTimeoutMs = 10000;
 
     /// How long past its own length (lead-in and range) a take may go

@@ -38,9 +38,11 @@
 
 #ifdef TONY_DEV_CHECKS
 #include <QCheckBox>
+#include <QFile>
 #endif
 
 #ifdef Q_OS_ANDROID
+#include "AndroidScreen.h"
 #include <QScroller>
 #endif
 
@@ -419,7 +421,33 @@ CalibrateAudioDialog::devHtml() const
                       tr("Report: %1").arg(m_devReport.reportPath
                                            .toHtmlEscaped()) :
                       tr("The report could not be written."));
+#ifdef Q_OS_ANDROID
+    // Where a phone keeps it, only Tony can read it
+    if (m_devReport.reportPath != "") {
+        html += paragraph(tr("Copy and Save Report... take the report with "
+                             "this page."));
+    }
+#endif
     return html;
+}
+
+QString
+CalibrateAudioDialog::devReportText() const
+{
+    if (!m_haveDevReport || m_devReport.reportPath == "") return QString();
+
+    // As the file has it, which is what a run on the desktop sends back
+    QFile file(m_devReport.reportPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        cerr << "CalibrateAudioDialog: the dev checks' report "
+             << m_devReport.reportPath << " could not be read: "
+             << file.errorString() << endl;
+        return "\n" + tr("The dev checks' report, %1, could not be read: %2")
+            .arg(m_devReport.reportPath, file.errorString()) + "\n";
+    }
+    return "\n" + tr("The dev checks' report, %1:")
+        .arg(m_devReport.reportPath) + "\n\n" +
+        QString::fromUtf8(file.readAll());
 }
 
 #endif
@@ -551,6 +579,13 @@ CalibrateAudioDialog::startCheck()
         return;
     }
 
+#ifdef Q_OS_ANDROID
+    // No one touches the phone for as long as the check runs, a few
+    // minutes with the dev checks, and a screen gone off would stop its
+    // take (AndroidScreen)
+    AndroidScreen::keepOn(true, "a check of the audio is running");
+#endif
+
     // Out of the way of the takes it records, which are the thing to
     // watch while it runs
     collapse();
@@ -597,10 +632,14 @@ CalibrateAudioDialog::reportText() const
 {
     QTextDocument document;
     document.setHtml(resultHtml());
-    return tr("%1, Calibrate Audio, %2")
+    QString text = tr("%1, Calibrate Audio, %2")
         .arg(QCoreApplication::applicationName(),
              QDateTime::currentDateTime().toString(Qt::ISODate)) +
         "\n\n" + document.toPlainText() + "\n";
+#ifdef TONY_DEV_CHECKS
+    text += devReportText();
+#endif
+    return text;
 }
 
 void
@@ -614,9 +653,17 @@ CalibrateAudioDialog::copyReport()
 void
 CalibrateAudioDialog::saveReport()
 {
+    QString name = "tony-calibration";
+#ifdef TONY_DEV_CHECKS
+    if (m_haveDevReport) {
+        name = "tony-dev-checks";
+        cerr << "CalibrateAudioDialog: the report saved holds the dev "
+             << "checks' report, " << m_devReport.reportPath << endl;
+    }
+#endif
     m_window->saveTextThroughPicker
         (this, reportText().toUtf8(), tr("Save the report"),
-         QString("tony-calibration-%1.txt")
+         QString("%1-%2.txt").arg(name)
          .arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss")),
          tr("report"));
 }
@@ -646,6 +693,9 @@ void
 CalibrateAudioDialog::runEnded()
 {
     m_running = false;
+#ifdef Q_OS_ANDROID
+    AndroidScreen::keepOn(false, "the check has ended");
+#endif
     showResultPage();
     // Back from small by itself, to say how the run went
     if (m_collapsed) expand();

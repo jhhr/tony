@@ -193,10 +193,18 @@ public:
 
     /// How long a stage may take.  A stage that runs the audio check
     /// waits for it, and the runner has limits of its own for each
-    /// step, which end its run with a reason: this is a backstop.
-    /// Save and reopen is quick
-    static constexpr int kCheckStageTimeoutMs = 240000;
-    static constexpr int kReopenTimeoutMs = 60000;
+    /// step, which end its run with a reason: this is a backstop behind
+    /// them.  The runner's for the reference's analysis and for those of
+    /// two punch-ins, the most a stage records, and two minutes for the
+    /// rest (writing and opening the reference, recording, stopping):
+    /// 4 minutes on a desktop, 10 on a phone.  Save and reopen is quick
+    /// on a desktop; on a phone it may take as many times longer as an
+    /// analysis may
+    static constexpr int kCheckStageTimeoutMs =
+        AudioCheckRunner::kReferenceTimeoutMs +
+        2 * AudioCheckRunner::kTakeAnalysisTimeoutMs + 120000;
+    static constexpr int kReopenTimeoutMs =
+        60000 * AudioCheckRunner::kAnalysisTimeFactor;
 
     /// The report's file name, in the report directory
     static constexpr const char *kReportFileName = "DevChecks.txt";

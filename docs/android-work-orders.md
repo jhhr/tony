@@ -188,7 +188,7 @@ builds happen in the container.)
 - (Lead, 2026-09-26: View > Lyrics Size, 35-100 %, 50 % by default on Android; the
   size drawn is logged.)
 - A12c — The Calibrate Audio dialog: small, and out of the way while a check runs. Done.
-- A12b — The dev run on the phone.
+- A12b — The dev run on the phone. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -1155,3 +1155,28 @@ fixed.
 Tests seen failing: fit off (fits_a_phone); no collapse (3); no expand at the end (from_the_menu).
 For A8: calibrate-audio.md §2 (small, Make Small, not selectable on Android), §9, §11.
 Left open: not on a phone (the font, the finger scroll, the dialog's place under the bars).
+
+### Phase A12b — 2026-09-26
+Built: `CalibrateAudioDialog::reportText()` (Copy, and Save Report... on Android) ends with
+DevChecks.txt whole when a dev run wrote one; Save Report... then suggests
+`tony-dev-checks-<time>.txt` and logs the report's path; on Android the result page says Copy
+and Save Report... take it. `AudioCheckRunner::kAnalysisTimeFactor` (1; 4 on Android) scales
+the reference's and a take's analysis limits (60/30 s; 240/120 s); `DevChecks`' stage limit is
+the runner's reference limit, two take limits and 2 min (240 s; 600 s), the reopen 60 s x the
+factor. The runner logs every analysis's time ("the reference, 240 s, was analysed in ...").
+`AndroidScreen::keepOn()` (Android; FLAG_KEEP_SCREEN_ON on Android's main thread) from the
+dialog's Start to the run's end. Item 5: one input channel is Measured, "the device records one
+input channel". Item 14: past the selection's end worked out in seconds, device frames by the
+device's rate, lead-in and range by the session's; `TakeObserver` counts an event loop deeper
+than its start as a dialog. DevChecks.txt names the route's driver and streams.
+`FakeAudioIO::Config::inputChannels`. Tests: `dev_checks_on_a_phone` (48 kHz, 1 in 2 out, a
+route; through the dialog: calibration, then the dev run with a 60 s long song),
+`dev_checks_see_a_dialog_qt_does_not_draw`.
+Found: at 48 kHz item 14 failed every take by ~0.35 s (reference frames taken as the device's).
+A screen going off (no touch for minutes) suspends Tony: the take is stopped and the loop held.
+Android's own dialogs (message boxes, picker) are no active modal widget (A7): item 14 missed them.
+Margin: the 240 s long song took ~10 s here; a phone 3-6x slower, 30-60 s; 240 s is 4x that.
+Tests seen failing: phone run at HEAD (item 14); loop level ignored; report text without the file.
+For A8: calibrate-audio.md §7 (limits on a phone, items 5 and 14, the header), §8, §10.
+Left open: not on a phone. Leaving Tony during a run (power key, a call) still ends it wrongly;
+a user's own long take has no screen kept on.

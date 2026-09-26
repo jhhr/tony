@@ -1246,6 +1246,7 @@ tony_app_files = [
 
 if system == 'android'
   tony_app_files += [
+    'main/AndroidScreen.cpp',
     'main/AndroidStorage.cpp',
     'main/OboeAudioIO.cpp',
   ]

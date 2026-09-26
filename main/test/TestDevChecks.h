@@ -23,7 +23,8 @@
 // reference, one over the end of the second, one near the start of the
 // song, two that meet inside a held tone, then saves the session and
 // opens it again: about 50 s of real time. The runs that look at other
-// things leave the long song out.
+// things leave the long song out. One runs in the shape of the user's
+// phone, calibrated from the dialog first, as there.
 //
 // The fixture is TestAudioCheck's, copied rather than shared. The
 // application's data directory, where the check writes its references,
@@ -69,6 +70,9 @@ class TestDevChecks : public QObject
 
     static constexpr double rate = 44100.0;
 
+    // The rate the user's phone records and plays at
+    static constexpr double phoneRate = 48000.0;
+
     // What the device reports, and what the round trip really is: as
     // TestAudioCheck's, 123 frames (2.8 ms) more than reported
     static constexpr int reportedOut = 2 * 4096;
@@ -91,8 +95,10 @@ class TestDevChecks : public QObject
     QStringList m_stages;
     std::vector<AudioCheckResult> m_checks;
 
-    // How often a test's fault was put in
+    // How often a test's fault was put in, and how many event loops of
+    // a dialog's were run (dev_checks_see_a_dialog_qt_does_not_draw())
     int m_faults = 0;
+    int m_loops = 0;
 
     // A stall of the GUI thread during the re-recording's lead-in
     // (stallTheReRecording()): watched for from the runner's first
@@ -114,6 +120,7 @@ class TestDevChecks : public QObject
         m_stages.clear();
         m_checks.clear();
         m_faults = 0;
+        m_loops = 0;
         m_stallWatch.stop();
         m_stallAt = -1.0;
         m_stallMs = 0;
@@ -152,6 +159,32 @@ class TestDevChecks : public QObject
     static FakeAudioIO::Config loopbackInARoom() {
         FakeAudioIO::Config config = loopback();
         config.input = TestSignals::whiteNoise(int(10 * rate), 1, 0.001);
+        return config;
+    }
+
+    // The same in the shape of the user's phone as OboeAudioIO opens it:
+    // at 48 kHz, the reference being at 44.1; one input channel, the
+    // phone's microphone, and two output channels; and the route, as
+    // TestAudioCheck's phoneRoute() has it. The latencies and the delay
+    // count the device's frames
+    static FakeAudioIO::Config phoneInARoom() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.sampleRate = int(phoneRate);
+        config.inputChannels = 1;
+        AudioRoute::Route &route = config.route;
+        route.driver = "oboe";
+        route.output.id = 3;
+        route.output.type = 2;
+        route.output.productName = "Pixel 7";
+        route.hasInput = true;
+        route.input.id = 7;
+        route.input.type = 15;
+        route.input.productName = "Pixel 7";
+        route.rate = phoneRate;
+        route.outputStreams =
+            "AAudio (MMAP), 48000 Hz, Exclusive, burst 96, buffer 192 of 1920";
+        route.inputStreams = "AAudio (MMAP), 48000 Hz, Exclusive, burst 96, "
+            "buffer 11424 of 11520, preset VoicePerformance";
         return config;
     }
 
@@ -1175,6 +1208,134 @@ private slots:
                  (QString("Round trip for the run: %1 ms")
                   .arg(calibration.calibratedRoundTrip * 1000.0, 0, 'f', 1)),
                  qPrintable(reportText()));
+    }
+
+    // The dev run as on the user's phone: calibrated from the dialog, on
+    // a device in the phone's shape (phoneInARoom()), and carried on into
+    // the dev checks with the round trip measured. Every check passes as
+    // on the desktop's loopback, at the device's 48 kHz, but item 5,
+    // which has no second input to find the mic on. The report's head
+    // names the driver and how its streams opened. The result page's
+    // report, which Copy takes and on a phone Save Report... saves, holds
+    // the calibration and the report file whole, since a phone keeps that
+    // file where only Tony can read it
+    void dev_checks_on_a_phone() {
+        makeWindow(phoneInARoom());
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        QVERIFY(dialog->devChecksWanted());
+        dialog->setPlan(shortPlan());
+        dialog->setDevOptions(options(-1.0));
+
+        m_window->discardModifications();
+        dialog->startCheck();
+        QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0, 180000);
+        QCOMPARE(m_finished, 1);
+        QVERIFY(!m_window->devChecks()->isRunning());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(dialog->isVisible());
+        for (const QString &line : reportText().split('\n')) {
+            qDebug().noquote() << "report:" << line;
+        }
+
+        QVERIFY(!m_checks.empty());
+        const AudioCheckResult calibration = m_checks.front();
+        QVERIFY2(calibration.calibrationUsable(),
+                 qPrintable(calibration.failure));
+        QCOMPARE(calibration.recordingRate, phoneRate);
+        QCOMPARE(calibration.referenceRate, rate);
+        QCOMPARE(calibration.route.driver, QString("oboe"));
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            if (c.item == 5) continue;
+            QVERIFY2(c.verdict == CheckResult::Verdict::Pass,
+                     describe(c.item));
+        }
+        const CheckResult *mic = check(5);
+        QVERIFY(mic);
+        QVERIFY2(mic->verdict == CheckResult::Verdict::Measured, describe(5));
+        QCOMPARE(mic->message, QString("Not applicable here: the device "
+                                       "records one input channel."));
+        QVERIFY2(number(*mic, "input peaks, punch-in 1").startsWith("input 1 -")
+                 && !number(*mic, "input peaks, punch-in 1")
+                 .contains("input 2"), describe(5));
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+
+        const QString file = reportText();
+        for (QString words : { QString("\nAudio driver in use: oboe\n"),
+                               "\nOutput streams: " +
+                               phoneInARoom().route.outputStreams + "\n",
+                               "\nInput streams: " +
+                               phoneInARoom().route.inputStreams + "\n" }) {
+            QVERIFY2(file.contains(words), qPrintable(words + " not in:\n" +
+                                                      file));
+        }
+
+        const QString report = dialog->reportText();
+        for (QString words : { QString("came back steadily"),
+                               QString("Item 5, mic_on_input_2: Measured"),
+                               "The dev checks' report, " +
+                               m_report.reportPath + ":\n\n" + file }) {
+            QVERIFY2(report.contains(words),
+                     qPrintable(words + " not in:\n" + report));
+        }
+        QVERIFY(report.trimmed().endsWith
+                ("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+    }
+
+    // A dialog Android draws itself, as it draws a message box or the file
+    // picker, is never a modal widget of Qt's: what shows it is the event
+    // loop its exec() runs. One such loop during the re-recording's take,
+    // with nothing on screen, is a dialog to item 14, which fails on it
+    // and on nothing else. Cancelled as the stage after begins
+    void dev_checks_see_a_dialog_qt_does_not_draw() {
+        makeWindow(loopback());
+        connect(m_window->audioCheck(), &AudioCheckRunner::progress,
+                this, [this](const AudioCheckRunner::Progress &state) {
+                    // Reported again as the seconds left go down
+                    if (state.step != AudioCheckRunner::Step::Recording ||
+                        m_faults > 0 || m_stages.isEmpty() ||
+                        !m_stages.last().endsWith(": Re-record")) {
+                        return;
+                    }
+                    ++m_faults;
+                    // Outside the runner's poll, as a box shown by
+                    // something else would be
+                    QTimer::singleShot(200, this, [this]() {
+                        QEventLoop loop;
+                        QTimer::singleShot(300, &loop, &QEventLoop::quit);
+                        loop.exec();
+                        ++m_loops;
+                    });
+                });
+        connect(m_window->devChecks(), &DevChecks::progress,
+                this, [this](QString stage, int, int) {
+                    if (stage == "Pre-roll near the start") {
+                        m_window->devChecks()->cancel();
+                    }
+                });
+
+        runDevChecks(roundTrip / rate, 0.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_faults, 1);
+        QCOMPARE(m_loops, 1);
+        QCOMPARE(m_report.failure, QString("The dev checks were cancelled."));
+
+        const CheckResult *stops = check(14);
+        QVERIFY(stops);
+        QVERIFY2(stops->verdict == CheckResult::Verdict::Fail, describe(14));
+        QVERIFY2(stops->message.startsWith("a dialog was up ") &&
+                 stops->message.endsWith(" into the take at 19.20 to 21.20 "
+                                         "s.") &&
+                 !stops->message.contains(";"), describe(14));
+        QVERIFY2(number(*stops, "dialogs, 19.20 to 21.20 s")
+                 .startsWith("one up "), describe(14));
+        QVERIFY2(check(7) && check(7)->verdict == CheckResult::Verdict::Pass,
+                 describe(7));
     }
 };
 

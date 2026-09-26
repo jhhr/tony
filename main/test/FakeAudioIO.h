@@ -47,6 +47,11 @@ public:
         int blockSize = 512;
         int channels = 2;
 
+        // The input's channels, where they are not as many as the
+        // output's: a phone records one (OboeAudioIO) and plays two. -1
+        // for as many as channels
+        int inputChannels = -1;
+
         // Reported to the application, and nothing else: the delay the
         // input really has is inputDelay
         int recordLatency = 0;
@@ -130,7 +135,7 @@ public:
 
         m_target->setSystemRecordBlockSize(m_config.blockSize);
         m_target->setSystemRecordSampleRate(m_config.sampleRate);
-        m_target->setSystemRecordChannelCount(m_config.channels);
+        m_target->setSystemRecordChannelCount(inputChannelCount());
         m_target->setSystemRecordLatency(m_config.recordLatency);
         m_reportedRecordLatency = m_config.recordLatency;
 
@@ -244,6 +249,11 @@ private:
         }
     }
 
+    int inputChannelCount() const {
+        return m_config.inputChannels > 0 ? m_config.inputChannels
+                                          : m_config.channels;
+    }
+
     static float peak(const float *samples, int count) {
         float p = 0.f;
         for (int i = 0; i < count; ++i) p = std::max(p, std::fabs(samples[i]));
@@ -285,18 +295,19 @@ private:
         bool kept = !m_config.inputIsKept || m_config.inputIsKept();
         long keptBefore = m_sinceResume;
 
+        const int inCh = inputChannelCount();
         std::vector<float> silence(n, 0.f);
-        std::vector<const float *> inPtrs(ch, in.data());
+        std::vector<const float *> inPtrs(inCh, in.data());
         if (m_config.inputChannel >= 0) {
-            for (int c = 0; c < ch; ++c) {
+            for (int c = 0; c < inCh; ++c) {
                 if (c != m_config.inputChannel) inPtrs[c] = silence.data();
             }
         }
-        m_target->putSamples(inPtrs.data(), ch, n);
+        m_target->putSamples(inPtrs.data(), inCh, n);
         if (kept) m_sinceResume += n;
         if (m_config.reportLevels) {
             m_target->setInputLevels(peak(inPtrs[0], n),
-                                     peak(inPtrs[ch > 1 ? 1 : 0], n));
+                                     peak(inPtrs[inCh > 1 ? 1 : 0], n));
         }
 
         std::vector<std::vector<float>> out(ch, std::vector<float>(n, 0.f));

@@ -105,8 +105,11 @@ public:
     /// characters of its font: about half a phone's width in landscape
     static const int preferredWidth = 64;
 
-    /// The result as plain text, under a line saying when: what Copy
-    /// puts on the clipboard and Save Report... saves
+    /// The result as plain text, under a line saying when, and in
+    /// development builds the dev checks' report file after it, whole,
+    /// if they wrote one: what Copy puts on the clipboard and Save
+    /// Report... saves.  On a phone that file is where only Tony can
+    /// read it
     QString reportText() const;
 
     /// What a check started here records: the calibration
@@ -271,6 +274,10 @@ private:
     void devFinished(const DevReport &report);
 
     QString devHtml() const;
+
+    /// The dev checks' report file as it is, under a line naming it, for
+    /// reportText(); "" if they wrote none
+    QString devReportText() const;
 #endif
 
     /// Seconds in milliseconds, for reading: tenths below 10 ms, where

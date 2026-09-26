@@ -296,7 +296,11 @@ Why so:
   1.5 s from either end of the tone, further than item 10 looks around it.
 
 A stage has 4 minutes (the reopen 1 minute), a backstop behind the runner's own limits,
-which end a run first and give their reason. A stage that fails ends the run; the checks are
+which end a run first and give their reason. On Android the runner's analysis limits, and
+so these, are four times as long (`AudioCheckRunner::kAnalysisTimeFactor`: a phone core
+is several times slower, and no phone had been timed; the runner logs how long each
+analysis took), and the screen is kept on from Start to the end of the run, since a phone
+that sleeps puts Tony in the background and ends the take. A stage that fails ends the run; the checks are
 then worked out from the stages it got through, and the rest are Skipped with the reason.
 
 A **`TakeObserver`** watches every punch-in from its Recording step until its analysis is
@@ -367,8 +371,10 @@ session open then does not use.
 
 ## 8. What to send back
 
-After a run on a new machine or device: the result page's text (select it all and copy)
-and the whole `DevChecks.txt`. What the numbers decide:
+After a run on a new machine or device: the result page's text and the whole
+`DevChecks.txt`. **Copy** on the result page takes both (the report is appended to the
+page's text), and on Android **Save Report...** saves them through the file picker, since a
+phone keeps `DevChecks.txt` where only Tony can read it. What the numbers decide:
 
 - **The round trip measured against the driver's, and where each punch-in landed:** how
   wrong the driver is, and how far the offset moves from one stream start to the next (the
