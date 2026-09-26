@@ -117,8 +117,8 @@ The numbers are those of `docs/manual-checklist.md` before that merge.
 | 9 | Stop on a 4-minute song | **Automated** | A generated 4-minute reference, punch-in near the end. Time from Stop to new pitch, against a threshold. Pitch outside the range unchanged, which proves the ranged path ran. |
 | 10 | The joins | **Automated** | Two punch-ins that meet in the middle of a held tone: no step in the samples at the join; pitch continuous (no gap, no doubled frame); **one** note across the join; nothing moves outside ±0.25 s. |
 | 11 | Is 3 s right, is the countdown readable | **Manual** | A judgement. |
-| 12 | Lead-in: nothing heard back, nothing before P changed | **Automated** | Output peaks during the lead-in are the reference's only. Audio and events before P are unchanged. |
-| 13 | Pre-roll near the start | **Automated** | Punch-in at P = 1 s: playback runs from 0, the countdown starts at 1, placement is right. |
+| 12 | Lead-in: nothing heard back, nothing before P changed | **Automated** | Output peaks during the lead-in are the reference's only. Audio and events before P are unchanged. *Found in C1c:* on a noiseless loopback the earlier take is silent wherever the reference is, so a take played out shows in no gap; the app test gives the fake a −60 dBFS noise floor, as a room gives a real mic. |
+| 13 | Pre-roll near the start | **Automated** | Punch-in at P = 1 s: playback runs from 0, the countdown counts only the 1 s there is (*found in C1c:* plus the round trip, by design, so it starts at 2; for the instant before the round trip is known it shows 1), placement is right. |
 | 14 | Record into Selection stops by itself | **Automated** | Stops within 0.25 s plus one poll of the end. The coverage added is exactly the selection. No dialog. |
 | 15 | The practice loop | **Measured** | *Automated:* it stops by itself, the playhead is back at P, and Play plays the take. *Yours:* "is anything else needed?". |
 | 16 | Constrain Playback to Selection with a pre-roll | **Measured** | Reports whether the lead-in was played in full. The decision is yours. |
@@ -322,7 +322,7 @@ marked "Done" when it is committed.
      own, `test-tony-dev`, run when a change touches what the checks drive (the user's
      decision). The phases below were cut again (§4).
    - **C1b** `TakeObserver`. Items 3, 4, 5 (and 8's number). Done.
-   - **C1c** Re-record and pre-roll stages. Items 7, 12, 13, 14.
+   - **C1c** Re-record and pre-roll stages. Items 7, 12, 13, 14. Done.
 5. **C2** Long song and joins: items 9 and 10.
 6. **C3** Retire `test-tony-device`, once all it checks is in the dev run.
 7. **Release build** by the lead (§8, "Release builds must stay clean").

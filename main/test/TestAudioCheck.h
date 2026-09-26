@@ -1037,6 +1037,34 @@ private slots:
         QCOMPARE(inUse.roundTrip, 0.3);
     }
 
+    // A plan asks for a pre-roll of its own, the check's unless it says
+    // otherwise: its take has that lead-in, and is placed right with it.
+    // A negative one is refused
+    void check_uses_the_pre_roll_it_is_given() {
+        makeWindow(loopback());
+        QCOMPARE(AudioCheckRunner::Plan().preRoll,
+                 AudioCheckRunner::kPreRollSeconds);
+
+        AudioCheckRunner::Plan refused = onePunchIn();
+        refused.preRoll = -0.5;
+        QVERIFY(!m_window->audioCheck()->start(refused));
+        QVERIFY(!m_window->audioCheck()->isRunning());
+
+        AudioCheckRunner::Plan plan = onePunchIn();
+        plan.roundTrip = roundTrip / rate;
+        plan.preRoll = 0.5;
+        runCheck(plan);
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 1);
+        QVERIFY2(std::fabs(r.summary.medianOffset * rate) <= 4.0,
+                 describe(r).constData());
+        QCOMPARE(m_window->takePreRoll(), sv::sv_frame_t(0.5 * rate));
+        QVERIFY(!m_window->audioCheckTakes());
+    }
+
     // A run that keeps the session records into the one open, the
     // reference and take of the run before: nothing is written, opened
     // or asked, though the session is modified. The take keeps the

@@ -93,10 +93,11 @@ struct AudioCheckResult
  * any take, which is what is being measured.
  *
  * The takes are recorded with Record into Selection, Play Reference
- * While Recording and a pre-roll of kPreRollSeconds, whatever the
- * toolbar says: MainWindow::record() and the rest consult an override
- * the runner sets for each of its takes, since the toolbar's toggles
- * write the user's settings.  A punch-in's range is made the selection
+ * While Recording and the plan's pre-roll (kPreRollSeconds unless it
+ * says otherwise), whatever the toolbar says: MainWindow::record() and
+ * the rest consult an override the runner sets for each of its takes,
+ * since the toolbar's toggles write the user's settings.  A punch-in's
+ * range is made the selection
  * (the previous one cleared, then this one selected: "Select" steps in
  * the history, as when the user selects), and record() is called; the
  * take stops itself at the end of the selection, through the same path
@@ -127,7 +128,7 @@ class AudioCheckRunner : public QObject
     Q_OBJECT
 
 public:
-    /// The lead-in of the check's takes
+    /// The lead-in of the check's takes, unless the plan asks for another
     static constexpr double kPreRollSeconds = 1.0;
 
     /// How often the runner looks at how a step is going
@@ -170,8 +171,13 @@ public:
         /// stored, and the window goes on saying it uses its own
         double roundTrip;
 
+        /// The pre-roll this run's takes ask for, in seconds.  As the
+        /// user's does, it gets shorter near the start of the song
+        /// (TakeTiming::preRollBefore())
+        double preRoll;
+
         Plan() : punchIns(0), eventsEach(0), keepSession(false),
-                 roundTrip(-1.0) { }
+                 roundTrip(-1.0), preRoll(kPreRollSeconds) { }
     };
 
     /// The steps of a run, in order; the last two come once for each
@@ -237,8 +243,9 @@ public:
     /**
      * Begin a run.  False, with nothing started, if one is running
      * already, if a take is being recorded, if the plan's punch-ins
-     * cannot be recorded (punchInsOf()), or if it keeps the session and
-     * there is none.  Otherwise finished() comes once, at the end,
+     * cannot be recorded (punchInsOf()), if its pre-roll is negative, or
+     * if it keeps the session and there is none.  Otherwise finished()
+     * comes once, at the end,
      * however the run ends.
      *
      * A run that replaces the session asks the user whether to save it

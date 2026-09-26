@@ -189,6 +189,13 @@ AudioCheckRunner::start(const Plan &plan)
         return false;
     }
 
+    // Written so that a NaN fails too
+    if (!(plan.preRoll >= 0.0)) {
+        cerr << "AudioCheckRunner::start: a pre-roll of " << plan.preRoll
+             << " s" << endl;
+        return false;
+    }
+
     if (plan.keepSession && !m_window->getMainModel()) {
         cerr << "AudioCheckRunner::start: there is no session to record into"
              << endl;
@@ -218,6 +225,9 @@ AudioCheckRunner::start(const Plan &plan)
     if (m_plan.roundTrip >= 0.0) {
         cerr << ", placed with a round trip of its own, "
              << m_plan.roundTrip * 1000.0 << " ms";
+    }
+    if (m_plan.preRoll != kPreRollSeconds) {
+        cerr << ", with a pre-roll of " << m_plan.preRoll << " s";
     }
     cerr << endl;
 
@@ -458,6 +468,7 @@ AudioCheckRunner::startPunchIn()
 
     m_window->m_audioCheckTakes = true;
     m_window->m_audioCheckRoundTrip = m_plan.roundTrip;
+    m_window->m_audioCheckPreRoll = m_plan.preRoll;
     m_window->record();
     if (m_step != step) return;
 
@@ -597,11 +608,11 @@ AudioCheckRunner::currentProgress() const
         p.punchIn = m_punchIn + 1;
     }
 
-    // The lead-in of a take to come is the whole of the check's, unless
+    // The lead-in of a take to come is the whole of the plan's, unless
     // its range starts sooner than that
     for (int i = m_punchIn; i < int(m_punchIns.size()); ++i) {
         const LatencyCheck::PunchIn &range = m_punchIns[i];
-        double seconds = std::min(kPreRollSeconds, range.start) +
+        double seconds = std::min(m_plan.preRoll, range.start) +
             (range.end - range.start);
         if (i == m_punchIn) {
             if (m_step == Step::AnalysingTake) continue;
@@ -705,6 +716,7 @@ AudioCheckRunner::clearOverride()
 {
     m_window->m_audioCheckTakes = false;
     m_window->m_audioCheckRoundTrip = -1.0;
+    m_window->m_audioCheckPreRoll = kPreRollSeconds;
 }
 
 bool

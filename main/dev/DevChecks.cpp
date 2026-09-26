@@ -19,6 +19,8 @@
 #include "../MainWindow.h"
 #include "../RealtimePitchTracker.h"
 #include "../SingingTakes.h"
+#include "../TakeDiff.h"
+#include "../TakeTiming.h"
 
 #include "audio/AudioCallbackPlaySource.h"
 #include "audio/AudioCallbackRecordTarget.h"
@@ -41,6 +43,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <iostream>
 
 using std::cerr;
@@ -177,6 +180,133 @@ inputsText(const vector<int> &inputs)
     return DevChecks::tr("inputs %1 and %2").arg(names.join(", ")).arg(last);
 }
 
+// How many frames an audio file holds, or -1 and why not
+sv_frame_t
+frameCount(QString path, QString &error)
+{
+    error = "";
+    if (path == "") {
+        error = DevChecks::tr("its raw recording was not seen");
+        return -1;
+    }
+    FileSource source(path);
+    WavFileReader reader(source);
+    if (!reader.isOK()) {
+        error = DevChecks::tr("its raw recording \"%1\" could not be read: %2")
+            .arg(path).arg(reader.getError());
+        return -1;
+    }
+    return reader.getFrameCount();
+}
+
+// A time on the reference's timeline in whole frames, as the runner
+// selected its punch-ins
+sv_frame_t
+frameAt(double seconds, sv_samplerate_t rate)
+{
+    return sv_frame_t(std::llround(seconds * rate));
+}
+
+QString
+rangeText(double from, double to)
+{
+    return DevChecks::tr("%1 to %2 s").arg(secondsText(from))
+        .arg(secondsText(to));
+}
+
+QString
+coverageText(const Coverage &coverage, sv_samplerate_t rate)
+{
+    QStringList ranges;
+    for (const Coverage::Range &r : coverage.getRanges()) {
+        ranges << rangeText(double(r.start) / rate, double(r.end) / rate);
+    }
+    return ranges.isEmpty() ? DevChecks::tr("nothing") : ranges.join(", ");
+}
+
+// Where a run's judged sweeps landed, in words, and a problem for each
+// one not found or further off than items 1 and 2 allow
+QString
+offsetsOf(const LatencyCheck::TakeSummary &s, QStringList &problems)
+{
+    QStringList offsets;
+    for (const LatencyCheck::EventResult &e : s.events) {
+        if (!e.arrival.found) {
+            offsets << DevChecks::tr("not found");
+            problems << DevChecks::tr("the sweep at %1 s was not found")
+                .arg(secondsText(e.expectedSeconds));
+            continue;
+        }
+        offsets << signedMs(e.arrival.errorSeconds);
+        if (std::fabs(e.arrival.errorSeconds) > DevChecks::kPlacementSeconds) {
+            problems << DevChecks::tr("the sweep at %1 s landed %2 off")
+                .arg(secondsText(e.expectedSeconds))
+                .arg(signedMs(e.arrival.errorSeconds));
+        }
+    }
+    if (s.events.empty()) problems << DevChecks::tr("no sweep was judged");
+    return offsets.isEmpty() ? DevChecks::tr("none judged") : offsets.join(", ");
+}
+
+// What TakeDiff::audioOutside() found, in words
+QString
+audioText(const TakeDiff::AudioDiff &d, sv_samplerate_t rate)
+{
+    if (d.pass) return DevChecks::tr("the same, bit for bit");
+    return DevChecks::tr("%1 frames differ, the first at %2 s, by up to %3")
+        .arg(d.differences)
+        .arg(double(d.firstDifference) / rate, 0, 'f', 3)
+        .arg(levelText(d.largestDifference));
+}
+
+// How many of the events lie wholly outside the window, as
+// TakeDiff::eventsOutside() counts them: what it compared
+int
+countOutside(const EventVector &events, const Coverage::Range &window)
+{
+    int n = 0;
+    for (const Event &e : events) {
+        const sv_frame_t end = e.getFrame() +
+            std::max(e.getDuration(), sv_frame_t(1));
+        if (end <= window.start || e.getFrame() >= window.end) ++n;
+    }
+    return n;
+}
+
+// What TakeDiff::eventsOutside() found, in words: where it looked is
+// "where", and the events before the change that lie there
+QString
+eventsText(const TakeDiff::EventDiff &d, const EventVector &before,
+           QString what, QString where, sv_samplerate_t rate)
+{
+    const int compared = countOutside(before, d.window);
+    if (d.pass) {
+        return DevChecks::tr("%1 %2 %3, unchanged").arg(compared).arg(what)
+            .arg(where);
+    }
+    return DevChecks::tr("%1 %2 %3: %4 added, %5 removed, %6 changed, the "
+                         "first at %7 s")
+        .arg(compared).arg(what).arg(where).arg(d.added.size())
+        .arg(d.removed.size()).arg(d.changed.size())
+        .arg(double(d.firstDifference) / rate, 0, 'f', 3);
+}
+
+// The number of seconds a status text counts down, if it is the lead-in's
+// countdown as TakeTiming words it; 0 if it is anything else
+int
+countdownOf(QString status)
+{
+    const QRegularExpressionMatch m =
+        QRegularExpression("[0-9]+").match(status);
+    if (!m.hasMatch()) return 0;
+    const int n = m.captured(0).toInt();
+    TakeTiming timing;
+    timing.rate = 1;
+    timing.position = n;
+    timing.preRoll = n;
+    return timing.countdownText(0) == status ? n : 0;
+}
+
 } // namespace
 
 QString
@@ -255,6 +385,18 @@ DevChecks::freshPunchIns()
              LatencyCheck::PunchIn(16.8, 21.2) };
 }
 
+LatencyCheck::PunchIn
+DevChecks::reRecording()
+{
+    return LatencyCheck::PunchIn(19.2, 21.2);
+}
+
+LatencyCheck::PunchIn
+DevChecks::nearTheStart()
+{
+    return LatencyCheck::PunchIn(1.0, 4.2);
+}
+
 QString
 DevChecks::nextScratchFolder(QString directory, QString inUse)
 {
@@ -324,11 +466,14 @@ DevChecks::start(const Options &options)
     m_fresh = AudioCheckResult();
     m_coverageAfterFresh = Coverage();
     m_freshWatched.clear();
+    m_reRecord = PunchInStage();
+    m_nearStart = PunchInStage();
     m_pitchBefore.clear();
     m_notesBefore.clear();
     m_pitchAfter.clear();
     m_notesAfter.clear();
     m_reopened = false;
+    m_beforeSave = LatencyCheck::TakeSummary();
     m_rejudged = LatencyCheck::TakeSummary();
     m_runnerRunning = false;
     m_runnerResult = AudioCheckResult();
@@ -337,6 +482,22 @@ DevChecks::start(const Options &options)
     m_stages.push_back({ tr("Fresh punch-ins"),
                          [this]() { beginFreshPunchIns(); },
                          [this]() { return freshPunchInsDone(); },
+                         kCheckStageTimeoutMs });
+    m_stages.push_back({ tr("Re-record"),
+                         [this]() {
+                             beginPunchInStage
+                                 (m_reRecord, reRecording(),
+                                  AudioCheckRunner::kPreRollSeconds);
+                         },
+                         [this]() { return punchInStageDone(m_reRecord); },
+                         kCheckStageTimeoutMs });
+    m_stages.push_back({ tr("Pre-roll near the start"),
+                         [this]() {
+                             beginPunchInStage
+                                 (m_nearStart, nearTheStart(),
+                                  kNearStartPreRollSeconds);
+                         },
+                         [this]() { return punchInStageDone(m_nearStart); },
                          kCheckStageTimeoutMs });
     m_stages.push_back({ tr("Save and reopen"),
                          [this]() { beginReopen(); },
@@ -515,12 +676,132 @@ DevChecks::freshPunchInsDone()
 }
 
 void
+DevChecks::beginPunchInStage(PunchInStage &stage, LatencyCheck::PunchIn range,
+                             double preRoll)
+{
+    // The take as the stages before left it, to compare with what this
+    // punch-in leaves
+    stage.before = snapshot();
+
+    AudioCheckRunner::Plan plan;
+    plan.layout = m_layout;
+    plan.ranges = { range };
+    plan.keepSession = true;
+    plan.roundTrip = m_options.roundTrip;
+    plan.preRoll = preRoll;
+
+    m_watched.clear();
+    m_observedPunchIn = 0;
+    m_runnerResult = AudioCheckResult();
+    m_runnerRunning = m_runner && m_runner->start(plan);
+    if (!m_runnerRunning) {
+        end(tr("The audio check could not start."));
+    }
+}
+
+bool
+DevChecks::punchInStageDone(PunchInStage &stage)
+{
+    if (m_runnerRunning) return false;
+
+    if (m_runnerResult.failure != "") {
+        end(tr("The punch-in could not be recorded: %1")
+            .arg(m_runnerResult.failure));
+        return false;
+    }
+
+    // The runner has waited for the take's analysis: its pitch and notes
+    // are those this punch-in leaves
+    stage.result = m_runnerResult;
+    stage.after = snapshot();
+    stage.watched = m_watched;
+
+    // The lead-in the window gave the take, which is the last so far,
+    // and all that the device delivered until the take stopped
+    stage.preRoll = m_window->m_takePreRoll;
+    stage.recorded = frameCount
+        (stage.watched.empty() ? QString() :
+         stage.watched.front().seen.recordingPath, stage.recordedError);
+
+    stage.done = true;
+    return true;
+}
+
+DevChecks::Snapshot
+DevChecks::snapshot() const
+{
+    Snapshot s;
+    sv_samplerate_t rate = 0;
+    s.audioError = AudioCheckRunner::readTakeFile
+        (m_window->m_takes->getAudioPath(), s.audio, rate);
+    s.pitch = takeEvents(Analyser::PitchTrack);
+    s.notes = takeEvents(Analyser::Notes);
+    s.coverage = m_window->m_takes->getCoverage();
+    return s;
+}
+
+vector<DevChecks::Run>
+DevChecks::runs() const
+{
+    vector<Run> all;
+    if (m_haveFresh) {
+        all.push_back({ &m_fresh, &m_coverageAfterFresh, &m_freshWatched });
+    }
+    for (const PunchInStage *stage : { &m_reRecord, &m_nearStart }) {
+        if (stage->done) {
+            all.push_back({ &stage->result, &stage->after.coverage,
+                            &stage->watched });
+        }
+    }
+    return all;
+}
+
+const DevChecks::Watched *
+DevChecks::watchedOf(const Run &run, int i)
+{
+    for (const Watched &w : *run.watched) {
+        if (w.punchIn == i) return &w;
+    }
+    return nullptr;
+}
+
+vector<LatencyCheck::PunchIn>
+DevChecks::punchInsSoFar() const
+{
+    vector<LatencyCheck::PunchIn> ranges;
+    for (const Run &run : runs()) {
+        for (const LatencyCheck::PunchInResult &p :
+                 run.result->summary.punchIns) {
+            ranges.push_back(p.range);
+        }
+    }
+    return ranges;
+}
+
+void
 DevChecks::beginReopen()
 {
     // Read from the models before the save, and again from the models
     // there are after the reopen
     m_pitchBefore = takeEvents(Analyser::PitchTrack);
     m_notesBefore = takeEvents(Analyser::Notes);
+
+    // And the take's file judged over every punch-in so far, as it will
+    // be again after the reopen.  Not the runs' own judgements: a later
+    // punch-in over an earlier one's sweep has replaced it
+    {
+        vector<float> mono;
+        sv_samplerate_t rate = 0;
+        const QString error = AudioCheckRunner::readTakeFile
+            (m_window->m_takes->getAudioPath(), mono, rate);
+        if (error != "") {
+            end(error);
+            return;
+        }
+        m_beforeSave = LatencyCheck::judgeTake
+            (m_layout, mono.data(), sv_frame_t(mono.size()), rate,
+             punchInsSoFar());
+    }
 
     // The way Save As saves once it has a name, with no dialog but for a
     // failure: the take's audio is copied into the session's folder
@@ -574,12 +855,9 @@ DevChecks::reopenDone()
         end(error);
         return false;
     }
-    vector<LatencyCheck::PunchIn> ranges;
-    for (const LatencyCheck::PunchInResult &p : m_fresh.summary.punchIns) {
-        ranges.push_back(p.range);
-    }
     m_rejudged = LatencyCheck::judgeTake
-        (m_layout, mono.data(), sv_frame_t(mono.size()), rate, ranges);
+        (m_layout, mono.data(), sv_frame_t(mono.size()), rate,
+         punchInsSoFar());
     m_reopened = true;
     return true;
 }
@@ -640,7 +918,9 @@ DevChecks::evaluate(QString reason) const
 {
     return { latencyCheck(reason), phrasesCheck(reason),
              liveDotsCheck(reason), speakersCheck(reason),
-             micChannelCheck(reason) };
+             micChannelCheck(reason), positionCheck(reason),
+             leadInCheck(reason), nearStartCheck(reason),
+             stopsItselfCheck(reason) };
 }
 
 CheckResult
@@ -656,41 +936,45 @@ DevChecks::latencyCheck(QString reason) const
         return c;
     }
 
-    // Every judged sweep of every punch-in, found and within the
-    // tolerance
-    const LatencyCheck::TakeSummary &s = m_fresh.summary;
+    // Every judged sweep of every punch-in of every run, found and within
+    // the tolerance; the punch-ins numbered along the run
     QStringList problems;
     double largest = 0.0;
-    for (int i = 0; i < int(s.punchIns.size()); ++i) {
-        const LatencyCheck::PunchInResult &p = s.punchIns[i];
-        QStringList offsets;
-        for (const LatencyCheck::EventResult &e : s.events) {
-            if (e.punchIn != i) continue;
-            if (!e.arrival.found) {
-                offsets << tr("not found");
-                problems << tr("the sweep at %1 s was not found")
-                    .arg(secondsText(e.expectedSeconds));
-                continue;
+    int n = 0;
+    for (const Run &run : runs()) {
+        const LatencyCheck::TakeSummary &s = run.result->summary;
+        for (int i = 0; i < int(s.punchIns.size()); ++i) {
+            const LatencyCheck::PunchInResult &p = s.punchIns[i];
+            ++n;
+            QStringList offsets;
+            for (const LatencyCheck::EventResult &e : s.events) {
+                if (e.punchIn != i) continue;
+                if (!e.arrival.found) {
+                    offsets << tr("not found");
+                    problems << tr("the sweep at %1 s was not found")
+                        .arg(secondsText(e.expectedSeconds));
+                    continue;
+                }
+                const double offset = e.arrival.errorSeconds;
+                offsets << signedMs(offset);
+                if (std::fabs(offset) > std::fabs(largest)) largest = offset;
+                if (std::fabs(offset) > kPlacementSeconds) {
+                    problems << tr("the sweep at %1 s landed %2 off")
+                        .arg(secondsText(e.expectedSeconds))
+                        .arg(signedMs(offset));
+                }
             }
-            const double offset = e.arrival.errorSeconds;
-            offsets << signedMs(offset);
-            if (std::fabs(offset) > std::fabs(largest)) largest = offset;
-            if (std::fabs(offset) > kPlacementSeconds) {
-                problems << tr("the sweep at %1 s landed %2 off")
-                    .arg(secondsText(e.expectedSeconds))
-                    .arg(signedMs(offset));
+            if (p.judged == 0) {
+                problems << tr("punch-in %1 judged no sweep").arg(n);
             }
+            c.numbers.push_back
+                ({ tr("offsets, punch-in %1 (%2)").arg(n)
+                   .arg(rangeText(p.range.start, p.range.end)),
+                   offsets.isEmpty() ? tr("none judged") :
+                   offsets.join(", ") });
         }
-        if (p.judged == 0) {
-            problems << tr("punch-in %1 judged no sweep").arg(i + 1);
-        }
-        c.numbers.push_back
-            ({ tr("offsets, punch-in %1 (%2 to %3 s)").arg(i + 1)
-               .arg(secondsText(p.range.start))
-               .arg(secondsText(p.range.end)),
-               offsets.isEmpty() ? tr("none judged") : offsets.join(", ") });
     }
-    if (s.punchIns.empty()) problems << tr("no punch-in was judged");
+    if (n == 0) problems << tr("no punch-in was judged");
     c.numbers.push_back({ tr("largest offset"), signedMs(largest) });
     c.numbers.push_back({ tr("round trip used"),
                           unsignedMs(m_fresh.usedRoundTrip) });
@@ -705,7 +989,8 @@ DevChecks::latencyCheck(QString reason) const
     }
 
     // The same file, copied into the session's folder by the save: every
-    // sweep where it was, to the frame
+    // sweep where it was just before the save, to the frame
+    const LatencyCheck::TakeSummary &s = m_beforeSave;
     const LatencyCheck::TakeSummary &r = m_rejudged;
     QString offsetsAfter = tr("the same");
     bool same = (r.events.size() == s.events.size());
@@ -771,51 +1056,55 @@ DevChecks::phrasesCheck(QString reason) const
         return c;
     }
 
-    // Each punch-in in the take where it was recorded, placed right, and
-    // with the start gap of its own stream measured
-    const LatencyCheck::TakeSummary &s = m_fresh.summary;
-    const sv_samplerate_t rate = m_fresh.referenceRate;
+    // Each punch-in of every run in the take where it was recorded, as
+    // the take was straight after its run, placed right, and with the
+    // start gap of its own stream measured
     QStringList problems;
-    for (int i = 0; i < int(s.punchIns.size()); ++i) {
-        const LatencyCheck::PunchInResult &p = s.punchIns[i];
+    int n = 0;
+    for (const Run &run : runs()) {
+        const LatencyCheck::TakeSummary &s = run.result->summary;
+        const sv_samplerate_t rate = run.result->referenceRate;
+        for (int i = 0; i < int(s.punchIns.size()); ++i) {
+            const LatencyCheck::PunchInResult &p = s.punchIns[i];
+            ++n;
 
-        // As the runner selected it, in whole frames of the session
-        const sv_frame_t start = sv_frame_t(std::llround(p.range.start * rate));
-        const sv_frame_t end = sv_frame_t(std::llround(p.range.end * rate));
-        Coverage::Range held;
-        if (!m_coverageAfterFresh.getRangeAt(start, held) ||
-            held.start > start || held.end < end) {
-            problems << tr("punch-in %1 is not all in the take").arg(i + 1);
+            // As the runner selected it, in whole frames of the session
+            const sv_frame_t start = frameAt(p.range.start, rate);
+            const sv_frame_t end = frameAt(p.range.end, rate);
+            Coverage::Range held;
+            if (!run.coverage->getRangeAt(start, held) ||
+                held.start > start || held.end < end) {
+                problems << tr("punch-in %1 is not all in the take").arg(n);
+            }
+
+            if (p.found == 0) {
+                problems << tr("punch-in %1: no sweep found").arg(n);
+            } else if (std::fabs(p.medianOffset) > kPlacementSeconds) {
+                problems << tr("punch-in %1 landed %2 off").arg(n)
+                    .arg(signedMs(p.medianOffset));
+            }
+
+            const TakeLatency t = (i < int(run.result->takes.size()) ?
+                                   run.result->takes[i] : TakeLatency());
+            if (!t.startGapMeasured) {
+                problems << tr("punch-in %1's start gap was not measured")
+                    .arg(n);
+            }
+
+            c.numbers.push_back
+                ({ tr("punch-in %1, median offset").arg(n),
+                   p.found > 0 ? signedMs(p.medianOffset) :
+                   tr("nothing found") });
+            c.numbers.push_back
+                ({ tr("punch-in %1, start gap").arg(n),
+                   tr("%1 (%2 frames), %3")
+                   .arg(unsignedMs(t.recordingSeconds(t.startGap)))
+                   .arg(t.startGap)
+                   .arg(t.startGapMeasured ? tr("measured") :
+                        tr("estimated only")) });
         }
-
-        if (p.found == 0) {
-            problems << tr("punch-in %1: no sweep found").arg(i + 1);
-        } else if (std::fabs(p.medianOffset) > kPlacementSeconds) {
-            problems << tr("punch-in %1 landed %2 off").arg(i + 1)
-                .arg(signedMs(p.medianOffset));
-        }
-
-        const TakeLatency t = (i < int(m_fresh.takes.size()) ?
-                               m_fresh.takes[i] : TakeLatency());
-        if (!t.startGapMeasured) {
-            problems << tr("punch-in %1's start gap was not measured")
-                .arg(i + 1);
-        }
-
-        c.numbers.push_back
-            ({ tr("punch-in %1, median offset").arg(i + 1),
-               p.found > 0 ? signedMs(p.medianOffset) : tr("nothing found") });
-        c.numbers.push_back
-            ({ tr("punch-in %1, start gap").arg(i + 1),
-               tr("%1 (%2 frames), %3")
-               .arg(unsignedMs(t.recordingSeconds(t.startGap)))
-               .arg(t.startGap)
-               .arg(t.startGapMeasured ? tr("measured") :
-                    tr("estimated only")) });
     }
-    if (s.punchIns.size() < 2) {
-        problems << tr("%1 punch-ins, not several").arg(s.punchIns.size());
-    }
+    if (n < 2) problems << tr("%1 punch-ins, not several").arg(n);
 
     if (problems.isEmpty()) {
         c.verdict = CheckResult::Verdict::Pass;
@@ -958,39 +1247,21 @@ DevChecks::liveDotsCheck(QString reason) const
     return c;
 }
 
-CheckResult
-DevChecks::speakersCheck(QString reason) const
+DevChecks::GapLooks
+DevChecks::gapLooks(const TakeObserver::Observation &o,
+                    const TakeLatency &t, sv_samplerate_t rate,
+                    double until) const
 {
-    CheckResult c;
-    c.item = 4;
-    c.name = "nothing_of_the_take_in_the_speakers";
+    GapLooks g;
 
-    if (!m_haveFresh) {
-        c.verdict = CheckResult::Verdict::Skipped;
-        c.message = reason;
-        return c;
-    }
+    // An audio callback takes in a block of input, then hands out a
+    // block of output.  The reference's first block went out from
+    // where playback started, after the start gap's input, so the
+    // frames received say which frames of the reference went out
+    if (!t.startGapMeasured || t.recordingRate <= 0 || rate <= 0) return g;
+    g.placed = true;
 
-    QStringList problems;
-
-    // The input played back out, by Tony or by the system, reaches the
-    // mic again a little later: every sweep arrives twice
-    const LatencyCheck::Echo &echo = m_fresh.summary.echo;
-    if (echo.heard) {
-        problems << tr("every sweep arrived a second time, %1 later at "
-                       "%2 dB: the input is being played back out, by "
-                       "Tony or by the system (\"Listen to this device\")")
-            .arg(unsignedMs(echo.delaySeconds))
-            .arg(echo.levelDb, 0, 'f', 1);
-    }
-    c.numbers.push_back
-        ({ tr("second arrival"),
-           echo.heard ? tr("%1 after the sweep, %2 dB, in %3 sweeps")
-           .arg(unsignedMs(echo.delaySeconds)).arg(echo.levelDb, 0, 'f', 1)
-           .arg(echo.events) : tr("none heard") });
-
-    // What Tony played: exactly nothing where the reference is silent,
-    // so no take and no synth.  The reference's sounds, in seconds
+    // The reference's sounds, in seconds
     const LatencyCheck::Layout &layout = m_layout;
     const double sweepSeconds =
         double(LatencyCheck::sweep(layout.rate).size()) / layout.rate;
@@ -1008,117 +1279,172 @@ DevChecks::speakersCheck(QString reason) const
         return true;
     };
 
-    const sv_samplerate_t rate = m_fresh.referenceRate;
-    const LatencyCheck::TakeSummary &s = m_fresh.summary;
+    const double start = double(o.playbackStart) / rate;
+    auto played = [&](sv_frame_t received) {
+        return start + double(received - t.startGap) / t.recordingRate;
+    };
+
+    // The levels read at a poll are of the blocks handed out since
+    // the read before.  Those were taken in after the frames counted
+    // just before that read, but for the one block being handled
+    // then, which went out after it: one block early.  And one late,
+    // for a resampler between the play source and a device at
+    // another rate.  The output latency plays no part: the levels
+    // are of what was handed to the device, not of what was heard.
+    // How long a block is, nothing in the window says (the play
+    // source is never told the device's), and PortAudio may vary
+    // it; but each block's input is counted at once, so no block is
+    // longer than the most frames that came in between two looks.
+    // Not counting looks held up: the first ones of a take wait for
+    // the window to set it up, and would count several blocks
+    sv_frame_t blockFrames = 0;
+    sv_frame_t heldUp = 0;
+    const TakeObserver::Sample *previous = nullptr;
+    for (const TakeObserver::Sample &sample : o.samples) {
+        if (!sample.recording) continue;
+        blockFrames = std::max(blockFrames, sample.framesAfter -
+                               sample.framesBefore);
+        if (previous) {
+            const sv_frame_t since =
+                sample.framesBefore - previous->framesAfter;
+            if (sample.ms - previous->ms <= 2 * TakeObserver::kPollMs) {
+                blockFrames = std::max(blockFrames, since);
+            } else {
+                heldUp = std::max(heldUp, since);
+            }
+        }
+        previous = &sample;
+    }
+    if (blockFrames <= 0) blockFrames = heldUp;
+    const double block = double(blockFrames) / t.recordingRate;
+    g.margin = block;
+
+    for (size_t k = 1; k < o.samples.size(); ++k) {
+        const TakeObserver::Sample &a = o.samples[k - 1];
+        const TakeObserver::Sample &b = o.samples[k];
+        if (!a.outputRead || !b.outputRead) continue;
+        const double level = std::max(b.outputLeft, b.outputRight);
+        g.loudest = std::max(g.loudest, level);
+        const double from = played(a.framesBefore) - block;
+        const double to = played(b.framesAfter) + block;
+        if (from < start || to > until || !silent(from, to)) continue;
+        ++g.looks;
+        g.loudestInGaps = std::max(g.loudestInGaps, level);
+        if (level > 0.0 && g.heard <= 0.0) {
+            g.heard = level;
+            g.heardFrom = from;
+            g.heardTo = to;
+        }
+    }
+    return g;
+}
+
+CheckResult
+DevChecks::speakersCheck(QString reason) const
+{
+    CheckResult c;
+    c.item = 4;
+    c.name = "nothing_of_the_take_in_the_speakers";
+
+    if (!m_haveFresh) {
+        c.verdict = CheckResult::Verdict::Skipped;
+        c.message = reason;
+        return c;
+    }
+
+    QStringList problems;
+
+    // The input played back out, by Tony or by the system, reaches the
+    // mic again a little later: every sweep arrives twice.  In any run
+    const LatencyCheck::Echo *echo = &m_fresh.summary.echo;
+    for (const Run &run : runs()) {
+        if (run.result->summary.echo.heard) {
+            echo = &run.result->summary.echo;
+            break;
+        }
+    }
+    if (echo->heard) {
+        problems << tr("every sweep arrived a second time, %1 later at "
+                       "%2 dB: the input is being played back out, by "
+                       "Tony or by the system (\"Listen to this device\")")
+            .arg(unsignedMs(echo->delaySeconds))
+            .arg(echo->levelDb, 0, 'f', 1);
+    }
+    c.numbers.push_back
+        ({ tr("second arrival"),
+           echo->heard ? tr("%1 after the sweep, %2 dB, in %3 sweeps")
+           .arg(unsignedMs(echo->delaySeconds)).arg(echo->levelDb, 0, 'f', 1)
+           .arg(echo->events) : tr("none heard") });
+
+    // What Tony played, at every punch-in of every run: exactly nothing
+    // where the reference is silent, so no take and no synth
     double loudest = 0.0;
     double loudestInGaps = 0.0;
     double margin = 0.0;
     int gapPolls = 0;
     QString firstHeard;
-    for (int i = 0; i < int(s.punchIns.size()); ++i) {
-        const Watched *w = freshWatched(i);
-        if (!w) {
-            problems << tr("punch-in %1 was not watched").arg(i + 1);
-            continue;
-        }
-        const TakeObserver::Observation &o = w->seen;
-
-        // Play Singing Audio: what it said before the take, it says
-        // after, and the take is heard or not as it says
-        if (!o.sawAfter) {
-            problems << tr("punch-in %1 was not seen after it stopped")
-                .arg(i + 1);
-        } else {
-            auto onOff = [](bool on) { return on ? tr("on") : tr("off"); };
-            if (o.singingAudioAfter != o.singingAudioBefore) {
-                problems << tr("Play Singing Audio was %1 before punch-in "
-                               "%2 and %3 after it")
-                    .arg(onOff(o.singingAudioBefore)).arg(i + 1)
-                    .arg(onOff(o.singingAudioAfter));
+    int n = 0;
+    for (const Run &run : runs()) {
+        const LatencyCheck::TakeSummary &s = run.result->summary;
+        for (int i = 0; i < int(s.punchIns.size()); ++i) {
+            ++n;
+            const Watched *w = watchedOf(run, i);
+            if (!w) {
+                problems << tr("punch-in %1 was not watched").arg(n);
+                continue;
             }
-            if (o.takeAudibleAfter != o.singingAudioAfter) {
-                problems << tr("after punch-in %1 Play Singing Audio is %2, "
-                               "but the take's audio is %3")
-                    .arg(i + 1).arg(onOff(o.singingAudioAfter))
-                    .arg(o.takeAudibleAfter ? tr("heard") : tr("silent"));
-            }
-            c.numbers.push_back
-                ({ tr("Play Singing Audio, punch-in %1").arg(i + 1),
-                   tr("%1 before, %2 after, the take %3")
-                   .arg(onOff(o.singingAudioBefore))
-                   .arg(onOff(o.singingAudioAfter))
-                   .arg(o.takeAudibleAfter ? tr("heard") : tr("silent")) });
-        }
+            const TakeObserver::Observation &o = w->seen;
 
-        // An audio callback takes in a block of input, then hands out a
-        // block of output.  The reference's first block went out from
-        // where playback started, after the start gap's input, so the
-        // frames received say which frames of the reference went out
-        const TakeLatency t = (i < int(m_fresh.takes.size()) ?
-                               m_fresh.takes[i] : TakeLatency());
-        if (!t.startGapMeasured || t.recordingRate <= 0) {
-            problems << tr("punch-in %1's start gap was not measured, so "
-                           "what it played could not be placed").arg(i + 1);
-            continue;
-        }
-        const double start = double(o.playbackStart) / rate;
-        auto played = [&](sv_frame_t received) {
-            return start + double(received - t.startGap) / t.recordingRate;
-        };
-
-        // The levels read at a poll are of the blocks handed out since
-        // the read before.  Those were taken in after the frames counted
-        // just before that read, but for the one block being handled
-        // then, which went out after it: one block early.  And one late,
-        // for a resampler between the play source and a device at
-        // another rate.  The output latency plays no part: the levels
-        // are of what was handed to the device, not of what was heard.
-        // How long a block is, nothing in the window says (the play
-        // source is never told the device's), and PortAudio may vary
-        // it; but each block's input is counted at once, so no block is
-        // longer than the most frames that came in between two looks.
-        // Not counting looks held up: the first ones of a take wait for
-        // the window to set it up, and would count several blocks
-        sv_frame_t blockFrames = 0;
-        sv_frame_t heldUp = 0;
-        const TakeObserver::Sample *previous = nullptr;
-        for (const TakeObserver::Sample &sample : o.samples) {
-            if (!sample.recording) continue;
-            blockFrames = std::max(blockFrames, sample.framesAfter -
-                                   sample.framesBefore);
-            if (previous) {
-                const sv_frame_t since =
-                    sample.framesBefore - previous->framesAfter;
-                if (sample.ms - previous->ms <= 2 * TakeObserver::kPollMs) {
-                    blockFrames = std::max(blockFrames, since);
-                } else {
-                    heldUp = std::max(heldUp, since);
+            // Play Singing Audio: what it said before the take, it says
+            // after, and the take is heard or not as it says
+            if (!o.sawAfter) {
+                problems << tr("punch-in %1 was not seen after it stopped")
+                    .arg(n);
+            } else {
+                auto onOff = [](bool on) { return on ? tr("on") : tr("off"); };
+                if (o.singingAudioAfter != o.singingAudioBefore) {
+                    problems << tr("Play Singing Audio was %1 before "
+                                   "punch-in %2 and %3 after it")
+                        .arg(onOff(o.singingAudioBefore)).arg(n)
+                        .arg(onOff(o.singingAudioAfter));
                 }
+                if (o.takeAudibleAfter != o.singingAudioAfter) {
+                    problems << tr("after punch-in %1 Play Singing Audio is "
+                                   "%2, but the take's audio is %3")
+                        .arg(n).arg(onOff(o.singingAudioAfter))
+                        .arg(o.takeAudibleAfter ? tr("heard") : tr("silent"));
+                }
+                c.numbers.push_back
+                    ({ tr("Play Singing Audio, punch-in %1").arg(n),
+                       tr("%1 before, %2 after, the take %3")
+                       .arg(onOff(o.singingAudioBefore))
+                       .arg(onOff(o.singingAudioAfter))
+                       .arg(o.takeAudibleAfter ? tr("heard") :
+                            tr("silent")) });
             }
-            previous = &sample;
-        }
-        if (blockFrames <= 0) blockFrames = heldUp;
-        const double block = double(blockFrames) / t.recordingRate;
-        margin = std::max(margin, block);
-        for (size_t k = 1; k < o.samples.size(); ++k) {
-            const TakeObserver::Sample &a = o.samples[k - 1];
-            const TakeObserver::Sample &b = o.samples[k];
-            if (!a.outputRead || !b.outputRead) continue;
-            const double level = std::max(b.outputLeft, b.outputRight);
-            loudest = std::max(loudest, level);
-            const double from = played(a.framesBefore) - block;
-            const double to = played(b.framesAfter) + block;
-            if (from < start || !silent(from, to)) continue;
-            ++gapPolls;
-            if (level > loudestInGaps) loudestInGaps = level;
-            if (level > 0.0 && firstHeard == "") {
+
+            const TakeLatency t = (i < int(run.result->takes.size()) ?
+                                   run.result->takes[i] : TakeLatency());
+            const GapLooks g = gapLooks(o, t, run.result->referenceRate,
+                                        std::numeric_limits<double>::max());
+            if (!g.placed) {
+                problems << tr("punch-in %1's start gap was not measured, "
+                               "so what it played could not be placed")
+                    .arg(n);
+                continue;
+            }
+            loudest = std::max(loudest, g.loudest);
+            loudestInGaps = std::max(loudestInGaps, g.loudestInGaps);
+            margin = std::max(margin, g.margin);
+            gapPolls += g.looks;
+            if (g.heard > 0.0 && firstHeard == "") {
                 firstHeard = tr("%1 from %2 to %3 s, in punch-in %4")
-                    .arg(levelText(level)).arg(from, 0, 'f', 3)
-                    .arg(to, 0, 'f', 3).arg(i + 1);
+                    .arg(levelText(g.heard)).arg(g.heardFrom, 0, 'f', 3)
+                    .arg(g.heardTo, 0, 'f', 3).arg(n);
             }
         }
     }
-    if (s.punchIns.empty()) problems << tr("no punch-in was judged");
+    if (n == 0) problems << tr("no punch-in was judged");
 
     if (loudest <= 0.0) {
         problems << tr("no output level was reported while the reference "
@@ -1235,6 +1561,451 @@ DevChecks::micChannelCheck(QString reason) const
         c.verdict = CheckResult::Verdict::Fail;
         c.message = tr("The mic is on input 2, and %1.")
             .arg(problems.join("; "));
+    }
+    return c;
+}
+
+CheckResult
+DevChecks::positionCheck(QString reason) const
+{
+    CheckResult c;
+    c.item = 7;
+    c.name = "record_from_a_position";
+
+    const PunchInStage &stage = m_reRecord;
+    const LatencyCheck::TakeSummary &s = stage.result.summary;
+    if (!stage.done || s.punchIns.empty()) {
+        c.verdict = CheckResult::Verdict::Skipped;
+        c.message = reason;
+        return c;
+    }
+
+    // Recorded over the end of an earlier punch-in: placed as items 1 and
+    // 2 ask, and outside the range selected the take's audio is what it
+    // was, to the bit, and its pitch and notes are, beyond the margin a
+    // ranged analysis may change.  The range is the selection: what the
+    // splice placed, if the take ran to its end (item 14), and nothing
+    // the splice wrote past it is excused
+    const sv_samplerate_t rate = stage.result.referenceRate;
+    const LatencyCheck::PunchIn &p = s.punchIns[0].range;
+    const Coverage::Range range(frameAt(p.start, rate), frameAt(p.end, rate));
+    QStringList problems;
+    c.numbers.push_back({ tr("range"), rangeText(p.start, p.end) });
+    c.numbers.push_back({ tr("offsets"), offsetsOf(s, problems) });
+
+    const Snapshot &before = stage.before;
+    const Snapshot &after = stage.after;
+    if (before.audioError != "" || after.audioError != "") {
+        problems << (before.audioError != "" ? before.audioError :
+                     after.audioError);
+    } else {
+        const TakeDiff::AudioDiff audio = TakeDiff::audioOutside
+            (before.audio.data(), sv_frame_t(before.audio.size()),
+             after.audio.data(), sv_frame_t(after.audio.size()), 1, range);
+        if (!audio.pass) {
+            problems << tr("the take's audio outside the range changed");
+        }
+        c.numbers.push_back({ tr("audio outside the range"),
+                              audioText(audio, rate) });
+    }
+
+    const TakeDiff::EventDiff pitch =
+        TakeDiff::eventsOutside(before.pitch, after.pitch, range, rate);
+    const TakeDiff::EventDiff notes =
+        TakeDiff::eventsOutside(before.notes, after.notes, range, rate);
+    const QString where = tr("outside %1")
+        .arg(rangeText(double(pitch.window.start) / rate,
+                       double(pitch.window.end) / rate));
+    if (!pitch.pass) problems << tr("the take's pitch outside the range "
+                                    "changed");
+    if (!notes.pass) problems << tr("the take's notes outside the range "
+                                    "changed");
+    if (countOutside(before.pitch, pitch.window) == 0) {
+        problems << tr("the take had no pitch outside the range to compare");
+    }
+    c.numbers.push_back({ tr("pitch"), eventsText(pitch, before.pitch,
+                                                  tr("pitch events"), where,
+                                                  rate) });
+    c.numbers.push_back({ tr("notes"), eventsText(notes, before.notes,
+                                                  tr("notes"), where, rate) });
+
+    if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Recorded over part of an earlier punch-in, the take "
+                       "was placed within %1, and outside the range its "
+                       "audio is the same bit for bit, and its pitch and "
+                       "notes beyond %2 s of it.")
+            .arg(unsignedMs(kPlacementSeconds))
+            .arg(TakeDiff::kEventMarginSeconds);
+    } else {
+        c.verdict = CheckResult::Verdict::Fail;
+        c.message = problems.join("; ") + ".";
+    }
+    return c;
+}
+
+CheckResult
+DevChecks::leadInCheck(QString reason) const
+{
+    CheckResult c;
+    c.item = 12;
+    c.name = "nothing_heard_or_changed_in_the_lead_in";
+
+    const PunchInStage &stage = m_reRecord;
+    const LatencyCheck::TakeSummary &s = stage.result.summary;
+    if (!stage.done || s.punchIns.empty()) {
+        c.verdict = CheckResult::Verdict::Skipped;
+        c.message = reason;
+        return c;
+    }
+
+    // The re-recording's lead-in played over what an earlier punch-in
+    // recorded before P.  Nothing of that may change: item 7's
+    // comparisons, their part before P alone, so that a change there is
+    // told apart from one after the range
+    const sv_samplerate_t rate = stage.result.referenceRate;
+    const LatencyCheck::PunchIn &p = s.punchIns[0].range;
+    const Snapshot &before = stage.before;
+    const Snapshot &after = stage.after;
+    const sv_frame_t from = frameAt(p.start, rate);
+    const sv_frame_t beyond = std::max
+        (from + 1, sv_frame_t(std::max(before.audio.size(),
+                                       after.audio.size())) +
+         frameAt(1.0, rate));
+    const Coverage::Range rest(from, beyond);
+    QStringList problems;
+
+    if (before.audioError != "" || after.audioError != "") {
+        problems << (before.audioError != "" ? before.audioError :
+                     after.audioError);
+    } else {
+        const TakeDiff::AudioDiff audio = TakeDiff::audioOutside
+            (before.audio.data(), sv_frame_t(before.audio.size()),
+             after.audio.data(), sv_frame_t(after.audio.size()), 1, rest);
+        if (!audio.pass) {
+            problems << tr("the take's audio before the punch-in changed");
+        }
+        c.numbers.push_back({ tr("audio before %1 s").arg(secondsText(p.start)),
+                              audioText(audio, rate) });
+    }
+
+    const TakeDiff::EventDiff pitch =
+        TakeDiff::eventsOutside(before.pitch, after.pitch, rest, rate);
+    const TakeDiff::EventDiff notes =
+        TakeDiff::eventsOutside(before.notes, after.notes, rest, rate);
+    const QString where = tr("before %1 s")
+        .arg(secondsText(double(pitch.window.start) / rate));
+    if (!pitch.pass) problems << tr("the take's pitch before the punch-in "
+                                    "changed");
+    if (!notes.pass) problems << tr("the take's notes before the punch-in "
+                                    "changed");
+    if (countOutside(before.pitch, pitch.window) == 0) {
+        problems << tr("the take had no pitch before the punch-in to "
+                       "compare");
+    }
+    c.numbers.push_back({ tr("pitch"), eventsText(pitch, before.pitch,
+                                                  tr("pitch events"), where,
+                                                  rate) });
+    c.numbers.push_back({ tr("notes"), eventsText(notes, before.notes,
+                                                  tr("notes"), where, rate) });
+
+    // And while it played, Tony played the reference and nothing else:
+    // item 4's looks at the output, those that lie wholly before P.  The
+    // take's audio is under them now, and kept silent as in any take
+    const Watched *w = stage.watched.empty() ? nullptr : &stage.watched[0];
+    const TakeLatency t = stage.result.takes.empty() ? TakeLatency() :
+        stage.result.takes[0];
+    if (!w) {
+        problems << tr("the punch-in was not watched");
+    } else {
+        const GapLooks g = gapLooks(w->seen, t, rate, p.start);
+        if (!g.placed) {
+            problems << tr("the start gap was not measured, so what the "
+                           "lead-in played could not be placed");
+        } else {
+            if (g.looks == 0) {
+                problems << tr("no look at the output during the lead-in "
+                               "fell wholly in one of the reference's "
+                               "silent gaps");
+            }
+            if (g.heard > 0.0) {
+                problems << tr("during the lead-in Tony played something "
+                               "where the reference is silent: %1 from %2 "
+                               "to %3 s")
+                    .arg(levelText(g.heard)).arg(g.heardFrom, 0, 'f', 3)
+                    .arg(g.heardTo, 0, 'f', 3);
+            }
+            c.numbers.push_back
+                ({ tr("output in the lead-in's silent gaps"),
+                   tr("%1, over %2 looks").arg(levelText(g.loudestInGaps))
+                   .arg(g.looks) });
+        }
+    }
+
+    if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Before the punch-in the take's audio is the same bit "
+                       "for bit, and its pitch and notes beyond %1 s of it; "
+                       "and while the lead-in played over the take, Tony "
+                       "played nothing where the reference is silent.")
+            .arg(TakeDiff::kEventMarginSeconds);
+    } else {
+        c.verdict = CheckResult::Verdict::Fail;
+        c.message = problems.join("; ") + ".";
+    }
+    return c;
+}
+
+CheckResult
+DevChecks::nearStartCheck(QString reason) const
+{
+    CheckResult c;
+    c.item = 13;
+    c.name = "pre_roll_near_the_start";
+
+    const PunchInStage &stage = m_nearStart;
+    const LatencyCheck::TakeSummary &s = stage.result.summary;
+    if (!stage.done || s.punchIns.empty()) {
+        c.verdict = CheckResult::Verdict::Skipped;
+        c.message = reason;
+        return c;
+    }
+
+    // Less song before the punch-in than the pre-roll asked for: the
+    // lead-in is all there is of it, and no more
+    const sv_samplerate_t rate = stage.result.referenceRate;
+    const LatencyCheck::PunchIn &p = s.punchIns[0].range;
+    const double room = std::min(kNearStartPreRollSeconds, p.start);
+    QStringList problems;
+    c.numbers.push_back({ tr("lead-in"),
+                          tr("%1 s, of the %2 s asked for")
+                          .arg(secondsText(double(stage.preRoll) / rate))
+                          .arg(secondsText(kNearStartPreRollSeconds)) });
+    if (stage.preRoll > frameAt(room, rate)) {
+        problems << tr("the lead-in was %1 s, longer than the %2 s of song "
+                       "before the punch-in")
+            .arg(secondsText(double(stage.preRoll) / rate))
+            .arg(secondsText(room));
+    }
+
+    const Watched *w = stage.watched.empty() ? nullptr : &stage.watched[0];
+    const TakeLatency t = stage.result.takes.empty() ? TakeLatency() :
+        stage.result.takes[0];
+    if (!w) {
+        problems << tr("the punch-in was not watched");
+    } else {
+        const TakeObserver::Observation &o = w->seen;
+
+        // Playback from the start of the song, and the cursor never
+        // before it.  The cursor is where playback started plus what has
+        // been recorded, so it is read while recording only
+        bool seen = false;
+        sv_frame_t lowest = 0;
+        for (const TakeObserver::Sample &sample : o.samples) {
+            if (!sample.recording) continue;
+            lowest = seen ? std::min(lowest, sample.playbackFrame) :
+                sample.playbackFrame;
+            seen = true;
+        }
+        c.numbers.push_back({ tr("playback from"),
+                              tr("%1 s").arg(secondsText
+                                             (double(o.playbackStart) /
+                                              rate)) });
+        c.numbers.push_back({ tr("cursor, lowest"),
+                              seen ? tr("%1 s").arg(secondsText
+                                                    (double(lowest) / rate))
+                              : tr("not seen") });
+        if (o.playbackStart != 0) {
+            problems << tr("playback started at %1 s, not at the start of "
+                           "the song")
+                .arg(secondsText(double(o.playbackStart) / rate));
+        }
+        if (!seen) {
+            problems << tr("the take was not seen recording");
+        } else if (lowest < 0) {
+            problems << tr("the cursor was at %1 s, before the start of the "
+                           "song").arg(secondsText(double(lowest) / rate));
+        }
+
+        // The countdown as the status bar showed it: in whole seconds,
+        // the lead-in and the round trip still to come (the singing that
+        // answers the reference at P arrives a round trip later), down
+        // to 1.  Before the start gap is measured the window counts with
+        // its estimate, which may differ by a block or two: hence the
+        // 50 ms
+        vector<int> counted;
+        for (const TakeObserver::Sample &sample : o.samples) {
+            if (!sample.recording) continue;
+            const int n = countdownOf(sample.status);
+            if (n > 0 && (counted.empty() || counted.back() != n)) {
+                counted.push_back(n);
+            }
+        }
+        const double wait = room + (t.recordingRate > 0 ?
+                                    double(t.roundTrip + t.startGap) /
+                                    t.recordingRate : 0.0);
+        const int most = int(std::ceil(wait + 0.05));
+        QStringList words;
+        for (int n : counted) words << QString::number(n);
+        c.numbers.push_back
+            ({ tr("countdown"),
+               counted.empty() ? tr("none shown") :
+               tr("%1; at most %2, for %3 s of lead-in and round trip")
+               .arg(words.join(", ")).arg(most).arg(secondsText(wait)) });
+        if (counted.empty()) {
+            problems << tr("no countdown was shown");
+        } else {
+            const int highest =
+                *std::max_element(counted.begin(), counted.end());
+            if (highest > most) {
+                problems << tr("the countdown began at %1, not %2: it "
+                               "counted more lead-in than there is room for")
+                    .arg(highest).arg(most);
+            }
+            if (counted.back() != 1) {
+                problems << tr("the countdown ended at %1, not 1")
+                    .arg(counted.back());
+            }
+        }
+    }
+
+    c.numbers.push_back({ tr("offsets"), offsetsOf(s, problems) });
+
+    if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("With a pre-roll of %1 s asked for at %2 s, playback "
+                       "ran from the start of the song and not before it, "
+                       "the countdown counted only the lead-in there is "
+                       "room for, and the take was placed within %3.")
+            .arg(secondsText(kNearStartPreRollSeconds))
+            .arg(secondsText(p.start)).arg(unsignedMs(kPlacementSeconds));
+    } else {
+        c.verdict = CheckResult::Verdict::Fail;
+        c.message = problems.join("; ") + ".";
+    }
+    return c;
+}
+
+CheckResult
+DevChecks::stopsItselfCheck(QString reason) const
+{
+    CheckResult c;
+    c.item = 14;
+    c.name = "record_into_selection_stops_by_itself";
+
+    vector<const PunchInStage *> stages;
+    for (const PunchInStage *stage : { &m_reRecord, &m_nearStart }) {
+        if (stage->done && !stage->result.summary.punchIns.empty()) {
+            stages.push_back(stage);
+        }
+    }
+    if (stages.empty()) {
+        c.verdict = CheckResult::Verdict::Skipped;
+        c.message = reason;
+        return c;
+    }
+
+    // The window looks this often whether a take into a selection has
+    // all it needs
+    const double poll = (m_window->m_takeTimer ?
+                         m_window->m_takeTimer->interval() / 1000.0 : 0.0);
+    auto seconds = [](double s) { return QString("%1 s").arg(s, 0, 'f', 3); };
+
+    QStringList problems;
+    for (const PunchInStage *stage : stages) {
+        const LatencyCheck::TakeSummary &s = stage->result.summary;
+        const sv_samplerate_t rate = stage->result.referenceRate;
+        const LatencyCheck::PunchIn &p = s.punchIns[0].range;
+        const sv_frame_t start = frameAt(p.start, rate);
+        const sv_frame_t end = frameAt(p.end, rate);
+        const QString range = rangeText(p.start, p.end);
+        const Watched *w = stage->watched.empty() ? nullptr :
+            &stage->watched[0];
+        const TakeLatency t = stage->result.takes.empty() ? TakeLatency() :
+            stage->result.takes[0];
+
+        // How far past the selection's end the take recorded: its raw
+        // recording against what reaches the end, the round trip and the
+        // lead-in before the selection.  The take waits for a margin past
+        // the end (TakeTiming::shouldStopAt()), and is then stopped by
+        // the take timer's next look, with the block coming in as it
+        // looks.  Not worked out with TakeTiming, whose margin is part of
+        // what is checked
+        if (!w) {
+            problems << tr("the take at %1 was not watched").arg(range);
+        } else if (stage->recorded < 0) {
+            problems << tr("the take at %1: %2").arg(range)
+                .arg(stage->recordedError);
+        } else if (t.recordingRate <= 0) {
+            problems << tr("the take at %1: its rate is not known")
+                .arg(range);
+        } else {
+            const sv_frame_t needed =
+                t.roundTrip + t.startGap + stage->preRoll + (end - start);
+            const double past =
+                double(stage->recorded - needed) / t.recordingRate;
+            const double allowed = kStopMarginSeconds + poll + gapLooks
+                (w->seen, t, rate, std::numeric_limits<double>::max()).margin;
+            c.numbers.push_back
+                ({ tr("stopped, %1").arg(range),
+                   tr("%1 past the end of the selection, at most %2 allowed")
+                   .arg(seconds(past)).arg(seconds(allowed)) });
+            if (past < 0.0) {
+                problems << tr("the take at %1 stopped %2 before the end of "
+                               "its selection had been recorded")
+                    .arg(range).arg(seconds(-past));
+            } else if (past > allowed) {
+                problems << tr("the take at %1 went on %2 past the end of its "
+                               "selection, more than %3 s, a look of the "
+                               "take timer and a block").arg(range)
+                    .arg(seconds(past)).arg(kStopMarginSeconds);
+            }
+        }
+
+        // The take's coverage as it was, and the selection: no more, and
+        // no less
+        Coverage expected = stage->before.coverage;
+        expected.add(start, end);
+        c.numbers.push_back({ tr("coverage after, %1").arg(range),
+                              coverageText(stage->after.coverage, rate) });
+        if (stage->after.coverage != expected) {
+            problems << tr("after the take at %1 the take covers %2, not %3")
+                .arg(range).arg(coverageText(stage->after.coverage, rate))
+                .arg(coverageText(expected, rate));
+        }
+
+        // No question asked, and no dialog of any kind, from the take's
+        // start to its analysis done
+        if (w) {
+            const TakeObserver::Sample *modal = nullptr;
+            for (const TakeObserver::Sample &sample : w->seen.samples) {
+                if (sample.modal) {
+                    modal = &sample;
+                    break;
+                }
+            }
+            c.numbers.push_back
+                ({ tr("dialogs, %1").arg(range),
+                   modal ? tr("one up %1 into the take")
+                   .arg(seconds(modal->ms / 1000.0)) :
+                   tr("none, over %1 looks").arg(w->seen.samples.size()) });
+            if (modal) {
+                problems << tr("a dialog was up %1 into the take at %2")
+                    .arg(seconds(modal->ms / 1000.0)).arg(range);
+            }
+        }
+    }
+
+    if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Each take into a selection stopped by itself within "
+                       "%1 s of the selection's end, a look of the take "
+                       "timer and a block, added the selection to the take "
+                       "and nothing else, and no dialog came up.")
+            .arg(kStopMarginSeconds);
+    } else {
+        c.verdict = CheckResult::Verdict::Fail;
+        c.message = problems.join("; ") + ".";
     }
     return c;
 }

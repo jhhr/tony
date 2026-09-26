@@ -376,3 +376,27 @@ starts (`m_watched`, cleared per stage); stage 1's kept in `m_freshWatched`.
 Left open: at −20 ms item 3 passes or fails with the hop phase (the test allows both).
 The gap check was seen failing on a non-silent reference, not a take played back out:
 stage 1 has no take audio where it plays (C1c's re-record has). Dot spread 40–230 ms.
+
+### Phase C1c — 2026-09-26
+Built: `AudioCheckRunner::Plan::preRoll` (default `kPreRollSeconds`, negative refused),
+handed to `MainWindow::m_audioCheckPreRoll`, which `wantedPreRollFrames()` reads.
+`DevChecks` stages 2 "Re-record" [19.2, 21.2] and 3 "Pre-roll near the start" [1.0, 4.2]
+with 3 s (both `keepSession`), a `Snapshot` (take file, pitch, notes, coverage) before and
+after each; items 7 `record_from_a_position`, 12 `nothing_heard_or_changed_in_the_lead_in`,
+13 `pre_roll_near_the_start`, 14 `record_into_selection_stops_by_itself`. Items 1, 2, 4 now
+cover every punch-in (`runs()`, numbered 1–4 along the run); item 1's reopen compares with
+the file judged just before the save over all ranges. C1b's gap logic is `gapLooks(until)`.
+Choices: P = 19.2 s: shortest range judging 20.1 s, a gap (18.8–19.2) in the lead-in
+(16 looks), a whole note before P − 0.25. Item 7 excuses only the selection; item 12 is the
+same before P, plus the looks that end by P. Item 14: raw recording frames minus (round
+trip + start gap + R + E − P), within [0, 0.25 s + take timer interval + one block], not via
+`TakeTiming`, whose margin it checks. Item 13: highest countdown shown ≤ ceil(min(3 s, P)
++ round trip + start gap + 50 ms), ending at 1. The fault test cancels at stage 3.
+Found: on a noiseless loopback the take equals the reference, so one played out shows in
+no gap: `loopbackInARoom()` adds −60 dBFS noise (pass and fault runs). The countdown reads
+1, 2, 1: `record()` shows it before the round trip is known (harmless, reported).
+The next phase must know: a new recording stage joins `runs()` for items 1, 2 and 4; a
+cancelled run still works out the checks of the stages it finished; the runner repeats
+`progress(Recording)` as the seconds left tick down.
+Left open: an overwrite question would come inside `record()`, before the observer starts,
+so item 14 cannot see it. Items 3 and 5 judge stage 1 only. `test-tony-dev` about 135 s.

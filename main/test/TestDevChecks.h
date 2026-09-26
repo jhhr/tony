@@ -19,8 +19,9 @@
 // Tier 5, as TestAudioCheck: the development checks (DevChecks) on the
 // real MainWindow, recording from the fake device with its output
 // looped back into its input. A run records two punch-ins against the
-// 40 s dev reference, then saves the session and opens it again: about
-// 20 s of real time.
+// 40 s dev reference, one over the end of the second, one near the
+// start of the song, then saves the session and opens it again: about
+// 30 s of real time.
 //
 // The fixture is TestAudioCheck's, copied rather than shared. The
 // application's data directory, where the check writes its references,
@@ -29,6 +30,7 @@
 // failing run's report never lands among the suites' results.
 
 #include "TestMainWindow.h"
+#include "TestSignals.h"
 
 #include "../AudioCheckRunner.h"
 #include "../CalibrateAudioDialog.h"
@@ -38,7 +40,9 @@
 
 #include "version.h"
 
+#include "base/PlayParameters.h"
 #include "base/RecordDirectory.h"
+#include "layer/Layer.h"
 #include "transform/ModelTransformerFactory.h"
 #include "widgets/InteractiveFileFinder.h"
 
@@ -47,6 +51,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QMessageBox>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -79,6 +84,9 @@ class TestDevChecks : public QObject
     QStringList m_stages;
     std::vector<AudioCheckResult> m_checks;
 
+    // How often a test's fault was put in
+    int m_faults = 0;
+
     void makeWindow(FakeAudioIO::Config config) {
         delete m_window;
         m_window = new TestMainWindow(config);
@@ -86,6 +94,7 @@ class TestDevChecks : public QObject
         m_finished = 0;
         m_stages.clear();
         m_checks.clear();
+        m_faults = 0;
         connect(m_window->devChecks(), &DevChecks::finished,
                 this, [this](const DevReport &report) {
                     m_report = report;
@@ -109,6 +118,17 @@ class TestDevChecks : public QObject
         config.inputDelay = roundTrip;
         config.loopback = true;
         config.reportLevels = true;
+        return config;
+    }
+
+    // The loopback with a room's noise on the input, at -60 dBFS: the
+    // takes then hold something where the reference is silent, as they
+    // do on a real device, so that a take played back out shows in the
+    // output there. Too quiet for the sweep finder, and no pitch for the
+    // live tracker or pYIN
+    static FakeAudioIO::Config loopbackInARoom() {
+        FakeAudioIO::Config config = loopback();
+        config.input = TestSignals::whiteNoise(int(10 * rate), 1, 0.001);
         return config;
     }
 
@@ -266,13 +286,13 @@ class TestDevChecks : public QObject
         QVERIFY(!m_window->audioCheck()->isRunning());
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->audioCheckTakes());
-        QCOMPARE(int(m_report.checks.size()), 5);
+        QCOMPARE(int(m_report.checks.size()), 9);
         for (const CheckResult &c : m_report.checks) {
             QVERIFY2(c.verdict == CheckResult::Verdict::Skipped, describe());
             QVERIFY2(c.message.contains(m_report.failure), describe());
         }
         QCOMPARE(lastReportLine(),
-                 QString("Totals: 0 passed, 0 failed, 0 measured, 5 skipped"));
+                 QString("Totals: 0 passed, 0 failed, 0 measured, 9 skipped"));
 
         QTest::qWait(500);
         QCOMPARE(m_finished, 1);
@@ -410,13 +430,17 @@ private slots:
                  << "dev-checks-x" << "mine");
     }
 
-    // The loopback fake, placed with its true round trip: every sweep of
-    // both punch-ins lands within 2 ms, the session saved and opened
-    // again holds the same take, and each punch-in measured its own start
-    // gap. The report ends with its totals, and the session open
-    // afterwards is the one saved in the scratch folder
+    // The loopback fake in a room, placed with its true round trip: every
+    // sweep of every punch-in lands within 2 ms, the session saved and
+    // opened again holds the same take, and each punch-in measured its own
+    // start gap. The re-recording changed nothing outside its range and
+    // nothing before it, and nothing of the take was heard during its
+    // lead-in; the punch-in near the start played from the start of the
+    // song; both stopped by themselves. The report ends with its totals,
+    // and the session open afterwards is the one saved in the scratch
+    // folder
     void dev_checks_pass_with_the_true_round_trip() {
-        makeWindow(loopback());
+        makeWindow(loopbackInARoom());
 
         runDevChecks(roundTrip / rate);
         if (QTest::currentTestFailed()) return;
@@ -427,7 +451,7 @@ private slots:
             qDebug().noquote() << "report:" << line;
         }
         QVERIFY2(m_report.failure == "", describe());
-        QCOMPARE(int(m_report.checks.size()), 5);
+        QCOMPARE(int(m_report.checks.size()), 9);
         const CheckResult *latency = check(1);
         const CheckResult *phrases = check(2);
         QVERIFY(latency && phrases);
@@ -486,21 +510,97 @@ private slots:
             QVERIFY2(reportText().contains(words), qPrintable(words));
         }
 
-        QCOMPARE(m_stages, QStringList() << "1 of 2: Fresh punch-ins"
-                 << "2 of 2: Save and reopen");
+        QCOMPARE(m_stages, QStringList() << "1 of 4: Fresh punch-ins"
+                 << "2 of 4: Re-record" << "3 of 4: Pre-roll near the start"
+                 << "4 of 4: Save and reopen");
 
         // Two punch-ins into a reference of the dev layout, recorded in
-        // the order given
-        QCOMPARE(int(m_checks.size()), 1);
+        // the order given; then one over the end of the second, which
+        // judges the sweep at 20.1 s; then one near the start, which
+        // judges the sweep at 3.1 s. Items 1 and 2 count all four
+        QCOMPARE(int(m_checks.size()), 3);
         const LatencyCheck::TakeSummary &s = m_checks[0].summary;
         QCOMPARE(int(s.punchIns.size()), 2);
         QCOMPARE(s.judged, 4);
         QCOMPARE(s.found, 4);
+        for (int i : { 1, 2 }) {
+            QCOMPARE(int(m_checks[i].summary.punchIns.size()), 1);
+            QCOMPARE(m_checks[i].summary.judged, 1);
+            QCOMPARE(m_checks[i].summary.found, 1);
+        }
+        QVERIFY(std::fabs(m_checks[1].summary.events[0].expectedSeconds -
+                          20.1) < 1e-4);
+        QVERIFY(std::fabs(m_checks[2].summary.events[0].expectedSeconds -
+                          3.1) < 1e-4);
+        for (QString label : { QString("offsets, punch-in 3 (19.20 to 21.20 "
+                                       "s)"),
+                               QString("offsets, punch-in 4 (1.00 to 4.20 "
+                                       "s)") }) {
+            QVERIFY2(number(*latency, label) != "", describe());
+        }
+        QVERIFY2(number(*phrases, "punch-in 4, start gap").endsWith("measured"),
+                 describe());
+
+        const CheckResult *position = check(7);
+        const CheckResult *leadIn = check(12);
+        const CheckResult *nearStart = check(13);
+        const CheckResult *stops = check(14);
+        QVERIFY(position && leadIn && nearStart && stops);
+        QCOMPARE(position->name, QString("record_from_a_position"));
+        QCOMPARE(leadIn->name,
+                 QString("nothing_heard_or_changed_in_the_lead_in"));
+        QCOMPARE(nearStart->name, QString("pre_roll_near_the_start"));
+        QCOMPARE(stops->name,
+                 QString("record_into_selection_stops_by_itself"));
+        for (const CheckResult *c : { position, leadIn, nearStart, stops }) {
+            QVERIFY2(c->verdict == CheckResult::Verdict::Pass, describe());
+        }
+
+        // Outside the re-recording's range, and before it, the take as it
+        // was, and something there to compare
+        QCOMPARE(number(*position, "audio outside the range"),
+                 QString("the same, bit for bit"));
+        QCOMPARE(number(*leadIn, "audio before 19.20 s"),
+                 QString("the same, bit for bit"));
+        for (const CheckResult *c : { position, leadIn }) {
+            for (QString label : { QString("pitch"), QString("notes") }) {
+                const QString words = number(*c, label);
+                QVERIFY2(words.endsWith(", unchanged") &&
+                         words.section(' ', 0, 0).toInt() > 0, describe());
+            }
+        }
+
+        // The take under the lead-in holds the room's noise where the
+        // reference is silent, and none of it was heard
+        const QString leadInGaps =
+            number(*leadIn, "output in the lead-in's silent gaps");
+        QVERIFY2(leadInGaps.startsWith("silence, over ") &&
+                 !leadInGaps.endsWith(" 0 looks"), describe());
+
+        // A lead-in of all the 1 s there is before the punch-in, from the
+        // start of the song, counted down from 2: 1 s and the round trip
+        // of 0.28 s, with the start gap. For the moment before the round
+        // trip is known the count is of the lead-in alone, 1
+        QCOMPARE(number(*nearStart, "lead-in"),
+                 QString("1.00 s, of the 3.00 s asked for"));
+        QCOMPARE(number(*nearStart, "playback from"), QString("0.00 s"));
+        QCOMPARE(number(*nearStart, "cursor, lowest"), QString("0.00 s"));
+        QVERIFY2(QRegularExpression("^(1, )?2, 1; at most 2, ")
+                 .match(number(*nearStart, "countdown")).hasMatch(),
+                 describe());
+
+        // Each stopped within a look of the take timer of when it could,
+        // and the one near the start added its range to the take
+        QVERIFY2(number(*stops, "coverage after, 1.00 to 4.20 s") ==
+                 "1.00 to 4.20 s, 6.30 to 10.20 s, 16.80 to 21.20 s",
+                 describe());
+        QVERIFY2(number(*stops, "dialogs, 19.20 to 21.20 s")
+                 .startsWith("none, over "), describe());
 
         QVERIFY(QFileInfo(m_report.reportPath).fileName() == "DevChecks.txt");
         QVERIFY(TakesFile::isInFolder(reportDirectory(), m_report.reportPath));
         QCOMPARE(lastReportLine(),
-                 QString("Totals: 4 passed, 0 failed, 1 measured, 0 skipped"));
+                 QString("Totals: 8 passed, 0 failed, 1 measured, 0 skipped"));
 
         QVERIFY(m_report.sessionPath != "");
         QCOMPARE(m_window->sessionFile(), m_report.sessionPath);
@@ -516,8 +616,9 @@ private slots:
     }
 
     // The same with a round trip 20 ms too long: every take is spliced
-    // from 20 ms too late, and lands 20 ms early. Both items fail, and
-    // the report shows where the sweeps landed
+    // from 20 ms too late, and lands 20 ms early. Items 1, 2, 7 and 13,
+    // which ask where it landed, fail, and the report shows where the
+    // sweeps landed
     void dev_checks_fail_with_the_round_trip_off() {
         makeWindow(loopback());
 
@@ -557,12 +658,28 @@ private slots:
                                                       text));
         }
 
-        // Items 4 and 5 do not depend on where the take is placed.  The
-        // dots are 20 ms early too, which is about as far as item 3 lets
-        // them be: whether they pass depends on where the tracker's hops
-        // fall
-        QVERIFY2(check(4) && check(4)->verdict == CheckResult::Verdict::Pass,
-                 describe());
+        // The re-recording and the punch-in near the start landed 20 ms
+        // early as well, and fail for that alone
+        for (int item : { 7, 13 }) {
+            const CheckResult *c = check(item);
+            QVERIFY2(c && c->verdict == CheckResult::Verdict::Fail,
+                     describe());
+            QVERIFY2(c->message.startsWith("the sweep at ") &&
+                     c->message.contains(" landed -") &&
+                     !c->message.contains(";"), describe());
+            QVERIFY2(std::fabs(milliseconds(number(*c, "offsets")) + 20.0)
+                     <= 1.0, describe());
+        }
+
+        // Items 4, 5, 12 and 14 do not depend on where the take is
+        // placed.  The dots are 20 ms early too, which is about as far as
+        // item 3 lets them be: whether they pass depends on where the
+        // tracker's hops fall
+        for (int item : { 4, 12, 14 }) {
+            QVERIFY2(check(item) &&
+                     check(item)->verdict == CheckResult::Verdict::Pass,
+                     describe());
+        }
         QVERIFY2(check(5) &&
                  check(5)->verdict == CheckResult::Verdict::Measured,
                  describe());
@@ -570,7 +687,7 @@ private slots:
             check(3) && check(3)->verdict == CheckResult::Verdict::Pass;
         QCOMPARE(lastReportLine(),
                  QString("Totals: %1 passed, %2 failed, 1 measured, 0 skipped")
-                 .arg(dotsPass ? 2 : 1).arg(dotsPass ? 2 : 3));
+                 .arg(dotsPass ? 4 : 3).arg(dotsPass ? 4 : 5));
     }
 
     // The loopback heard a second time, 50 ms later at half the level, as
@@ -610,6 +727,70 @@ private slots:
                  describe());
         QVERIFY2(number(*mic, "input peaks, punch-in 1")
                  .startsWith("input 1 silence, input 2 -"), describe());
+    }
+
+    // The take heard during the re-recording's lead-in, as if Tony did
+    // not keep it silent: its audio made audible as the runner reports
+    // that punch-in recording, before the reference starts to play. The
+    // lead-in plays over what stage 1 recorded, which in a room holds
+    // noise where the reference is silent, and items 4 and 12 fail on
+    // the output there; nothing before the punch-in changed. The run is
+    // cancelled as the stage after the re-recording begins: the checks
+    // of the stages it got through are worked out all the same
+    void dev_checks_take_heard_during_the_lead_in() {
+        makeWindow(loopbackInARoom());
+        connect(m_window->audioCheck(), &AudioCheckRunner::progress,
+                this, [this](const AudioCheckRunner::Progress &state) {
+                    // Reported again as the seconds left go down
+                    if (state.step != AudioCheckRunner::Step::Recording ||
+                        m_faults > 0 || m_stages.isEmpty() ||
+                        !m_stages.last().endsWith(": Re-record")) {
+                        return;
+                    }
+                    Analyser *take = m_window->analyser2();
+                    sv::Layer *audio =
+                        take ? take->getLayer(Analyser::Audio) : nullptr;
+                    auto params = audio ? audio->getPlayParameters() : nullptr;
+                    if (params) {
+                        params->setPlayAudible(true);
+                        ++m_faults;
+                    }
+                });
+        connect(m_window->devChecks(), &DevChecks::progress,
+                this, [this](QString, int n, int) {
+                    if (n == 3) m_window->devChecks()->cancel();
+                });
+
+        runDevChecks(roundTrip / rate);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_faults, 1);
+        QCOMPARE(m_report.failure, QString("The dev checks were cancelled."));
+        QCOMPARE(int(m_checks.size()), 2);
+
+        const CheckResult *speakers = check(4);
+        const CheckResult *leadIn = check(12);
+        QVERIFY(speakers && leadIn);
+        QVERIFY2(speakers->verdict == CheckResult::Verdict::Fail, describe());
+        QVERIFY2(speakers->message.startsWith("Tony played something where "
+                                              "the reference is silent: -"),
+                 describe());
+        QVERIFY2(speakers->message.contains(", in punch-in 3."), describe());
+        QCOMPARE(number(*speakers, "second arrival"), QString("none heard"));
+
+        QVERIFY2(leadIn->verdict == CheckResult::Verdict::Fail, describe());
+        QVERIFY2(leadIn->message.startsWith("during the lead-in Tony played "
+                                            "something where the reference "
+                                            "is silent: -"), describe());
+        QVERIFY2(!leadIn->message.contains(";"), describe());
+        QCOMPARE(number(*leadIn, "audio before 19.20 s"),
+                 QString("the same, bit for bit"));
+
+        // Not reached: the save, and the punch-in near the start
+        for (int item : { 1, 13 }) {
+            QVERIFY2(check(item) &&
+                     check(item)->verdict == CheckResult::Verdict::Skipped,
+                     describe());
+        }
     }
 
     // Cancelled during a take: the take stops, the run ends once with
@@ -720,7 +901,7 @@ private slots:
         QVERIFY(calibration.calibrationUsable());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
         QTRY_VERIFY_WITH_TIMEOUT
-            (dialog->pageText().contains("Dev checks, stage 1 of 2"), 10000);
+            (dialog->pageText().contains("Dev checks, stage 1 of 4"), 10000);
         QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
                                  30000);
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
