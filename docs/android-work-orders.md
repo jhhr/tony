@@ -162,6 +162,7 @@ builds happen in the container.)
 - A7 — Sessions in place on the phone, and fixes from the first phone test. Done.
 - A7b — Fixes from the second phone test: menus, the picker, Downloads. Done.
 - A4b — Vertical zoom and scroll by touch.
+- A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -385,6 +386,31 @@ wider than the singing, and pinch zooms only the time axis.
   `setDisplayFrequencyExtents()`, which View > Edit Display Extents
   (`MainWindow::editDisplayExtents()`) uses. Check the scale (log for pitch), the limits,
   and what the other layers in the pane do when it changes.
+
+### A7c — M4A/AAC through Android's decoders; no autosave of an incomplete session
+
+The user's third finding (2026-09-26): a desktop session whose reference is
+"(vocals) Avi Kaplan - Peace Somehow.m4a" opens on the phone (the reference is found by name
+next to the .ton, the stored path being `c:/Users/.../OneDrive/Singing/...`), but reports
+"Incomplete session loaded": the Android build has no AAC decoder. On Windows, M4A is read
+by bqaudiostream's `MediaFoundationReadStream`; on Android only WAV (sndfile), MP3 (mad) and
+Opus (opusfile) are read.
+
+- An `AudioReadStream` over the NDK's `AMediaExtractor` and `AMediaCodec` (libmediandk,
+  API 21+), in `main/`, compiled for Android only, registered with bqaudiostream's factory
+  the way its own readers are (`static AudioReadStreamBuilder<...>` with a URI and the
+  extensions; see `bqaudiostream/src/MediaFoundationReadStream.cpp` ~84): m4a, aac, mp4,
+  and whatever else the phone's decoders take that Tony cannot read already (flac, ogg,
+  opus are candidates; say which, and what wins when two readers claim an extension).
+  svcore's `BQAFileReader` asks that factory, so no fork changes. The registration must
+  survive linking (`link_whole` into the application library keeps it; check).
+- Decoded to float at the file's own rate and channels, as the other readers give; Tony
+  resamples on load (A1's notes). Seeking is not needed if the other readers do not seek.
+- Pure parts (format bookkeeping, sample conversion) testable on the desktop; the decoder
+  itself only on the phone.
+- A session that loaded incomplete (audio it names could not be read) is never saved
+  without the user asking: not by the save on suspend (A7), and Save warns first. Find
+  where svapp reports "Incomplete session loaded" and how Tony can know it happened.
 
 ### A8 — Documentation pass
 
