@@ -181,6 +181,7 @@ protected slots:
     virtual void syncAlternatePitchTrack();
 
     virtual void importLyrics();
+    virtual void exportLyrics();
     virtual void removeLyrics();
     virtual void showLyricsToggled();
 
@@ -369,6 +370,7 @@ protected:
     // belong to the song, not to a take.  Display only
     LyricsTrack   *m_lyrics;
     QAction       *m_importLyricsAction;
+    QAction       *m_exportLyricsAction;
     QAction       *m_removeLyricsAction;
     QAction       *m_showLyrics;
 
@@ -379,21 +381,31 @@ protected:
     // the reference's analyser has taken its waveform over
     void updateWaveformFade();
 
-    // Put the lyrics of this LRC file on the reference's timeline, in
-    // place of any there are.  Not undoable, as loading background music
-    // is not, and nothing goes onto the undo stack.  False if the file
-    // could not be read or holds no timed lyrics, which the user is told
-    // in a dialog, or if lyricsImportAllowed() says no; nothing has
-    // changed then
+    // Put the lyrics of this TTML or LRC file on the reference's
+    // timeline, in place of any there are.  Not undoable, as loading
+    // background music is not, and nothing goes onto the undo stack.
+    // False if the file could not be read or holds no timed lyrics,
+    // which the user is told in a dialog, or if lyricsImportAllowed()
+    // says no; nothing has changed then
     bool importLyricsFrom(QString path);
 
     // Lyrics can be imported once there is a reference, and not while a
     // take is being recorded
     bool lyricsImportAllowed() const;
 
-    // Ask for the LRC file to import, "" if the user cancelled.
+    // Ask for the TTML or LRC file to import, "" if the user cancelled.
     // Overridden by the tests, which cannot answer a dialog
     virtual QString askForLyricsFile();
+
+    // Write the lyrics, as the model holds them now, to this TTML file.
+    // Not a command, and the session is not changed by it.  False if
+    // there are no lyrics, or if the file could not be written, which
+    // the user is told in a dialog
+    bool exportLyricsTo(QString path);
+
+    // Ask where to export the lyrics to, offering the suggested path;
+    // "" if the user cancelled.  Overridden by the tests
+    virtual QString askForLyricsExportFile(QString suggested);
 
     // --- The audio folder of the session (spec 6.4) ---
 

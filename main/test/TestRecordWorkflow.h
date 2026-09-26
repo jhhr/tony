@@ -30,6 +30,7 @@
 #include "../CoverageStrip.h"
 #include "../Lyrics.h"
 #include "../LyricsTrack.h"
+#include "../LyricsTtml.h"
 #include "../SingingTakes.h"
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
@@ -219,16 +220,23 @@ public:
     QAction *alternatePitchUpAction() { return m_alternatePitchUpAction; }
     QAction *alternatePitchDownAction() { return m_alternatePitchDownAction; }
 
-    // The timed lyrics, and the three menu actions that act on them
+    // The timed lyrics, and the four menu actions that act on them
     LyricsTrack *lyrics() { return m_lyrics; }
     bool doImportLyricsFrom(QString path) { return importLyricsFrom(path); }
+    bool doExportLyricsTo(QString path) { return exportLyricsTo(path); }
     QAction *importLyricsAction() { return m_importLyricsAction; }
+    QAction *exportLyricsAction() { return m_exportLyricsAction; }
     QAction *removeLyricsAction() { return m_removeLyricsAction; }
     QAction *showLyricsAction() { return m_showLyrics; }
 
     // The file Import Lyrics asks for, answered from here: "" is Cancel
     void setLyricsFileAnswer(QString path) { m_lyricsFileAnswer = path; }
     int lyricsFileQuestions() const { return m_lyricsFileQuestions; }
+
+    // The file Export Lyrics asks for, likewise, and the path it offered
+    void setLyricsExportAnswer(QString path) { m_lyricsExportAnswer = path; }
+    int lyricsExportQuestions() const { return m_lyricsExportQuestions; }
+    QString lyricsExportSuggestion() const { return m_lyricsExportSuggestion; }
 
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
         onRealtimePitchDetected(frame, hz);
@@ -268,6 +276,12 @@ protected:
         return m_lyricsFileAnswer;
     }
 
+    QString askForLyricsExportFile(QString suggested) override {
+        ++m_lyricsExportQuestions;
+        m_lyricsExportSuggestion = suggested;
+        return m_lyricsExportAnswer;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -281,6 +295,9 @@ private:
     QString m_takeNameAnswer;
     QString m_lyricsFileAnswer;
     int m_lyricsFileQuestions = 0;
+    QString m_lyricsExportAnswer;
+    int m_lyricsExportQuestions = 0;
+    QString m_lyricsExportSuggestion;
 };
 
 class TestRecordWorkflow : public QObject
@@ -1005,10 +1022,11 @@ class TestRecordWorkflow : public QObject
         return QString(TONY_TEST_DATA_DIR) + "/lyrics/" + name;
     }
 
+    // As the import reads it: TTML or LRC
     static Lyrics lyricsIn(QString path) {
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) return {};
-        return parseLrc(file.readAll()).lyrics;
+        return parseLyrics(file.readAll()).lyrics;
     }
 
     // What an import of this file has to put in the model: the words on
@@ -1019,9 +1037,9 @@ class TestRecordWorkflow : public QObject
         return lyricsToEvents(lyricsIn(path), reference->getSampleRate());
     }
 
-    QString writeLrc(const QByteArray &text) {
+    QString writeLrc(const QByteArray &text, const char *suffix = "lrc") {
         QString path = m_dir.filePath
-            (QString("lyrics-%1.lrc").arg(++m_fileCounter));
+            (QString("lyrics-%1.%2").arg(++m_fileCounter).arg(suffix));
         QFile file(path);
         if (!file.open(QIODevice::WriteOnly) ||
             file.write(text) != text.size()) {
@@ -5895,7 +5913,10 @@ private slots:
             { untimed, "No timed lyrics were found" },
             { m_dir.filePath("no-such-lyrics.lrc"), "could not be found" },
             { writeLrc(QByteArray(int(Lyrics::maxFileBytes) + 1, 'a')),
-              "over 1 MB" },
+              "over 1 MB, too big to be a lyrics file" },
+            { writeLrc("<tt>\n<body><p begin=\"0:01.000\">Sana</body>\n</tt>\n",
+                       "ttml"),
+              "not well-formed XML" },
         };
         for (const auto &f : failures) {
             QVERIFY2(!m_window->doImportLyricsFrom(f.first),
@@ -5989,6 +6010,215 @@ private slots:
         stopTake();
         if (QTest::currentTestFailed()) return;
         QTRY_VERIFY_WITH_TIMEOUT(import->isEnabled(), 2000);
+    }
+
+    // TTML as the exporter writes it word by word: every word ends where
+    // the file says, not where the next one starts
+    void lyrics_import_ttml() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        m_window->discardModifications();
+
+        QString path = lyricsFixture("moises-exporter-words.ttml");
+        QVERIFY(m_window->doImportLyricsFrom(path));
+        QVERIFY(m_window->lyrics()->isShown());
+        QVERIFY(m_window->isDocumentModified());
+        QCOMPARE(m_window->lyrics()->getLayer()->getLayerPresentationName(),
+                 QString("Lyrics"));
+
+        sv::EventVector expected = expectedLyricsEvents(path);
+        QCOMPARE(int(expected.size()), 12);
+        sv::EventVector events = lyricsEvents();
+        QCOMPARE(events, expected);
+
+        // "Tämä" is sung from 0.52 s to 0.80 s and "on" starts at 0.84 s,
+        // where an inferred end would be.  The syllables of "keksitty" are
+        // one word, and the second <p> is the second line
+        auto frameAt = [](double seconds) {
+            return sv::sv_frame_t(std::llround(seconds * rate));
+        };
+        QCOMPARE(events[0].getLabel(), QString("Tämä"));
+        QCOMPARE(events[0].getFrame(), frameAt(0.52));
+        QCOMPARE(events[0].getFrame() + events[0].getDuration(), frameAt(0.80));
+        QCOMPARE(events[1].getFrame(), frameAt(0.84));
+        QCOMPARE(events[2].getLabel(), QString("keksitty"));
+        QCOMPARE(events[2].getFrame(), frameAt(1.10));
+        QCOMPARE(events[2].getFrame() + events[2].getDuration(), frameAt(1.90));
+        QCOMPARE(events[3].getValue(), 0.f);
+        QCOMPARE(events[4].getLabel(), QString("Yö"));
+        QCOMPARE(events[4].getValue(), 1.f);
+
+        QString status = m_window->statusText();
+        QVERIFY2(status.startsWith("Imported 12 words in 3 lines."),
+                 qPrintable(status));
+    }
+
+    // File > Export Lyrics... writes the words as the model holds them
+    // now, not as the file they came from had them, as TTML that reads
+    // back to the same words.  Not a change to the session
+    void lyrics_export() {
+        makeWindow(FakeAudioIO::Config());
+        QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        auto model = sv::ModelById::getAs<sv::RegionModel>
+            (m_window->lyrics()->getModelId());
+        QVERIFY(model);
+
+        // One word changed in the model since: its text, and its end
+        sv::EventVector imported = lyricsEvents();
+        auto word = std::find_if(imported.begin(), imported.end(),
+                                 [](const sv::Event &e) {
+                                     return e.getLabel() == "hämärä";
+                                 });
+        QVERIFY(word != imported.end());
+        model->remove(*word);
+        model->add(word->withLabel("hämärämpi")
+                   .withDuration(word->getDuration() / 2));
+        sv::EventVector events = lyricsEvents();
+        QVERIFY(events != imported);
+
+        m_window->discardModifications();
+        QSignalSpy commands(sv::CommandHistory::getInstance(), qOverload<>
+                            (&sv::CommandHistory::commandExecuted));
+
+        QString path = m_dir.filePath("exported-lyrics.ttml");
+        m_window->setLyricsExportAnswer(path);
+        QVERIFY(m_window->exportLyricsAction()->isEnabled());
+        m_window->exportLyricsAction()->trigger();
+        QCOMPARE(m_window->lyricsExportQuestions(), 1);
+
+        // The name offered is the reference's, beside it
+        QFileInfo info(reference);
+        QCOMPARE(m_window->lyricsExportSuggestion(),
+                 QDir(info.absolutePath())
+                 .filePath(info.completeBaseName() + ".ttml"));
+
+        QFile file(path);
+        QVERIFY2(file.open(QIODevice::ReadOnly), "nothing was written");
+        LyricsParseResult parsed = parseTtml(file.readAll());
+        QVERIFY2(parsed.error == "", qPrintable(parsed.error));
+
+        // The same words, texts and lines, at the same times to the
+        // nearest millisecond, and the title the layer was named after
+        Lyrics now = lyricsFromEvents(events, rate);
+        const QVector<LyricWord> &back = parsed.lyrics.words;
+        QCOMPARE(back.size(), now.words.size());
+        for (int i = 0; i < back.size(); ++i) {
+            QString what = QString("word %1, \"%2\"").arg(i)
+                .arg(now.words[i].text);
+            QVERIFY2(back[i].text == now.words[i].text,
+                     qPrintable(what + " came back as " + back[i].text));
+            QVERIFY2(back[i].line == now.words[i].line,
+                     qPrintable(what + ": another line"));
+            QVERIFY2(std::fabs(back[i].start - now.words[i].start) < 0.0005001,
+                     qPrintable(what + ": another start"));
+            QVERIFY2(std::fabs(back[i].end - now.words[i].end) < 0.0005001,
+                     qPrintable(what + ": another end"));
+        }
+        QStringList texts;
+        for (const LyricWord &w : back) texts << w.text;
+        QVERIFY2(texts.contains("hämärämpi") && !texts.contains("hämärä"),
+                 qPrintable(texts.join(" ")));
+        QCOMPARE(parsed.lyrics.title, QString("Kesäyön testilaulu"));
+
+        QCOMPARE(m_window->statusText(),
+                 QString("Exported 13 words in %1 lines.")
+                 .arg(now.lineCount()));
+        QCOMPARE(int(commands.count()), 0);
+        QVERIFY(!m_window->isDocumentModified());
+        QCOMPARE(lyricsEvents(), events);
+    }
+
+    // Only when there are lyrics, shown or hidden
+    void lyrics_export_needs_lyrics() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *exportAction = m_window->exportLyricsAction();
+        QVERIFY2(!exportAction->isEnabled(), "there is no reference yet");
+
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(!exportAction->isEnabled(), "there are no lyrics yet");
+
+        QString lrc = lyricsFixture("moises-exporter-words.lrc");
+        QVERIFY(m_window->doImportLyricsFrom(lrc));
+        QVERIFY(exportAction->isEnabled());
+        m_window->showLyricsAction()->trigger();
+        QVERIFY(!m_window->lyrics()->isVisible());
+        QVERIFY2(exportAction->isEnabled(), "hidden lyrics are lyrics too");
+        m_window->showLyricsAction()->trigger();
+
+        m_window->removeLyricsAction()->trigger();
+        QVERIFY(!m_window->lyrics()->isShown());
+        QVERIFY(!exportAction->isEnabled());
+        QString path = m_dir.filePath("removed-lyrics.ttml");
+        m_window->setLyricsExportAnswer(path);
+        exportAction->trigger();
+        QCOMPARE(m_window->lyricsExportQuestions(), 0);
+        QVERIFY(!m_window->doExportLyricsTo(path));
+        QVERIFY(!QFileInfo::exists(path));
+
+        QVERIFY(m_window->doImportLyricsFrom(lrc));
+        QVERIFY(exportAction->isEnabled());
+        m_window->doCloseSession();
+        QVERIFY2(!exportAction->isEnabled(), "the session has gone");
+    }
+
+    void lyrics_export_cancelled() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        QString status = m_window->statusText();
+
+        const QStringList ttml { "*.ttml" };
+        QStringList before = QDir(m_dir.path()).entryList(ttml, QDir::Files);
+        m_window->setLyricsExportAnswer("");
+        m_window->exportLyricsAction()->trigger();
+        QCOMPARE(m_window->lyricsExportQuestions(), 1);
+        QVERIFY(m_window->lyricsExportSuggestion() != "");
+        QVERIFY2(!QFileInfo::exists(m_window->lyricsExportSuggestion()),
+                 "written where the dialog would have suggested");
+        QCOMPARE(QDir(m_dir.path()).entryList(ttml, QDir::Files), before);
+        QCOMPARE(m_window->statusText(), status);
+    }
+
+    // One dialog each, and nothing written or changed
+    void lyrics_export_failure() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->doImportLyricsFrom
+                (lyricsFixture("moises-exporter-words.lrc")));
+        sv::EventVector events = lyricsEvents();
+        QString status = m_window->statusText();
+        m_window->discardModifications();
+
+        // Not a file made read-only: root can write to that.  A folder
+        // that is not there, and the name of a folder
+        QString noFolder = m_dir.filePath("no-such-folder/lyrics.ttml");
+        QString folder = m_dir.filePath("a-folder.ttml");
+        QVERIFY(QDir().mkpath(folder));
+
+        for (QString path : { noFolder, folder }) {
+            m_window->setLyricsExportAnswer(path);
+            m_window->exportLyricsAction()->trigger();
+            QStringList dialogs = dialogsMatching("Could not export lyrics");
+            QCOMPARE(dialogs.size(), 1);
+            QVERIFY2(dialogs[0].contains(path), qPrintable(dialogs[0]));
+            QCOMPARE(m_window->statusText(), status);
+            QVERIFY(!m_window->isDocumentModified());
+            QCOMPARE(lyricsEvents(), events);
+        }
+        QCOMPARE(m_window->lyricsExportQuestions(), 2);
+        QVERIFY(!QFileInfo::exists(m_dir.filePath("no-such-folder")));
+        QVERIFY(QFileInfo(folder).isDir());
+        QVERIFY(QDir(folder).isEmpty());
     }
 
     // Saved with the session and found again by name when it is opened,

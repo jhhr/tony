@@ -20,6 +20,7 @@
 #include "Analyser.h"
 #include "LatencyUtils.h"
 #include "Lyrics.h"
+#include "LyricsTtml.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
@@ -107,6 +108,8 @@
 #include <QDialogButtonBox>
 #include <QActionGroup>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QSet>
 #include <QTimer>
 #include <QEventLoop>
 #include <QTextStream>
@@ -153,6 +156,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_coverageStrip(nullptr),
     m_lyrics(nullptr),
     m_importLyricsAction(nullptr),
+    m_exportLyricsAction(nullptr),
     m_removeLyricsAction(nullptr),
     m_showLyrics(nullptr),
     m_takesMenu(nullptr),
@@ -619,10 +623,16 @@ MainWindow::setupFileMenu()
 
     // Enabled in updateMenuStates()
     m_importLyricsAction = new QAction(il.load("fileopen"), tr("Import &Lyrics..."), this);
-    m_importLyricsAction->setStatusTip(tr("Import timed lyrics from an LRC file, to be shown along the top of the pane"));
+    m_importLyricsAction->setStatusTip(tr("Import timed lyrics from a TTML or LRC file, to be shown along the bottom of the pane"));
     m_importLyricsAction->setEnabled(false);
     connect(m_importLyricsAction, &QAction::triggered, this, &MainWindow::importLyrics);
     menu->addAction(m_importLyricsAction);
+
+    m_exportLyricsAction = new QAction(tr("Expor&t Lyrics..."), this);
+    m_exportLyricsAction->setStatusTip(tr("Write the lyrics, as they are now, to a TTML file"));
+    m_exportLyricsAction->setEnabled(false);
+    connect(m_exportLyricsAction, &QAction::triggered, this, &MainWindow::exportLyrics);
+    menu->addAction(m_exportLyricsAction);
 
     m_removeLyricsAction = new QAction(tr("Remove Lyrics"), this);
     m_removeLyricsAction->setStatusTip(tr("Take the imported lyrics out of the session"));
@@ -992,7 +1002,7 @@ MainWindow::setupViewMenu()
     // Peek Left has the L
     m_showLyrics = new QAction(tr("Show L&yrics"), this);
     m_showLyrics->setCheckable(true);
-    m_showLyrics->setStatusTip(tr("Show or hide the imported lyrics along the top of the pane"));
+    m_showLyrics->setStatusTip(tr("Show or hide the imported lyrics along the bottom of the pane"));
     m_showLyrics->setEnabled(false);
     connect(m_showLyrics, &QAction::triggered, this, &MainWindow::showLyricsToggled);
     menu->addAction(m_showLyrics);
@@ -2245,6 +2255,9 @@ MainWindow::updateMenuStates()
     if (m_importLyricsAction) {
         m_importLyricsAction->setEnabled(lyricsImportAllowed());
     }
+    if (m_exportLyricsAction) {
+        m_exportLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
+    }
     if (m_removeLyricsAction) {
         m_removeLyricsAction->setEnabled(m_lyrics && m_lyrics->isShown());
     }
@@ -3377,8 +3390,8 @@ MainWindow::askForLyricsFile()
 
     return QFileDialog::getOpenFileName
         (this, tr("Import Lyrics"), dir,
-         tr("LRC lyrics (*.lrc)") + ";;" + tr("Text files (*.txt)") + ";;" +
-         tr("All files (*)"));
+         tr("Lyrics (*.ttml *.lrc)") + ";;" + tr("TTML lyrics (*.ttml)") +
+         ";;" + tr("LRC lyrics (*.lrc)") + ";;" + tr("All files (*)"));
 }
 
 void
@@ -3400,16 +3413,16 @@ MainWindow::importLyricsFrom(QString path)
 
     emit activity(tr("Import lyrics \"%1\"").arg(path));
 
-    // An LRC file is a few kB.  One chosen by mistake, a recording say, is
-    // not read at all; and the read stops just past the limit, which
-    // parseLrc() enforces too, in case the file grows in the meantime
+    // A lyrics file is a few kB.  One chosen by mistake, a recording say,
+    // is not read at all; and the read stops just past the limit, which
+    // the parsers enforce too, in case the file grows in the meantime
     QString error;
     QByteArray bytes;
     QFileInfo info(path);
     if (!info.isFile()) {
         error = tr("File \"%1\" could not be found.").arg(path);
     } else if (info.size() > Lyrics::maxFileBytes) {
-        error = tr("The file is over 1 MB, too big to be an LRC file.");
+        error = tr("The file is over 1 MB, too big to be a lyrics file.");
     } else {
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) {
@@ -3422,7 +3435,7 @@ MainWindow::importLyricsFrom(QString path)
 
     LyricsParseResult parsed;
     if (error == "") {
-        parsed = parseLrc(bytes);
+        parsed = parseLyrics(bytes);
         error = parsed.error;
     }
 
@@ -3487,6 +3500,83 @@ MainWindow::importLyricsFrom(QString path)
             .arg(pastEnd);
     }
     m_myStatusMessage = messages.join(" ");
+    getStatusLabel()->setText(m_myStatusMessage);
+
+    return true;
+}
+
+QString
+MainWindow::askForLyricsExportFile(QString suggested)
+{
+    return QFileDialog::getSaveFileName
+        (this, tr("Export Lyrics"), suggested,
+         tr("TTML lyrics (*.ttml)") + ";;" + tr("All files (*)"));
+}
+
+void
+MainWindow::exportLyrics()
+{
+    if (!m_lyrics || !m_lyrics->isShown()) return;
+
+    // Named after the reference and beside it, as the lyrics to import
+    // were looked for there
+    QString suggested;
+    if (auto reference = getMainModel()) {
+        QFileInfo info(reference->getLocation());
+        if (info.exists()) {
+            suggested = QDir(info.absolutePath())
+                .filePath(info.completeBaseName() + ".ttml");
+        }
+    }
+
+    QString path = askForLyricsExportFile(suggested);
+    if (path.isEmpty()) return;
+    exportLyricsTo(path);
+}
+
+bool
+MainWindow::exportLyricsTo(QString path)
+{
+    if (!m_lyrics || !m_lyrics->isShown()) return false;
+    auto model = ModelById::getAs<RegionModel>(m_lyrics->getModelId());
+    if (!model) return false;
+
+    // The words as the model has them now, not as the file they came
+    // from had them.  The title is not in the model: an import named the
+    // layer after it
+    Lyrics lyrics = lyricsFromEvents(model->getAllEvents(),
+                                     model->getSampleRate());
+    if (RegionLayer *layer = m_lyrics->getLayer()) {
+        QString name = layer->getLayerPresentationName();
+        if (name != tr("Lyrics")) lyrics.title = name;
+    }
+    QByteArray bytes = writeTtml(lyrics);
+
+    // A file that is there already is replaced only once the new one is
+    // written in full
+    QSaveFile file(path);
+    bool written = file.open(QIODevice::WriteOnly) &&
+        file.write(bytes) == bytes.size() &&
+        file.commit();
+    if (!written) {
+        QMessageBox::warning
+            (this, tr("Could not export lyrics"),
+             tr("File \"%1\" could not be written: %2")
+             .arg(path).arg(file.errorString()));
+        return false;
+    }
+
+    emit activity(tr("Export lyrics to \"%1\"").arg(path));
+
+    // Not a change to the session, so nothing is marked modified.  Kept
+    // as the status message, as an import's is
+    int wordCount = int(lyrics.words.size());
+    QSet<int> lines;
+    for (const LyricWord &w : lyrics.words) lines.insert(w.line);
+    int lineCount = int(lines.size());
+    m_myStatusMessage = tr("Exported %1 in %2.")
+        .arg(wordCount == 1 ? tr("1 word") : tr("%1 words").arg(wordCount),
+             lineCount == 1 ? tr("1 line") : tr("%1 lines").arg(lineCount));
     getStatusLabel()->setText(m_myStatusMessage);
 
     return true;
