@@ -32,10 +32,16 @@
 #   deploy/linux/cloud-session.sh wait    wait for it to finish, show the
 #                                         end of its log, exit as it did
 #
-# "start --if-cloud" does nothing outside a cloud session, for a
-# SessionStart hook. The log is tmp/cloud-session.log.
+# "start --if-cloud" does nothing outside a cloud session: it is what the
+# SessionStart hook in .claude/settings.json runs, at the start and the
+# resumption of every session, including those on the Windows machine.
+# The log is tmp/cloud-session.log.
 
 set -u -o pipefail
+
+if [ "${1:-} ${2:-}" = "start --if-cloud" ] && [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
+    exit 0
+fi
 
 cd "$(dirname "$0")/../.."
 root=$(pwd)
@@ -48,9 +54,6 @@ targets="tony pyin.so test-tony-core test-tony-app test-tony-device"
 
 case "${1:-} ${2:-}" in
     "start "|"start --if-cloud")
-        if [ "${2:-}" = "--if-cloud" ] && [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
-            exit 0
-        fi
         if ! flock -n "$lock" true; then
             echo "The background build is running already (log: tmp/cloud-session.log)."
             exit 0

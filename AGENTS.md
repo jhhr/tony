@@ -54,10 +54,10 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
 - Give the app suite a tool timeout of 10 minutes.
 
-In a **Linux cloud session** the commands are others: run `deploy/linux/cloud-session.sh
-start` first (it builds in the background) and `deploy/linux/cloud-session.sh wait` before
-the first build or test; the rest is in
-[docs/building.md](docs/building.md#on-linux-a-cloud-session).
+In a **Linux cloud session** the commands are others. The session's hook has started a
+build in the background; run `deploy/linux/cloud-session.sh wait` before the first build or
+test (if it says none was started, run `deploy/linux/cloud-session.sh start` first). The
+rest is in [docs/building.md](docs/building.md#on-linux-a-cloud-session).
 
 ## Rules for working here
 
@@ -107,7 +107,8 @@ the first build or test; the rest is in
 ### Git
 
 - Commit only when asked, and only with both whole suites green. One commit per coherent
-  step, staged by file name (never `git add -A`; `.claude/` and `tmp/` stay out).
+  step, staged by file name (never `git add -A`; `tmp/` and all of `.claude/` but
+  `settings.json` stay out).
 - Messages: `feat:` / `fix:` / `test:` / `docs:`, lower case, then a short what-and-why
   body. End with a `Co-Authored-By` trailer naming the model that wrote the code.
 - Use the `gh` CLI for anything on GitHub.

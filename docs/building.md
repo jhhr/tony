@@ -84,11 +84,14 @@ do it:
 - **`container-setup.sh`** makes any fresh Ubuntu 24.04 able to build: packages, Qt, the
   library directories at their pins, `meson setup build`. Safe to run again. After the
   environment's snapshot it only checks out the libraries and configures.
-- **`cloud-session.sh start` is the first command of a cloud session.** It runs
-  `container-setup.sh` and then builds everything into `build/` in the background, at low
-  priority: about 4 minutes, while the session reads. The log is `tmp/cloud-session.log`.
-  `cloud-session.sh wait` waits for it and exits as it did. **Wait before the first build
-  or test**: two ninjas must not work in one build directory.
+- **`cloud-session.sh start` runs at the start of every cloud session**, from the
+  SessionStart hook in `.claude/settings.json` (`start --if-cloud`, which does nothing
+  outside the cloud). It runs `container-setup.sh` and then builds everything into `build/`
+  in the background, at low priority: about 4 minutes, while the session reads. The hook
+  itself returns at once. The log is `tmp/cloud-session.log`. `cloud-session.sh wait`
+  waits for it and exits as it did. **Wait before the first build or test**: two ninjas
+  must not work in one build directory. A session with several repositories runs no
+  repository's hooks; there, run `cloud-session.sh start` by hand.
 
 The environment's settings:
 

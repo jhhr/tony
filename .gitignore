@@ -50,3 +50,7 @@ test-svcore-*
 .notarization-uuid
 Dockerfile*.gen
 tmp
+# Claude Code's local files (settings.local.json, worktrees); only the
+# shared settings, with the cloud session's hook, are tracked
+.claude/*
+!.claude/settings.json
