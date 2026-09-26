@@ -87,7 +87,15 @@ plan.
 
 ## 4. What the loopback run settles, item by item
 
-The numbers are those of `docs/manual-checklist.md`.
+*Since the merge of `default` (2026-09-26):* `default` automated much of the checklist on
+its own. `TestUiChecks` covers the screen, keyboard and dialog items on the fake device,
+the smoke items below among them. `test-tony-device`, run by hand, covers the device items
+(1, 2, 4, 5, 6, 9). The user decided that the dev run takes the device items over and
+`test-tony-device` is retired; the smoke group and items 15 and 16 are dropped from the dev
+run. The table keeps the old numbering, which `default` has since rewritten; phase D
+brings the two together.
+
+The numbers are those of `docs/manual-checklist.md` before that merge.
 
 - **Automated:** the dev checks pass or fail it.
 - **Measured:** the dev checks report numbers; a person still judges how it looks or
@@ -231,17 +239,16 @@ goes in `tony_core`.
 Calibration first. The dev checks then use the new figure for the run only; your stored
 setting changes only through Use this latency.
 
-| Step | What it does | Items |
-| --- | --- | --- |
-| 1 | Two punch-ins into fresh regions, observer on | 1, 2, 3, 5, 8 |
-| 2 | Re-record over an earlier punch-in, through its lead-in | 4, 7, 12, 14 |
-| 3 | Punch-in at P = 1 s | 13 |
-| 4 | Two adjacent punch-ins meeting inside a held tone | 10 |
-| 5 | Constrain Playback to Selection on for one punch-in, then off | 16 |
-| 6 | Play from P | 15 |
-| 7 | Save to the temp `.ton`, reopen, analyse again | 1 |
-| 8 | Long reference, punch-in near the end | 9 |
-| 9 | Smoke group, optional | 19–25, 27, 28 |
+| Step | What it does | Items | Phase |
+| --- | --- | --- | --- |
+| 1 | Two punch-ins into fresh regions, observer on | 1, 2, 3, 4, 5, 8 | C1a, C1b |
+| 2 | Re-record over an earlier punch-in, through its lead-in | 7, 12, 14 | C1c |
+| 3 | Punch-in at P = 1 s with a 3 s pre-roll | 13 | C1c |
+| 4 | Two adjacent punch-ins meeting inside a held tone | 10 | C2 |
+| 5 | Save to the scratch `.ton` and reopen | 1 | C1a |
+| 6 | Long reference, two punch-ins far apart | 9 (and 1, 2) | C2 |
+
+Items 15 and 16 and the smoke group are no longer in the dev run (§4).
 
 ## 6. Tests
 
@@ -303,15 +310,22 @@ marked "Done" when it is committed.
    driver's figure is, whether the offset holds across stream restarts on MME, and
    whether your device's rate hits the takes. Work goes on meanwhile: only the
    thresholds and the restart-jitter remedy wait on those numbers.
+   *First run, 2026-09-26* (MME, wired mic and headphones): round trip 301 and 295 ms
+   with one earcup to the mic, verdict Unsteady both times (5–15 ms); Scattered with the
+   mic between both cups. The detailed figures are awaited.
 3. **Calibration in use:** built in B2 (Use this latency and Forget in B4).
 4. **Dev-check framework:**
    - **C0** `TakeDiff`, pure. Done.
    - **C1a** Build flag, `DevChecks`, report, friend access, the dialog's dev run.
      Items 1 and 2. Done.
-   - **C1b** `TakeObserver`. Items 7, 12, 13, 14.
-5. **C2** Observer group: items 3, 4, 5, 8, 15, 16.
-6. **C3** Join and long-song group: items 9 and 10.
-7. **C4** Smoke group.
+   - *After the merge of `default`:* `TestDevChecks` moved into an executable of its
+     own, `test-tony-dev`, run when a change touches what the checks drive (the user's
+     decision). The phases below were cut again (§4).
+   - **C1b** `TakeObserver`. Items 3, 4, 5 (and 8's number).
+   - **C1c** Re-record and pre-roll stages. Items 7, 12, 13, 14.
+5. **C2** Long song and joins: items 9 and 10.
+6. **C3** Retire `test-tony-device`, once all it checks is in the dev run.
+7. **Release build** by the lead (§8, "Release builds must stay clean").
 8. **D** Docs, from the code and the phase log:
    - `manual-checklist.md`: an automated item keeps its text and gets "*automated:
      dev check `<name>`*"; a measured item keeps only the question for a person. The
@@ -371,6 +385,8 @@ could convert. The button then shows the fix working on each device.
 | Form of a dev check | A function returning a plain `CheckResult`, not a QtTest function |
 | Checkpoint after B3 | The user runs it on Windows when they can; C0 onwards does not wait |
 | Commits | The lead commits each phase after review and pushes `feat/calibrateaudiotests` |
+| `test-tony-device` (from `default`) | Its checks move into the dev run, and it is retired (C3) |
+| Where the dev checks' tests run | `test-tony-dev`, a third executable in dev builds, run when a change touches the take path, the audio check or the dev checks |
 
 ## 11. Facts checked in the code
 
