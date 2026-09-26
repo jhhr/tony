@@ -185,6 +185,9 @@ builds happen in the container.)
   merged in for Calibrate Audio at 48 kHz.)
 - A12 — Calibrate Audio on the phone. Done (the dialog's size and layout left to A12c, by the
   lead's change of scope).
+- (Lead, 2026-09-26: View > Lyrics Size, 35-100 %, 50 % by default on Android; the
+  size drawn is logged.)
+- A12c — The Calibrate Audio dialog: small, and out of the way while a check runs.
 - A12b — The dev run on the phone.
 - A8 — Documentation pass.
 
@@ -636,6 +639,43 @@ Known before starting:
 Tests on the desktop as far as they go (the fake device at 48 kHz, the key and staleness
 rules in core); the JNI for the route compiles only for Android. Say what the phone test
 should do and send back.
+
+### A12c — The Calibrate Audio dialog: small, and out of the way while a check runs
+
+The user's phone test of Calibrate Audio (2026-09-26, the APK before A12): the text could
+be selected but not copied (A12 added Copy); "the calibrate modal is too large and the
+buttons on the bottom are off screen. The modals ought to be resized much smaller. Using
+a smaller font-size would be acceptable too. I noticed this on desktop too ... the modal
+blocks the view of the test happening. The modal could be made very small, just a small
+progress bar and small status text could be shown in the corner. Tapping that could expand
+to allow canceling an ongoing test so that possibility doesn't go away. Once the test
+finishes the modal would expand again. This kind of change would be done for both desktop
+and Android but it's mainly for Android."
+
+- **Smaller**: every page of `CalibrateAudioDialog` fits a landscape phone (the log's
+  923 x 411 logical px, less the safe area margins 58,24,48,0) with all its buttons on
+  screen; text that does not fit scrolls. A smaller font on Android is acceptable. The
+  desktop dialog gets smaller too; keep it readable.
+- **Out of the way during a check**: when a check starts, the dialog collapses to a small
+  indicator in a corner of the window (a progress bar and one line of status: the step,
+  the punch-in, the time left) that does not cover the pane where the takes are drawn.
+  Tapping or clicking it expands the dialog to the progress page, with Cancel, and a way
+  back to small. When the check ends (done, failed or cancelled), the dialog expands by
+  itself to the result page. The dev run (A12b) will use the same progress page and
+  indicator for its stages.
+- **Behaviour kept**: not modal; closing it while a check runs cancels the check; Copy,
+  Save Report..., Use this latency, Check Again; the instructions and result texts A12
+  wrote. A12 changed the dialog only by adding Copy and Save Report... on the result page,
+  the phone instructions, NoSignal and Fading advice for a phone, a "Streams:" row, and
+  asking for the microphone before Start.
+- **The other dialogs**: open each of Tony's other dialogs in a window of the phone's size
+  with the compact layout (message boxes, the take name question, Edit Display Extents,
+  the lyrics dialogs, Preferences) and list in the report which do not fit. Fix only the
+  generic cause, if there is one (a font or margin that the compact layout could set for
+  all dialogs); the rest is for the user to choose.
+- Tests: the pages' sizes against a phone-sized window; collapse at the start, expand on
+  a tap and at the end, Cancel reachable while collapsed by expanding; closing still
+  cancels.
 
 ### A12b — The dev run on the phone
 
