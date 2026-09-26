@@ -568,7 +568,10 @@ a dip, below).
 **Later candidates:**
 
 - A noise gate for live dots: `RealtimePitchTracker` has none (YIN is scale-free), so room
-  noise can make dots. A measured noise floor could set one.
+  noise can make dots, where pYIN as Tony runs it penalises soft pitches. The user's run of
+  2026-09-27 had four dots in silence, at about 300 Hz (the 50 Hz mains' sixth harmonic),
+  and item 3 failed on them; what the microphone heard there is not known. A measured
+  noise floor could set one.
 - A quick re-measure after a Bluetooth reconnect, without a test session.
 - The microphone's channel and the noise floor on the calibration's result page.
 - A getter for the rate the record target records at (svapp fork), so that the menu line
@@ -737,3 +740,7 @@ So that later work does not derive them again.
   Items 4, 9, 10 and 12 passed on all three; 1, 2, 7 and 13 failed on the restart jitter
   on all three; 3 failed on dots at a sound's onset, and 14 on WASAPI on its own misreading
   of a 48 kHz take, both since fixed in the checks.
+- **2026-09-26 and 2026-09-27**, whole dev runs on WASAPI at 20 ms with the stream kept
+  running between takes, each after Calibrate Audio: [audio-drivers.md](audio-drivers.md),
+  §7. Takes drift and slip within 10 ms; items 1, 2, 7 and 13 pass at ±6 ms. Item 3 failed
+  first on dots at a tone's end, since set apart, then on four dots in silence (§10).

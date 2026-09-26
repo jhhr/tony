@@ -108,8 +108,8 @@ headphones with one earcup against the microphone:
 2. **WASAPI at 20 ms.**
 3. **WASAPI at 10 ms.**
 4. **WASAPI at 20 ms again**, with a build that keeps the stream running between takes:
-   Calibrate Audio carrying on into a whole dev run, as the others. Items 1, 2, 7 and 13
-   should now pass; send the pair back as before (`DevChecks-wasapi-20-running.txt`).
+   Calibrate Audio carrying on into a whole dev run, as the others. Made twice
+   (2026-09-26 and 2026-09-27): items 1, 2, 7 and 13 pass at ±6 ms.
 
 Each is steps 2 to 5 above, with that driver and latency and the devices chosen under it:
 Calibrate Audio carrying on into the dev checks. After each, select and copy the result
@@ -117,7 +117,9 @@ page's text, and copy `DevChecks.txt` to a name that says which run it was
 (`DevChecks-wasapi-20.txt`, say): the next run writes over it. Send back each pair,
 and whether anything crackled or dropped out during a run. Press **Use this latency** on
 the driver and latency you will sing with: the figure is kept for that driver only.
-Runs 1 to 3 were before the stream was kept running between takes; run 4 is still to do.
+Runs 1 to 3 were before the stream was kept running between takes, run 4 after. Run 4's
+second time failed item 3 on four dots in silence, which no run before had: repeat it
+once, in a quiet room, to see whether they come back.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and

@@ -229,6 +229,24 @@ happened near a slip can read up to about ±10 ms; calibrating again then puts i
 the middle. Whether Windows shows the microphone in use until Tony quits, and whether a
 take starts with a click, were not watched for.
 
+**Kept running, again**, WASAPI at 20 ms, 2026-09-27, the same setup and order, with the
+±6 ms. Round trip 98.5 ms. The sweeps, in the order taken: −3.3, −3.7, −4.6, −4.8, −5.3,
++4.5, +3.8, +3.2, +2.7, +2.1 ms. 9 passed, 1 failed, 1 measured.
+
+- **The same course as the run before**, take by take within 0.3 ms, although the two
+  calibrations read 6.7 ms apart: each run placed its takes against its own calibration.
+  Both runs began with Calibrate Audio, and in both it measured about 5 ms from either
+  edge of the window, so the drift and the slip seem to run the same course from the
+  stream's start.
+- **A slip can fall inside a take**: this time between the fourth punch-in's two sweeps,
+  which landed 9.8 ms apart. Items 1, 2, 7 and 13 passed; the largest offset, −5.3 ms, was
+  0.7 ms inside the limit.
+- Windows showed the microphone in use for the whole run, as it should with the stream
+  kept running; no take was heard to start with a click.
+- Item 3 failed on four dots in silence, at about 300 Hz, 0.45 s or more from any of the
+  reference's sounds; none of the four runs before had one. The live tracker has no level
+  floor ([calibrate-audio.md](calibrate-audio.md), §10); what made them is not known.
+
 ## 8. Open points
 
 - **A round trip is kept per driver, not per latency.** After a latency change the kept
@@ -242,7 +260,8 @@ take starts with a click, were not watched for.
 - WDM-KS (in PortAudio's build too) and WASAPI's exclusive mode would be lower still, but
   take the device from every other program; not built.
 - **Kept running on two sound cards** the alignment drifts and slips by a period (§7):
-  every take within 10 ms of the others. On one device it should not drift; not measured.
+  every take within 10 ms of the others. In two runs that began with Calibrate Audio, it
+  measured in the middle of that window. On one device it should not drift; not measured.
   Opening the device again still moves it, so a figure kept from an earlier session is up
   to about 8 ms off: calibrate at the start of a session for the best placement. The
   microphone shows as in use from the first take until Tony quits.
