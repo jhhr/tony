@@ -354,6 +354,44 @@ private slots:
         QVERIFY(LatencyCheck::longLayout().events.size() > 100);
     }
 
+    // A long layout of another length is the start of the 4-minute one:
+    // its events, as many as end in time for the calibration's 0.8 s of
+    // silence, and the length asked for
+    void long_layout_of_another_length() {
+        const LatencyCheck::Layout whole = LatencyCheck::longLayout();
+        QCOMPARE(LatencyCheck::kLongSeconds, 240.0);
+        QCOMPARE(whole.length, framesOf(240.0));
+
+        for (double seconds : { 60.0, 61.3 }) {
+            const LatencyCheck::Layout part =
+                LatencyCheck::longLayout(kRate, seconds);
+            QCOMPARE(part.rate, kRate);
+            QCOMPARE(part.length, framesOf(seconds));
+
+            const int n = int(part.events.size());
+            QVERIFY2(n > 20 && n < int(whole.events.size()),
+                     qPrintable(QString::number(n)));
+            for (int i = 0; i < n; ++i) {
+                const LatencyCheck::Event &a = part.events[i];
+                const LatencyCheck::Event &b = whole.events[i];
+                QCOMPARE(a.sweepStart, b.sweepStart);
+                QCOMPARE(a.toneStart, b.toneStart);
+                QCOMPARE(a.toneLength, b.toneLength);
+                QCOMPARE(a.toneHz, b.toneHz);
+            }
+
+            auto endOf = [](const LatencyCheck::Event &e) {
+                return e.toneStart + e.toneLength;
+            };
+            QVERIFY(endOf(part.events[n - 1]) + framesOf(0.8) <= part.length);
+            QVERIFY(endOf(whole.events[n]) + framesOf(0.8) > part.length);
+        }
+
+        // 61.3 s has room for one event more than 60 s
+        QCOMPARE(LatencyCheck::longLayout(kRate, 61.3).events.size(),
+                 LatencyCheck::longLayout(kRate, 60.0).events.size() + 1);
+    }
+
     // Every sweep and every tone peaks at -12 dBFS, and nothing is louder
     void generator_peaks_at_minus_12_dbfs() {
         const LatencyCheck::Layout layout = LatencyCheck::devLayout();

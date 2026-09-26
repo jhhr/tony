@@ -427,3 +427,29 @@ cancelled run still works out the checks of the stages it finished; the runner r
 `progress(Recording)` as the seconds left tick down.
 Left open: an overwrite question would come inside `record()`, before the observer starts,
 so item 14 cannot see it. Items 3 and 5 judge stage 1 only. `test-tony-dev` about 135 s.
+
+### Phase C2 — 2026-09-26
+Built: `LatencyCheck::longLayout(rate, seconds)`, default `kLongSeconds` (240), core test
+`long_layout_of_another_length`. `DevChecks` stage 1 "Long song" (`Options::longSeconds`,
+0 leaves it out and item 9 Skipped; `longPunchIns()`: the shortest range judging the first
+sweep from 1/4 and from 5/8 of the song, 61.04–62.96 and 150.84–152.76 s at 240 s) and
+stage 5 "Joins" (`joinPunchIns()`: [26.0, 28.7] and [28.7, 32.0], J = 28.7 s, the middle of
+the tone 27.2–30.2 s; they judge 26.9 and 30.9 s). Items 9 `stop_on_a_long_song`, 10
+`the_joins`. `Run` carries its layout (`gapLooks()` takes it); items 1, 2, 4 count the long
+song's punch-ins first (1–8 now); the reopen's `punchInsSoFar()` keeps to the dev take.
+Choices: timed by `longSongStep()` from the runner's reports: whole song = its
+AnalysingReference step (writing and opening before it, 0.14 s at 60 s, not counted); a
+punch-in = its AnalysingTake step, ending at the next Recording report (after `record()`)
+or at `finished()` (after the judging). Item 9's pitch before a punch-in is read at its first
+Recording report. Item 10's messages name the part: "step:", "pitch:", "note:", "outside:".
+On the fake: 60 s song 2.9–3.0 s, punch-ins 0.59–0.70 s (20–24 %); 240 s: 10.4 s, 0.63 and
+0.75 s (6–7 %). At J the step reads −8.3 dB (the two 5 ms fades, a dip), pitch gap 1 hop.
+Found: item 10 fails, the note only: the first punch-in's note ends 5.7 ms past J, the tone
+after J has none (the ranged run starts 0.5 s before J, so its note begins before W and is
+dropped). Analysing the whole take gives one note, 27.21–30.20 s. `QEXPECT_FAIL` in the test.
+Seen failing: item 9 (Stop analysing the whole take: 40 % and 72 %, pitch changed), item
+10's step (no fade-in: 29.4 dB). Tests: the passing run and the cancel, close and dialog tests
+have a 60 s long song; the fault runs and the deletion test leave it out.
+Left open: item 12 (C1c) once found 0 looks in its 0.4 s lead-in gap (15–16 usual, 9 once):
+a silent GUI stall of 340 ms or more there, likely this VM's disk; a real run could show it.
+The runner's 60 s limit on the reference's analysis is 6× 240 s's 10 s. `test-tony-dev` 180 s.

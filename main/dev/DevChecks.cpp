@@ -379,10 +379,46 @@ DevChecks::~DevChecks()
 }
 
 vector<LatencyCheck::PunchIn>
+DevChecks::longPunchIns(const LatencyCheck::Layout &layout)
+{
+    // All that judgeTake() reads for a sweep, and the little more that
+    // LatencyCheck::punchInsFor() leaves
+    const double before = LatencyCheck::kSearchSeconds +
+        LatencyCheck::kJudgeMarginSeconds + LatencyCheck::kPunchInSlackSeconds;
+    const double after = LatencyCheck::kSearchSeconds +
+        LatencyCheck::kSweepSeconds + LatencyCheck::kJudgeMarginSeconds +
+        LatencyCheck::kPunchInSlackSeconds;
+    if (layout.rate <= 0) return {};
+    const double length = double(layout.length) / layout.rate;
+
+    vector<LatencyCheck::PunchIn> punchIns;
+    for (double share : { 0.25, 0.625 }) {
+        for (const LatencyCheck::Event &e : layout.events) {
+            const double at = double(e.sweepStart) / layout.rate;
+            if (at < share * length) continue;
+            punchIns.push_back(LatencyCheck::PunchIn(at - before, at + after));
+            break;
+        }
+    }
+    if (punchIns.size() != 2 || punchIns[0].end > punchIns[1].start ||
+        punchIns[1].end > length) {
+        return {};
+    }
+    return punchIns;
+}
+
+vector<LatencyCheck::PunchIn>
 DevChecks::freshPunchIns()
 {
     return { LatencyCheck::PunchIn(6.3, 10.2),
              LatencyCheck::PunchIn(16.8, 21.2) };
+}
+
+vector<LatencyCheck::PunchIn>
+DevChecks::joinPunchIns()
+{
+    return { LatencyCheck::PunchIn(26.0, 28.7),
+             LatencyCheck::PunchIn(28.7, 32.0) };
 }
 
 LatencyCheck::PunchIn
@@ -462,12 +498,16 @@ DevChecks::start(const Options &options)
     m_layout = LatencyCheck::devLayout();
     m_observedPunchIn = 0;
     m_watched.clear();
+    m_long = LongSong();
+    m_long.layout = LatencyCheck::longLayout(m_layout.rate,
+                                             m_options.longSeconds);
     m_haveFresh = false;
     m_fresh = AudioCheckResult();
     m_coverageAfterFresh = Coverage();
     m_freshWatched.clear();
     m_reRecord = PunchInStage();
     m_nearStart = PunchInStage();
+    m_joins = PunchInStage();
     m_pitchBefore.clear();
     m_notesBefore.clear();
     m_pitchAfter.clear();
@@ -479,6 +519,12 @@ DevChecks::start(const Options &options)
     m_runnerResult = AudioCheckResult();
 
     m_stages.clear();
+    if (m_options.longSeconds > 0.0) {
+        m_stages.push_back({ tr("Long song"),
+                             [this]() { beginLongSong(); },
+                             [this]() { return longSongDone(); },
+                             kCheckStageTimeoutMs });
+    }
     m_stages.push_back({ tr("Fresh punch-ins"),
                          [this]() { beginFreshPunchIns(); },
                          [this]() { return freshPunchInsDone(); },
@@ -486,7 +532,7 @@ DevChecks::start(const Options &options)
     m_stages.push_back({ tr("Re-record"),
                          [this]() {
                              beginPunchInStage
-                                 (m_reRecord, reRecording(),
+                                 (m_reRecord, { reRecording() },
                                   AudioCheckRunner::kPreRollSeconds);
                          },
                          [this]() { return punchInStageDone(m_reRecord); },
@@ -494,10 +540,18 @@ DevChecks::start(const Options &options)
     m_stages.push_back({ tr("Pre-roll near the start"),
                          [this]() {
                              beginPunchInStage
-                                 (m_nearStart, nearTheStart(),
+                                 (m_nearStart, { nearTheStart() },
                                   kNearStartPreRollSeconds);
                          },
                          [this]() { return punchInStageDone(m_nearStart); },
+                         kCheckStageTimeoutMs });
+    m_stages.push_back({ tr("Joins"),
+                         [this]() {
+                             beginPunchInStage
+                                 (m_joins, joinPunchIns(),
+                                  AudioCheckRunner::kPreRollSeconds);
+                         },
+                         [this]() { return punchInStageDone(m_joins); },
                          kCheckStageTimeoutMs });
     m_stages.push_back({ tr("Save and reopen"),
                          [this]() { beginReopen(); },
@@ -589,6 +643,7 @@ DevChecks::runnerFinished(const AudioCheckResult &result)
 {
     // A run the dialog started, or anyone else, is not ours
     if (!m_runnerRunning) return;
+    if (m_long.timing) longSongStep(AudioCheckRunner::Step::Idle, 0);
     if (m_observer->isObserving()) finishObservation();
     m_runnerRunning = false;
     m_runnerResult = result;
@@ -598,6 +653,7 @@ void
 DevChecks::runnerProgress(const AudioCheckRunner::Progress &state)
 {
     if (!m_runnerRunning) return;
+    if (m_long.timing) longSongStep(state.step, state.punchIn);
 
     // Reported once the take has started, from the same poll of the
     // runner's.  A punch-in's analysis is done when the next one starts
@@ -625,6 +681,46 @@ DevChecks::finishObservation()
     m_observedPunchIn = 0;
 }
 
+void
+DevChecks::longSongStep(AudioCheckRunner::Step step, int punchIn)
+{
+    // Reported again as the seconds left go down
+    LongSong &s = m_long;
+    if (step == s.step && punchIn == s.punchIn) return;
+
+    // Each step ends as the next begins: the whole song's analysis as
+    // the first punch-in starts to record, and a punch-in's analysis as
+    // the next starts or the runner ends.  The whole song's is timed from
+    // its session open, as a song opened by the user is analysed, and a
+    // punch-in's from the take stopped: the steps the audio check waits
+    using Step = AudioCheckRunner::Step;
+    const qint64 now = s.clock.elapsed();
+    const double seconds = double(now - s.stepFrom) / 1000.0;
+    if (s.step == Step::AnalysingReference) s.wholeSongSeconds = seconds;
+    if (s.step == Step::AnalysingTake) s.stopSeconds.push_back(seconds);
+
+    // The take's pitch before each punch-in, which is the pitch after the
+    // one before it.  Starting a take hides the pitch but leaves its model
+    if (step == Step::Recording) {
+        s.pitch.push_back(takeEvents(Analyser::PitchTrack));
+    }
+
+    if (s.step == Step::OpeningReference) {
+        cerr << "DevChecks: the long song was written and opened in "
+             << seconds << " s" << endl;
+    } else if (s.step == Step::AnalysingReference) {
+        cerr << "DevChecks: the long song was analysed in " << seconds
+             << " s" << endl;
+    } else if (s.step == Step::AnalysingTake) {
+        cerr << "DevChecks: punch-in " << s.punchIn << " into the long song "
+             << "was analysed in " << seconds << " s" << endl;
+    }
+
+    s.step = step;
+    s.punchIn = punchIn;
+    s.stepFrom = now;
+}
+
 const DevChecks::Watched *
 DevChecks::freshWatched(int i) const
 {
@@ -632,6 +728,48 @@ DevChecks::freshWatched(int i) const
         if (w.punchIn == i) return &w;
     }
     return nullptr;
+}
+
+void
+DevChecks::beginLongSong()
+{
+    AudioCheckRunner::Plan plan;
+    plan.layout = m_long.layout;
+    plan.ranges = longPunchIns(m_long.layout);
+    plan.roundTrip = m_options.roundTrip;
+
+    m_watched.clear();
+    m_observedPunchIn = 0;
+    m_runnerResult = AudioCheckResult();
+    m_long.timing = true;
+    m_long.clock.start();
+    m_runnerRunning = m_runner && m_runner->start(plan);
+    if (!m_runnerRunning) {
+        m_long.timing = false;
+        end(tr("The audio check could not start on a long song of %1 s.")
+            .arg(m_options.longSeconds));
+    }
+}
+
+bool
+DevChecks::longSongDone()
+{
+    if (m_runnerRunning) return false;
+    m_long.timing = false;
+
+    if (m_runnerResult.failure != "") {
+        end(tr("The punch-ins into the long song could not be recorded: %1")
+            .arg(m_runnerResult.failure));
+        return false;
+    }
+
+    // The runner has waited for the last punch-in's analysis
+    m_long.result = m_runnerResult;
+    m_long.coverage = m_window->m_takes->getCoverage();
+    m_long.watched = m_watched;
+    m_long.pitch.push_back(takeEvents(Analyser::PitchTrack));
+    m_long.done = true;
+    return true;
 }
 
 void
@@ -676,16 +814,17 @@ DevChecks::freshPunchInsDone()
 }
 
 void
-DevChecks::beginPunchInStage(PunchInStage &stage, LatencyCheck::PunchIn range,
+DevChecks::beginPunchInStage(PunchInStage &stage,
+                             vector<LatencyCheck::PunchIn> ranges,
                              double preRoll)
 {
-    // The take as the stages before left it, to compare with what this
-    // punch-in leaves
+    // The take as the stages before left it, to compare with what these
+    // punch-ins leave
     stage.before = snapshot();
 
     AudioCheckRunner::Plan plan;
     plan.layout = m_layout;
-    plan.ranges = { range };
+    plan.ranges = ranges;
     plan.keepSession = true;
     plan.roundTrip = m_options.roundTrip;
     plan.preRoll = preRoll;
@@ -744,12 +883,17 @@ vector<DevChecks::Run>
 DevChecks::runs() const
 {
     vector<Run> all;
-    if (m_haveFresh) {
-        all.push_back({ &m_fresh, &m_coverageAfterFresh, &m_freshWatched });
+    if (m_long.done) {
+        all.push_back({ &m_long.layout, &m_long.result, &m_long.coverage,
+                        &m_long.watched });
     }
-    for (const PunchInStage *stage : { &m_reRecord, &m_nearStart }) {
+    if (m_haveFresh) {
+        all.push_back({ &m_layout, &m_fresh, &m_coverageAfterFresh,
+                        &m_freshWatched });
+    }
+    for (const PunchInStage *stage : { &m_reRecord, &m_nearStart, &m_joins }) {
         if (stage->done) {
-            all.push_back({ &stage->result, &stage->after.coverage,
+            all.push_back({ &m_layout, &stage->result, &stage->after.coverage,
                             &stage->watched });
         }
     }
@@ -768,8 +912,10 @@ DevChecks::watchedOf(const Run &run, int i)
 vector<LatencyCheck::PunchIn>
 DevChecks::punchInsSoFar() const
 {
+    // Not the long song's: that was another session, and another take
     vector<LatencyCheck::PunchIn> ranges;
     for (const Run &run : runs()) {
+        if (run.layout != &m_layout) continue;
         for (const LatencyCheck::PunchInResult &p :
                  run.result->summary.punchIns) {
             ranges.push_back(p.range);
@@ -886,6 +1032,7 @@ DevChecks::end(QString failure)
     m_timer->stop();
     m_observer->stop();
     m_observedPunchIn = 0;
+    m_long.timing = false;
     m_stage = -1;
     m_begun = false;
 
@@ -919,6 +1066,7 @@ DevChecks::evaluate(QString reason) const
     return { latencyCheck(reason), phrasesCheck(reason),
              liveDotsCheck(reason), speakersCheck(reason),
              micChannelCheck(reason), positionCheck(reason),
+             longSongCheck(reason), joinsCheck(reason),
              leadInCheck(reason), nearStartCheck(reason),
              stopsItselfCheck(reason) };
 }
@@ -930,7 +1078,8 @@ DevChecks::latencyCheck(QString reason) const
     c.item = 1;
     c.name = "latency_on_this_machine";
 
-    if (!m_haveFresh) {
+    const vector<Run> all = runs();
+    if (all.empty()) {
         c.verdict = CheckResult::Verdict::Skipped;
         c.message = reason;
         return c;
@@ -941,7 +1090,7 @@ DevChecks::latencyCheck(QString reason) const
     QStringList problems;
     double largest = 0.0;
     int n = 0;
-    for (const Run &run : runs()) {
+    for (const Run &run : all) {
         const LatencyCheck::TakeSummary &s = run.result->summary;
         for (int i = 0; i < int(s.punchIns.size()); ++i) {
             const LatencyCheck::PunchInResult &p = s.punchIns[i];
@@ -977,7 +1126,7 @@ DevChecks::latencyCheck(QString reason) const
     if (n == 0) problems << tr("no punch-in was judged");
     c.numbers.push_back({ tr("largest offset"), signedMs(largest) });
     c.numbers.push_back({ tr("round trip used"),
-                          unsignedMs(m_fresh.usedRoundTrip) });
+                          unsignedMs(all.front().result->usedRoundTrip) });
 
     if (!m_reopened) {
         c.verdict = CheckResult::Verdict::Skipped;
@@ -1050,7 +1199,7 @@ DevChecks::phrasesCheck(QString reason) const
     c.item = 2;
     c.name = "several_phrases_in_one_take";
 
-    if (!m_haveFresh) {
+    if (runs().empty()) {
         c.verdict = CheckResult::Verdict::Skipped;
         c.message = reason;
         return c;
@@ -1248,7 +1397,8 @@ DevChecks::liveDotsCheck(QString reason) const
 }
 
 DevChecks::GapLooks
-DevChecks::gapLooks(const TakeObserver::Observation &o,
+DevChecks::gapLooks(const LatencyCheck::Layout &layout,
+                    const TakeObserver::Observation &o,
                     const TakeLatency &t, sv_samplerate_t rate,
                     double until) const
 {
@@ -1262,7 +1412,6 @@ DevChecks::gapLooks(const TakeObserver::Observation &o,
     g.placed = true;
 
     // The reference's sounds, in seconds
-    const LatencyCheck::Layout &layout = m_layout;
     const double sweepSeconds =
         double(LatencyCheck::sweep(layout.rate).size()) / layout.rate;
     vector<std::pair<double, double>> sounds;
@@ -1346,7 +1495,8 @@ DevChecks::speakersCheck(QString reason) const
     c.item = 4;
     c.name = "nothing_of_the_take_in_the_speakers";
 
-    if (!m_haveFresh) {
+    const vector<Run> all = runs();
+    if (all.empty()) {
         c.verdict = CheckResult::Verdict::Skipped;
         c.message = reason;
         return c;
@@ -1356,8 +1506,8 @@ DevChecks::speakersCheck(QString reason) const
 
     // The input played back out, by Tony or by the system, reaches the
     // mic again a little later: every sweep arrives twice.  In any run
-    const LatencyCheck::Echo *echo = &m_fresh.summary.echo;
-    for (const Run &run : runs()) {
+    const LatencyCheck::Echo *echo = &all.front().result->summary.echo;
+    for (const Run &run : all) {
         if (run.result->summary.echo.heard) {
             echo = &run.result->summary.echo;
             break;
@@ -1384,7 +1534,7 @@ DevChecks::speakersCheck(QString reason) const
     int gapPolls = 0;
     QString firstHeard;
     int n = 0;
-    for (const Run &run : runs()) {
+    for (const Run &run : all) {
         const LatencyCheck::TakeSummary &s = run.result->summary;
         for (int i = 0; i < int(s.punchIns.size()); ++i) {
             ++n;
@@ -1425,7 +1575,8 @@ DevChecks::speakersCheck(QString reason) const
 
             const TakeLatency t = (i < int(run.result->takes.size()) ?
                                    run.result->takes[i] : TakeLatency());
-            const GapLooks g = gapLooks(o, t, run.result->referenceRate,
+            const GapLooks g = gapLooks(*run.layout, o, t,
+                                        run.result->referenceRate,
                                         std::numeric_limits<double>::max());
             if (!g.placed) {
                 problems << tr("punch-in %1's start gap was not measured, "
@@ -1645,6 +1796,289 @@ DevChecks::positionCheck(QString reason) const
 }
 
 CheckResult
+DevChecks::longSongCheck(QString reason) const
+{
+    CheckResult c;
+    c.item = 9;
+    c.name = "stop_on_a_long_song";
+
+    const LongSong &s = m_long;
+    const LatencyCheck::TakeSummary &summary = s.result.summary;
+    if (!s.done || summary.punchIns.empty()) {
+        c.verdict = CheckResult::Verdict::Skipped;
+        c.message = (m_options.longSeconds > 0.0 ? reason :
+                     tr("The long song was left out of this run."));
+        return c;
+    }
+
+    // Stop analyses only the range recorded, and merges it in: far
+    // quicker than the whole song's analysis, and nothing of the take's
+    // pitch outside the range changes, beyond the margin the merge may
+    // touch.  The second punch-in has the first's pitch to leave alone,
+    // which a whole-take analysis would make again
+    const sv_samplerate_t rate = s.result.referenceRate;
+    const double whole = s.wholeSongSeconds;
+    QStringList problems;
+    c.numbers.push_back
+        ({ tr("whole-song analysis"),
+           whole < 0.0 ? tr("not timed") :
+           tr("%1 s, of a song of %2 s, from its session open")
+           .arg(secondsText(whole))
+           .arg(secondsText(double(s.layout.length) / s.layout.rate)) });
+    if (whole < 0.0) problems << tr("the whole song's analysis was not timed");
+
+    int compared = 0;
+    for (int i = 0; i < int(summary.punchIns.size()); ++i) {
+        const LatencyCheck::PunchIn &p = summary.punchIns[i].range;
+        const QString range = rangeText(p.start, p.end);
+        if (i >= int(s.stopSeconds.size())) {
+            problems << tr("punch-in %1's analysis was not timed").arg(i + 1);
+        } else {
+            const double stop = s.stopSeconds[i];
+            c.numbers.push_back
+                ({ tr("Stop to pitch merged, punch-in %1 (%2)").arg(i + 1)
+                   .arg(range),
+                   whole > 0.0 ?
+                   tr("%1 s, %2 per cent of the whole song's")
+                   .arg(secondsText(stop)).arg(100.0 * stop / whole, 0, 'f', 0)
+                   : tr("%1 s").arg(secondsText(stop)) });
+            if (whole >= 0.0 && !(stop < kStopShare * whole)) {
+                problems << tr("punch-in %1 took %2 s from Stop to its pitch "
+                               "merged, not under %3 of the whole song's "
+                               "analysis, %4 s")
+                    .arg(i + 1).arg(secondsText(stop)).arg(kStopShare)
+                    .arg(secondsText(whole));
+            }
+        }
+
+        if (i + 1 >= int(s.pitch.size())) {
+            problems << tr("the take's pitch around punch-in %1 was not seen")
+                .arg(i + 1);
+            continue;
+        }
+        const EventVector &before = s.pitch[i];
+        const EventVector &after = s.pitch[i + 1];
+        const Coverage::Range r(frameAt(p.start, rate), frameAt(p.end, rate));
+        const TakeDiff::EventDiff pitch =
+            TakeDiff::eventsOutside(before, after, r, rate);
+        compared += countOutside(before, pitch.window);
+        if (!pitch.pass) {
+            problems << tr("punch-in %1 changed the take's pitch outside its "
+                           "range").arg(i + 1);
+        }
+        c.numbers.push_back
+            ({ tr("pitch, punch-in %1").arg(i + 1),
+               eventsText(pitch, before, tr("pitch events"),
+                          tr("outside %1")
+                          .arg(rangeText(double(pitch.window.start) / rate,
+                                         double(pitch.window.end) / rate)),
+                          rate) });
+    }
+    if (compared == 0) {
+        problems << tr("the take had no pitch outside the punch-ins to "
+                       "compare");
+    }
+
+    if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("On a song of %1 s, each punch-in had its pitch merged "
+                       "in under %2 of the time the whole song's analysis "
+                       "took, and left the take's pitch beyond %3 s of its "
+                       "range as it was: only the range was analysed.")
+            .arg(secondsText(double(s.layout.length) / s.layout.rate))
+            .arg(kStopShare).arg(TakeDiff::kEventMarginSeconds);
+    } else {
+        c.verdict = CheckResult::Verdict::Fail;
+        c.message = problems.join("; ") + ".";
+    }
+    return c;
+}
+
+CheckResult
+DevChecks::joinsCheck(QString reason) const
+{
+    CheckResult c;
+    c.item = 10;
+    c.name = "the_joins";
+
+    const PunchInStage &stage = m_joins;
+    const LatencyCheck::TakeSummary &s = stage.result.summary;
+    if (!stage.done || s.punchIns.size() < 2) {
+        c.verdict = CheckResult::Verdict::Skipped;
+        c.message = reason;
+        return c;
+    }
+
+    // Two punch-ins that meet in the middle of a held tone, as a singer
+    // punching in twice within one note: at the join the samples run on
+    // without a step, the pitch track without a hole or a frame twice,
+    // one note runs through it, and outside the two ranges the take's
+    // pitch and notes are as they were.  Each part is named when it
+    // fails: two punch-ins placed differently, as on a device whose
+    // offset moves when its stream restarts, show in the step and the
+    // pitch, and the note merge may fail on its own
+    const sv_samplerate_t rate = stage.result.referenceRate;
+    const LatencyCheck::PunchIn &first = s.punchIns[0].range;
+    const LatencyCheck::PunchIn &second = s.punchIns[1].range;
+    const sv_frame_t join = frameAt(first.end, rate);
+    auto at = [rate](sv_frame_t frame) {
+        return QString("%1 s").arg(double(frame) / rate, 0, 'f', 3);
+    };
+    QStringList problems;
+    c.numbers.push_back({ tr("join"),
+                          tr("%1 s, between %2 and %3")
+                          .arg(secondsText(first.end))
+                          .arg(rangeText(first.start, first.end))
+                          .arg(rangeText(second.start, second.end)) });
+
+    // Where each landed, for reading the rest: items 1 and 2 judge it
+    QStringList placing;
+    c.numbers.push_back({ tr("offsets"), offsetsOf(s, placing) });
+    if (s.punchIns[0].found > 0 && s.punchIns[1].found > 0) {
+        c.numbers.push_back({ tr("second punch-in against the first"),
+                              signedMs(s.punchIns[1].medianOffset -
+                                       s.punchIns[0].medianOffset) });
+    }
+
+    const Snapshot &before = stage.before;
+    const Snapshot &after = stage.after;
+    if (after.audioError != "") {
+        problems << tr("step: %1").arg(after.audioError);
+    } else {
+        const TakeDiff::SampleStep step = TakeDiff::stepAt
+            (after.audio.data(), sv_frame_t(after.audio.size()), 1, rate,
+             join);
+        c.numbers.push_back
+            ({ tr("step at the join"),
+               tr("%1 dB, at most %2: the largest first difference %3 at %4, "
+                  "the typical one %5")
+               .arg(step.stepDb, 0, 'f', 1).arg(TakeDiff::kMaxStepDb)
+               .arg(levelText(step.largest)).arg(at(step.largestAt))
+               .arg(levelText(step.typical)) });
+        if (!step.pass) {
+            problems << tr("step: the samples jump at the join, %1 dB over "
+                           "their typical step, more than %2 dB")
+                .arg(step.stepDb, 0, 'f', 1).arg(TakeDiff::kMaxStepDb);
+        }
+    }
+
+    const TakeDiff::PitchJoin pitch =
+        TakeDiff::pitchAcross(after.pitch, join, rate);
+    c.numbers.push_back
+        ({ tr("pitch across the join"),
+           tr("%1 events within %2 s of it; the largest gap %3 (%4 hops) "
+              "from %5; %6 frames twice, %7 out of order")
+           .arg(pitch.events).arg(TakeDiff::kPitchWindowSeconds)
+           .arg(unsignedMs(double(pitch.largestGap) / rate))
+           .arg(double(pitch.largestGap) / double(TakeDiff::kHopFrames), 0,
+                'f', 1)
+           .arg(at(pitch.largestGapFrom)).arg(pitch.doubled)
+           .arg(pitch.outOfOrder) });
+    if (!pitch.pass) {
+        QStringList why;
+        if (pitch.largestGap > TakeDiff::kMaxGapHops * TakeDiff::kHopFrames) {
+            why << tr("a gap of %1 from %2")
+                .arg(unsignedMs(double(pitch.largestGap) / rate))
+                .arg(at(pitch.largestGapFrom));
+        }
+        if (pitch.doubled > 0) {
+            why << tr("%1 frames twice, the first at %2").arg(pitch.doubled)
+                .arg(at(pitch.firstDoubled));
+        }
+        if (pitch.outOfOrder > 0) {
+            why << tr("%1 events out of order, the first at %2")
+                .arg(pitch.outOfOrder).arg(at(pitch.firstOutOfOrder));
+        }
+        problems << tr("pitch: the track does not run through the join: %1")
+            .arg(why.join(", "));
+    }
+
+    // And every note within a second of it, to show how a note that does
+    // not run through came apart
+    const TakeDiff::NoteJoin notes =
+        TakeDiff::notesAcross(after.notes, join, rate);
+    auto noteText = [rate](const Event &e) {
+        return rangeText(double(e.getFrame()) / rate,
+                         double(e.getFrame() + e.getDuration()) / rate);
+    };
+    QStringList spanning, close, around;
+    for (const Event &e : notes.spanning) spanning << noteText(e);
+    for (const Event &e : notes.edgesNear) close << noteText(e);
+    const sv_frame_t oneSecond = frameAt(1.0, rate);
+    for (const Event &e : after.notes) {
+        if (e.getFrame() < join + oneSecond &&
+            e.getFrame() + e.getDuration() > join - oneSecond) {
+            around << noteText(e);
+        }
+    }
+    c.numbers.push_back({ tr("notes at the join"),
+                          spanning.isEmpty() ? tr("none") :
+                          spanning.join(", ") });
+    c.numbers.push_back({ tr("nearest note edge"),
+                          after.notes.empty() ? tr("no notes") :
+                          signedMs(double(notes.nearestEdge) / rate) });
+    c.numbers.push_back({ tr("notes within 1 s of the join"),
+                          around.isEmpty() ? tr("none") : around.join(", ") });
+    if (!notes.pass) {
+        QStringList why;
+        if (notes.spanning.size() != 1) {
+            why << tr("%1 notes hold the join, not one")
+                .arg(notes.spanning.size());
+        }
+        if (!close.isEmpty()) {
+            why << tr("a note begins or ends within %1 s of it: %2")
+                .arg(TakeDiff::kNoteClearanceSeconds).arg(close.join(", "));
+        }
+        problems << tr("note: one note does not run through the join: %1")
+            .arg(why.join(", and "));
+    }
+
+    // Nothing moved outside the two ranges together, beyond the margin
+    const Coverage::Range both(frameAt(first.start, rate),
+                               frameAt(second.end, rate));
+    const TakeDiff::EventDiff pitchOutside =
+        TakeDiff::eventsOutside(before.pitch, after.pitch, both, rate);
+    const TakeDiff::EventDiff notesOutside =
+        TakeDiff::eventsOutside(before.notes, after.notes, both, rate);
+    const QString where = tr("outside %1")
+        .arg(rangeText(double(pitchOutside.window.start) / rate,
+                       double(pitchOutside.window.end) / rate));
+    if (!pitchOutside.pass) {
+        problems << tr("outside: the take's pitch outside the ranges changed");
+    }
+    if (!notesOutside.pass) {
+        problems << tr("outside: the take's notes outside the ranges changed");
+    }
+    if (countOutside(before.pitch, pitchOutside.window) == 0) {
+        problems << tr("outside: the take had no pitch outside the ranges to "
+                       "compare");
+    }
+    c.numbers.push_back({ tr("pitch outside"),
+                          eventsText(pitchOutside, before.pitch,
+                                     tr("pitch events"), where, rate) });
+    c.numbers.push_back({ tr("notes outside"),
+                          eventsText(notesOutside, before.notes, tr("notes"),
+                                     where, rate) });
+
+    if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Two punch-ins meeting at %1 s, in the middle of a "
+                       "held tone, left no step in the samples there, the "
+                       "pitch track running through it, one note across it "
+                       "and no note beginning or ending within %2 s of it, "
+                       "and the take's pitch and notes beyond %3 s of the "
+                       "two ranges as they were.")
+            .arg(secondsText(first.end))
+            .arg(TakeDiff::kNoteClearanceSeconds)
+            .arg(TakeDiff::kEventMarginSeconds);
+    } else {
+        c.verdict = CheckResult::Verdict::Fail;
+        c.message = problems.join("; ") + ".";
+    }
+    return c;
+}
+
+CheckResult
 DevChecks::leadInCheck(QString reason) const
 {
     CheckResult c;
@@ -1718,7 +2152,7 @@ DevChecks::leadInCheck(QString reason) const
     if (!w) {
         problems << tr("the punch-in was not watched");
     } else {
-        const GapLooks g = gapLooks(w->seen, t, rate, p.start);
+        const GapLooks g = gapLooks(m_layout, w->seen, t, rate, p.start);
         if (!g.placed) {
             problems << tr("the start gap was not measured, so what the "
                            "lead-in played could not be placed");
@@ -1945,7 +2379,8 @@ DevChecks::stopsItselfCheck(QString reason) const
             const double past =
                 double(stage->recorded - needed) / t.recordingRate;
             const double allowed = kStopMarginSeconds + poll + gapLooks
-                (w->seen, t, rate, std::numeric_limits<double>::max()).margin;
+                (m_layout, w->seen, t, rate,
+                 std::numeric_limits<double>::max()).margin;
             c.numbers.push_back
                 ({ tr("stopped, %1").arg(range),
                    tr("%1 past the end of the selection, at most %2 allowed")
@@ -2047,7 +2482,9 @@ DevChecks::writeReport(const DevReport &report) const
         drivers << QString::fromStdString(name);
     }
     out << "Audio drivers built in: " << drivers.join(", ") << "\n";
-    const sv_samplerate_t recordingRate = m_fresh.recordingRate;
+    const vector<Run> all = runs();
+    const sv_samplerate_t recordingRate =
+        all.empty() ? 0 : all.front().result->recordingRate;
     sv_samplerate_t outputRate = m_window->m_playSource ?
         m_window->m_playSource->getDeviceSampleRate() : 0;
     if (outputRate <= 0) outputRate = recordingRate;

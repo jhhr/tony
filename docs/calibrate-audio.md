@@ -115,7 +115,7 @@ The numbers are those of `docs/manual-checklist.md` before that merge.
 | 7 | Record from a position; overwrite question | **Automated** (placement) | Placement as in 1. Outside the new range, the take's audio is bit-identical and pitch and notes are unchanged beyond ±0.25 s. The question, No, and "Don't ask again" stay with the app suite (`record_over_existing_question`) and a glance. |
 | 8 | Cursor from P, pane follows, all in one place | **Measured** | *Automated:* the cursor is at S when the take starts, and inside the visible range throughout. *Reported:* the dot-to-cursor offset. *Eyes:* the rest. |
 | 9 | Stop on a 4-minute song | **Automated** | A generated 4-minute reference, punch-in near the end. Time from Stop to new pitch, against a threshold. Pitch outside the range unchanged, which proves the ranged path ran. |
-| 10 | The joins | **Automated** | Two punch-ins that meet in the middle of a held tone: no step in the samples at the join; pitch continuous (no gap, no doubled frame); **one** note across the join; nothing moves outside ±0.25 s. |
+| 10 | The joins | **Automated** | Two punch-ins that meet in the middle of a held tone: no step in the samples at the join; pitch continuous (no gap, no doubled frame); **one** note across the join; nothing moves outside ±0.25 s. *Found in C2:* the note fails on today's code. The second punch-in's analysis starts 0.5 s before the join, inside the tone, so its note begins before the merge window and is dropped; the first's note ends at the join. A whole-take analysis gives one note. |
 | 11 | Is 3 s right, is the countdown readable | **Manual** | A judgement. |
 | 12 | Lead-in: nothing heard back, nothing before P changed | **Automated** | Output peaks during the lead-in are the reference's only. Audio and events before P are unchanged. *Found in C1c:* on a noiseless loopback the earlier take is silent wherever the reference is, so a take played out shows in no gap; the app test gives the fake a −60 dBFS noise floor, as a room gives a real mic. |
 | 13 | Pre-roll near the start | **Automated** | Punch-in at P = 1 s: playback runs from 0, the countdown counts only the 1 s there is (*found in C1c:* plus the round trip, by design, so it starts at 2; for the instant before the round trip is known it shows 1), placement is right. |
@@ -241,12 +241,15 @@ setting changes only through Use this latency.
 
 | Step | What it does | Items | Phase |
 | --- | --- | --- | --- |
-| 1 | Two punch-ins into fresh regions, observer on | 1, 2, 3, 4, 5, 8 | C1a, C1b |
-| 2 | Re-record over an earlier punch-in, through its lead-in | 7, 12, 14 | C1c |
-| 3 | Punch-in at P = 1 s with a 3 s pre-roll | 13 | C1c |
-| 4 | Two adjacent punch-ins meeting inside a held tone | 10 | C2 |
-| 5 | Save to the scratch `.ton` and reopen | 1 | C1a |
-| 6 | Long reference, two punch-ins far apart | 9 (and 1, 2) | C2 |
+| 1 | Long reference, two punch-ins far apart | 9 (and 1, 2, 4) | C2 |
+| 2 | Two punch-ins into fresh regions, observer on | 1, 2, 3, 4, 5, 8 | C1a, C1b |
+| 3 | Re-record over an earlier punch-in, through its lead-in | 7, 12, 14 | C1c |
+| 4 | Punch-in at P = 1 s with a 3 s pre-roll | 13 | C1c |
+| 5 | Two adjacent punch-ins meeting inside a held tone | 10 | C2 |
+| 6 | Save to the scratch `.ton` and reopen | 1 | C1a |
+
+*Since C2* the long reference comes first: the dev reference then replaces its session
+as a check's own, unsaved, without asking, and the run still ends on the saved session.
 
 Items 15 and 16 and the smoke group are no longer in the dev run (§4).
 
@@ -327,7 +330,7 @@ marked "Done" when it is committed.
      decision). The phases below were cut again (§4).
    - **C1b** `TakeObserver`. Items 3, 4, 5 (and 8's number). Done.
    - **C1c** Re-record and pre-roll stages. Items 7, 12, 13, 14. Done.
-5. **C2** Long song and joins: items 9 and 10.
+5. **C2** Long song and joins: items 9 and 10. Done.
 6. **C3** Retire `test-tony-device`, once all it checks is in the dev run.
 7. **Release build** by the lead (§8, "Release builds must stay clean").
 8. **D** Docs, from the code and the phase log:
