@@ -518,6 +518,70 @@ private slots:
                  "the label is not drawn centred over its box, past both ends");
     }
 
+    void an_edited_word_is_laid_out_again() {
+        // The same number of words, over the same stretch of time: all
+        // that a stale layout would have noticed
+        addSpacedWords(3);
+        render({ QRect(0, 0, kWidth, kHeight) });
+
+        auto model = sv::ModelById::getAs<sv::RegionModel>(m_layer->getModel());
+        QVERIFY(model);
+        QSignalSpy repaints(m_layer, &sv::Layer::layerParametersChanged);
+        model->remove(spacedWord(1));
+        model->add(spacedWord(1).withLabel("sanaseppo"));
+        QVERIFY2(repaints.count() > 0, "the edit did not ask for a repaint");
+
+        QImage image = render({ QRect(0, 0, kWidth, kHeight) });
+        int x0 = m_pane->getXForFrame(spacedWord(1).getFrame());
+        int x1 = m_pane->getXForFrame(spacedWord(1).getFrame() +
+                                      spacedWord(1).getDuration());
+        int dark = 0;
+        for (int x = x0; x < x1; ++x) {
+            for (int y = kHeight / 2; y < kHeight; ++y) {
+                if (qGray(image.pixel(x, y)) < 100) ++dark;
+            }
+        }
+        QVERIFY2(dark > 20, "the edited word's label is not drawn");
+    }
+
+    void the_highlight_follows_an_edit_of_the_word_being_sung() {
+        addSpacedWords(3);
+        auto model = sv::ModelById::getAs<sv::RegionModel>(m_layer->getModel());
+        QVERIFY(model);
+        m_layer->setHighlightFrame(sv::sv_frame_t(kRate * 2.1));
+
+        sv::Event renamed = spacedWord(1).withLabel("sana");
+        model->remove(spacedWord(1));
+        model->add(renamed);
+        sv::Event e(0);
+        QVERIFY(m_layer->getHighlightedEvent(e));
+        QCOMPARE(e.getLabel(), QString("sana"));
+
+        // Shortened to end before the frame: no word is being sung
+        model->remove(renamed);
+        model->add(renamed.withDuration(sv::sv_frame_t(kRate * 0.05)));
+        QVERIFY(!m_layer->getHighlightedEvent(e));
+    }
+
+    void the_box_row_is_where_the_boxes_are_painted() {
+        QVERIFY(m_layer->getLyricsBoxRow(m_pane).isEmpty());
+        addSpacedWords(3);
+        QImage image = render({ QRect(0, 0, kWidth, kHeight) });
+        QRect row = m_layer->getLyricsBoxRow(m_pane);
+        QVERIFY(!row.isEmpty());
+
+        int x = m_pane->getXForFrame(spacedWord(1).getFrame()) + 8;
+        QCOMPARE(topDrawnRow(image, x), row.top());
+        int bottom = row.top();
+        while (bottom + 1 < kHeight &&
+               image.pixel(x, bottom + 1) != qRgb(255, 255, 255)) {
+            ++bottom;
+        }
+        QCOMPARE(bottom, row.bottom());
+        QCOMPARE(row.left(), 0);
+        QCOMPARE(row.width(), m_pane->getPaintWidth());
+    }
+
     void painting_in_strips_matches_painting_whole() {
         // A view that scrolls repaints only the strip that comes into
         // sight; the labels in it must be where they were when the
