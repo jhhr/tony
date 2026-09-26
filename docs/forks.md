@@ -18,14 +18,21 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 The forks are free to change when Tony needs it; prefer a small, general addition to the
 library over a workaround in `main/`.
 
-1. Edit and commit inside the library's directory (it is its own git repository, on the
-   fork branch). Commit messages there follow that repository's style: `area: what`.
+1. Edit and commit inside the library's directory (it is its own git repository). The
+   fork's branch follows Tony's: for work committed straight to Tony's `default`, the fork
+   branch of the table; for work on a Tony feature branch, a fork branch of the **same
+   name**, on top of what it already holds (or started from the fork branch of the table),
+   which reaches the fork branch when the Tony branch is merged. Commit messages there
+   follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
    upstream sonic-visualiser — do not push there.
 3. Put the new commit hash in `repoint-lock.json` as that library's `pin`, and commit that
    in Tony together with the code that needs it.
 4. A sub-agent that was told to work only in `main/` does not edit a fork: it reports
    exactly which change it needs, and the lead session makes it.
+
+When switching Tony branches, check out the fork branches that go with it: a fork left on
+another branch builds something the lock file does not say.
 
 **repoint does not run on the development machine** (it needs an SML compiler and none is
 installed). The checkouts are managed with plain git, and `repoint-project.json` /
