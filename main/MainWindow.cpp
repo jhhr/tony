@@ -19,6 +19,7 @@
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
 #include "AudioCheckRunner.h"
+#include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
@@ -204,6 +205,10 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takeLatency(),
     m_audioCheck(nullptr),
     m_audioCheckTakes(false),
+    m_calibrateAudioDialog(nullptr),
+    m_calibrateAudioAction(nullptr),
+    m_latencyLineAction(nullptr),
+    m_forgetLatencyAction(nullptr),
     m_lastRecordingRate(0)
 {
     setWindowTitle(QApplication::applicationName());
@@ -400,6 +405,13 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_coverageStrip = new CoverageStrip(this);
     m_audioCheck = new AudioCheckRunner(this);
 
+    // What may be chosen changes as a check begins and as it ends.  The
+    // first progress comes from its first step, before anything is asked
+    connect(m_audioCheck, &AudioCheckRunner::progress,
+            this, [this]() { updateMenuStates(); });
+    connect(m_audioCheck, &AudioCheckRunner::finished,
+            this, [this]() { updateMenuStates(); });
+
     // Often enough to stop a take that records into a selection well
     // within the margin that follows the selection's end
     m_takeTimer = new QTimer(this);
@@ -456,7 +468,10 @@ MainWindow::MainWindow(AudioMode audioMode,
 
 MainWindow::~MainWindow()
 {
-    // A check still running ends here, before anything it reads goes
+    // The check's dialog first, as it holds the runner; then a check
+    // still running ends here, before anything it reads goes
+    delete m_calibrateAudioDialog;
+    m_calibrateAudioDialog = nullptr;
     delete m_audioCheck;
     m_audioCheck = nullptr;
 
@@ -1656,6 +1671,29 @@ MainWindow::setupToolbars()
         connect(g, SIGNAL(triggered(QAction *)),
                 this, SLOT(audioDeviceSelected(QAction *)));
     }
+
+    // The audio check, and the latency takes are placed with: a line to
+    // read, never chosen, brought up to date whenever the menu opens
+    m_calibrateAudioAction = menu->addAction(tr("&Calibrate Audio..."));
+    m_calibrateAudioAction->setStatusTip
+        (tr("Measure how late recordings arrive through these devices, with "
+            "an earcup held against the microphone"));
+    connect(m_calibrateAudioAction, &QAction::triggered,
+            this, &MainWindow::calibrateAudio);
+
+    m_latencyLineAction = menu->addAction(QString());
+    m_latencyLineAction->setEnabled(false);
+
+    m_forgetLatencyAction = menu->addAction(tr("&Forget Measured Latency"));
+    m_forgetLatencyAction->setStatusTip
+        (tr("Place takes on these devices with the latency the driver "
+            "reports again"));
+    connect(m_forgetLatencyAction, &QAction::triggered,
+            this, [this]() { forgetMeasuredLatency(); });
+
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::updateLatencyMenuLine);
+    updateLatencyMenuLine();
     menu->addSeparator();
 
     m_rightButtonPlaybackMenu->addAction(playAction);
@@ -2218,6 +2256,17 @@ MainWindow::updateMenuStates()
     bool canChange = takeOperationsAllowed();
     emit canChangeTakes(canChange);
     emit canActOnTake(canChange && m_takes->getActiveIndex() >= 0);
+
+    // The audio check records takes of its own, and keeps what it
+    // measures for the devices it started on
+    bool checking = m_audioCheck && m_audioCheck->isRunning();
+    if (m_calibrateAudioAction) {
+        m_calibrateAudioAction->setEnabled(!inTake && !checking);
+    }
+    for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        if (m) m->menuAction()->setEnabled(!checking);
+    }
+    updateLatencyMenuLine();
 
     if (pitchCandidatesVisible) {
         m_showCandidatesAction->setText(tr("Hide Pitch Candidates"));
@@ -4341,15 +4390,19 @@ MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
     figure.reportedOutput = result.reportedOutputLatency;
     figure.reportedInput = result.reportedInputLatency;
 
+    // Under the devices the check ran on, which the Preferences may no
+    // longer name: the result can be on show long after the run
+    LatencyCalibration::Key key = result.key;
+    key.rate = result.recordingRate;
+
     QSettings settings;
-    LatencyCalibration::store
-        (settings, LatencyCalibration::currentKey(settings, result.recordingRate),
-         figure);
+    LatencyCalibration::store(settings, key, figure);
     cerr << "MainWindow::storeMeasuredLatency: round trip "
-         << figure.roundTrip * 1000.0 << " ms at " << result.recordingRate
+         << figure.roundTrip * 1000.0 << " ms at " << key.rate
          << " Hz, the device reporting " << figure.reportedOutput * 1000.0
          << " ms out and " << figure.reportedInput * 1000.0 << " ms in"
          << endl;
+    updateLatencyMenuLine();
     return true;
 }
 
@@ -4362,6 +4415,30 @@ MainWindow::forgetMeasuredLatency()
                                                   expectedRecordingRate()));
     cerr << "MainWindow::forgetMeasuredLatency: at "
          << expectedRecordingRate() << " Hz" << endl;
+    updateLatencyMenuLine();
+}
+
+void
+MainWindow::updateLatencyMenuLine()
+{
+    if (!m_latencyLineAction || !m_forgetLatencyAction) return;
+    LatencyCalibration::InUse inUse = latencyInUse();
+    m_latencyLineAction->setText
+        (tr("Latency: %1").arg(CalibrateAudioDialog::describeLatency(inUse)));
+
+    // A stale figure is kept too (it applies again if the device goes
+    // back to its old buffers), and can be forgotten like any other
+    m_forgetLatencyAction->setEnabled
+        (inUse.source == LatencyCalibration::Source::Measured || inUse.stale);
+}
+
+void
+MainWindow::calibrateAudio()
+{
+    if (!m_calibrateAudioDialog) {
+        m_calibrateAudioDialog = new CalibrateAudioDialog(this, m_audioCheck);
+    }
+    m_calibrateAudioDialog->present();
 }
 
 TakeTiming

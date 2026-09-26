@@ -36,6 +36,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTimer>
@@ -87,6 +88,16 @@ AudioCheckRunner::~AudioCheckRunner()
         m_window->m_audioCheckTakes = false;
         m_step = Step::Idle;
     }
+}
+
+AudioCheckRunner::Plan
+AudioCheckRunner::calibrationPlan()
+{
+    Plan plan;
+    plan.layout = LatencyCheck::calibrationLayout();
+    plan.punchIns = 4;
+    plan.eventsEach = 3;
+    return plan;
 }
 
 QString
@@ -144,6 +155,13 @@ AudioCheckRunner::start(const Plan &plan)
     m_plan = plan;
     m_result = AudioCheckResult();
     m_reported = Progress();
+
+    // The devices the takes will be recorded on.  The window's device
+    // menus are shut while the run lasts; the rate comes with the takes
+    {
+        QSettings settings;
+        m_result.key = LatencyCalibration::currentKey(settings, 0);
+    }
     m_punchIns = punchIns;
     m_starts.clear();
     m_ends.clear();
@@ -539,6 +557,7 @@ AudioCheckRunner::end(QString failure)
         m_result.reportedOutputLatency = first.reportedOutput;
         m_result.reportedInputLatency = first.reportedInput;
         m_result.recordingRate = first.recordingRate;
+        m_result.key.rate = first.recordingRate;
         m_result.rateMismatch = m_result.recordingRate > 0 &&
             m_result.referenceRate > 0 &&
             m_result.recordingRate != m_result.referenceRate;

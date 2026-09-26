@@ -166,6 +166,18 @@ public:
     // the last take was placed with
     AudioCheckRunner *audioCheck() { return m_audioCheck; }
     bool audioCheckTakes() { return m_audioCheckTakes; }
+
+    // Playback > Calibrate Audio, the dialog it shows once it has been
+    // chosen, the lines under it, and the device menus above it
+    QAction *calibrateAudioAction() { return m_calibrateAudioAction; }
+    CalibrateAudioDialog *calibrateAudioDialog() {
+        return m_calibrateAudioDialog;
+    }
+    QAction *latencyLineAction() { return m_latencyLineAction; }
+    QAction *forgetLatencyAction() { return m_forgetLatencyAction; }
+    QMenu *playbackMenu() { return m_playbackMenu; }
+    QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
+    QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
     TakeLatency takeLatency() { return m_takeLatency; }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
 

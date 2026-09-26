@@ -27,9 +27,12 @@
 #include "TestRecordWorkflow.h"
 
 #include "../AudioCheckRunner.h"
+#include "../CalibrateAudioDialog.h"
 #include "../LatencyCheck.h"
 
 #include "base/PlayParameterRepository.h"
+
+#include <QMenu>
 
 class TestAudioCheck : public QObject
 {
@@ -110,6 +113,73 @@ class TestAudioCheck : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0, 60000);
         QCOMPARE(m_finished, 1);
         QVERIFY(!m_window->audioCheck()->isRunning());
+    }
+
+    // The devices the Preferences name, as the device menus write them
+    // when the driver is left alone. The fake device takes no notice
+    static void setDevices(QString output, QString input) {
+        QSettings settings;
+        settings.beginGroup("Preferences");
+        settings.setValue("audio-playback-device", output);
+        settings.setValue("audio-record-device", input);
+        settings.endGroup();
+    }
+
+    static LatencyCalibration::Key key(QString output, QString input) {
+        LatencyCalibration::Key key;
+        key.playbackDevice = output;
+        key.recordDevice = input;
+        key.rate = rate;
+        return key;
+    }
+
+    // The Playback menu's line about the latency, as it reads when the
+    // menu is opened
+    QString latencyLine() {
+        emit m_window->playbackMenu()->aboutToShow();
+        return m_window->latencyLineAction()->text();
+    }
+
+    // Playback > Calibrate Audio chosen, and the dialog it shows, Start
+    // pressed on it with the short plan
+    CalibrateAudioDialog *startCheckFromMenu() {
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        if (!dialog) return nullptr;
+        dialog->setPlan(shortPlan());
+        m_window->discardModifications();
+        dialog->startCheck();
+        return dialog;
+    }
+
+    // A run judged at the reference's rate, by the fake device's
+    // figures, to be given a verdict
+    static AudioCheckResult judgedResult(LatencyCheck::Verdict verdict) {
+        AudioCheckResult r;
+        r.recordingRate = rate;
+        r.referenceRate = rate;
+        r.reportedOutputLatency = reportedOut / rate;
+        r.reportedInputLatency = reportedIn / rate;
+        r.usedRoundTrip = (reportedOut + reportedIn) / rate;
+        r.takes.resize(4);
+        r.summary.verdict = verdict;
+        if (verdict != LatencyCheck::Verdict::Ok) {
+            r.summary.flags.push_back(verdict);
+        }
+        r.summary.judged = 12;
+        r.summary.found = 12;
+        r.summary.punchIns.resize(4);
+        for (LatencyCheck::PunchInResult &p : r.summary.punchIns) {
+            p.judged = 3;
+            p.found = 3;
+            p.medianOffset = 0.003;
+            p.spread = 0.001;
+        }
+        r.summary.medianOffset = 0.003;
+        r.summary.spread = 0.001;
+        r.summary.inputPeak = 0.25;
+        r.calibratedRoundTrip = r.usedRoundTrip + 0.003;
+        return r;
     }
 
     // The three toggles of the take path, and the settings they and the
@@ -351,6 +421,10 @@ private slots:
         settings.endGroup();
         settings.beginGroup("Analyser");
         settings.remove("");
+        settings.endGroup();
+        settings.beginGroup("Preferences");
+        settings.remove("audio-playback-device");
+        settings.remove("audio-record-device");
         settings.endGroup();
         SingingTakes::setOverwriteConfirmationWanted(true);
     }
@@ -763,6 +837,236 @@ private slots:
         QCOMPARE(AudioCheckRunner::nextReferencePath
                  (dir.path(), dir.filePath("song.wav")), one);
         QCOMPARE(files(), QStringList() << "song.wav");
+    }
+
+    // Playback > Calibrate Audio: a dialog, not modal, that names the
+    // devices and the latency in use and starts a check. While the check
+    // runs, neither it nor the device menus can be chosen. Other devices
+    // are named in the Preferences meanwhile; Use this latency keeps the
+    // round trip measured for the devices the check started on, and the
+    // menu's line says what the devices named now are placed with
+    void calibrate_audio_from_the_menu() {
+        setDevices("Speakers A", "Microphone A");
+        makeWindow(loopback());
+
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isModal());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Instructions);
+        const QString instructions = dialog->pageText();
+        for (QString words : { "Speakers A", "Microphone A", "off your ears",
+                               "moderate volume", "room quiet",
+                               "replaces the session", "save your work",
+                               "driver's figure" }) {
+            QVERIFY2(instructions.contains(words),
+                     qPrintable(words + " not in: " + instructions));
+        }
+
+        // Four punch-ins of three sweeps, which the calibration layout has
+        // room for, unless the test says otherwise
+        const AudioCheckRunner::Plan plan = dialog->plan();
+        QCOMPARE(plan.punchIns, 4);
+        QCOMPARE(plan.eventsEach, 3);
+        QCOMPARE(int(LatencyCheck::punchInsFor
+                     (plan.layout, plan.punchIns, plan.eventsEach).size()), 4);
+
+        dialog->setPlan(shortPlan());
+        m_window->discardModifications();
+        dialog->startCheck();
+        QVERIFY(m_window->audioCheck()->isRunning());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
+        setDevices("Speakers B", "Microphone B");
+
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
+                                 30000);
+        QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
+        QVERIFY(!m_window->audioOutputMenu()->menuAction()->isEnabled());
+        QVERIFY(!m_window->audioInputMenu()->menuAction()->isEnabled());
+        QVERIFY2(dialog->pageText().contains("Recording punch-in 1 of 2"),
+                 qPrintable(dialog->pageText()));
+
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->page() == CalibrateAudioDialog::Page::Result, 60000);
+        QCOMPARE(m_finished, 1);
+        QVERIFY(m_window->calibrateAudioAction()->isEnabled());
+        QVERIFY(m_window->audioOutputMenu()->menuAction()->isEnabled());
+        QVERIFY(m_window->audioInputMenu()->menuAction()->isEnabled());
+
+        // 12411 frames measured, 12288 reported, at 44.1 kHz
+        QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());
+        QString words = dialog->pageText();
+        for (QString w : { "came back steadily",
+                           "281 ms measured; the driver reports 279 ms",
+                           "output Speakers A; input Microphone A" }) {
+            QVERIFY2(words.contains(w),
+                     qPrintable(w + " not in: " + words));
+        }
+        QVERIFY(dialog->canUseLatency());
+
+        dialog->useLatency();
+        QVERIFY(!dialog->canUseLatency());
+        QVERIFY2(dialog->pageText().contains("Kept."),
+                 qPrintable(dialog->pageText()));
+
+        LatencyCalibration::Figure figure;
+        QSettings settings;
+        QVERIFY(!LatencyCalibration::load
+                (settings, key("Speakers B", "Microphone B"), figure));
+        QVERIFY(LatencyCalibration::load
+                (settings, key("Speakers A", "Microphone A"), figure));
+        QVERIFY2(std::fabs(figure.roundTrip * rate - roundTrip) <= 4.0,
+                 qPrintable(QString("kept %1 frames")
+                            .arg(figure.roundTrip * rate)));
+
+        QCOMPARE(latencyLine(), QString("Latency: driver's figure, 279 ms"));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+        setDevices("Speakers A", "Microphone A");
+        const QString line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured 281 ms, "),
+                 qPrintable(line));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+    }
+
+    // Forget Measured Latency: the menu's line goes back to the driver's
+    // figure, and the figure kept is gone
+    void calibrate_audio_forget_measured_latency() {
+        makeWindow(loopback());
+        const LatencyCalibration::InUse reported = m_window->latencyInUse();
+        QVERIFY(reported.source == LatencyCalibration::Source::Reported);
+        QVERIFY2(latencyLine().startsWith("Latency: driver's figure"),
+                 qPrintable(latencyLine()));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+
+        // As the check keeps one, for the devices the device reports now
+        LatencyCalibration::Figure figure;
+        figure.roundTrip = 0.3;
+        figure.date = QDateTime::currentDateTimeUtc();
+        figure.reportedOutput = reported.reportedOutput;
+        figure.reportedInput = reported.reportedInput;
+        QSettings settings;
+        LatencyCalibration::store(settings, key("", ""), figure);
+
+        const QString line = latencyLine();
+        QCOMPARE(line, QString("Latency: measured 300 ms, %1")
+                 .arg(QLocale().toString(QDate::currentDate(), "d MMM")));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+
+        m_window->forgetLatencyAction()->trigger();
+        QVERIFY(!LatencyCalibration::load(settings, key("", ""), figure));
+        QVERIFY(m_window->latencyInUse().source ==
+                LatencyCalibration::Source::Reported);
+        QVERIFY2(m_window->latencyLineAction()->text()
+                 .startsWith("Latency: driver's figure"),
+                 qPrintable(m_window->latencyLineAction()->text()));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+    }
+
+    // What the result page says, for results made here: the verdict in
+    // plain words with its fix, and Use this latency only when the figure
+    // can be used
+    void calibrate_audio_result_words() {
+        makeWindow(loopback());
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+
+        auto verify = [&](const AudioCheckResult &result, bool usable,
+                          QStringList present, QStringList absent) {
+            dialog->showResult(result);
+            QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+            const QString words = dialog->pageText();
+            for (QString w : present) {
+                QVERIFY2(words.contains(w),
+                         qPrintable(w + " not in: " + words));
+            }
+            for (QString w : absent) {
+                QVERIFY2(!words.contains(w),
+                         qPrintable(w + " in: " + words));
+            }
+            QCOMPARE(dialog->canUseLatency(), usable);
+        };
+
+        // Found one sweep in twelve
+        AudioCheckResult silent =
+            judgedResult(LatencyCheck::Verdict::NoSignal);
+        silent.summary.found = 1;
+        verify(silent, false,
+               { "could not hear the test sounds: it found 1 of 12",
+                 "volume up", "not muted", "Audio enhancements",
+                 "\"Hands-Free\"", "not measured; the driver reports 279 ms" },
+               { "Use this latency" });
+        if (QTest::currentTestFailed()) return;
+
+        // A device at 48 kHz: what the sweeps say is not the point
+        AudioCheckResult fast = judgedResult(LatencyCheck::Verdict::Scattered);
+        fast.recordingRate = 48000;
+        fast.rateMismatch = true;
+        fast.summary.spread = 0.6;
+        verify(fast, false,
+               { "The recording device runs at 48000 Hz; takes cannot line "
+                 "up until that is fixed.",
+                 "recorded at 48000 Hz, reference at 44100 Hz" },
+               { "varies from take to take" });
+        if (QTest::currentTestFailed()) return;
+
+        // Unsteady, but usable; and the microphone monitored
+        AudioCheckResult unsteady =
+            judgedResult(LatencyCheck::Verdict::Unsteady);
+        unsteady.summary.spread = 0.008;
+        unsteady.summary.echo.heard = true;
+        unsteady.summary.echo.delaySeconds = 0.045;
+        unsteady.summary.echo.levelDb = -12.0;
+        verify(unsteady, true,
+               { "The driver's timing varies from take to take by 8 ms.",
+                 "Your microphone is being played back somewhere",
+                 "Listen to this device", "45 ms later",
+                 "45 ms after the sound, 12 dB quieter" },
+               { "Kept." });
+    }
+
+    // Not while an ordinary take is being recorded: the check records
+    // takes of its own
+    void calibrate_audio_not_during_a_take() {
+        makeWindow(FakeAudioIO::Config());
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->calibrateAudioAction()->isEnabled());
+
+        m_window->doRecord();
+        QVERIFY(m_window->recordTarget()->isRecording());
+        QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
+        QTest::qWait(300);
+
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QTRY_VERIFY_WITH_TIMEOUT
+            (m_window->calibrateAudioAction()->isEnabled(), 10000);
+    }
+
+    // Closing the dialog while its check runs cancels the check; opened
+    // again, it starts from the instructions
+    void calibrate_audio_closed_during_a_check() {
+        makeWindow(loopback());
+        CalibrateAudioDialog *dialog = startCheckFromMenu();
+        QVERIFY(dialog);
+        QVERIFY(m_window->audioCheck()->isRunning());
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
+                                 30000);
+
+        QVERIFY(dialog->close());
+        QVERIFY(!dialog->isVisible());
+        QVERIFY(!m_window->audioCheck()->isRunning());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(!m_window->audioCheckTakes());
+        QCOMPARE(m_finished, 1);
+        QVERIFY(m_result.failure != "");
+        QVERIFY(m_window->calibrateAudioAction()->isEnabled());
+
+        m_window->calibrateAudioAction()->trigger();
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Instructions);
     }
 };
 

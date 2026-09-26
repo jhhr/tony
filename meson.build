@@ -1108,6 +1108,7 @@ tony_core_files = [
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
   'main/AudioCheckRunner.cpp',
+  'main/CalibrateAudioDialog.cpp',
   'main/CoverageStrip.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
@@ -1129,6 +1130,7 @@ tony_app_moc_files = qt.preprocess(
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
   'main/AudioCheckRunner.h',
+  'main/CalibrateAudioDialog.h',
   'main/CoverageStrip.h',
 ])
 

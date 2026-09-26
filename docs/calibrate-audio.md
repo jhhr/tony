@@ -292,7 +292,7 @@ marked "Done" when it is committed.
      dialog needs it. Done.
    - **B3** The check's playback: the reference centred at −12 dBFS, the sonification
      silent, and a progress signal. Done.
-   - **B4** The Calibrate Audio dialog and menu entry.
+   - **B4** The Calibrate Audio dialog and menu entry. Done.
 
    **Then you run it on your PC.** Its numbers settle three things: how wrong the
    driver's figure is, whether the offset holds across stream restarts on MME, and

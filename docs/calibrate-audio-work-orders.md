@@ -526,3 +526,17 @@ Left open: the default reference path is exercised only through `nextReferencePa
 ### Lead — 2026-09-26, after B3
 - De-raced `TestSingingAnalysis::waitForRange()` (`2a306fb`): `initialAnalysisCompleted()` also fires from `layerCompletionChanged()` before a ranged merge; it failed once in a full run.
 - For phase D's `open-points.md`, older bugs B3 found: (a) in a window's first file the toolbar level control's notches move the pitch/notes gain 0.5 → 0.562, force both audible and write that to the settings; (b) `audible-0` (Play Audio) is overridden on load by `audible-3` (the spectrogram layer on the same model, loaded last). Also B1's: closing a session during an ordinary take, then Stop, hangs.
+
+### Phase B4 — 2026-09-26
+Built: `main/CalibrateAudioDialog.{h,cpp}` (`tony_app`), a `QDialog`, not modal, with three pages (instructions, progress, result): `present()`, `startCheck()` (Start and Check Again), `cancelCheck()`, `useLatency()`, `showResult()`, `reject()`; for tests `page()`, `pageText()`, `canUseLatency()`, `setPlan()`; static `describeLatency(InUse)`. `AudioCheckRunner::calibrationPlan()` (4 × 3). `AudioCheckResult::key`: the Preferences' devices taken in `start()`, the rate set in `end()`; `storeMeasuredLatency()` stores under it. `MainWindow`: Playback ▸ Calibrate Audio..., a disabled line "Latency: ...", Forget Measured Latency, after the device submenus; `calibrateAudio()`, `updateLatencyMenuLine()`. `updateMenuStates()` shuts Calibrate Audio during any take or check, and both device menus during a check; the runner's `progress` and `finished` call it. `TestAudioCheck`: 5 tests `calibrate_audio_*`, one full run (13 s); `TestMainWindow` accessors.
+Choices / deviations:
+- The window owns the dialog, makes it on first use, and deletes it in `~MainWindow` before the runner. The dialog calls only `latencyInUse()` and `storeMeasuredLatency()`, and shows only runs it started itself.
+- Closing it (title bar, Esc, Close) while its check runs cancels the check. Opened again, it shows the instructions.
+- Menu line: "Latency: measured 281 ms, 26 Sep" (the year only when not this one), "Latency: driver's figure, 279 ms", plus " (the measured one is out of date)" when stale, or "not known yet" while the device reports 0. Forget is enabled while a figure is kept, stale or not. The line is refreshed on the menu's `aboutToShow`, in `updateMenuStates()`, and by store and forget.
+- Result page: one sentence for the verdict, then its fix. A rate mismatch replaces the verdict's words, and an echo adds a paragraph. Then a table: the round trip measured (not for NoSignal or a rate mismatch) against the driver's (out + in), what the takes were placed with, each punch-in's offset, the spread, found of judged, both rates, the input peak, the echo, and the devices. The text is selectable, to copy.
+- Progress: the runner's seconds left plus `kSecondsPerAnalysis` = 3 s for each analysis to come. The bar never goes back.
+- Nothing new asks the user, so there is no new seam: Forget asks nothing.
+The next phase must know:
+- A run replacing a check session asks "Session modified: save?" (its takes mark it modified). Check Again always meets it; answer No. The runner could skip the question for its own reference's session.
+- Not on the result page: §2's mic channel and noise floor. The runner measures neither.
+Left open: Record stays enabled during a check. Pressing it there goes through the Stop path and ends the check's take early; what the run then makes of it was not tried.

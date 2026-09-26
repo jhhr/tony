@@ -39,6 +39,7 @@ class QActionGroup;
 
 class AudioCheckRunner;
 struct AudioCheckResult;
+class CalibrateAudioDialog;
 
 namespace sv {
 class VersionTester;
@@ -92,12 +93,13 @@ public:
     FileOpenStatus openSession(sv::FileSource source) override;
 
     // The round trip takes are placed with (see LatencyCalibration).
-    // Keep the one an audio check measured, for the devices the
-    // Preferences name and the rate the check recorded at; false, with
-    // nothing kept, unless the check's figure is usable
+    // Keep the one an audio check measured, for the devices it started
+    // on and the rate it recorded at (AudioCheckResult::key); false, with
+    // nothing kept, unless the check's figure is usable.  The Playback
+    // menu's line about the latency follows
     bool storeMeasuredLatency(const AudioCheckResult &result);
 
-    // Drop the figure latencyInUse() describes
+    // Drop the figure latencyInUse() describes, and say so in the menu
     void forgetMeasuredLatency();
 
     // What the next take will be placed with, as far as it is known
@@ -281,6 +283,9 @@ protected slots:
 
     virtual void rescanAudioDevices();
     virtual void audioDeviceSelected(QAction *);
+
+    // Playback > Calibrate Audio: the audio check's dialog, not modal
+    virtual void calibrateAudio();
 
     virtual void handleOSCMessage(const sv::OSCMessage &);
 
@@ -885,6 +890,20 @@ protected:
     // record(), recordingStarted() and wantedPreRollFrames() consult it
     AudioCheckRunner *m_audioCheck;
     bool m_audioCheckTakes;
+
+    // Playback > Calibrate Audio, made the first time it is chosen, and
+    // the lines under it: the latency takes are placed with, and Forget
+    // Measured Latency.  Calibrate Audio is shut while a take or a check
+    // is being recorded, and so are the device menus while a check runs:
+    // the figure it measures is kept for the devices it started on
+    CalibrateAudioDialog *m_calibrateAudioDialog;
+    QAction *m_calibrateAudioAction;
+    QAction *m_latencyLineAction;
+    QAction *m_forgetLatencyAction;
+
+    // Say which latency is in use, and let it be forgotten if it is one
+    // the check measured
+    void updateLatencyMenuLine();
 
     // The rate the device recorded at, the last time a take was placed
     // with a round trip; 0 until then, and again once another device is

@@ -15,6 +15,7 @@
 #ifndef TONY_AUDIO_CHECK_RUNNER_H
 #define TONY_AUDIO_CHECK_RUNNER_H
 
+#include "LatencyCalibration.h"
 #include "LatencyCheck.h"
 #include "LatencyUtils.h"
 
@@ -65,6 +66,13 @@ struct AudioCheckResult
     /// The round trip that would have placed the takes right
     /// (LatencyCheck::calibratedRoundTrip()); see calibrationUsable()
     double calibratedRoundTrip;
+
+    /// What the figure is kept under (MainWindow::storeMeasuredLatency()):
+    /// the devices as the Preferences named them when the run started,
+    /// and the rate the takes were recorded at.  Not the devices named
+    /// when the figure is kept: the result is on show for as long as the
+    /// user likes, and another device may have been chosen by then
+    LatencyCalibration::Key key;
 
     /// Whether calibratedRoundTrip means anything: the run was judged
     /// Ok or Unsteady, at the reference's rate
@@ -175,6 +183,10 @@ public:
 
     explicit AudioCheckRunner(MainWindow *window);
     virtual ~AudioCheckRunner();
+
+    /// The plan of Playback > Calibrate Audio: four punch-ins of three
+    /// events each on the calibration layout
+    static Plan calibrationPlan();
 
     /// Where the reference is written unless the plan names a file:
     /// the application's data directory
