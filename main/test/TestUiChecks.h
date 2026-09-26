@@ -717,7 +717,7 @@ private slots:
         openReference(writeWav(tone(lowHz, 4.0)));
         if (QTest::currentTestFailed()) return;
 
-        // One recording: see strip_on_top_after_another_recording
+        // One recording, so that the band has an end to drag off
         m_window->seekTo(frames(0.5));
         take(1500);
         if (QTest::currentTestFailed()) return;
@@ -895,8 +895,10 @@ private slots:
     }
 
     // The band after a second recording, in a gap of the first: the take's
-    // audio is swapped for a file holding both, and the band has to stay
-    // on top of the waveform of the new file
+    // audio is swapped for a file holding both, and the take's waveform
+    // layer is made again. The band has to stay on top of it, then and
+    // after everything else that swaps the audio or makes the layer again:
+    // undo, redo, and opening the session
     void strip_on_top_after_another_recording() {
         FakeAudioIO::Config config;
         config.input = tone(highHz, 6.0);
@@ -905,29 +907,64 @@ private slots:
         openReference(writeWav(tone(lowHz, 4.0)));
         if (QTest::currentTestFailed()) return;
 
+        const sv::sv_frame_t inFirst = frames(0.4);
+        const sv::sv_frame_t inSecond = frames(2.2);
+
+        // Whether the band is drawn at a frame: a few columns either side
+        // of it along the bottom row, all orange
+        auto band = [&](sv::sv_frame_t frame, QString shot) {
+            showSeconds(0.0, 3.0);
+            QImage image = grabPaneRedrawn();
+            saveShot(shot, image);
+            int x = pane0()->getXForFrame(frame);
+            for (int dx = -3; dx <= 3; ++dx) {
+                if (!isOrange(image.pixel(x + dx, image.height() - 3))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
         take(1000);
         if (QTest::currentTestFailed()) return;
-        showSeconds(0.0, 3.0);
-        sv::Pane *pane = pane0();
-        const sv::sv_frame_t inFirst = frames(0.4);
-        QImage image = grabPaneRedrawn();
-        QVERIFY(isOrange(image.pixel(pane->getXForFrame(inFirst),
-                                     image.height() - 3)));
+        QVERIFY(band(inFirst, "first"));
 
         m_window->seekTo(frames(2.0));
         take(700);
         if (QTest::currentTestFailed()) return;
-        showSeconds(0.0, 3.0);
-        image = grabPaneRedrawn();
-        saveShot("after-second", image);
-        int y = image.height() - 3;
-        QEXPECT_FAIL("", "the take's waveform layer made by the audio swap "
-                     "is attached above the coverage strip and covers the "
-                     "band (syncCoverageStrip() raises nothing once the "
-                     "strip is shown)", Continue);
-        QVERIFY2(isOrange(image.pixel(pane->getXForFrame(inFirst), y)) &&
-                 isOrange(image.pixel(pane->getXForFrame(frames(2.2)), y)),
+        QVERIFY2(band(inFirst, "second") && band(inSecond, "second"),
                  "after a second recording the band is not drawn");
+
+        // Raised, and still a picture, not sound: out of the play source
+        auto stripIsSilent = [this]() {
+            return !m_window->playSource()->getModels().count
+                (m_window->coverageStrip()->getModelId());
+        };
+        QVERIFY2(stripIsSilent(), "the strip's model is in the play source");
+
+        QCOMPARE(undoText(), tr("&Undo %1").arg(tr("Record Singing")));
+        press(QKeySequence(tr("Ctrl+Z")));
+        QTRY_COMPARE(int(coverage().size()), 1);
+        QVERIFY2(band(inFirst, "undone") && !band(inSecond, "undone"),
+                 "after an undo the band is not what is left of the take");
+
+        press(QKeySequence(tr("Ctrl+Shift+Z")));
+        QTRY_COMPARE(int(coverage().size()), 2);
+        QVERIFY2(band(inFirst, "redone") && band(inSecond, "redone"),
+                 "after a redo the band is not drawn");
+
+        QString session = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(session));
+        m_window->doCloseSession();
+        QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QTRY_VERIFY(m_window->takes()->haveTake() &&
+                    int(coverage().size()) == 2);
+        QVERIFY2(band(inFirst, "reopened") && band(inSecond, "reopened"),
+                 "in the session opened again the band is not drawn");
+        QVERIFY2(stripIsSilent(), "the strip's model is in the play source");
     }
 
     // Checklist: Erase and Select Recording are greyed out with no take,
@@ -1184,14 +1221,12 @@ private slots:
         int pointer = pane->getXForFrame(P);
         QVERIFY(left > 20 && right < before.width() - 20);
 
-        // The band of the coverage strip along the bottom is left to
-        // strip_on_top_after_another_recording
         int differing = 0;
         QString first;
         for (int x = 0; x < before.width(); ++x) {
             if (x >= left && x <= right) continue;
             if (std::abs(x - pointer) <= 3) continue;
-            for (int y = 0; y < before.height() - 10; ++y) {
+            for (int y = 0; y < before.height(); ++y) {
                 if (before.pixel(x, y) != after.pixel(x, y)) {
                     if (first == "") {
                         first = QString("x = %1, y = %2").arg(x).arg(y);

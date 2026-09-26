@@ -146,7 +146,7 @@ it first, or break the code for a moment (mark the line `MUTATION`, and check
   purpose. "Fixing" one side makes the live dots and the pYIN track disagree.
 
 A bug that is known and not yet fixed is committed as a test with `QEXPECT_FAIL` naming
-it; the marker goes in the commit that fixes it. There are three at present, all in
+it; the marker goes in the commit that fixes it. There are two at present, all in
 `TestUiChecks`, listed in [open-points.md](open-points.md).
 
 ## Timing and races

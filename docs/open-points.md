@@ -47,9 +47,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 Defects the checks of `TestUiChecks` found, each committed as a test expected to fail
 (`QEXPECT_FAIL` names the cause):
 
-- **The band of the coverage strip is hidden after the second recording.** The audio swap
-  makes the take's waveform layer again, on top, and `syncCoverageStrip()` raises nothing
-  once the strip is shown (`strip_on_top_after_another_recording`).
 - **`commitData()` writes `~/.sv1/tmp-*.sv`**, Sonic Visualiser's extension; Tony opens
   only `.ton` as a session, so what it saved at logout does not open from Recent Files
   (`commit_data_writes_a_playable_session`; renamed to `.ton` it opens and plays).

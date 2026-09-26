@@ -3284,6 +3284,17 @@ MainWindow::syncCoverageStrip()
 
     m_coverageStrip->setCoverage(m_takes->getCoverage());
 
+    // The band runs along the bottom of the pane, over the take's
+    // waveform, so it has to be above that layer. The swap makes the
+    // waveform layer again, on top of everything (as does activating a
+    // take), so this is looked at on every call and not only when the
+    // strip is first shown
+    Layer *strip = m_coverageStrip->getLayer();
+    int layers = pane->getLayerCount();
+    if (strip && layers > 0 && pane->getLayer(layers - 1) != strip) {
+        TakeLayers::raise(pane, strip);
+    }
+
     if (!wasShown) {
         // The new layer is on top, where a tool would look for the layer
         // to act on, so the tracks that can be edited go back there, as
