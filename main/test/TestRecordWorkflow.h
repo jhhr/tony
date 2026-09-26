@@ -68,6 +68,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
@@ -630,7 +631,17 @@ class TestRecordWorkflow : public QObject
         s.pitch = pitchEvents(a2);
         s.notes = a2 ? noteEvents(a2->getLayer(Analyser::Notes))
             : sv::EventVector();
-        if (takeAudio()) s.frames = takeAudio()->getFrameCount();
+        // Waited for, as verifyTakeMatches() waits: the model of a file
+        // just opened (as after an erase) says 0 frames until it has read
+        // the file, and under load that can outlast the call
+        if (auto audio = takeAudio()) {
+            QElapsedTimer waited;
+            waited.start();
+            while (!audio->isReady() && waited.elapsed() < 30000) {
+                QTest::qWait(10);
+            }
+            s.frames = audio->getFrameCount();
+        }
         return s;
     }
 
