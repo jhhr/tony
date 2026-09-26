@@ -149,9 +149,14 @@ class DevChecks : public QObject
     Q_OBJECT
 
 public:
-    /// Items 1 and 2: how far from where the reference has it a sweep
-    /// may land, either way
-    static constexpr double kPlacementSeconds = 0.002;
+    /// Items 1, 2, 7 and 13: how far from where the reference has it a
+    /// sweep may land, either way.  Kept running, a stream on two sound
+    /// cards drifts, and PortAudio slips a period (10 ms on WASAPI) to
+    /// match, so a session's takes lie within one period of each other:
+    /// the user's run lay within -5.3 and +4.0 ms of its calibration.
+    /// The user accepted that (2026-09-26), far under what a singer
+    /// hears; 2 ms before
+    static constexpr double kPlacementSeconds = 0.006;
 
     /// Item 3: more live dots than this in every punch-in, each where
     /// TakeDiff::placeLiveDot() allows

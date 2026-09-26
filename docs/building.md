@@ -172,7 +172,7 @@ Measured on 2026-09-26:
 | A session's first build, with the setup script's ccache | 3.7 minutes, in the background |
 | Linking `tony` and the three test executables | 3 s with mold, 12 s with GNU ld |
 | App suite | 628 s in one process, 98 s in eight |
-| Development checks' suite | 314 s in one process, 59 s in eight |
+| Development checks' suite | 444 s in one process, 112 s in eight |
 
 Why each part is as it is:
 

@@ -206,13 +206,70 @@ What they showed:
 - Two failures were the checks' own, since fixed: item 14 misread a 48 kHz take's overrun
   (it reads about 0.3 s, as on MME), and item 3 judged dots in a sound's first window,
   which through a real room are off pitch on every driver
-  ([calibrate-audio.md](calibrate-audio.md), §8).
+  ([calibrate-audio.md](calibrate-audio.md), §7).
 - Whether 10 ms crackled was not reported.
 
 **Decided** (the user, 2026-09-26): WASAPI at 20 ms is the default, and the stream is
-kept running between takes (done, §5). **Next:** Calibrate Audio and a whole dev run on
-WASAPI at 20 ms, where items 1, 2, 7 and 13 should now pass
-([manual-checklist.md](manual-checklist.md), §1).
+kept running between takes (§5).
+
+**The stream kept running**, WASAPI at 20 ms, 2026-09-26: Calibrate Audio, then a whole
+dev run without the device opened again in between; headphones on a PCI sound card (Xonar
+Essence STX), the microphone on a USB one. Round trip 91.8 ms. The punch-ins, in the
+order they were taken: −3.2, −3.7, −4.5, −5.2, +4.0, +3.4, +2.9, +2.2 ms: 9 ms from lowest
+to highest, where the restarts had given 15.
+
+- **The alignment drifts, then slips by a period.** Each take lands about 0.6 ms earlier
+  than the one before, and once, between the fourth and the fifth, the offset jumps back
+  by 9 ms: WASAPI's 10 ms period, less the drift. Two sound cards run on two clocks, and
+  the output's runs fast against the input's; kept running, the output uses up its margin
+  and plays a period of silence (the next run's recordings, below). (One start gap read
+  478 frames where every other read 0 or 480.)
+- So a running stream keeps every take within one period, 10 ms, of the others; where that
+  window sits against the kept figure depends on when Calibrate Audio measured it. On
+  one device, one clock, there would be no drift; not measured.
+- Consecutive takes agree: item 10's second punch-in against the first, −0.6 ms.
+- Items 4, 9, 10, 12 and 14 passed. Item 3 failed on three dots at a tone's end, as at
+  onsets, and sets those apart since ([calibrate-audio.md](calibrate-audio.md), §7).
+
+**Decided** (the user, 2026-09-26): accept it. Items 1, 2, 7 and 13 allow ±6 ms instead of
+±2 ms: half a period and a margin, as this run's figures lay. A run whose calibration
+happened near a slip can read up to about ±10 ms; calibrating again then puts it back in
+the middle. Whether Windows shows the microphone in use until Tony quits, and whether a
+take starts with a click, were not watched for.
+
+**Kept running, again**, WASAPI at 20 ms, 2026-09-27, the same setup and order, with the
+±6 ms. Round trip 98.5 ms. The sweeps, in the order taken: −3.3, −3.7, −4.6, −4.8, −5.3,
++4.5, +3.8, +3.2, +2.7, +2.1 ms. 9 passed, 1 failed, 1 measured.
+
+- **The same course as the run before**, take by take within 0.3 ms, although the two
+  calibrations read 6.7 ms apart: each run placed its takes against its own calibration.
+  Both runs began with Calibrate Audio, and in both it measured about 5 ms from either
+  edge of the window, so the drift and the slip seem to run the same course from the
+  stream's start.
+- **A slip can fall inside a take**: this time between the fourth punch-in's two sweeps,
+  which landed 9.8 ms apart. Items 1, 2, 7 and 13 passed; the largest offset, −5.3 ms, was
+  0.7 ms inside the limit.
+- Windows showed the microphone in use for the whole run, as it should with the stream
+  kept running; no take was heard to start with a click.
+- Item 3 failed on four dots in silence, at about 300 Hz, 0.45 s or more from any of the
+  reference's sounds; none of the four runs before had one. The live tracker has no level
+  floor ([calibrate-audio.md](calibrate-audio.md), §10).
+
+The run's recordings (`recorded-*.wav`, 48 kHz, the microphone on both inputs), which the
+user sent, show what the report could not:
+
+- **The slip is a gap in the playback.** In the fourth punch-in, at 18.56 s, the recorded
+  220.5 Hz tone fades out over 5 ms and back 5 ms later, and everything after it arrives
+  9.7 ms later: the headphones played about one period of silence. Within each take the
+  sweeps arrive 0.1 ms earlier every second, the two clocks about 100 ppm apart, so a
+  stream running on these two cards has such a gap about every 100 s; heard as a tick
+  when it falls in something playing.
+- **The dots in silence are the room's noise.** A steady floor of about −66.5 dBFS in
+  every recording, the calibration's too, most of it below 400 Hz, with two lines at 306
+  and 334 Hz some 30 dB over the rest; the mains' 50 Hz line is 8 dB below them. Fans,
+  most likely, not hum. Now and then YIN takes a window of it for a pitch, just under its
+  threshold (0.12 to 0.148 against 0.15): one or two dots in almost every recording, all
+  between −64.5 and −67.5 dBFS, where no dot on a tone read below −42 dBFS.
 
 ## 8. Open points
 
@@ -226,11 +283,14 @@ WASAPI at 20 ms, where items 1, 2, 7 and 13 should now pass
   before the first take, from svapp ([calibrate-audio.md](calibrate-audio.md), §5).
 - WDM-KS (in PortAudio's build too) and WASAPI's exclusive mode would be lower still, but
   take the device from every other program; not built.
-- **Kept running, not yet measured**: whether one alignment holds over a session's takes
-  on a real device is for the next dev run (§7). Opening the device again still moves it,
-  so a figure kept from an earlier session is up to about 8 ms off: calibrate at the start
-  of a session for the best placement. The microphone shows as in use from the first
-  take until Tony quits.
+- **Kept running on two sound cards** the alignment drifts and slips by a period (§7):
+  every take within 10 ms of the others, and each slip is a period of silence in the
+  playback, about every 100 s on the user's cards. In two runs that began with Calibrate
+  Audio, it measured in the middle of that window. On one device it should not drift; not
+  measured.
+  Opening the device again still moves it, so a figure kept from an earlier session is up
+  to about 8 ms off: calibrate at the start of a session for the best placement. The
+  microphone shows as in use from the first take until Tony quits.
 - On the loopback fake at 48 kHz, two runs in four read an output peak near 0 dBFS in the
   first block after a stream started, where the reference peaks at −12 dBFS; never at
   44.1 kHz. It may be an audible click at a take's start on a 48 kHz device.

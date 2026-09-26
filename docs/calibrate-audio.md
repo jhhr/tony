@@ -326,20 +326,22 @@ path, when the take stopped, and Play Singing Audio before and after.
 
 The items are numbered as the manual checklist was when they were planned, before `default`
 rewrote it; the report and [manual-checklist.md](manual-checklist.md) §1 use these numbers.
-"Placed within ±2 ms" means every judged sweep found, with its offset within ±2 ms.
+"Placed within ±6 ms" means every judged sweep found, with its offset within ±6 ms: one
+WASAPI period of drift between two sound cards' clocks, which the user accepted
+([audio-drivers.md](audio-drivers.md), §7); ±2 ms until then.
 
 | Item | Check | Passes when | Numbers |
 | --- | --- | --- | --- |
-| 1 | `latency_on_this_machine` | every punch-in of every stage placed within ±2 ms; after the reopen, the take's file judged again over the dev take's punch-ins gives the same offsets to the frame, and the pitch and notes the session restored are the same events (values as the file rounds them) | offsets of each punch-in, the largest, the round trip used, the same after reopening |
-| 2 | `several_phrases_in_one_take` | at least two punch-ins; each wholly in the take's coverage, its median offset within ±2 ms, its own start gap measured | each punch-in's median offset and start gap |
-| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Counted apart and not judged: dots on the sweeps (a subharmonic of their top), and dots within one window of the tracker (46 ms) after a tone's start or the punch-in's, whose window straddles that start: on the fake they are on pitch, but through a real speaker, room and microphone they wander 50 to 75 cents (`TakeDiff::placeLiveDot()`) | dots per punch-in, on tones, at onsets, on sweeps, elsewhere, and the message says how many were at onsets; how far behind the cursor they appeared, median and spread |
+| 1 | `latency_on_this_machine` | every punch-in of every stage placed within ±6 ms; after the reopen, the take's file judged again over the dev take's punch-ins gives the same offsets to the frame, and the pitch and notes the session restored are the same events (values as the file rounds them) | offsets of each punch-in, the largest, the round trip used, the same after reopening |
+| 2 | `several_phrases_in_one_take` | at least two punch-ins; each wholly in the take's coverage, its median offset within ±6 ms, its own start gap measured | each punch-in's median offset and start gap |
+| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Counted apart and not judged: dots on the sweeps (a subharmonic of their top), and dots at an edge, whose window straddles it: within one window of the tracker (46 ms) after a tone's start or the punch-in's, or within half a window (23 ms) either side of a tone's end, where the window holds the tone's decay through the room and what follows. On the fake they are on pitch, but through a real speaker, room and microphone they wander 50 to 75 cents (`TakeDiff::placeLiveDot()`) | dots per punch-in, on tones, at edges, on sweeps, elsewhere, and the message says how many were at edges; how far behind the cursor they appeared, median and spread |
 | 4 | `nothing_of_the_take_in_the_speakers` | no echo in any stage; an output level of exactly 0 at every look that lies wholly in one of the reference's silent gaps; Play Singing Audio the same after each take as before, and the take heard or not as it says | the second arrival; the largest output level in the gaps, and over how many looks; the largest output level; the margin of a look |
 | 5 | `mic_on_input_2` | stage 2: judged only when the microphone is on input 2 alone (an input within 20 dB of the loudest carries it), and then passes when every punch-in drew more than 10 dots; otherwise Measured, "not applicable here"; a Fail when no input recorded anything | each input's peak in each punch-in; which inputs carry the microphone |
-| 7 | `record_from_a_position` | stage 3: placed within ±2 ms; outside the selection the take's audio the same bit for bit, and its pitch and notes beyond ±0.25 s unchanged | the range, offsets, audio, pitch and notes outside |
+| 7 | `record_from_a_position` | stage 3: placed within ±6 ms; outside the selection the take's audio the same bit for bit, and its pitch and notes beyond ±0.25 s unchanged | the range, offsets, audio, pitch and notes outside |
 | 9 | `stop_on_a_long_song` | stage 1: each punch-in's time from Stop to its pitch merged under half the whole song's analysis time, and the take's pitch beyond ±0.25 s of each range unchanged, which shows only the range was analysed | the whole song's analysis, and each punch-in's time and share of it |
 | 10 | `the_joins` | stage 5, at J: no step in the samples (the largest first difference within ±2 ms of J at most 10 dB over the 95th percentile of the 50 ms around); the pitch track running through (no gap over one hop within ±0.5 s, no frame twice, in order); exactly one note holding J and no note beginning or ending within 0.5 s; outside the two ranges ± 0.25 s, pitch and notes unchanged. A failure names its part: "step:", "pitch:", "note:", "outside:" | offsets, the second punch-in against the first, the step in dB, the pitch across J, the notes at J and within 1 s, the nearest note edge |
 | 12 | `nothing_heard_or_changed_in_the_lead_in` | stage 3: before P the take's audio the same bit for bit and its pitch and notes beyond 0.25 s unchanged; and item 4's looks that end by P, now over the take's own audio, read 0 in the silent gaps | audio, pitch and notes before P; the output in the lead-in's gaps, and the looks; the longest wait between two looks |
-| 13 | `pre_roll_near_the_start` | stage 4: a lead-in no longer than the 1 s of song before P; playback from frame 0, and the cursor never before it; a countdown shown, ending at 1, and starting no higher than the lead-in, round trip and start gap (and 50 ms) rounded up; placed within ±2 ms | the lead-in, where playback started, the cursor's lowest, the countdown, offsets |
+| 13 | `pre_roll_near_the_start` | stage 4: a lead-in no longer than the 1 s of song before P; playback from frame 0, and the cursor never before it; a countdown shown, ending at 1, and starting no higher than the lead-in, round trip and start gap (and 50 ms) rounded up; placed within ±6 ms | the lead-in, where playback started, the cursor's lowest, the countdown, offsets |
 | 14 | `record_into_selection_stops_by_itself` | stages 3 and 4: what was recorded past the selection's end, from the raw recording, between 0 and 0.25 s plus one look of the take timer (100 ms) and a block; the coverage after is the coverage before plus the selection, exactly; no modal dialog from the take's start to its analysis done | seconds past the end, and allowed; the coverage after; dialogs |
 
 Item 10 does not judge placement: items 1 and 2 do. Item 14 works out what the take needed
@@ -409,7 +411,7 @@ phone keeps `DevChecks.txt` where only Tony can read it. What the numbers decide
 - **The report's header:** the driver and the latency asked of it, the drivers built in,
   and what the device reports: which run on which driver is which
   ([audio-drivers.md](audio-drivers.md), §7).
-- **Items 1 and 2**, each sweep's offset and each start gap: the ±2 ms. **Item 3**, how far
+- **Items 1 and 2**, each sweep's offset and each start gap: the ±6 ms. **Item 3**, how far
   the dots trail the cursor. **Items 4 and 12**, the margin, the looks in the gaps and the
   longest wait: how the gap check fares with a real device's blocks. **Item 5**, each
   input's peak. **Item 9**, both times. **Item 10**, the step in dB and the notes at J.
@@ -501,11 +503,13 @@ figure then placed every take. Considered: widening items 1 and 2 to ±15 ms; th
 project, whose WASAPI restarted as unsteadily; keeping the stream running between takes.
 **Chosen, and built: the stream is kept running between takes**
 ([recording.md](recording.md#latency)), so that a session's takes share one alignment,
-which the calibration at its start measures. Items 1 and 2 keep ±2 ms. Not yet measured
-on a real device: the next dev run, on WASAPI at 20 ms, should pass items 1, 2, 7 and 13.
-The user's phone, restarted at every take, spread so too: through Bluetooth a
-calibration's punch-ins landed 8.5 ms apart and the dev run's up to +4.9 ms off, while one
-take's sweeps agreed; Android keeps the stream running as well since.
+which the calibration at its start measures. Measured on the user's PC (two sound cards):
+the alignment drifts and slips by a period, so takes land within one period, 10 ms, of each
+other; the user accepted that, and items 1, 2, 7 and 13 allow ±6 ms
+([audio-drivers.md](audio-drivers.md), §7). The user's phone, restarted at every take,
+spread too: through Bluetooth a calibration's punch-ins landed 8.5 ms apart and the dev
+run's up to +4.9 ms off, while one take's sweeps agreed; Android keeps the stream running
+as well since.
 What still moves the alignment is opening the device again (a driver, latency or device
 chosen, a device menu opened, Tony started again, on Android a resume after two idle
 minutes or the background): a figure kept from an earlier session
@@ -568,7 +572,11 @@ a dip, below).
 **Later candidates:**
 
 - A noise gate for live dots: `RealtimePitchTracker` has none (YIN is scale-free), so room
-  noise can make dots. A measured noise floor could set one.
+  noise can make dots, where pYIN as Tony runs it penalises soft pitches. The user's run of
+  2026-09-27 had four dots in silence, at about 300 Hz, and item 3 failed on them. Its
+  recordings put them in the room's steady noise, about −66.5 dBFS with lines at 306 and
+  334 Hz, 25 dB below the quietest dot on a tone ([audio-drivers.md](audio-drivers.md),
+  §7). A measured noise floor could set one.
 - A quick re-measure after a Bluetooth reconnect, without a test session.
 - The microphone's channel and the noise floor on the calibration's result page.
 - A getter for the rate the record target records at (svapp fork), so that the menu line
@@ -589,9 +597,12 @@ a dip, below).
   failing on purpose, and the real `splice()` and `erase()` through files, whose fades lie
   inside the range; item 3's places for a live dot, with dots 67 cents sharp at the times
   of the user's runs (7.516 to 7.528 s, the tone of 245 Hz from 7.5 s; 16.803 to 16.822 s,
-  the punch-in from 16.8 s) not judged, and off pitch one window later, and the reach of a
-  sound. `TestAudioDriverSettings`: the drivers, the default and the latency
-  kept per driver ([audio-drivers.md](audio-drivers.md), §6).
+  the punch-in from 16.8 s, where that tone also ends) not judged, and off pitch one window
+  later, also at a punch-in from inside a tone; dots 71 and 62 cents sharp at 8.302 and
+  18.797 s, 2 ms after the tone of 245 Hz ends and 3 ms before that of 220.5 Hz does, not
+  judged, and off pitch one window earlier, the allowance half a window either side of
+  the end and no more; and the reach of a sound. `TestAudioDriverSettings`: the drivers,
+  the default and the latency kept per driver ([audio-drivers.md](audio-drivers.md), §6).
 - **The round trip in the take path** (`TestRecordWorkflow`, `latency_*`): a stored figure
   lines a take up where the reported pair does not, a stale one is ignored, and the
   reported pair is converted at the device's rate, also when the device was opened before
@@ -642,7 +653,7 @@ and the dev checks".
 - item 9: a 60 s song analysed in 2.9 to 3.0 s, its punch-ins merged in 0.59 to 0.70 s (20
   to 24 %); a 240 s song in 10.4 s, its punch-ins in 0.63 and 0.75 s (6 to 7 %);
 - item 10: the step reads −8.3 dB, the dip; the largest pitch gap is one hop;
-- item 3: 12 to 15 of each punch-in's 280 to 306 dots at onsets;
+- item 3: 24 and 25 of the punch-ins' 279 and 280 dots at edges;
 - item 12: 57 looks in the lead-in's gaps; item 14: 0.25 to 0.35 s past the selection's end;
 - at 48 kHz, every sweep at +1.0 to +1.1 ms, the resampler's hold-back, which the round trip
   given leaves out; item 14: 0.28 and 0.32 s.
@@ -734,3 +745,7 @@ So that later work does not derive them again.
   Items 4, 9, 10 and 12 passed on all three; 1, 2, 7 and 13 failed on the restart jitter
   on all three; 3 failed on dots at a sound's onset, and 14 on WASAPI on its own misreading
   of a 48 kHz take, both since fixed in the checks.
+- **2026-09-26 and 2026-09-27**, whole dev runs on WASAPI at 20 ms with the stream kept
+  running between takes, each after Calibrate Audio: [audio-drivers.md](audio-drivers.md),
+  §7. Takes drift and slip within 10 ms; items 1, 2, 7 and 13 pass at ±6 ms. Item 3 failed
+  first on dots at a tone's end, since set apart, then on four dots in silence (§10).
