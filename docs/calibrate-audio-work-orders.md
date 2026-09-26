@@ -194,11 +194,11 @@ coloured fringes on the scale's labels read as live dots in `TestUiChecks`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`), C1b (`276036e`), C1c (`b1b8f08`), C2 (`fbdce6c`).
 
 Also done: C1a (`4370131`), the merge of `default` (`c8b9585`), `test-tony-dev` (lead).
 
-**Order from here:** C1b, C1c, C2, C3, then the lead's release build, then D. The spec's
+**Order from here:** C1b, C1c, C2, C2b, C2c, C3, then the lead's release build, then D. The spec's
 old C2 (observer group) and C4 (smoke group) are gone: `TestUiChecks` covers the smoke
 items and the screen, and what the dev run measures on the device is now in C1b–C2.
 
@@ -334,6 +334,57 @@ and how it times the whole-song analysis; spec §4 rows 9 and 10.
 - **Tests**: the passing run gains both stages; keep `test-tony-dev` under about 3 minutes
   in all (135 s now). Show failure for item 9 (e.g. Stop analysing the whole song) and one
   part of item 10 by breaking the code, and undo by hand.
+
+### C2b — Item 12 robust against a stalled event loop (a de-race, its own commit)
+
+Read also: `main/dev/DevChecks.cpp` (`gapLooks()`, the "Re-record" stage, item 12) and
+`main/dev/TakeObserver.{h,cpp}`; C1b's and C1c's log entries.
+
+- **The flake (found in C2):** item 12 judges the output levels in the silent gaps of the
+  re-record's lead-in. Its only gap there, 18.8–19.2 s, holds 15–16 looks; a stall of the
+  GUI thread of about 340 ms (seen on this VM, nothing in the log) left 9, once 0, and
+  item 12 failed in a clean run. A real device can stall too, and MME's larger blocks
+  widen the margin and shrink the gap further.
+- **The fix, in the design, not the tolerance:**
+  - Give the re-record stage's plan a longer pre-roll (`Plan::preRoll`), so that its
+    lead-in also spans the 0.9 s gap at 16.8–17.7 s inside the earlier punch-in
+    [16.8, 21.2]: a pre-roll of 2.4 s starts it at 16.8 s. Check that items 7, 12 and 14
+    still read as before, and say what the lead-in now covers.
+  - Look at what a stall does to a look (the frames received jump; the look's window then
+    spans a sweep and is left out). Where a gap check ends with no look in any gap, the
+    part is "not judged" with the reason, not a Fail: it has not seen the take played
+    out. Item 4 the same.
+- **Tests:** a test that stalls the GUI thread for about 0.4 s during the re-record's
+  lead-in (a single-shot timer that busy-waits, started when the runner reports that
+  punch-in recording): item 12 still judges and passes; and the take-heard fault still
+  fails with such a stall. Show the stall test failing on the code before the fix.
+
+### C2c — The notes merge keeps one note across a join (`Analyser`, its own commit)
+
+Read also: `docs/takes.md` "Ranged analysis and merge" and its known limits (search "by
+onset", "deliberate trade"); `Analyser::analyseRange()`'s merge in `main/Analyser.cpp`
+(search "Notes go by their onset"); the existing merge tests (search `TestRecordWorkflow.h`
+and `TestSingingAnalysis.h` for "note"); C2's log entry.
+
+- **The defect (found by item 10):** two punch-ins meeting at J inside a held tone. The
+  first's note ends at J (the audio after J was silence when it was analysed). The second
+  punch-in's run starts 0.5 s before J, inside the tone, so its note begins before W (the
+  range ± 0.25 s): the merge adds only notes with their onset in W, and the tone after J
+  has no note. Analysing the whole take gives one note, 27.21–30.20 s.
+- **Wanted:** one note across the join. When an old note runs into W from before it and
+  a new note that begins before W overlaps it there, the old note keeps its onset (the
+  audio before W has not changed) and takes the new note's end, cut back as today at an
+  old onset after W. Decide, and justify, what happens when a new note begins before W
+  with no old note there. Keep everything else the merge promises: notes in unchanged
+  audio not split, the change record (`m_rangedNotesChange`) that undo reverses, and the
+  "deliberate trade" of `docs/takes.md` unless the fix removes it (then say so).
+- **Tests:**
+  - an app test on the fake: two punch-ins meeting inside a held tone leave one note
+    across J; seen failing before the fix;
+  - undo of the second punch-in gives back the first's note exactly;
+  - every existing merge test green and unchanged;
+  - `TestDevChecks`: item 10's `QEXPECT_FAIL` removed; the check passes.
+- **Docs:** `docs/takes.md`'s "Notes, by onset" and its known limit, in the same commit.
 
 ### C3 — Retire `test-tony-device`
 

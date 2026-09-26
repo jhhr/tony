@@ -331,6 +331,9 @@ marked "Done" when it is committed.
    - **C1b** `TakeObserver`. Items 3, 4, 5 (and 8's number). Done.
    - **C1c** Re-record and pre-roll stages. Items 7, 12, 13, 14. Done.
 5. **C2** Long song and joins: items 9 and 10. Done.
+   - **C2b** Item 12 robust against a stalled event loop (a flake C2 found).
+   - **C2c** The notes merge keeps one note across a join: the defect item 10 found (the
+     user chose to fix it on this branch).
 6. **C3** Retire `test-tony-device`, once all it checks is in the dev run.
 7. **Release build** by the lead (§8, "Release builds must stay clean").
 8. **D** Docs, from the code and the phase log:
