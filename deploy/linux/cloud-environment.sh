@@ -226,7 +226,12 @@ else
 fi
 
 wait "$android_pid"
-say "Android SDK: exit $? ($(tail -1 "$logs/android.log"))"
+android_status=$?
+if [ -f /opt/android/sdk/ndk/27.2.12479018/source.properties ]; then
+    say "Android SDK: exit $android_status, the SDK and NDK are in /opt/android/sdk"
+else
+    say "Android SDK: exit $android_status ($(tail -1 "$logs/android.log"))"
+fi
 
 say "Done"
 exit 0
