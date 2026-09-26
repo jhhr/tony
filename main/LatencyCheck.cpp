@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 
 using namespace sv;
 using std::vector;
@@ -89,6 +90,56 @@ fade(double t, double duration)
         return 0.5 * (1.0 - std::cos(pi * (duration - t) / kFadeSeconds));
     }
     return 1.0;
+}
+
+// One tone without its fades, scaled so that the loudest its waveform
+// gets is 1: the pitch and its harmonics up to kToneTopHz, the n-th at
+// 1/n, in Newman's phases (pi (n-1)^2 / N), which spread them over the
+// period, all with the vibrato.  The vibrato only goes through the same
+// waveform faster and slower, so that loudest is read from one period,
+// finely, and no sample is louder; and so the scale, and the tone, is
+// the same at any rate.  Each sample's partials come from powers of one
+// rotation, so that a long song's tones take one sine and cosine a
+// sample, not one a partial
+vector<double>
+harmonicTone(double hz, sv_frame_t length, sv_samplerate_t rate)
+{
+    const int count = std::max(1, int(std::floor(kToneTopHz / hz)));
+    vector<std::complex<double>> partial(count);
+    for (int n = 1; n <= count; ++n) {
+        partial[n - 1] = std::polar(1.0 / n,
+                                    pi * double(n - 1) * double(n - 1) / count);
+    }
+    auto waveform = [&](double phase) {
+        const std::complex<double> turn = std::polar(1.0, phase);
+        std::complex<double> power = turn;
+        double v = 0.0;
+        for (int n = 0; n < count; ++n) {
+            v += (partial[n] * power).imag();
+            power *= turn;
+        }
+        return v;
+    };
+
+    const int steps = 8192;
+    double loudest = 0.0;
+    for (int k = 0; k < steps; ++k) {
+        loudest = std::max(loudest,
+                           std::fabs(waveform(2.0 * pi * k / steps)));
+    }
+
+    // The vibrato: the frequency swings kVibratoCents either way, so
+    // the phase swings by the swing in Hz over the rate
+    const double swing = hz * (std::pow(2.0, kVibratoCents / 1200.0) - 1.0) /
+        kVibratoHz;
+    vector<double> out(std::max(length, sv_frame_t(0)), 0.0);
+    for (sv_frame_t i = 0; i < length; ++i) {
+        const double t = double(i) / rate;
+        out[i] = waveform(2.0 * pi * hz * t +
+                          swing * std::sin(2.0 * pi * kVibratoHz * t)) /
+            loudest;
+    }
+    return out;
 }
 
 void
@@ -189,13 +240,15 @@ LatencyCheck::generate(const Layout &layout)
             if (f >= 0 && f < layout.length) out[f] += s[i];
         }
 
+        if (e.toneHz <= 0.0) continue;
+        const vector<double> tone =
+            harmonicTone(e.toneHz, e.toneLength, layout.rate);
         const double duration = double(e.toneLength) / layout.rate;
         for (sv_frame_t i = 0; i < e.toneLength; ++i) {
             sv_frame_t f = e.toneStart + i;
             if (f < 0 || f >= layout.length) continue;
             double t = double(i) / layout.rate;
-            out[f] += float(amplitude * fade(t, duration) *
-                            std::sin(2.0 * pi * e.toneHz * t));
+            out[f] += float(amplitude * fade(t, duration) * tone[size_t(i)]);
         }
     }
 
