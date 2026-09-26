@@ -161,6 +161,39 @@ where `createAudioIO()` is first called.
 - Docs: recording.md "Latency" (the latency asked for), calibrate-audio.md where it says
   the reported pair comes from `suggestedLatency = 0.2`.
 
+### W4 — Docs
+
+Read: this file's log; the spec; `git log --stat bcfbfdd..HEAD` (the project's commits);
+the docs named below, by section. Code only to check a statement.
+
+- `docs/audio-drivers.md` becomes the page for the drivers **as built**, as
+  calibrate-audio.md is for Calibrate Audio: why, the decisions, the facts, the design as
+  it is, the tests, what W5 is to measure and what to send back, open points. Plan
+  wording ("will", "phase W3 does") goes; §5's phases become a short "state" of what is
+  done and what W5 still is.
+- `docs/manual-checklist.md`: items for the driver and latency menus on Windows (first
+  start: MME ticked, devices kept; WASAPI lists its own devices; a latency change reopens
+  the device; the report names driver and latency), and W5's runs: Calibrate Audio and a
+  dev run on MME at 200 ms and on WASAPI at 20 and 10 ms, the `DevChecks.txt` of each sent
+  back. Where the checklist's device section already has the dev run, extend it rather
+  than repeat it.
+- `docs/calibrate-audio.md`: §11's test list (W1's and W3's tests); §10's driver project
+  pointing to audio-drivers.md instead of repeating it.
+- `docs/open-points.md`, `docs/architecture.md` (the libraries' contents),
+  `docs/README.md` and `AGENTS.md`'s "Read / Before" table (a row for audio-drivers.md:
+  touching the driver or latency menus, `AudioDriverSettings`, `AudioDriverMenus`, or the
+  bqaudioio fork), the root `README.md`'s feature list (the two menus, one line).
+- `docs/building.md`, "Building on Linux": how the fork's Windows-only code is checked
+  here — `apt-get install g++-mingw-w64-x86-64-posix`, PortAudio 19.7.0's headers
+  (`portaudio.h`, `pa_win_wasapi.h`, `pa_win_waveformat.h`) from
+  `raw.githubusercontent.com/PortAudio/portaudio/v19.7.0/include/`, and
+  `x86_64-w64-mingw32-g++ -std=c++17 -fsyntax-only -DHAVE_PORTAUDIO -I<headers>
+  -Ibqaudioio/bqaudioio -Ibqaudioio/src -Ibqvec bqaudioio/src/PortAudioIO.cpp` (and
+  `AudioFactory.cpp`); that is how W2 was checked (both clean, and the WASAPI block seen
+  in the preprocessed output).
+- Remove this file (`docs/audio-drivers-work-orders.md`) and every link to it.
+- No narratives of fixed bugs, no commit hashes, no lists of members.
+
 ## 5. Log
 
 Capped at 25 lines per entry. Newest last.
