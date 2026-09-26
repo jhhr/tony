@@ -144,7 +144,8 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   by up to about 8 ms either way on the user's PC, on MME and WASAPI alike, and items 1,
   2, 7 and 13 failed on it. The stream is now kept running between takes on desktop
   ([recording.md](recording.md#latency)), and on WASAPI at 20 ms, with the microphone and
-  the headphones on two sound cards, takes drift and slip within 10 ms and pass at ±6 ms
+  the headphones on two sound cards, takes drift and slip within 10 ms and pass at ±6 ms;
+  each slip is a period of silence in the playback, about every 100 s
   ([audio-drivers.md](audio-drivers.md), §7). Opening the device again (a driver,
   latency or device chosen, a device menu opened, Tony started again) still moves the
   alignment, so a figure kept from an earlier session is up to about 8 ms off: calibrate
@@ -164,8 +165,8 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   cursor runs with what has been recorded.
 - **Live dots have no level floor**: YIN reports a pitch from a quiet steady sound as
   readily as from singing. The user's run of 2026-09-27 had four dots in silence, at about
-  300 Hz, and item 3 failed on them; whether they were hum or a sound in the room is not
-  known.
+  300 Hz, and item 3 failed on them: the room's steady noise, at about −66.5 dBFS, 25 dB
+  below the quietest dot on a tone ([audio-drivers.md](audio-drivers.md), §7).
 - Items 3 and 5 judge the fresh punch-ins only. Item 14 cannot see an overwrite question,
   which `record()` would ask before the observer starts.
 - Not in the dev run, of what the retired `test-tony-device` did: a take with no lead-in

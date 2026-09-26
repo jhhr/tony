@@ -89,8 +89,9 @@ apart only in its number "second punch-in against the first": the join is a 10 m
 which hides a jump. The stream now runs on between takes, from the first take until the
 device is opened again, so a calibration and the dev run after it share one alignment.
 With the microphone and the headphones on two sound cards that alignment still drifts, and
-slips back by a period: takes lie within 10 ms of each other, and items 1, 2, 7 and 13
-allow ±6 ms ([audio-drivers.md](audio-drivers.md), §7). A run that fails them by a few
+slips back by a period, which the headphones hear as a period of silence: takes lie within
+10 ms of each other, and items 1, 2, 7 and 13 allow ±6 ms
+([audio-drivers.md](audio-drivers.md), §7). A run that fails them by a few
 ms more was likely calibrated near a slip: calibrate again.
 
 **The alignment moves when the device is opened again**: choosing a driver, a latency or a
@@ -118,8 +119,10 @@ page's text, and copy `DevChecks.txt` to a name that says which run it was
 and whether anything crackled or dropped out during a run. Press **Use this latency** on
 the driver and latency you will sing with: the figure is kept for that driver only.
 Runs 1 to 3 were before the stream was kept running between takes, run 4 after. Run 4's
-second time failed item 3 on four dots in silence, which no run before had: repeat it
-once, in a quiet room, to see whether they come back.
+second time failed item 3 on four dots from the room's noise, which the live tracker has
+no level floor to keep out. Still to try: a run with the microphone and the headphones on
+one sound card, which should neither drift nor slip; and, on two cards, whether the
+playback's gap at a slip (about every 100 s once a take has been made) is heard.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and

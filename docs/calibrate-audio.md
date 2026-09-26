@@ -569,9 +569,10 @@ a dip, below).
 
 - A noise gate for live dots: `RealtimePitchTracker` has none (YIN is scale-free), so room
   noise can make dots, where pYIN as Tony runs it penalises soft pitches. The user's run of
-  2026-09-27 had four dots in silence, at about 300 Hz (the 50 Hz mains' sixth harmonic),
-  and item 3 failed on them; what the microphone heard there is not known. A measured
-  noise floor could set one.
+  2026-09-27 had four dots in silence, at about 300 Hz, and item 3 failed on them. Its
+  recordings put them in the room's steady noise, about −66.5 dBFS with lines at 306 and
+  334 Hz, 25 dB below the quietest dot on a tone ([audio-drivers.md](audio-drivers.md),
+  §7). A measured noise floor could set one.
 - A quick re-measure after a Bluetooth reconnect, without a test session.
 - The microphone's channel and the noise floor on the calibration's result page.
 - A getter for the rate the record target records at (svapp fork), so that the menu line

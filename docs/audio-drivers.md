@@ -213,9 +213,10 @@ to highest, where the restarts had given 15.
 
 - **The alignment drifts, then slips by a period.** Each take lands about 0.6 ms earlier
   than the one before, and once, between the fourth and the fifth, the offset jumps back
-  by 9 ms: WASAPI's 10 ms period, less the drift. Two sound cards run on two clocks; kept
-  running, the difference builds up until PortAudio drops or repeats one period of
-  input to match. (One start gap read 478 frames where every other read 0 or 480.)
+  by 9 ms: WASAPI's 10 ms period, less the drift. Two sound cards run on two clocks, and
+  the output's runs fast against the input's; kept running, the output uses up its margin
+  and plays a period of silence (the next run's recordings, below). (One start gap read
+  478 frames where every other read 0 or 480.)
 - So a running stream keeps every take within one period, 10 ms, of the others; where that
   window sits against the kept figure depends on when Calibrate Audio measured it. On
   one device, one clock, there would be no drift; not measured.
@@ -245,7 +246,23 @@ take starts with a click, were not watched for.
   kept running; no take was heard to start with a click.
 - Item 3 failed on four dots in silence, at about 300 Hz, 0.45 s or more from any of the
   reference's sounds; none of the four runs before had one. The live tracker has no level
-  floor ([calibrate-audio.md](calibrate-audio.md), §10); what made them is not known.
+  floor ([calibrate-audio.md](calibrate-audio.md), §10).
+
+The run's recordings (`recorded-*.wav`, 48 kHz, the microphone on both inputs), which the
+user sent, show what the report could not:
+
+- **The slip is a gap in the playback.** In the fourth punch-in, at 18.56 s, the recorded
+  220.5 Hz tone fades out over 5 ms and back 5 ms later, and everything after it arrives
+  9.7 ms later: the headphones played about one period of silence. Within each take the
+  sweeps arrive 0.1 ms earlier every second, the two clocks about 100 ppm apart, so a
+  stream running on these two cards has such a gap about every 100 s; heard as a tick
+  when it falls in something playing.
+- **The dots in silence are the room's noise.** A steady floor of about −66.5 dBFS in
+  every recording, the calibration's too, most of it below 400 Hz, with two lines at 306
+  and 334 Hz some 30 dB over the rest; the mains' 50 Hz line is 8 dB below them. Fans,
+  most likely, not hum. Now and then YIN takes a window of it for a pitch, just under its
+  threshold (0.12 to 0.148 against 0.15): one or two dots in almost every recording, all
+  between −64.5 and −67.5 dBFS, where no dot on a tone read below −42 dBFS.
 
 ## 8. Open points
 
@@ -260,8 +277,10 @@ take starts with a click, were not watched for.
 - WDM-KS (in PortAudio's build too) and WASAPI's exclusive mode would be lower still, but
   take the device from every other program; not built.
 - **Kept running on two sound cards** the alignment drifts and slips by a period (§7):
-  every take within 10 ms of the others. In two runs that began with Calibrate Audio, it
-  measured in the middle of that window. On one device it should not drift; not measured.
+  every take within 10 ms of the others, and each slip is a period of silence in the
+  playback, about every 100 s on the user's cards. In two runs that began with Calibrate
+  Audio, it measured in the middle of that window. On one device it should not drift; not
+  measured.
   Opening the device again still moves it, so a figure kept from an earlier session is up
   to about 8 ms off: calibrate at the start of a session for the best placement. The
   microphone shows as in use from the first take until Tony quits.
