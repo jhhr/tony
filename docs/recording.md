@@ -230,17 +230,37 @@ their calls from a press.
 sleep 5 ms when there is not a full window yet. `kHopSize` is also the resolution of the dot model, whose
 unit must be `"Hz"` for the layer to align to the pane's log-frequency scale.
 
+**A level floor** (`kMinLevel`, −60 dBFS): a window whose first half is quieter gives no
+dot, and YIN is not run on it. YIN is blind to level, and finds a pitch now and then in
+a room's steady noise: the user's PC fans, at −66.5 dBFS with lines at 306 and 334 Hz,
+gave a dot or two in the silence of almost every take, 25 dB below the quietest window
+of a tone their microphone heard ([audio-drivers.md](audio-drivers.md), §7). The level
+is:
+
+- **the first half's**, because YIN's difference function compares the first half with the
+  window further on, so the pitch it finds is the first half's. Measured on the whole
+  window, one whose second half reaches into a sound passes, with the pitch of the quiet
+  before it: on the fake, dots of its hum just before every sweep;
+- **the channels' average**, not the mixdown's sum: a microphone on both inputs would read
+  6 dB louder than on one. A microphone on one input of two reads 6 dB below its own
+  level.
+
+A microphone whose noise is louder than −60 dBFS still gives such dots; one measured by
+Calibrate Audio could set the floor instead ([calibrate-audio.md](calibrate-audio.md),
+§10).
+
 **Octave slips are dropped** (`OctaveSlips`, `tony_core`). YIN takes the first lag whose
 normalised difference is under its threshold; where noise lifts the dip at the period just
 over it, the dip at twice the period, normalised by a larger mean, can still be under, and
 the dot comes out an octave low (or, the other way, high). On the user's phone, the input at
 −28 dBFS, 4 of about 280 dots a punch-in slipped so, and the dev checks' item 3 failed on
-them. Every hop goes through `OctaveSlips`, voiced or not: a dot about an octave (±100
-cents) from the one on the hop before is held back with those after it that are too, and
-the run is dropped if the next dot is back at the pitch before it. A run longer than one
-window's hops (8), or one that ends in silence or at another pitch, is let through, late by
-as long as it was held: a real leap of an octave shows up to 46 ms later, and nothing else
-is late. A dot with none on the hop before (a phrase's first) passes as it is.
+them. Every hop goes through `OctaveSlips`, voiced or not (one under the level floor is
+unvoiced): a dot about an octave (±100 cents) from the one on the hop before is held back
+with those after it that are too, and the run is dropped if the next dot is back at the
+pitch before it. A run longer than one window's hops (8), or one that ends in silence or at
+another pitch, is let through, late by as long as it was held: a real leap of an octave
+shows up to 46 ms later, and nothing else is late. A dot with none on the hop before (a
+phrase's first) passes as it is.
 
 **Getting the dots to the pane.** The tracker finds about 170 estimates a second. Handed
 to the GUI thread one at a time (a queued call each), a GUI thread that needs longer for one
@@ -267,4 +287,5 @@ Correct as they are, though they look wrong:
 
 - The `1/frameSize` scale in the FFT difference function: bqfft's inverse is unscaled.
   It matches pyin's `fastDifference`, which `test-tony-core` links as the reference.
-- The mixdown is a sum, not an average: YIN's normalised difference is scale-free.
+- The mixdown is a sum, not an average: YIN's normalised difference is scale-free. Only
+  the level floor divides it by the channels.

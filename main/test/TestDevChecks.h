@@ -161,10 +161,14 @@ class TestDevChecks : public QObject
     // takes then hold something where the reference is silent, as they
     // do on a real device, so that a take played back out shows in the
     // output there. Too quiet for the sweep finder, and no pitch for the
-    // live tracker or pYIN
+    // live tracker or pYIN. And all along, the fans the user's room had:
+    // a steady 306 Hz at -66 dBFS, in which YIN alone finds a pitch, and
+    // the live tracker's level floor none
     static FakeAudioIO::Config loopbackInARoom() {
         FakeAudioIO::Config config = loopback();
         config.input = TestSignals::whiteNoise(int(10 * rate), 1, 0.001);
+        config.humHz = 306.0;
+        config.humGain = float(std::pow(10.0, -66.0 / 20.0) * std::sqrt(2.0));
         return config;
     }
 

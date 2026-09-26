@@ -571,12 +571,11 @@ a dip, below).
 
 **Later candidates:**
 
-- A noise gate for live dots: `RealtimePitchTracker` has none (YIN is scale-free), so room
-  noise can make dots, where pYIN as Tony runs it penalises soft pitches. The user's run of
-  2026-09-27 had four dots in silence, at about 300 Hz, and item 3 failed on them. Its
-  recordings put them in the room's steady noise, about −66.5 dBFS with lines at 306 and
-  334 Hz, 25 dB below the quietest dot on a tone ([audio-drivers.md](audio-drivers.md),
-  §7). A measured noise floor could set one.
+- A measured noise floor for the live dots: `RealtimePitchTracker`'s floor is a fixed
+  −60 dBFS ([recording.md](recording.md#the-live-tracker)), which kept out the room noise
+  that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS). A microphone noisier
+  than that still gives dots in silence; Calibrate Audio could measure its floor in the
+  silence between its sounds, and put it on the result page.
 - A quick re-measure after a Bluetooth reconnect, without a test session.
 - The microphone's channel and the noise floor on the calibration's result page.
 - A getter for the rate the record target records at (svapp fork), so that the menu line
@@ -745,7 +744,10 @@ So that later work does not derive them again.
   Items 4, 9, 10 and 12 passed on all three; 1, 2, 7 and 13 failed on the restart jitter
   on all three; 3 failed on dots at a sound's onset, and 14 on WASAPI on its own misreading
   of a 48 kHz take, both since fixed in the checks.
-- **2026-09-26 and 2026-09-27**, whole dev runs on WASAPI at 20 ms with the stream kept
-  running between takes, each after Calibrate Audio: [audio-drivers.md](audio-drivers.md),
-  §7. Takes drift and slip within 10 ms; items 1, 2, 7 and 13 pass at ±6 ms. Item 3 failed
-  first on dots at a tone's end, since set apart, then on four dots in silence (§10).
+- **2026-09-26 and 2026-09-27**, three whole dev runs on WASAPI at 20 ms with the stream
+  kept running between takes, each after Calibrate Audio:
+  [audio-drivers.md](audio-drivers.md), §7. Takes drift and slip within 10 ms; items 1, 2,
+  7 and 13 pass at ±6 ms when the calibration lands in the middle of that window, as it
+  did twice; the third run's landed at its edge, and items 1 and 2 failed. Item 3 failed
+  first on dots at a tone's end, since set apart, then on four dots in silence (§10), and
+  passed with the live tracker's level floor.
