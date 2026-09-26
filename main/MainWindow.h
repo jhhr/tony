@@ -34,6 +34,8 @@
 class QTimer;
 class QComboBox;
 class QActionGroup;
+class QToolBar;
+class CompactLayout;
 
 namespace sv {
 class VersionTester;
@@ -81,6 +83,11 @@ public:
     // element is read from the file and the takes put back from it
     void toXml(QTextStream &out, bool asTemplate) override;
     FileOpenStatus openSession(sv::FileSource source) override;
+
+    // Switch the layout for a phone on or off (CompactLayout), as View >
+    // Compact Layout does: main() switches it on at start on Android and
+    // with --compact
+    void setCompactLayout(bool on);
 
 signals:
     void canExportPitchTrack(bool);
@@ -312,6 +319,21 @@ protected:
     sv::ModelId           m_realtimePitchModelId;
 
     sv::Overview  *m_overview;
+
+    // The layout for a phone: one toolbar of touch-sized buttons in place
+    // of the menu bar and the other toolbars.  MainWindow only hands it
+    // the parts (setupCompactLayout()): the actions below, which are made
+    // with the menus and toolbars, and others that have members already
+    CompactLayout *m_compactLayout;
+    QAction       *m_playAction;
+    QAction       *m_recordAction;
+    QAction       *m_zoomInAction;
+    QAction       *m_zoomOutAction;
+    QAction       *m_navigateToolAction;
+    QAction       *m_noteEditToolAction;
+    QToolBar      *m_playbackControlsToolBar;
+    QToolBar      *m_showAndPlayToolBar;
+    void setupCompactLayout();
 
     // Actions/toolbar items for the singing track
     QAction       *m_showSingingPitch;

@@ -18,6 +18,7 @@
 #include "MainWindow.h"
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
+#include "CompactLayout.h"
 #include "LatencyUtils.h"
 #include "PaneUtils.h"
 #include "TakeEvents.h"
@@ -139,6 +140,15 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_realtimePitchTracker(nullptr),
     m_realtimePitchLayer(nullptr),
     m_overview(0),
+    m_compactLayout(nullptr),
+    m_playAction(nullptr),
+    m_recordAction(nullptr),
+    m_zoomInAction(nullptr),
+    m_zoomOutAction(nullptr),
+    m_navigateToolAction(nullptr),
+    m_noteEditToolAction(nullptr),
+    m_playbackControlsToolBar(nullptr),
+    m_showAndPlayToolBar(nullptr),
     m_showSingingPitch(nullptr),
     m_showSingingNotes(nullptr),
     m_playSingingAudio(nullptr),
@@ -410,6 +420,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takeTimer->setInterval(100);
     connect(m_takeTimer, SIGNAL(timeout()), this, SLOT(pollTakeProgress()));
 
+    // Before the menus: its switch is in the View menu
+    m_compactLayout = new CompactLayout(this);
+
     setupMenus();
     setupToolbars();
     setupHelpMenu();
@@ -417,6 +430,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     statusBar();
 
     finaliseMenus();
+
+    setupCompactLayout();
 
     connect(m_viewManager, SIGNAL(activity(QString)),
             m_activityLog, SLOT(activityHappened(QString)));
@@ -547,6 +562,9 @@ MainWindow::setupFileMenu()
     QMenu *menu = menuBar()->addMenu(tr("&File"));
     menu->setTearOffEnabled(true);
     QToolBar *toolbar = addToolBar(tr("File Toolbar"));
+    // The toolbars are named for QMainWindow::saveState(), which tells
+    // them apart by name (CompactLayout's tests compare what it saves)
+    toolbar->setObjectName("File Toolbar");
 
     m_keyReference->setCategory(tr("File and Session Management"));
 
@@ -680,6 +698,7 @@ MainWindow::setupEditMenu()
          tr("Double-click left button to select the region of time corresponding to a note"));
 
     QToolBar *toolbar = addToolBar(tr("Tools Toolbar"));
+    toolbar->setObjectName("Tools Toolbar");
     
     CommandHistory::getInstance()->registerToolbar(toolbar);
 
@@ -699,6 +718,7 @@ MainWindow::setupEditMenu()
     group->addAction(action);
     menu->addAction(action);
     m_keyReference->registerShortcut(action);
+    m_navigateToolAction = action;
 
     m_keyReference->setCategory
         (tr("Navigate Tool Mouse Actions"));
@@ -722,6 +742,7 @@ MainWindow::setupEditMenu()
     group->addAction(action);
     menu->addAction(action);
     m_keyReference->registerShortcut(action);
+    m_noteEditToolAction = action;
 
     m_keyReference->setCategory
         (tr("Note Edit Tool Mouse Actions"));
@@ -891,6 +912,9 @@ MainWindow::setupEditMenu()
     // Ctrl+Backspace, the obvious partner to the Backspace of Delete
     // Notes, is upstream Tony's Remove Pitches
     m_eraseSingingAction->setShortcut(tr("Ctrl+D"));
+    // What a toolbar button shows when there is no icon: only the compact
+    // toolbar has one for it
+    m_eraseSingingAction->setIconText(tr("Erase"));
     m_eraseSingingAction->setStatusTip
         (tr("Remove the recorded singing within the selected region, leaving silence"));
     m_keyReference->registerShortcut(m_eraseSingingAction);
@@ -944,6 +968,7 @@ MainWindow::setupViewMenu()
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
     m_keyReference->registerShortcut(action);
     menu->addAction(action);
+    m_zoomInAction = action;
     
     action = new QAction(il.load("zoom-out"),
                          tr("Zoom &Out"), this);
@@ -953,6 +978,7 @@ MainWindow::setupViewMenu()
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
     m_keyReference->registerShortcut(action);
     menu->addAction(action);
+    m_zoomOutAction = action;
     
     action = new QAction(tr("Restore &Default Zoom"), this);
     action->setStatusTip(tr("Restore the zoom level to the default"));
@@ -975,6 +1001,10 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Set the minimum and maximum frequencies in the visible display"));
     connect(action, SIGNAL(triggered()), this, SLOT(editDisplayExtents()));
     menu->addAction(action);
+
+    menu->addSeparator();
+
+    menu->addAction(m_compactLayout->getAction());
 }
 
 void
@@ -1477,6 +1507,7 @@ MainWindow::setupToolbars()
     m_rightButtonPlaybackMenu = m_rightButtonMenu->addMenu(tr("Playback"));
 
     QToolBar *toolbar = addToolBar(tr("Playback Toolbar"));
+    toolbar->setObjectName("Playback Toolbar");
 
     QAction *rwdStartAction = toolbar->addAction(il.load("rewind-start"),
                                                  tr("Rewind to Start"));
@@ -1503,6 +1534,7 @@ MainWindow::setupToolbars()
     connect(m_playSource, SIGNAL(playStatusChanged(bool)),
         playAction, SLOT(setChecked(bool)));
     connect(this, SIGNAL(canPlay(bool)), playAction, SLOT(setEnabled(bool)));
+    m_playAction = playAction;
 
     m_ffwdAction = toolbar->addAction(il.load("ffwd"),
                                               tr("Fast Forward"));
@@ -1530,6 +1562,7 @@ MainWindow::setupToolbars()
 	    this, SLOT(analyseNow()));
     connect(this, SIGNAL(canRecord(bool)),
             recordAction, SLOT(setEnabled(bool)));
+    m_recordAction = recordAction;
 
     // The takes of the session, beside the recording controls: choosing
     // one shows it, with its audio, pitch track and notes (spec 5.3).
@@ -1557,6 +1590,7 @@ MainWindow::setupToolbars()
     toolbar->addWidget(m_takeCombo);
 
     toolbar = addToolBar(tr("Play Mode Toolbar"));
+    toolbar->setObjectName("Play Mode Toolbar");
 
     QAction *psAction = toolbar->addAction(il.load("playselection"),
                                            tr("Constrain Playback to Selection"));
@@ -1705,13 +1739,17 @@ MainWindow::setupToolbars()
     m_rightButtonPlaybackMenu->addAction(normalAction);
 
     toolbar = new QToolBar(tr("Playback Controls"));
+    toolbar->setObjectName("Playback Controls");
     addToolBar(Qt::BottomToolBarArea, toolbar);
+    m_playbackControlsToolBar = toolbar;
 
     toolbar->addWidget(m_playSpeed);
     toolbar->addWidget(m_fader);
 
     toolbar = addToolBar(tr("Show and Play"));
+    toolbar->setObjectName("Show and Play");
     addToolBar(Qt::BottomToolBarArea, toolbar);
+    m_showAndPlayToolBar = toolbar;
 
     // "Reference:" label before the reference-track button group
     {
@@ -2022,6 +2060,41 @@ MainWindow::setupToolbars()
     updateLayerStatuses();
     
 //    QTimer::singleShot(500, this, SLOT(betaReleaseWarning()));
+}
+
+void
+MainWindow::setupCompactLayout()
+{
+    CompactLayout::Parts parts;
+
+    parts.play = m_playAction;
+    parts.record = m_recordAction;
+    parts.recordIntoSelection = m_recordIntoSelection;
+    parts.takeBox = m_takeCombo;
+    parts.erase = m_eraseSingingAction;
+    parts.zoomIn = m_zoomInAction;
+    parts.zoomOut = m_zoomOutAction;
+
+    parts.navigateTool = m_navigateToolAction;
+
+    parts.panel = { m_playbackControlsToolBar, m_showAndPlayToolBar };
+
+    // Notes are edited on the desktop; a phone has no device to choose
+    parts.hiddenActions = { m_navigateToolAction, m_noteEditToolAction };
+    for (QMenu *menu: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        if (menu) parts.hiddenActions.push_back(menu->menuAction());
+    }
+
+    // For room: the panes are what a phone's height is wanted for
+    parts.hiddenWidgets = { m_overview };
+
+    m_compactLayout->setParts(parts);
+}
+
+void
+MainWindow::setCompactLayout(bool on)
+{
+    m_compactLayout->setOn(on);
 }
 
 

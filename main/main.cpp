@@ -14,6 +14,7 @@
 */
 
 #include "MainWindow.h"
+#include "CompactLayout.h"
 
 #include "system/System.h"
 #include "system/Init.h"
@@ -320,7 +321,7 @@ main(int argc, char **argv)
 
     if (args.contains("--help") || args.contains("-h") || args.contains("-?")) {
         std::cerr << QApplication::tr(
-            "\nTony is a program for interactive note and pitch analysis and annotation.\n\nUsage:\n\n  %1 [--no-audio] [--no-sonification] [--no-spectrogram] [<file> ...]\n\n  --no-audio: Do not attempt to open an audio output device\n  --no-sonification: Disable sonification of pitch tracks and notes and hide their toggles.\n  --no-spectrogram: Disable spectrogram.\n  <file>: One or more Tony (.ton) and audio files may be provided.").arg(argv[0]).toStdString() << std::endl;
+            "\nTony is a program for interactive note and pitch analysis and annotation.\n\nUsage:\n\n  %1 [--no-audio] [--no-sonification] [--no-spectrogram] [--compact] [<file> ...]\n\n  --no-audio: Do not attempt to open an audio output device\n  --no-sonification: Disable sonification of pitch tracks and notes and hide their toggles.\n  --no-spectrogram: Disable spectrogram.\n  --compact: Start with the layout for a phone: one toolbar of large buttons in place of the menus and toolbars.\n  <file>: One or more Tony (.ton) and audio files may be provided.").arg(argv[0]).toStdString() << std::endl;
         exit(2);
     }
 
@@ -388,6 +389,10 @@ main(int argc, char **argv)
     if (splash) {
         QObject::connect(gui, SIGNAL(hideSplash()), splash, SLOT(hide()));
     }
+
+    // Before the window is shown, so that a phone never shows the
+    // desktop layout
+    gui->setCompactLayout(CompactLayout::isWantedAtStart(args));
 
     QScreen *screen = QApplication::primaryScreen();
     QRect available = screen->availableGeometry();

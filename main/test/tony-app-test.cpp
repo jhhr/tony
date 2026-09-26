@@ -15,6 +15,7 @@
 #include "TestSingingAnalysis.h"
 #include "TestRecordWorkflow.h"
 #include "TestTouchGestures.h"
+#include "TestCompactLayout.h"
 
 #include "RunSuite.h"
 
@@ -73,6 +74,12 @@ int main(int argc, char *argv[])
 
     {
         TestTouchGestures t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestCompactLayout t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

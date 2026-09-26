@@ -1178,6 +1178,7 @@ tony_core_files = [
 
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
+  'main/CompactLayout.cpp',
   'main/CoverageStrip.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
@@ -1199,6 +1200,7 @@ tony_app_moc_files = qt.preprocess(
   'main/MainWindow.h',
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
+  'main/CompactLayout.h',
   'main/CoverageStrip.h',
   'main/TouchGestures.h',
 ])
@@ -1507,12 +1509,16 @@ if system != 'android'
     'main/test/TestSingingAnalysis.h',
     'main/test/TestRecordWorkflow.h',
     'main/test/TestTouchGestures.h',
+    'main/test/TestCompactLayout.h',
   ])
 
   tony_app_test_exe = executable(
     'test-tony-app',
     tony_app_test_moc_files,
     'main/test/tony-app-test.cpp',
+    # The icons: without them every toolbar button shows its text, and
+    # is as wide as that (TestCompactLayout needs the buttons' real size)
+    qt_resource_files,
     dependencies: [
       tony_app_dep,
       tony_core_dep,
