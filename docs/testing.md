@@ -72,7 +72,10 @@ Windows path would start an escape in the C string.
   for Linux. Do not combine shards with test names on the command line.
 - A sharded run is a whole run of the suites, but the tests that share a process are other
   ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
-  run the one-process run as well.
+  run the one-process run as well. It also loads the machine more: built against Ubuntu's
+  Qt 6.4, `TestUiChecks`' `live_dots_under_the_cursor` failed in both of two runs in eight
+  processes (the tracker itself 313 and 325 ms behind the cursor, over the test's 300 ms)
+  and passed with `-j 4`. Judge a failure of it there by running it alone.
 - **On Linux some tests fail whatever the change.** With the Qt of the cloud setup,
   conda-forge's 6.11 ([building.md](building.md#building-on-linux)), only
   `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and
@@ -269,6 +272,10 @@ it; the marker goes in the commit that fixes it. There are none at present.
   after it. A test that acts during that analysis calls `holdRangedMerges(true)` on its
   `TestMainWindow` before Stop (`Analyser::setRangedMergeHeld()`), and `false` before it
   waits for `analysed()`, or from a timer where a save's own wait has to let the merge go.
+- A take stopped as soon as it started can have nothing in it under load: the fake device
+  has delivered nothing yet, the take is dropped, and no analysis comes for `stopTake()`
+  to wait for. A test that only looks at something during a take calls
+  `waitForSomethingRecorded()` before `stopTake()`.
 - The status bar is written by three base-class timers; a test that reads it must go
   through what `showTakeCountdown()` controls.
 - Deleting a derived layer does not stop its transform; only

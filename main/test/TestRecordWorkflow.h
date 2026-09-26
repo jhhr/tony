@@ -178,6 +178,14 @@ class TestRecordWorkflow : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
     }
 
+    // For a test that stops a take as soon as it has looked at something:
+    // stopped at once, under load the take can have nothing in it, and
+    // then there is no take for stopTake() to wait for
+    void waitForSomethingRecorded() {
+        QTRY_VERIFY_WITH_TIMEOUT
+            (m_window->recordTarget()->getRecordDuration() > rate / 2, 5000);
+    }
+
     void take(int ms) {
         startTake();
         if (QTest::currentTestFailed()) return;
@@ -5077,6 +5085,7 @@ private slots:
         m_window->doNewEmptyTake();
         QCOMPARE(m_window->takes()->getTakeCount(), 1);
 
+        waitForSomethingRecorded();
         stopTake();
         if (QTest::currentTestFailed()) return;
         m_window->doUpdateMenuStates();
@@ -6002,6 +6011,7 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         QVERIFY(!reference->isLayerDormant(pane));
+        waitForSomethingRecorded();
         stopTake();
     }
 
@@ -6434,6 +6444,7 @@ private slots:
         QVERIFY(!m_window->doImportLyricsFrom(path));
         QVERIFY(!m_window->lyrics()->isShown());
 
+        waitForSomethingRecorded();
         stopTake();
         if (QTest::currentTestFailed()) return;
         QTRY_VERIFY_WITH_TIMEOUT(import->isEnabled(), 2000);
