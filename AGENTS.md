@@ -24,7 +24,8 @@ code.
 
 ## Build and test
 
-From **Git Bash** (the usual agent shell). `build.bat` does not run from sh.
+From **Git Bash** (the usual agent shell) on the Windows machine. `build.bat` does not run
+from sh. A Linux cloud session builds otherwise: see the end of this section.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
@@ -57,8 +58,12 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
-- Give the app suite a tool timeout of 10 minutes, or run it in the background: it comes
-  close to that.
+- Give the app suite a tool timeout of 15 minutes, or run it in the background.
+
+In a **Linux cloud session** the commands are others. The session's hook has started a
+build into `build/` in the background; run `deploy/linux/cloud-session.sh wait` before the
+first build or test (if it says none was started, run `deploy/linux/cloud-session.sh start`
+first). The rest is in [docs/building.md](docs/building.md#building-on-linux).
 
 ## Rules for working here
 
@@ -108,7 +113,8 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ### Git
 
 - Commit only when asked, and only with both whole suites green. One commit per coherent
-  step, staged by file name (never `git add -A`; `.claude/` and `tmp/` stay out).
+  step, staged by file name (never `git add -A`; `tmp/` and all of `.claude/` but
+  `settings.json` stay out).
 - Messages: `feat:` / `fix:` / `test:` / `docs:`, lower case, then a short what-and-why
   body. End with a `Co-Authored-By` trailer naming the model that wrote the code.
 - Use the `gh` CLI for anything on GitHub.

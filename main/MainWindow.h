@@ -21,6 +21,8 @@
 #include "RealtimePitchTracker.h"
 #include "AlternatePitchTrack.h"
 #include "CoverageStrip.h"
+#include "LyricsTrack.h"
+#include "LyricsEditor.h"
 #include "SingingTakes.h"
 #include "TakeCommands.h"
 #include "TakeTiming.h"
@@ -225,6 +227,13 @@ protected slots:
     virtual void alternatePitchDown();
     virtual void syncAlternatePitchTrack();
 
+    virtual void importLyrics();
+    virtual void exportLyrics();
+    virtual void removeLyrics();
+    virtual void showLyricsToggled();
+    virtual void editLyricsToggled();
+    virtual void shiftLyrics();
+
     virtual void editDisplayExtents();
 
     virtual void analyseNow();
@@ -411,6 +420,80 @@ protected:
     // Put the strip in step with the take's coverage: make it if there
     // is a take and none yet, take it away when the take goes
     void syncCoverageStrip();
+
+    // The timed lyrics of the session, drawn along the bottom of pane 0
+    // and stored in the session with the layer that draws them.  They
+    // belong to the song, not to a take.  Display only
+    LyricsTrack   *m_lyrics;
+    QAction       *m_importLyricsAction;
+    QAction       *m_exportLyricsAction;
+    QAction       *m_removeLyricsAction;
+    QAction       *m_showLyrics;
+
+    // Edit > Edit Lyrics: the mouse moves the words' starts and ends in
+    // the lyrics' box row while it is on, and changes, adds and deletes
+    // words there.  Off, and not to be had, without lyrics on show or
+    // while a take is being recorded, which updateMenuStates() sees to;
+    // and off after an import, which importLyricsFrom() sees to
+    LyricsEditor  *m_lyricsEditor;
+    QAction       *m_editLyricsAction;
+
+    // Edit > Shift Lyrics...: all the words earlier or later by a number
+    // of seconds.  To be had whenever editing is, edit mode on or not
+    QAction       *m_shiftLyricsAction;
+
+    // The lyrics are there to be edited: shown, visible, and no take
+    // being recorded (the singer is reading them)
+    bool lyricsEditAllowed() const;
+
+    // Edit mode on, if lyricsEditAllowed(), or off, and the action to
+    // match.  Off finishes a drag in progress, pushing its command, so
+    // this must not be reached from an undo or a redo
+    void setLyricsEditing(bool on);
+
+    // Fade the waveforms of both analysers while the lyrics are on show
+    // over them, and not otherwise.  Called after anything that shows or
+    // hides the lyrics, and after anything that makes an analyser: a new
+    // one starts unfaded, and a session's lyrics are found only after
+    // the reference's analyser has taken its waveform over
+    void updateWaveformFade();
+
+    // Put the lyrics of this TTML or LRC file on the reference's
+    // timeline, in place of any there are.  Not undoable, as loading
+    // background music is not, and nothing goes onto the undo stack.
+    // False if the file could not be read or holds no timed lyrics,
+    // which the user is told in a dialog, or if lyricsImportAllowed()
+    // says no; nothing has changed then
+    bool importLyricsFrom(QString path);
+
+    // Lyrics can be imported once there is a reference, and not while a
+    // take is being recorded
+    bool lyricsImportAllowed() const;
+
+    // Ask for the TTML or LRC file to import, "" if the user cancelled.
+    // Overridden by the tests, which cannot answer a dialog
+    virtual QString askForLyricsFile();
+
+    // Write the lyrics, as the model holds them now, to this TTML file.
+    // Not a command, and the session is not changed by it.  False if
+    // there are no lyrics, or if the file could not be written, which
+    // the user is told in a dialog
+    bool exportLyricsTo(QString path);
+
+    // Ask where to export the lyrics to, offering the suggested path;
+    // "" if the user cancelled.  Overridden by the tests
+    virtual QString askForLyricsExportFile(QString suggested);
+
+    // Ask for the text of a word of the lyrics, offering the one it has
+    // ("" for a new word): true with the text typed in its place, false
+    // if the user cancelled.  The lyrics editor asks through this.
+    // Overridden by the tests
+    virtual bool askForLyricsWordText(QString &text, bool isNew);
+
+    // Ask how far to shift all the words of the lyrics, in seconds,
+    // negative for earlier: true with the seconds, false if the user
+    // cancelled.  Overridden by the tests
+    virtual bool askForLyricsShift(double &seconds);
 
     // --- The audio folder of the session (spec 6.4) ---
 

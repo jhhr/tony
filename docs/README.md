@@ -11,9 +11,9 @@ methods, and they do not tell the story of fixed bugs.
 
 | Page | What is in it |
 | --- | --- |
-| [building.md](building.md) | The MinGW build, and every way the environment has gone wrong |
+| [building.md](building.md) | The MinGW build, and every way the environment has gone wrong; the Linux build of a cloud session |
 | [testing.md](testing.md) | The test executables (core, app, and the dev checks'), the fakes and helpers, how tests turned out to be worthless, races |
-| [architecture.md](architecture.md) | What the fork adds, `tony_core` / `tony_app`, who owns what, and the rules for layers, models, commands, playback and session files |
+| [architecture.md](architecture.md) | What the fork adds, `tony_core` / `tony_app`, who owns what, and the rules for layers, models, commands, playback and session files; the smaller features, the lyrics and their editor among them |
 | [recording.md](recording.md) | Record to Stop, step by step and why in that order; latency; pre-roll; record into selection; the live tracker |
 | [takes.md](takes.md) | Takes: decisions, the audio swap, ranged analysis and merge, undo, the coverage strip, files and sessions, limitations |
 | [forks.md](forks.md) | The `jhhr/*` library forks: how to change one, what each adds, known defects |

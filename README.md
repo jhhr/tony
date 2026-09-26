@@ -47,6 +47,30 @@ orange pitch track to compare with it.
    the toolbar): each keeps its own audio, pitch track and notes, and switching
    between them needs no re-analysis. The audio of a session's takes is kept in
    a folder named after the session beside it, so the two can be moved together
+ * timed lyrics: File -> Import Lyrics... reads a TTML or LRC file, timed by
+   word or by line, and shows the words in boxes along the bottom of the pane,
+   at the time and for as long as each is sung. The word at the playback
+   position is highlighted, while playing, while recording and wherever you
+   click, and the waveform is faded while the words are on show so that they
+   can be read over it. They are saved with the session; View -> Show Lyrics
+   hides them, File -> Remove Lyrics takes them out, and File -> Export
+   Lyrics... writes them, as they are now, to a TTML file. The reference must
+   be the recording the lyrics were timed to (a Moises stem and its original
+   mix share a timeline)
+ * the lyrics can be corrected by ear, with the song there to listen to: with
+   Edit -> Edit Lyrics on, drag the start or end of a word in its box,
+   double-click a word to change its text, or right-click to delete a word or
+   add one between words. Lyrics that are all early or late move together:
+   Shift-drag in the row, or Edit -> Shift Lyrics... by a number of seconds.
+   Each edit can be undone; the edits are saved with the session, and Export
+   Lyrics writes them
+ * lyrics can be exported from Moises with the Moises-Lyric-Exporter browser
+   extension. Set it to TTML, word by word, with the offset at 0 (otherwise
+   every line is 0.2 s early, and Tony cannot tell): TTML gives every word
+   its end as well as its start, which LRC cannot. Its gap threshold only
+   matters for LRC. It is unofficial and not made by Moises: install it
+   unpacked from a commit that has been reviewed, and do not update it without
+   reviewing the change
 
 
 Authors, Citation, License and Use

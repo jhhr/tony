@@ -29,7 +29,23 @@ library over a workaround in `main/`.
    which reaches the fork branch when the Tony branch is merged. Commit messages there
    follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
-   upstream sonic-visualiser — do not push there.
+   upstream sonic-visualiser — do not push there. In a cloud session the checkouts are
+   `container-setup.sh`'s, whose `origin` is the fork, and two checks stand in the way:
+   - The session's git proxy refuses a push to a repository not attached to the session,
+     a new branch included (HTTP 403). The session's add-repository tool attaches it, with
+     push access.
+   - Auto mode trusts only the repository the session started in and its remotes, and so
+     blocks committing in a fork's checkout, attaching the fork and pushing to it. The
+     environment's setup script names the four forks as trusted as well, which the user
+     chose ([building.md](building.md#building-on-linux)); `claude auto-mode config`
+     shows whether a session has that entry. Without it, the user's own message has to
+     ask for the action, naming the fork and the branch. After a denial, stop and tell the
+     user what is blocked: trying again another way counts as getting round the check, and
+     is blocked too. The user can instead push the change.
+
+   Do not start the session with the forks selected instead: a session with several
+   repositories runs no repository's SessionStart hook, so the background build does not
+   start.
 3. Put the new commit hash in `repoint-lock.json` as that library's `pin`, and commit that
    in Tony together with the code that needs it.
 4. A sub-agent that was told to work only in `main/` does not edit a fork: it reports
@@ -83,6 +99,48 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   away from the dots.
 - `RegionLayer::PlotStrip` plot style: the coverage strip. Saved through the existing
   `plotStyle` attribute.
+- `RegionLayer::PlotLyrics` plot style, after `PlotStrip` so saved numbers keep their
+  meaning: the lyrics. Each region is a light box in one row along the bottom of the view
+  just above `PlotStrip`'s 8 px, **exactly as long as the region** and never widened for
+  its label: the box edges are the word times, and two words next to each other share the
+  line between them. The label, dark text with a halo in the box's colour whatever the
+  view's colours, is centred on the box and runs over its edges where it is longer. The
+  static, pure `placeLyricsLabels()` places the labels (Tony's app suite tests it): one
+  that would come closer than a small gap to the label before it is moved right, and the
+  labels before it left, as little as will do but never so far that a label's middle
+  leaves its box; one that cannot be goes in a second row above the boxes, and one with no
+  room there either is left out (its box is still drawn). There is no gap between boxes
+  to keep, so contiguous words whose labels fit share the first row. The first word of a
+  line (where the value changes) is bold. The font (`getLyricsFontPixelSize()`) is twice
+  the view's at the least, up to four times, and never more than an eighth of the view's
+  height; it grows with the **square root** of the zoom, so that zooming in gives the
+  words room (their boxes grow with the zoom itself). No vertical scale, no feature
+  description, and not editable by the pane's tools: Tony's `LyricsEditor` edits the
+  model itself.
+  `setHighlightFrame()` draws the region at that frame in amber (the latest to start, where
+  regions overlap) and emits `layerParametersChanged()` only when that region changes: the
+  highlight is painted into the view's cache, so each new word repaints the view, a few
+  times a second at most, and only views listen to that signal, so nothing is marked
+  modified. `getHighlightedEvent()` says which region it is. A highlighted word that was
+  left out is drawn in the boxes' row, centred on its box, over the others for as long as
+  it is highlighted, with an amber halo: the one being sung is the one the singer must be
+  able to read. Where a label goes depends on the labels before it, so the
+  layout is made for the **whole model** at once and cached per zoom level and font; a
+  strip newly scrolled into sight then agrees with what is already on show. That is what
+  lets the layer stay **scrollable**: `View::getNonScrollableFrontLayers()` treats every
+  layer in front of a non-scrollable one as non-scrollable too, so the pitch tracks above
+  the lyrics would repaint on every cursor update.
+  The layout is made again, the highlighted region found again and the whole view
+  repainted on **any** change to the model (member-pointer connections to `modelChanged`
+  and `modelChangedWithin`): an edited word keeps the count of regions and often the
+  extent of the whole, which with the zoom and the font is all the cache otherwise checks;
+  a label that changes or moves can move the labels before it and the rows of those after,
+  anywhere in the view; and the word being sung may be the one edited, or another one now.
+  `getLyricsBoxRow(view)` says where the boxes' row was last painted in that view, empty
+  before the first paint, for Tony's editor to tell whether the pointer is over a box. It
+  is in the view's own **logical** coordinates, the ones a mouse event has: on a high-DPI
+  screen the layer paints through a proxy at twice the size, so the row cannot be worked
+  out again from the pane.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
 - `FlexiNoteLayer::getAssociatedPitchModel()`, which the note tools set a note's pitch
