@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`), B4 (`9b1fb6c`), C0 (`1ef2494`).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
@@ -431,9 +431,125 @@ do not duplicate it.
     two at the join; a hard cut in a sine.
   - **Show failure** for two of them by breaking the code.
 
-### C1 — Dev-check framework and first group (spec §3, §4, §5 "development builds only")
+### C1a — Dev-check framework, items 1 and 2 (spec §2 point 5, §3, §4, §5 "development builds only")
 
-To be refined by the lead.
+Read also: `main/AudioCheckRunner.{h,cpp}` whole (about 1000 lines together; you extend
+it), `main/CalibrateAudioDialog.h`, `main/test/TestAudioCheck.h` for the fixture
+(`loopback()`, `shortPlan()`, `makeWindow()`), `docs/takes.md` on where take files go
+before and after a save, and spec §4's rows for items 1 and 2.
+
+- **Build flag** (spec §3). In `meson.build`, a build type not starting with `release`
+  adds `-DTONY_DEV_CHECKS` to `general_defines`, and only then are `main/dev/*.cpp`
+  compiled into `tony_app` and their headers moc'd. `build_linux` is `debugoptimized`, so
+  it has them. Everything under `main/dev/`, and every use of it elsewhere (a `friend`
+  line, a member, a dialog widget, the test class's registration), is inside
+  `#ifdef TONY_DEV_CHECKS`. A release build must compile with no `main/dev/` file; the
+  lead builds one later, so keep the `#ifdef`s tidy.
+- **Runner extensions** (every build; small; each tested in `TestAudioCheck`):
+  - **`Plan` ranges.** Explicit punch-ins in seconds; when given, they replace
+    `punchInsFor()`. `start()` refuses ranges that overlap, are out of order or lie
+    outside the layout.
+  - **`Plan` keeps the session.** Record into the session open now, which the caller
+    says is a check reference of the plan's layout: no reference written or opened, no
+    save question; straight on to the reference's analysis wait and the punch-ins. The
+    take keeps what earlier runs recorded; only this plan's punch-ins are judged.
+  - **`Plan` round trip, for the run only** (spec §10 "a dev run uses the new figure
+    for itself only"). Seconds; unset means the window's own. The window uses it for the
+    check's takes only, where `recordingStarted()` takes `roundTripAt()` now. It never
+    touches the stored figure or the Playback menu's line. Log it as the check's own.
+  - **`TakeLatency` gets the start gap** each take used, and whether it was measured or
+    only estimated (item 2 reports it per punch-in).
+  - **No save question for the check's own session.** When the session open has never
+    been saved and its main file is in `referenceDirectory()`, replacing it asks
+    nothing: it is the check before. This also ends B4's Check Again prompt.
+  - **Record during a check** (from B4): greyed while a check runs, and `record()`
+    ignores the user's press then. Pressing it today ends the check's take early.
+- **`main/dev/DevChecks.{h,cpp}`**, a `QObject`.
+  - **No nested event loop.** Spec §5 said `waitUntil()` with a `QEventLoop`; the lead
+    changed it: a list of stages driven by the runner's `finished()` and a polling timer,
+    as the runner is driven, for the runner's reason (the window can be closed at any
+    moment). Each stage starts something and says when it is done; a stage that times
+    out fails the run.
+  - `start(Options)`, `cancel()`, `isRunning()`, `sessionClosing()` (as the runner's:
+    ends the run unless the run itself is replacing the session). Signals `progress`
+    (stage name, n of m) and `finished(DevReport)`, once however the run ends.
+  - `Options`: the round trip for the run (seconds), the report directory ("" for
+    `TONY_TEST_LOG_DIR` if set, else `AppDataLocation`), the scratch directory ("" for
+    `AppDataLocation`).
+  - `CheckResult { item, name, verdict (Pass, Fail, Measured, Skipped), numbers (label and
+    value pairs, as text), message }`; `DevReport { checks, failure, reportPath,
+    sessionPath }`. A run that ends early marks the checks it did not reach Skipped,
+    with the reason.
+  - Owned by `MainWindow` in dev builds, like the runner; a `friend` of it under the
+    `#ifdef`. `~MainWindow` deletes it after the dialog and before the runner;
+    `closeSession()` calls its `sessionClosing()`.
+- **The stages of C1a** (C1b inserts more before the last):
+  1. **Fresh punch-ins.** A runner run on `devLayout()`, opening a new reference (no
+     save question: see above), with two explicit punch-ins in separate regions of the
+     calibration part, each holding two sweeps, and the run's round trip. Choose ranges
+     that leave the held tones (after 25 s) and the start (before 3 s) free for later
+     stages, and say which you chose.
+  2. **Save and reopen.** Save the session into a scratch folder (below) with
+     `MainWindow`'s own save path, no dialog; reopen it; wait for the analyses; read the
+     take's file again.
+- **Items:**
+  - **1** Pass when every judged sweep of every punch-in lands within ±2 ms (a named
+    constant), and after the reopen the take's audio judged again gives the same offsets
+    and its pitch and notes are the same events as before the save. Numbers: offsets
+    per punch-in, largest offset, the round trip used.
+  - **2** Pass when every punch-in was added to the take, each placed within ±2 ms, each
+    with a measured start gap of its own. Numbers: per punch-in its median offset and
+    start gap.
+- **Scratch folders.** Not deleted at the end: the session open afterwards lives in it
+  (spec §2: the test session stays open). As `nextReferencePath()` does for references:
+  numbered folders, and at the start of a run every one that the open session does not
+  use is removed. The report names the folder.
+- **Report.**
+  - Text file `DevChecks.txt` in the report directory: the run's date, devices and round
+    trip, then one block per check grouped by checklist item (verdict, message,
+    numbers), ending `Totals: N passed, N failed, N measured, N skipped`.
+  - Tests pass a report directory of their own: a failing run's report must not land
+    among the suites' own files, where the lead greps for `^FAIL`.
+- **Dialog** (dev builds only). The instructions page gets a checkbox, "Run the dev
+  checks after calibrating", on by default and not remembered. With it on and the
+  calibration usable, the progress page goes straight on into the dev checks with
+  `calibratedRoundTrip`, Cancel cancels whichever is running, and the result page
+  shows the calibration as today plus the dev report: one line per check, then the
+  report file's path. With the calibration unusable, the dev checks do not run and the
+  page says so.
+- **Tests,** new class `TestDevChecks` in the app suite, compiled and registered only
+  in dev builds; the fixture copied from `TestAudioCheck`, not shared by editing it:
+  - passing on a loopback fake with its true round trip: items 1 and 2 pass, the report
+    file ends with `Totals:`, and the session open afterwards is the one in the scratch
+    folder;
+  - failing with the round trip 20 ms off: items 1 and 2 fail, and the report shows the
+    offsets;
+  - cancelled mid-run, and the session closed mid-run: `finished` once, no take left
+    recording, the user's three toggles and stored latency untouched;
+  - the dialog with the checkbox on runs the dev checks after the calibration (the short
+    plan for the calibration).
+  - **Show failure** for item 1's tolerance and for the run round trip being ignored.
+  - Report the real time `TestDevChecks` adds. Spec §6 says more than about a minute
+    over all the dev phases moves them to a third executable, which the lead will ask
+    the user about; do not create one.
+
+### C1b — Observer, items 7, 12, 13, 14 (spec §4, §5 `TakeObserver`)
+
+To be refined by the lead after C1a. Outline:
+
+- `main/dev/TakeObserver`: polls every 20 ms while the runner reports a take recording
+  and records, with the time: playback frame, output and input levels (left and right,
+  as `getOutputLevels()` and `getInputLevels()` give them; find out and say exactly what
+  one reading covers), status text, frames received, any modal widget up, and when the
+  take stopped. Live dots, pane centre and action states wait for C2.
+- Before and after each punch-in: the take's samples from its file, and its pitch and
+  notes, compared with `TakeDiff`.
+- New stages before the save and reopen: re-record over one of stage 1's punch-ins
+  starting inside it, so its lead-in plays over earlier material (items 7, 12, 14), with
+  no overwrite question for the check's takes; then a punch-in at P = 1 s with a 3 s
+  pre-roll for that plan (item 13: playback from 0, a shorter countdown, placement
+  right; checklist item 13 is "pre-roll less than 3 s from the start").
+- Items 1 and 2 then cover every punch-in of the run.
 
 ### C2 — Observer group (spec §4 items 3, 4, 5, 8, 15, 16)
 
@@ -588,3 +704,8 @@ The next phase must know:
 - **Two punch-ins that meet at J leave a 10 ms dip, not a crossfade.** Each fades against what the file held there, which is silence: [J − 5 ms, J) fades out and [J, J + 5 ms) fades in (read from `weightAt()`, not measured). `stepAt()` reads it as no step.
 - The notes merge adds a new note only if its onset is in W (`Analyser.cpp`, "Notes go by their onset"). A second run's note that begins before J − 0.25 s is not added, and the dip may split the note at J. Either way, item 10's "one note across the join" may fail on today's code. C3 should measure it, not assume it.
 Left open: every threshold untuned; nothing calls `TakeDiff` yet.
+
+### Lead — 2026-09-26, after C0
+- C1 is split into C1a (framework, items 1 and 2) and C1b (observer, items 7, 12, 13, 14); spec §7 says so.
+- DevChecks runs as stages driven by the runner and a timer, not a nested event loop; scratch folders stay with the open session and the next run removes the old ones. Spec §5 and §8 changed to match.
+- C0's warning about item 10 (a 10 ms dip at two punch-ins' join; notes merged by onset) stands for C3.

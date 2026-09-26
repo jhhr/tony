@@ -62,7 +62,8 @@ with less noise.
 
    **Use this latency** stores the figure.
 5. **Development builds only:** the dialog carries on into the **dev checks**, about
-   4 minutes (section 5). It ends with a report page and a report file.
+   4 minutes (section 5), unless a checkbox on the instructions page (on by default)
+   is cleared. It ends with a report page and a report file.
 
 The test session stays open afterwards, so the reference's and the takes' pitch tracks
 can be looked at. You go back to your song through Recent Files.
@@ -206,9 +207,10 @@ goes in `tony_core`.
 
 - **`DevChecks`.** A list of checks. Each returns a plain
   `CheckResult { item, name, verdict (Pass/Fail/Measured/Skipped), numbers, message }`.
-  Waiting is done with a small `waitUntil(predicate, timeout)`, a `QEventLoop` with a
-  timer, behind the modal progress dialog. Cancel stops the take and closes the test
-  session cleanly.
+  The run is a list of stages, each starting something and saying when it is done,
+  driven by the runner's `finished()` and a polling timer as the runner itself is, and
+  never by a nested event loop: the window can be closed at any moment. Cancel stops
+  the take and leaves the test session open.
 
   They are **not** QtTest functions. A QVERIFY failure cannot be asserted from inside
   another QtTest, and the app suite has to prove each check can fail.
@@ -217,9 +219,10 @@ goes in `tony_core`.
 - **Report.** A page in the dialog, grouped by checklist item, with the measured numbers.
   A text file goes to `TONY_TEST_LOG_DIR` if that is set, else to the app data directory,
   and ends with a `Totals:` line like the suites.
-- **Scratch files.** The run saves its test session into a temporary folder, so every
-  take file lands in `<session>.takes/`. It deletes the folder at the end, unless
-  something failed; then the report names it.
+- **Scratch files.** The run saves its test session into a numbered scratch folder, so
+  every take file lands in `<session>.takes/`, and the report names it. The folder stays
+  after the run, since the session open then lives in it; the next run removes every
+  one the open session does not use.
 
 ### The dev run, one scripted sequence (~4 min)
 
@@ -301,8 +304,9 @@ marked "Done" when it is committed.
 3. **Calibration in use:** built in B2 (Use this latency and Forget in B4).
 4. **Dev-check framework:**
    - **C0** `TakeDiff`, pure. Done.
-   - **C1** Build flag, `DevChecks`, `TakeObserver`, report, friend access. First
-     group: items 1, 2, 7, 12, 13, 14.
+   - **C1a** Build flag, `DevChecks`, report, friend access, the dialog's dev run.
+     Items 1 and 2.
+   - **C1b** `TakeObserver`. Items 7, 12, 13, 14.
 5. **C2** Observer group: items 3, 4, 5, 8, 15, 16.
 6. **C3** Join and long-song group: items 9 and 10.
 7. **C4** Smoke group.
@@ -329,9 +333,10 @@ could convert. The button then shows the fix working on each device.
   verdicts point to *Sound settings ▸ device ▸ Audio enhancements: Off*.
 - **Thresholds are guesses** until real runs exist. Every check reports its numbers as
   well as pass or fail, and the report file is what tunes them.
-- **Nested event loops in the live app.** The run stays behind a modal progress dialog,
-  and Cancel must always leave a clean state. `closeSession()` already stops take
-  polling.
+- **The live app during a run.** No nested event loops: the runner and the dev checks
+  are driven by timers, and the dialog is not modal, so the window can be used, and
+  closed, while they run. Cancel, and a session closed mid-run, must always leave a
+  clean state. `closeSession()` already stops take polling.
 - **Loudness.** The sweeps are −12 dBFS with earcups off the ears; the dialog says so
   before starting. *Found in B1:* not as played. Tony normalises every audio file to
   full scale as it reads it (`Preferences::setNormaliseAudio(true)`), so the reference
