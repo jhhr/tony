@@ -159,7 +159,7 @@ builds happen in the container.)
 - A4 — Touch gestures on the panes. Done.
 - A5 — Compact touch mode. Done.
 - A6 — Oboe audio backend.
-- A7 — Android files, permission and lifecycle.
+- A7 — Sessions in place on the phone, and fixes from the first phone test.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -312,11 +312,36 @@ all of it; the A1 log entry.
 - Pure arithmetic (latency from timestamps and the like) in `tony_core` with core tests;
   the rest can only be judged on the phone.
 
-### A7 — Android files, permission and lifecycle
+### A7 — Sessions in place on the phone, and fixes from the first phone test
 
-Detailed when it starts: microphone permission, stopping audio and saving on suspend,
-opening a reference or session through the picker by copying it into app storage, and
-exporting.
+Decided with the user (2026-09-26): sessions live in ordinary folders on the phone, which
+a sync app (Syncthing, FolderSync, Dropsync, OneSync) mirrors with the desktop, and Tony
+works on them in place with Android's "All files access" (`MANAGE_EXTERNAL_STORAGE`, fine
+for a sideloaded app). No session bundle.
+
+Read: [port-android.md](port-android.md) "Files, storage and cloud apps", "Permissions and
+lifecycle"; [mobile-port.md](mobile-port.md) "Files and sessions"; [takes.md](takes.md)
+"Files on disk", "The session file"; the A3b log entry (`AndroidFiles`, the
+`getOpenFileName()` override).
+
+- All files access: declared in the manifest; asked for (a short explanation, then the
+  system's settings page for it) the first time a session is opened or saved, or a picked
+  file lies in the phone's own storage; checked with `Environment.isExternalStorageManager()`.
+- A picked `content://` URI from the phone's own storage (the external storage provider,
+  and the downloads provider's `raw:` ids) is turned back into a real path (pure function
+  in `tony_core`, core tests). With access, that path is what Tony opens and saves:
+  sessions open and save in place with their takes folder, audio opens in place.
+- Without a path (Drive, Dropbox, OneDrive, or no access): audio is copied in as now; a
+  session is refused with a clear message, and a save does not leave an empty file
+  behind (the picker creates the document before Tony writes).
+- First phone test (user, A3b/A5 APK): no crash; loading, analysis, zoom and scroll work.
+  Fix: menus taller than the screen cannot be scrolled (items off-screen) — make menus
+  scrollable on Android; Save Session As suggests no file name and accepts an empty one;
+  the save error message came out garbled because the `content://` URI's `%3A`/`%2F`
+  were taken for `QString::arg()` placeholders by chained `.arg()` calls.
+- On `Qt::ApplicationSuspended`: stop playback, and finish a take being recorded as Stop
+  does; save the session if it has a path and is modified.
+- The 48 kHz play cursor (A1) is not this phase's: the user expects a fix on `default`.
 
 ### A8 — Documentation pass
 
