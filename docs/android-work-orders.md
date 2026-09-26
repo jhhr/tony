@@ -160,6 +160,8 @@ builds happen in the container.)
 - A5 — Compact touch mode. Done.
 - A6 — Oboe audio backend. Done.
 - A7 — Sessions in place on the phone, and fixes from the first phone test. Done.
+- A7b — Fixes from the second phone test: menus, the picker, Downloads.
+- A4b — Vertical zoom and scroll by touch.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -342,6 +344,41 @@ lifecycle"; [mobile-port.md](mobile-port.md) "Files and sessions"; [takes.md](ta
 - On `Qt::ApplicationSuspended`: stop playback, and finish a take being recorded as Stop
   does; save the session if it has a path and is modified.
 - The 48 kHz play cursor (A1) is not this phase's: the user expects a fix on `default`.
+
+### A7b — Fixes from the second phone test: menus, the picker, Downloads
+
+The user's second phone test (APK at 3062d25), 2026-09-26. Worked: menu scrolling; the
+All files access prompt; Save Session As with a suggested name, saving once access was
+granted; playback stopping in the background. Did not:
+
+- The topmost menu item (Open, in the File menu) is hard to tap: a tap at the very top
+  edge of the screen hardly registers. Menus must keep clear of the screen's edges and of
+  the system bars (`QScreen::availableGeometry()`, the window's safe area margins in Qt
+  6.9+), with a margin, wherever Qt places them.
+- Files in Google Drive cannot be picked: tapping one in the picker does nothing. Suspect
+  the picker's MIME type filter (Qt turns name filters into `EXTRA_MIME_TYPES`; a provider
+  disables files whose type is not listed): check `qandroidplatformfiledialoghelper.cpp`
+  and what Tony's filters become; on Android offer all files and check the type after.
+- A file downloaded from Drive into the phone's storage then failed to open, audio as
+  well as `.ton`, "with the same error as before" (the user suspected the access grant
+  had been lost). Likely: picks from Downloads (`msf:` ids) and from the picker's Recent
+  and Audio roots (the media provider's `audio:` ids) have no path in A7's mapping. With
+  All files access, MediaStore gives their path (the `_data` column, through the
+  `ContentResolver`); map those too. The refusal message names the provider, so that a
+  case still unmapped can be reported; and log the URI.
+
+### A4b — Vertical zoom and scroll by touch
+
+The same phone test: the pitch track is tiny, because the pane's frequency range is far
+wider than the singing, and pinch zooms only the time axis.
+
+- A pinch zooms each axis by the spread of the fingers along it: horizontal spread the
+  time axis as now, vertical spread the frequency range, about the frequency under the
+  pinch centre; a diagonal spread both. A two-finger drag scrolls vertically too.
+- The frequency range is the analyser's: `Analyser::getDisplayFrequencyExtents()` /
+  `setDisplayFrequencyExtents()`, which View > Edit Display Extents
+  (`MainWindow::editDisplayExtents()`) uses. Check the scale (log for pitch), the limits,
+  and what the other layers in the pane do when it changes.
 
 ### A8 — Documentation pass
 
