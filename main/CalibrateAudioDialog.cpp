@@ -14,6 +14,7 @@
 
 #include "CalibrateAudioDialog.h"
 
+#include "AudioDriverMenus.h"
 #include "MainWindow.h"
 
 #include <QDate>
@@ -567,6 +568,9 @@ CalibrateAudioDialog::instructionsHtml() const
         tr("Set a moderate volume, and keep the room quiet.") +
         "</li></ul>";
     html += "<table cellspacing=\"4\">";
+    html += "<tr><td>" + tr("Driver:") + "</td><td>" +
+        AudioDriverMenus::driverName(devices.implementation).toHtmlEscaped() +
+        "</td></tr>";
     html += "<tr><td>" + tr("Output:") + "</td><td>" +
         deviceName(devices.playbackDevice).toHtmlEscaped() + "</td></tr>";
     html += "<tr><td>" + tr("Input:") + "</td><td>" +
@@ -747,6 +751,8 @@ CalibrateAudioDialog::calibrationHtml() const
                 .arg(QLocale().toString(std::fabs(s.echo.levelDb), 'f', 0))
                 .arg(s.echo.levelDb <= 0.0 ? tr("quieter") : tr("louder")) :
                 tr("none heard"));
+    html += row(tr("Driver:"),
+                AudioDriverMenus::driverName(r.key.implementation));
     html += row(tr("Devices:"),
                 tr("output %1; input %2")
                 .arg(deviceName(r.key.playbackDevice))

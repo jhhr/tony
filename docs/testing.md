@@ -6,7 +6,7 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 9 minutes in one process, a minute and a half in eight (measured 2026-09-26 on Linux), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 4 minutes in one process, a little over one in eight (2026-09-26, Linux): each test records a dev run's takes, or part of them, in real time |
 
@@ -133,10 +133,14 @@ Windows path would start an escape in the C string.
   `TestDevChecks` in `test-tony-dev`): subclass of `MainWindow` that exposes protected
   operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
   and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
-  Playback menu's actions). It installs the fake device through `createAudioIO()`, or no
-  device at all when made with `installDevice` false, and **answers dialogs
-  through virtual seams**: `confirmRecordingOverTake()`, `confirmDeleteTake()`,
-  `askForTakeName()`, `askForLyricsFile()`, `askForLyricsExportFile()` (which also keeps
+  Playback menu's actions). It installs the fake device through `openAudioIO()`, which
+  `MainWindow::createAudioIO()` calls once it has named the driver and applied its
+  latency, or no device at all when made with `installDevice` false, and keeps what the
+  Preferences named for the last device opened (`audioIOOpenedFor()`). The drivers are
+  the ones a test gives with `setAudioImplementations()`, none by default, whatever the
+  platform has. It **answers dialogs through virtual seams**: `confirmRecordingOverTake()`,
+  `confirmDeleteTake()`, `askForTakeName()`, `askForLyricsFile()`,
+  `askForLyricsExportFile()` (which also keeps
   the path it was offered), each with a `set...Answer()` and a counter of questions asked.
   `askForLyricsWordText()` takes a queue of answers (`answerWordText()`,
   `cancelWordText()`; none left is Cancel) and can run something while the question is
@@ -223,8 +227,12 @@ The rules of the edits themselves are tested without a window, in `TestLyricsEdi
   `setApplicationSessionExtension("ton")` and the record directory.
 - `QSignalSpy` connects directly; for a signal from another thread use a receiver object
   on the test thread.
-- In `TestMainWindow` override only `createAudioIO()`: `~MainWindowBase` calls
-  `deleteAudioIO()` non-virtually.
+- In `TestMainWindow` override only `openAudioIO()`: `~MainWindowBase` calls
+  `deleteAudioIO()` non-virtually, and `MainWindow::createAudioIO()` names the driver and
+  applies its latency before it calls `openAudioIO()`.
+- A hidden `QAction` reads as disabled, whatever it was set to: a test of when the Audio
+  Driver and Audio Latency menus are greyed out gives the window drivers first
+  (`setAudioImplementations()`, `doRebuildAudioDriverMenus()`), so that they are shown.
 - The app and dev mains draw text without sub-pixel anti-aliasing. Ubuntu's fontconfig asks
   for it and Qt 6.4 follows it: the scale's labels then have orange fringes, which
   `TestUiChecks` takes for live dots. A new main that shows a window needs the same.
@@ -343,8 +351,9 @@ What they cover is in [calibrate-audio.md](calibrate-audio.md), section 11. Both
 follow `TestRecordWorkflow`'s (a `TestMainWindow`, the dialog watchdog, the user's toggles
 reset in `init()`), and `TestDevChecks`' is a copy of `TestAudioCheck`'s, not shared: each
 class keeps its own. `cleanup()` also removes any round trip a test stored, which would
-place the next test's takes. How they are built, and what to keep in mind when adding to
-them:
+place the next test's takes, and `TestAudioCheck`'s the driver, the devices kept per
+driver and the latencies a test named. How they are built, and what to keep in mind when
+adding to them:
 
 - **The loopback fake.** Both record through `FakeAudioIO` with `loopback` on (their
   `loopback()`). The device reports 2 × 4096 frames out and 4096 in, and the true round

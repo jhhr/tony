@@ -1186,6 +1186,7 @@ tony_entry_files = [
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
   'main/AndroidFiles.cpp',
+  'main/AudioDriverSettings.cpp',
   'main/Coverage.cpp',
   'main/DecodedPcm.cpp',
   'main/LogFile.cpp',
@@ -1220,6 +1221,7 @@ endif
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
   'main/AudioCheckRunner.cpp',
+  'main/AudioDriverMenus.cpp',
   'main/CalibrateAudioDialog.cpp',
   'main/CompactLayout.cpp',
   'main/CoverageStrip.cpp',
@@ -1254,6 +1256,7 @@ tony_app_moc_headers = [
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
   'main/AudioCheckRunner.h',
+  'main/AudioDriverMenus.h',
   'main/CalibrateAudioDialog.h',
   'main/CompactLayout.h',
   'main/CoverageStrip.h',
@@ -1561,6 +1564,7 @@ if system != 'android'
     'main/test/TestLyricsEdit.h',
     'main/test/TestLatencyCheck.h',
     'main/test/TestLatencyCalibration.h',
+    'main/test/TestAudioDriverSettings.h',
     'main/test/TestTakeDiff.h',
     'main/test/TestLiveDotsFeed.h',
     'main/test/TestRunSuite.h',

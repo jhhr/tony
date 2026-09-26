@@ -21,6 +21,8 @@
 #include "CompactLayout.h"
 #include "PlotSize.h"
 #include "AudioCheckRunner.h"
+#include "AudioDriverMenus.h"
+#include "AudioDriverSettings.h"
 #include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
 #include "Lyrics.h"
@@ -228,6 +230,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioDeviceGroup(0),
     m_audioInputDeviceMenu(0),
     m_audioInputDeviceGroup(0),
+    m_audioDriverMenus(nullptr),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -1682,6 +1685,73 @@ MainWindow::audioDeviceSelected(QAction *action)
     recreateAudioIO();
 }
 
+QStringList
+MainWindow::audioImplementationNames() const
+{
+    QStringList names;
+    for (const std::string &name :
+             breakfastquay::AudioFactory::getImplementationNames()) {
+        names << QString::fromStdString(name);
+    }
+    return names;
+}
+
+void
+MainWindow::nameDefaultAudioDriver()
+{
+    QSettings settings;
+    if (AudioDriverSettings::nameDefaultDriver
+        (settings, audioImplementationNames())) {
+        cerr << "MainWindow::nameDefaultAudioDriver: no audio driver was "
+             << "named; naming " << AudioDriverSettings::kDefaultDriver
+             << endl;
+    }
+}
+
+void
+MainWindow::audioDriverChosen(QString)
+{
+    // As for another device: the driver opens the devices it names,
+    // which may record at another rate.  The latency chosen for it is
+    // applied as the device is opened
+    if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+    m_lastRecordingRate = 0;
+    recreateAudioIO();
+}
+
+void
+MainWindow::audioLatencyChosen(double)
+{
+    if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+    recreateAudioIO();
+}
+
+#ifndef Q_OS_ANDROID
+void
+MainWindow::createAudioIO()
+{
+    if (m_playTarget || m_audioIO) return;
+
+    // The first device is opened lazily, with the first file or the
+    // first take, and svapp opens it for the driver the Preferences
+    // name, so a driver has to be named by then
+    nameDefaultAudioDriver();
+    if (m_audioDriverMenus) m_audioDriverMenus->applyLatency();
+
+    openAudioIO();
+}
+
+void
+MainWindow::openAudioIO()
+{
+    MainWindowBase::createAudioIO();
+}
+#endif
+
 void
 MainWindow::setupToolbars()
 {
@@ -1858,6 +1928,20 @@ MainWindow::setupToolbars()
     menu->addSeparator();
     menu->addAction(recordAction);
     menu->addSeparator();
+
+    // The driver and the latency asked of it, before the devices, which
+    // are the driver's own
+    m_audioDriverMenus = new AudioDriverMenus
+        (menu, [this]() { return audioImplementationNames(); }, this);
+    connect(m_audioDriverMenus, &AudioDriverMenus::driverChosen,
+            this, &MainWindow::audioDriverChosen);
+    connect(m_audioDriverMenus, &AudioDriverMenus::latencyChosen,
+            this, &MainWindow::audioLatencyChosen);
+
+    // Before anything in this menu reads the driver: the device menus
+    // list its devices, and the latency line looks its figure up
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::nameDefaultAudioDriver);
 
     m_audioDeviceMenu = menu->addMenu(tr("Audio Output &Device"));
     m_audioDeviceMenu->setStatusTip(tr("Choose which device Tony plays through"));
@@ -2296,6 +2380,12 @@ MainWindow::setupCompactLayout()
     for (QMenu *menu: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (menu) parts.hiddenActions.push_back(menu->menuAction());
     }
+    if (m_audioDriverMenus) {
+        for (QMenu *menu: { m_audioDriverMenus->driverMenu(),
+                            m_audioDriverMenus->latencyMenu() }) {
+            parts.hiddenActions.push_back(menu->menuAction());
+        }
+    }
 
     // For room: the panes are what a phone's height is wanted for
     parts.hiddenWidgets = { m_overview };
@@ -2547,6 +2637,10 @@ MainWindow::updateMenuStates()
     if (checking) emit canRecord(false);
     if (m_calibrateAudioAction) {
         m_calibrateAudioAction->setEnabled(!inTake && !checking);
+    }
+    // Choosing either opens the device afresh
+    if (m_audioDriverMenus) {
+        m_audioDriverMenus->setEnabled(!inTake && !checking);
     }
     for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (m) m->menuAction()->setEnabled(!checking);

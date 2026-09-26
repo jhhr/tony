@@ -173,3 +173,11 @@ session's rate. A 48 kHz check measures about 1.1 ms over the fake's delay: bqau
 
 **W2** (lead). The fork as the spec's §4; pinned. Tony's build unchanged on Linux; the
 suites green against the fork.
+
+**W3** (agent; lead reviewed and committed). `AudioDriverSettings` (core) and
+`AudioDriverMenus` (app); `MainWindow::createAudioIO()` on desktop names the default and
+applies the latency, then `openAudioIO()`, which the tests override instead of
+`createAudioIO()`. The first device opens lazily (first file, first take, recreate), never
+in the constructor. Seen failing: the default, the per-driver latency (twice), the
+greying. Not tested: that playback stops on a choice. For W4: the manual checklist has no
+items for the menus yet; calibrate-audio.md §11's test list.

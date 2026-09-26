@@ -145,6 +145,22 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
 - `m_takeLatency` keeps what the last take was placed with: the round trip, whether it was
   measured, the reported pair in seconds, the recording's rate, and the start gap and
   whether it was measured. The audio check reads it for each of its takes.
+- **The latency asked for** is not part of L: it is what bqaudioio asks the driver for on
+  each side (PortAudio's `suggestedLatency`), which sets the driver's buffers, and the
+  round trip with them. It is chosen per driver under Playback > Audio Latency (10 to
+  200 ms, `Preferences/audio-latency-<driver>`; 200 ms where none is chosen, what every
+  stream asked for before there was a choice), and `MainWindow::createAudioIO()` hands it
+  to bqaudioio before each device is opened; choosing one opens the device again. A
+  measured round trip is kept per driver, not per latency: a figure measured at another
+  latency is told apart only by the staleness fingerprint
+  ([calibrate-audio.md](calibrate-audio.md), §5), when the reported pair moves with the
+  buffers.
+- **The driver** (Playback > Audio Driver: MME, DirectSound, WASAPI, shown where more than
+  one is built in, which is on Windows) is `Preferences/audio-target`. Where none is named
+  and MME is built in, `MainWindow::createAudioIO()` names MME before the first device is
+  opened, and the Playback menu before it shows the device menus, carrying the devices
+  chosen before over to MME's keys: bqaudioio lists no devices for no driver when it has
+  several. Choosing a driver or a latency is shut during a take and while a check runs.
 
 ## Pre-roll and Record into Selection
 

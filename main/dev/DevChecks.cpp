@@ -16,6 +16,7 @@
 
 #include "DevChecks.h"
 
+#include "../AudioDriverMenus.h"
 #include "../MainWindow.h"
 #include "../RealtimePitchTracker.h"
 #include "../SingingTakes.h"
@@ -2509,6 +2510,15 @@ DevChecks::writeReport(const DevReport &report) const
     out << "Run: " << m_startedAt.toString(Qt::ISODate) << "\n";
     out << "Output device: " << device(m_devices.playbackDevice) << "\n";
     out << "Input device: " << device(m_devices.recordDevice) << "\n";
+
+    // So that runs on two drivers, or at two latencies, can be told apart
+    out << "Audio driver: "
+        << AudioDriverMenus::driverName(m_devices.implementation) << "\n";
+    const double latencyAsked = m_window->m_audioDriverMenus ?
+        m_window->m_audioDriverMenus->appliedLatency() : 0.0;
+    out << "Latency asked for: "
+        << (latencyAsked > 0.0 ? unsignedMs(latencyAsked)
+            : QString("none")) << "\n";
 
     // What the device says of itself, as the window has it now.  The
     // output latency counts frames at the rate the play source was told

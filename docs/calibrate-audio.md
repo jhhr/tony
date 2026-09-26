@@ -22,8 +22,9 @@ Audacity's measurements) was a separate report, not kept in the repository.
   a measured figure the round trip is the sum of the output and input latency the device
   reports. The start gap is measured and right; the reported pair comes from
   `Pa_GetStreamInfo()`, which on MME, DirectSound and WASAPI is buffer sizes only.
-  Audacity measured it off by −5 to +155 ms. bqaudioio opens the stream with
-  `suggestedLatency = 0.2` on both sides.
+  Audacity measured it off by −5 to +155 ms. bqaudioio opens the stream with the
+  `suggestedLatency` chosen for the driver under Playback > Audio Latency on both sides,
+  0.2 s unless another is chosen ([recording.md](recording.md#latency)).
 - **The device need not run at the reference's rate.** It opens at PortAudio's default
   rate: for "(System Default)" through MME most likely 44.1 kHz, for a device whose name
   exists only under WASAPI or WDM-KS often 48 kHz. A recording is converted to the
@@ -54,9 +55,9 @@ meanwhile. Closing the dialog while its check runs cancels the check, since noth
 would show how the run ended. Three pages:
 
 1. **Instructions:** one earcup against the microphone, off your ears; a moderate volume
-   and a quiet room; the output and input devices and the latency in use; how long it
-   takes. In development builds the checkbox **Run the dev checks after calibrating**, on
-   every time the page is shown and not remembered. **Start**.
+   and a quiet room; the driver, the output and input devices and the latency in use; how
+   long it takes. In development builds the checkbox **Run the dev checks after
+   calibrating**, on every time the page is shown and not remembered. **Start**.
 2. **Progress:** the step and the punch-in, a bar and the time left (the recording to come,
    plus a guess of 3 s for each analysis), **Cancel**. During the dev checks, their stage.
 3. **Result** (§4): **Use this latency** (only when the calibration is usable), **Check
@@ -176,7 +177,7 @@ round trip measured (not for NoSignal) against the driver's, output plus input; 
 takes were placed with (measured before, or the driver's figure); where each punch-in
 landed (+ is late); the spread; sweeps found of those judged; both rates ("recorded at
 48000 Hz, converted to the reference's 44100 Hz" where they differ); the input peak in
-dBFS; the echo; the devices. A failed run shows why it ended instead.
+dBFS; the echo; the driver and the devices. A failed run shows why it ended instead.
 
 **Use this latency** keeps the calibrated round trip for the devices the check started on,
 not for those the Preferences name when it is pressed (the result stays on show for as long
@@ -336,9 +337,10 @@ song was left out (`Options::longSeconds` of 0, for tests only).
 
 `DevChecks.txt` in `TONY_TEST_LOG_DIR` if that is set, else in the application data
 directory (`%APPDATA%\sonic-visualiser\Tony` on Windows), written over by each run. Its
-header: the date, the output and input devices, the audio drivers built in, the playback and
-record latencies the device reports (frames and ms), the round trip for the run, the
-scratch folder, the session saved, and why the run ended early if it did. Then each check
+header: the date, the output and input devices, the audio driver they were opened through
+and the latency asked of it, the audio drivers built in, the playback and record latencies
+the device reports (frames and ms), the round trip for the run, the scratch folder, the
+session saved, and why the run ended early if it did. Then each check
 under "Item N", with its verdict, message and numbers, and last `Totals: N passed, N failed,
 N measured, N skipped`, as the suites end.
 
@@ -446,9 +448,9 @@ below). In order:
    API, WASAPI's automatic rate conversion, and a `suggestedLatency` that can be set
    ([forks.md](forks.md#bqaudioio)). Done; the plan from here on is in
    [audio-drivers.md](audio-drivers.md).
-3. **A driver type in Tony**: MME, DirectSound or WASAPI; the device menus list that type's
-   devices only (today every host API's are listed, and `getDeviceIndex()` takes the first
-   name that matches, which is MME's); the stored round trip kept per type.
+3. **A driver type in Tony**: MME, DirectSound or WASAPI, and the latency asked of it,
+   under Playback > Audio Driver and Audio Latency; the device menus list that type's
+   devices only; the stored round trip kept per type. Done.
 4. **Measure** with Calibrate Audio and a dev run on each type, on the user's PC.
 
 **MME stays the default** until such a run shows WASAPI, or another type, better.

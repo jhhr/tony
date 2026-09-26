@@ -588,8 +588,11 @@ private slots:
                  describe());
         QVERIFY2(mic->message.startsWith("Not applicable here"), describe());
 
-        // What the device says of itself, at the head of the report
-        for (QString words : { QString("Audio drivers built in: "),
+        // What the device says of itself, at the head of the report, and
+        // the driver it was opened through with the latency asked of it
+        for (QString words : { QString("Audio driver: (auto)\n"),
+                               QString("Latency asked for: 200.0 ms\n"),
+                               QString("Audio drivers built in: "),
                                QString("Playback latency reported: 8192 "
                                        "frames (185.8 ms)"),
                                QString("Record latency reported: 4096 "

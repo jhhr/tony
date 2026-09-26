@@ -32,7 +32,7 @@ to be merged back into it). What is built is marked **Done** in §6; the reasons
 | **A driver is a bqaudioio implementation**: `mme`, `directsound`, `wasapi`, each PortAudio restricted to that host API; `port` stays as it is (all host APIs) | lead | Tony's device menus, the saved devices (`audio-*-device-<implementation>`), svapp's `createAudioIO()` and the stored round trip (`LatencyCalibration::Key::implementation`) are already per implementation: no svapp change |
 | WASAPI in **shared** mode, with `paWinWasapiAutoConvert` on both sides | lead | The input's and the output's mixers can run at different rates, and the stream opens at the output's; shared mode leaves other programs' sound alone. Exclusive mode is not in this project |
 | A device at 48 kHz needs nothing more for placement | `feat/tonyandroid` A1 | The recording is resampled to the reference's rate before the splice, and `TakeTiming` converts device frames (§3). Calibrate Audio's "rate mismatch" verdict is out of date and goes (W1) |
-| `suggestedLatency` settable per driver | lead; the Tony-side choice is open (§7) | At 0.2 s WASAPI would keep MME's buffers and gain nothing |
+| `suggestedLatency` settable per driver, chosen in a Playback > Audio Latency submenu (10, 20, 50, 100, 200 ms; 200 when unset) | lead, 2026-09-26 | At 0.2 s WASAPI would keep MME's buffers and gain nothing; a choice lets W5 compare |
 
 ## 3. Facts checked
 
@@ -126,11 +126,15 @@ Each leaves the tree building and all three suites green, committed and pushed t
   the fork, and `container-setup.sh` moves a checkout made from the mirror over to it.
   Compiled for Linux in Tony's build and cross-compiled for Windows; run on no device yet
   (the container has none).
+- **W3 Done.** Playback > Audio Driver and Audio Latency (shown with two drivers or more,
+  so on Windows only), greyed out during a take and a check; MME named by default before
+  the first device opens, with the devices chosen before carried over. `DevChecks.txt`
+  and the Calibrate Audio dialog name the driver (and the report the latency). A figure
+  measured before is kept under no driver's name, so it is not carried over: calibrate
+  again on each driver.
 
 ## 7. Open
 
-- **How the latency is chosen in Tony**: a fixed smaller figure for WASAPI, or a submenu
-  of a few (10, 20, 50, 100, 200 ms). To settle before W3.
 - WDM-KS (in PortAudio's build too) and WASAPI's exclusive mode would be lower still, but
   take the device from every other program; not in this project.
 - Keeping the stream running between takes would remove the restart from the take path
