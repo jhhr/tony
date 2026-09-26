@@ -69,6 +69,13 @@ first.
   grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   ```
 
+  For the whole suites, `default`'s sharded runner is quicker (the app suite in about a
+  minute and a half) and prints a per-suite summary with every failure; from the repo
+  root: `deploy/linux/run-tests.sh test-tony-core > tmp/core-run.log 2>&1` and the same
+  for `test-tony-app` and `test-tony-dev` (the dev checks' suite, since the merge of
+  `default`; build it with the others). Under its load `stale_pitch_event_ignored` failed
+  once at `QVERIFY(model)` and passed alone and on the next run.
+
   No `.exe` on Linux; the plugin target is `pyin.so`. Tony needs Qt 6.5 or later at run
   time (string connects with `sv::` types, see the A0 log entry).
 - Send build output to a log file with the exit status written into it; look at the tail
@@ -126,6 +133,13 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
 | Features beyond the spec (latency calibration setting, session bundle) are not built unless a phone test shows they are needed | The spec says so |
 
 ## 4. State of the code (kept by the lead; as of 2026-09-25, after phase A1)
+
+- 2026-09-26, after A7c: `default` merged in (`fb5fa6f`): lyrics, Calibrate Audio (a
+  measured round trip, `roundTripAt()`, which converts through seconds per rate), the dev
+  checks (`test-tony-dev`; compiled into non-release builds, the Android one included), the
+  sharded test runner, the live dot throttle and cache exclusion. svgui is pinned at
+  `c685b97`, checked out as its branch `feat/tonyandroid`. The test window class is in
+  `main/test/TestMainWindow.h`. All three suites green; the Android build links.
 
 - The branch holds `default`, the research docs, the container setup script
   `deploy/linux/container-setup.sh`, and A1's fix.
@@ -420,14 +434,22 @@ The fourth phone test (2026-09-26): the Avi Kaplan session and a direct `.m4a` o
 while recording the orange live dots lag **several seconds** behind the singing on the
 phone. On the desktop they keep up. Nothing else about recording was reported yet.
 
+That APK was built before `default` was merged in (2026-09-26, `fb5fa6f`). `default` had
+fixed the same symptom on the desktop in two steps: `ModelChangeThrottle` tells the pane of
+new dots at most every 40 ms instead of once per dot, and the dots layer is kept out of the
+pane's cache (`Layer::setCachedInView`, svgui fork), so a notice no longer has the pane draw
+the reference's waveform, pitch track and notes again (see `docs/recording.md` and the
+messages of `2a20de5` and `7fb4174`: GUI thread from ~80 % to ~22 % of a core in a
+1920 px window on this container). Nobody has measured that on a phone. So:
+
 What is known from the code (not measured):
 
-- `RealtimePitchTracker` (its own thread) emits `pitchDetected()` **once per hop**, 256
-  frames, about 172 signals a second. Each is a queued call into
-  `MainWindow::onRealtimePitchDetected()`, which adds one point to the live model
-  (`SparseTimeValueModel::add`, a model change the pane repaints for) and sets the status
-  bar text. A GUI thread that needs more than about 5.8 ms per estimate falls behind for
-  good, and the lag grows for as long as the take lasts.
+- `RealtimePitchTracker` (its own thread) still emits `pitchDetected()` **once per hop**,
+  256 frames, about 172 signals a second. Each is a queued call into
+  `MainWindow::onRealtimePitchDetected()`, which adds one point to the live model, tells
+  the throttle, and sets the status bar text. A GUI thread that needs more than about
+  5.8 ms per estimate falls behind for good, and the lag grows for as long as the take
+  lasts.
 - The recorded audio reaches the model on the GUI thread too: svapp's
   `AudioCallbackRecordTarget::updateModel()` every 10 ms (the fork's timeout; upstream about
   200 ms) writes to the file and calls `WritableWaveFileModel::updateModel()`, which closes
@@ -449,8 +471,10 @@ Wanted:
 - **Fix so the lag is bounded by design**, whatever the phone's speed: the dots come to the
   GUI thread in batches (everything the tracker found since the last one) at a paced rate,
   go into the model together, and the status bar is set once per batch. If the GUI thread
-  is slow, the dots arrive later in bigger batches, but never a growing queue behind. Fix
-  any other per-estimate or per-update cost the measurement shows, the simpler way.
+  is slow, the dots arrive later in bigger batches, but never a growing queue behind. Keep
+  `default`'s throttle and cache exclusion; fold the throttle into the batching if that is
+  simpler, saying so. Fix any other per-estimate or per-update cost the measurement shows,
+  the simpler way.
 - **A log line once a second while recording**, so the phone's log (Help > Save Log...)
   says whether it holds: seconds recorded, seconds the tracker has reached, seconds of
   dots drawn, and the GUI-side costs measured above (e.g. slot time, paint time of the
@@ -458,7 +482,8 @@ Wanted:
 - A test that fails with the per-estimate design: e.g. a GUI thread made slow on purpose
   in the test, and the newest dot must stay within a bound of the recording.
 - If the measurement points into svgui (the pane repaints its whole image for each point,
-  say), you may change the fork `svgui/` for it: on its branch `tony-customizations`,
+  say), you may change the fork `svgui/` for it: on its branch `feat/tonyandroid`
+  (checked out; fork work for a Tony branch goes on a fork branch of the same name),
   committed there with its own style (`view: what`), not pushed; the lead pushes it and
   pins it. `svcore/` and `svapp/`: report the change, do not make it.
 
@@ -492,7 +517,8 @@ Wanted:
 - The desktop at ratio 1 and 100% draws **exactly as before**: prove it with a test that
   renders the layers into images before/after, or equivalent.
 - The change is in the fork `svgui/`, which you may edit for this phase: on its branch
-  `tony-customizations`, as small and general as it can be (e.g. a plot scale in
+  `feat/tonyandroid` (checked out; fork work for a Tony branch goes on a fork branch of
+  the same name), as small and general as it can be (e.g. a plot scale in
   `ViewManager` that `View`/`ViewProxy` apply, and the layers using `scalePixelSize()` for
   their hard-coded sizes), committed there with its own style (`layer: what`,
   `view: what`), not pushed; the lead pushes it and pins it. Tony's side (the setting, the
