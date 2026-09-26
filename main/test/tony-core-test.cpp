@@ -16,6 +16,7 @@
 #include "TestRealtimePitchTracker.h"
 #include "TestLatencyShift.h"
 #include "TestCoverage.h"
+#include "TestDecodedPcm.h"
 #include "TestLogFile.h"
 #include "TestPinchZoom.h"
 #include "TestPopupArea.h"
@@ -76,6 +77,12 @@ int main(int argc, char *argv[])
 
     {
         TestCoverage t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestDecodedPcm t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

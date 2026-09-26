@@ -150,7 +150,7 @@ check() {
     echo "    it exports $symbol"
 }
 
-system_libraries='lib(c|m|dl|log|z|android|c\+\+_shared)\.so'
+system_libraries='lib(c|m|dl|log|z|android|mediandk|c\+\+_shared)\.so'
 
 check libTony_arm64-v8a.so main "$system_libraries|libQt6[A-Za-z]+_arm64-v8a\.so"
 check pyin.so vampGetPluginDescriptor "$system_libraries"

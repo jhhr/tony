@@ -539,9 +539,11 @@ elif system == 'android'
     '-Wl,--version-script=' + meson.current_source_dir() / 'vamp-plugin-sdk/vamp-plugin.map'
   ]
 
-  # Android's system log, which main.cpp passes stdout and stderr on to
+  # Android's system log, which main.cpp passes stdout and stderr on to;
+  # and its media extractors and decoders (main/AndroidMediaReadStream)
   feature_additional_libs = [
-    '-llog'
+    '-llog',
+    '-lmediandk',
   ]
 
 else
@@ -1170,6 +1172,7 @@ tony_entry_files = [
 tony_core_files = [
   'main/AndroidFiles.cpp',
   'main/Coverage.cpp',
+  'main/DecodedPcm.cpp',
   'main/LogFile.cpp',
   'main/PinchZoom.cpp',
   'main/PopupArea.cpp',
@@ -1182,6 +1185,15 @@ tony_core_files = [
   'main/TakeTiming.cpp',
   'main/VerticalZoom.cpp',
 ]
+
+# Android's decoders for the audio its libraries cannot read (M4A, FLAC,
+# Ogg): a bqaudiostream reader that registers itself, which only link_whole
+# keeps in the application, nothing referring to it
+if system == 'android'
+  tony_core_files += [
+    'main/AndroidMediaReadStream.cpp',
+  ]
+endif
 
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
@@ -1486,6 +1498,7 @@ if system != 'android'
     'main/test/TestRealtimePitchTracker.h',
     'main/test/TestLatencyShift.h',
     'main/test/TestCoverage.h',
+    'main/test/TestDecodedPcm.h',
     'main/test/TestLogFile.h',
     'main/test/TestPinchZoom.h',
     'main/test/TestPopupArea.h',
