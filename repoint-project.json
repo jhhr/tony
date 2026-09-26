@@ -62,7 +62,7 @@
             "vcs": "git",
             "service": "github",
             "owner": "jhhr",
-            "branch": "master"
+            "branch": "tony-customizations"
         },
         "bqaudiostream": {
             "vcs": "git",

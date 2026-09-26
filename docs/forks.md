@@ -10,7 +10,7 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 | `svgui/` | `jhhr/svgui` `tony-customizations` | See below. |
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
-| `bqaudioio/` | `jhhr/bqaudioio` `master` | See below. Upstream is Mercurial on sourcehut; the fork started from its GitHub mirror. |
+| `bqaudioio/` | `jhhr/bqaudioio` `tony-customizations` | See below. Upstream is Mercurial on sourcehut; the fork started from its GitHub mirror. |
 
 `pyin/` and the rest are upstream and must stay untouched.
 
@@ -100,7 +100,7 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `ViewManager::setRecordStartFrame()` / `getRecordStartFrame()`: while recording, the
   playback frame is this plus the recorded duration, not the duration alone. Without it a
   take recorded at P > 0 showed the cursor crawling from frame 0 and the pane scrolling
-  away from the dots. `setRecordFrameRatio()` (branch `feat/tonyandroid`) scales the
+  away from the dots. `setRecordFrameRatio()` scales the
   duration, which the record target counts in the device's frames, to the timeline's: a
   phone at 48 kHz against a reference at 44.1 kHz.
 - `RegionLayer::PlotStrip` plot style: the coverage strip. Saved through the existing
@@ -120,12 +120,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   line (where the value changes) is bold. The font (`getLyricsFontPixelSize()`) is twice
   the view's at the least, up to four times, and never more than an eighth of the view's
   height; it grows with the **square root** of the zoom, so that zooming in gives the
-  words room (their boxes grow with the zoom itself). `setLyricsTextScale()` (branch
-  `feat/tonyandroid`) draws the words at a share of that: View > Lyrics Size
-  (`LyricsSize`, 50 % by default on Android, where the desktop's size left room for only a
-  few words); each new size is written to the log. No vertical scale, no feature
-  description, and not editable by the pane's tools: Tony's `LyricsEditor` edits the
-  model itself.
+  words room (their boxes grow with the zoom itself). `setLyricsTextScale()` draws the
+  words at a share of that: View > Lyrics Size (`LyricsSize`, 50 % by default on Android,
+  where the desktop's size left room for only a few words); each new size is written to
+  the log. No vertical scale, no feature description, and not editable by the pane's
+  tools: Tony's `LyricsEditor` edits the model itself.
   `setHighlightFrame()` draws the region at that frame in amber (the latest to start, where
   regions overlap) and emits `layerParametersChanged()` only when that region changes: the
   highlight is painted into the view's cache, so each new word repaints the view, a few
@@ -170,11 +169,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `View::paintEvent()` on a cache hit no longer has the cached layers draw into its buffer,
   where the cache then covered them. Upstream has done that since 2018, so the cache saved
   nothing and every paint, down to the play pointer's few pixels, drew every layer.
-- Plot elements keep their size in logical pixels (branch `feat/tonyandroid`, for the
-  Android port). `View` draws its layers at the whole pixel ratio (3 on a phone at 2.75),
-  but `TimeValueLayer`'s points (2 px high) and `FlexiNoteLayer`'s notes (`NOTE_HEIGHT`)
-  were sized in those physical pixels and pens scaled by only the square root of the ratio,
-  so on a phone pitch and notes were a third of their size. Now
+- Plot elements keep their size in logical pixels (for the Android port). `View` draws its
+  layers at the whole pixel ratio (3 on a phone at 2.75), but `TimeValueLayer`'s points
+  (2 px high) and `FlexiNoteLayer`'s notes (`NOTE_HEIGHT`) were sized in those physical
+  pixels and pens scaled by only the square root of the ratio, so on a phone pitch and
+  notes were a third of their size. Now
   `LayerGeometryProvider::scalePlotSize()` (logical px x ratio x plot scale, no font factor:
   unchanged at ratio 1 and scale 1) sizes them, the notes' hit areas use it too, and
   `ViewProxy::scalePenWidth()` scales by the whole ratio and the plot scale.
@@ -185,7 +184,7 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 ### bqaudioio
 
 The driver project ([audio-drivers.md](audio-drivers.md)), on the fork branch
-`feat/wasapi`:
+`tony-customizations`, which upstream's `master` does not have:
 
 - **An implementation per Windows host API.** `mme`, `directsound` and `wasapi` are
   PortAudio restricted to that host API: their device lists hold its devices only, and
@@ -204,8 +203,8 @@ user's PC see the Windows part; Linux builds none of it.
 
 A `bqaudioio/` cloned from the mirror before the fork was pinned does not have the pin:
 `git remote add jhhr https://github.com/jhhr/bqaudioio`, `git fetch jhhr`, then
-`git checkout -B feat/wasapi jhhr/feat/wasapi` (the branch that goes with Tony's
-`feat/wasapi`). `container-setup.sh` does the equivalent by itself in a cloud session.
+`git checkout -B tony-customizations jhhr/tony-customizations`. `container-setup.sh`
+does the equivalent by itself in a cloud session.
 
 ## Known defects in the forks, not fixed
 
