@@ -460,10 +460,10 @@ private slots:
 
         // A doubled frame and a hole a second away: pYIN's own doubled
         // frame near the end of a run is like this
-        sv::EventVector far = pitch;
-        far.push_back(pitchAt(atJoin + 172 * hop));
-        for (int k = 1; k <= 10; ++k) removeFrame(far, atJoin - 172 * hop + k * hop);
-        QVERIFY(TakeDiff::pitchAcross(far, join, kRate).pass);
+        sv::EventVector distant = pitch;
+        distant.push_back(pitchAt(atJoin + 172 * hop));
+        for (int k = 1; k <= 10; ++k) removeFrame(distant, atJoin - 172 * hop + k * hop);
+        QVERIFY(TakeDiff::pitchAcross(distant, join, kRate).pass);
 
         // The merge's seam, a quarter of a second before the join
         sv::EventVector seam = pitch;

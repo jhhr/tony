@@ -250,16 +250,16 @@ TakeDiff::notesAcross(const EventVector &notes, sv_frame_t join,
 
         if (start <= join && join < end) result.spanning.push_back(note);
 
-        bool near = false;
+        bool edgeNear = false;
         for (sv_frame_t edge : { start, end }) {
             sv_frame_t offset = edge - join;
-            if (std::llabs(offset) <= clearance) near = true;
+            if (std::llabs(offset) <= clearance) edgeNear = true;
             if (!haveEdge || std::llabs(offset) < std::llabs(result.nearestEdge)) {
                 result.nearestEdge = offset;
                 haveEdge = true;
             }
         }
-        if (near) result.edgesNear.push_back(note);
+        if (edgeNear) result.edgesNear.push_back(note);
     }
 
     result.pass = result.spanning.size() == 1 && result.edgesNear.empty();
