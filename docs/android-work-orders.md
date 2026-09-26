@@ -179,6 +179,8 @@ builds happen in the container.)
 - A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session. Done.
 - A9 — Live dots in real time on the phone. Done.
 - A10 — Plot elements sized for the screen. Done.
+- A11 — Fixes from the fifth phone test: the cursor at a 48 kHz device, Save Log.
+- A4c — Vertical zoom keeps the pitch in view.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -526,6 +528,62 @@ Wanted:
   200%), since they do too.
 - Tests: the sizes at ratio 1 and 3 and the setting's steps, in images rendered offscreen
   (`QT_SCALE_FACTOR` or a `QImage` with a device pixel ratio).
+
+### A11 — Fixes from the fifth phone test: the cursor at a 48 kHz device, Save Log
+
+The fifth phone test (2026-09-26, APK at `1979ccc`): the live dots now keep up and sit
+where they should, and the reference plays in time during a take; pitch and notes are
+easier to see. Two faults:
+
+- **While recording, the play cursor races ahead** of the dots and of what is heard, further
+  and further as the take goes on. This is the known fault of section 4 (A1): svgui's
+  `ViewManager::getPlaybackFrame()` gives, while recording, `m_recordStartFrame +
+  m_recordTarget->getRecordDuration()`, and the duration counts the device's frames
+  (48 kHz on the phone) against a pane at the reference's rate (44.1 kHz): 8.8 % fast.
+  `QEXPECT_FAIL` in `takes_placed_from_a_device_at_48000` marks it.
+- **Help > Save Log... saved an empty file.** The log was not empty (else "There is no log
+  to save"), and no error was shown. `MainWindow::saveLog()` writes to the document the
+  picker made through `AndroidStorage::openDocument(uri, "w")`, which takes the file
+  descriptor with `ParcelFileDescriptor.detachFd()` and later `::close()`s it. A provider
+  that opened the document with a close listener (the media store behind Downloads, a cloud
+  app) is then told the client detached, not that it finished, and may drop what was
+  written. Reading (`"r"`, the audio copied in by A7b) uses the same call.
+
+Wanted:
+
+- The cursor at the reference's frames while recording at any device rate: the smallest
+  change in the svgui fork, which you may edit (branch `feat/tonyandroid`, checked out;
+  `view: what`; committed there, not pushed; the lead pushes and pins). svcore's
+  `AudioRecordTarget` has no rate; Tony knows it once the take has started
+  (`TakeTiming::recordRate`), and already tells `ViewManager` where the take starts
+  (`setRecordStartFrame()` in `record()`), so it can tell it the ratio as well. The
+  `QEXPECT_FAIL` goes and the check passes.
+- Documents written and read through the picker's grant are closed the way Android
+  expects: keep the `ParcelFileDescriptor` and `close()` it (or write through
+  `ContentResolver.openOutputStream()`), with `"wt"` for a write. After Save Log, check
+  what the document holds (its size, through the resolver) and say in the log, and in the
+  message if it differs, how many bytes went in and how many are there. Android-only code;
+  what is pure goes in `tony_core` with a test.
+- Say in the report what the phone test should look for in the log.
+
+### A4c — Vertical zoom keeps the pitch in view
+
+The fifth phone test: pinching to zoom the frequency range zooms about the frequency under
+the fingers (A4b). The Avi Kaplan song is low, and zooming in pushes the pitch below the
+bottom edge; the user: "The smart thing to do would be to keep the plot centered somehow
+when zooming in."
+
+- A vertical zoom anchors at the middle, on the pane's log scale, of the pitch that is on
+  show in the pane's time range: the reference's pitch track and notes, and the singing's,
+  whichever are shown. With none on show, it anchors under the fingers as now. The
+  horizontal part of a pinch and the two-finger drag (vertical scroll) stay as they are.
+- The anchor's choice is pure (`VerticalZoom` in `tony_core`: given the values on show and
+  the current range, the anchor) and tested there; `MainWindow` gathers the values
+  (`TouchGestures::VerticalRange` is where the pane's range comes from now, see
+  `MainWindow::paneAdded`), and a test through synthetic touch events shows a low pitch
+  staying in view as the range narrows.
+- Not asked, so not built: following the pitch vertically during playback, a "fit the
+  pitch" action. Say in the report if either looks needed.
 
 ### A8 — Documentation pass
 
