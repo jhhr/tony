@@ -127,7 +127,7 @@ push, amend, stash, or `git add -A`.
 
 ## 4. Phases
 
-Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`).
+Done: A1 (`944df7c`), A2 (`a03b7ec`), B1 (`58de074`), B2 (`47944f2`), B3 (`8524d5f`).
 
 ### A1 — Test reference and sweep finder (spec §5 "tony_core", §6 core suite)
 
@@ -522,3 +522,7 @@ The next phase must know:
 - Pre-existing, not fixed: (a) in the first file of a window the same feedback moves the pitch and notes gain from 0.5 to 0.562 and forces both audible, writing the settings; (b) `audible-0` is overridden at load by `audible-3`: the spectrogram is a layer on the reference's model, so it plays whenever `audible-3` is true.
 - B4: add a few seconds per analysis to `secondsLeft` for a rough total.
 Left open: the default reference path is exercised only through `nextReferencePath()`; the tests name their own file.
+
+### Lead — 2026-09-26, after B3
+- De-raced `TestSingingAnalysis::waitForRange()` (`2a306fb`): `initialAnalysisCompleted()` also fires from `layerCompletionChanged()` before a ranged merge; it failed once in a full run.
+- For phase D's `open-points.md`, older bugs B3 found: (a) in a window's first file the toolbar level control's notches move the pitch/notes gain 0.5 → 0.562, force both audible and write that to the settings; (b) `audible-0` (Play Audio) is overridden on load by `audible-3` (the spectrogram layer on the same model, loaded last). Also B1's: closing a session during an ordinary take, then Stop, hangs.
