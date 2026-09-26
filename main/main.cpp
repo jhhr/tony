@@ -42,6 +42,16 @@
 #include <signal.h>
 #include <cstdlib>
 
+#ifdef Q_OS_ANDROID
+#include "AndroidFiles.h"
+#include <QStandardPaths>
+#include <android/log.h>
+#include <cerrno>
+#include <string>
+#include <thread>
+#include <unistd.h>
+#endif
+
 #include "../version.h"
 
 #include <vamp-hostsdk/PluginHostAdapter.h>
@@ -131,6 +141,44 @@ protected:
     }
 };
 
+#ifdef Q_OS_ANDROID
+// An Android app's stdout and stderr lead nowhere, and Tony and svcore
+// report through cerr. Send both into a pipe, and have a thread pass what
+// comes out of it on to the system log (logcat), a line at a time, under
+// the tag "Tony". Qt's own messages go to the system log already.
+static void
+sendOutputToSystemLog()
+{
+    int fds[2];
+    if (pipe(fds) != 0) return;
+
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    dup2(fds[1], STDOUT_FILENO);
+    dup2(fds[1], STDERR_FILENO);
+    close(fds[1]);
+
+    int readEnd = fds[0];
+    std::thread([readEnd]() {
+        char buffer[1024];
+        std::string line;
+        while (true) {
+            ssize_t n = read(readEnd, buffer, sizeof(buffer));
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            for (ssize_t i = 0; i < n; ++i) {
+                // The system log cuts longer lines short
+                if (buffer[i] == '\n' || line.size() >= 1000) {
+                    __android_log_write(ANDROID_LOG_INFO, "Tony", line.c_str());
+                    line.clear();
+                }
+                if (buffer[i] != '\n') line += buffer[i];
+            }
+        }
+    }).detach();
+}
+#endif
+
 static QString
 getEnvQStr(QString variable)
 {
@@ -156,9 +204,13 @@ putEnvQStr(QString assignment)
 #endif
 }
 
-static void
+// Returns what went wrong in setting up the plugins, for the user to be
+// told; only on Android can anything go wrong here
+static QStringList
 setupTonyVampPath()
 {
+    QStringList problems;
+
     QString myVampPath = getEnvQStr("TONY_VAMP_PATH");
 
 #ifdef Q_OS_WIN32
@@ -183,6 +235,21 @@ setupTonyVampPath()
 #ifdef Q_OS_MAC
         myVampPath = myDir + "/../Resources";
         (void)sep; // unused
+#elif defined(Q_OS_ANDROID)
+        // myDir is the folder Android installed the application's own
+        // library in, and the plugins beside it as libpyin.so and
+        // libchp.so. Vamp looks in a folder of links to those two
+        // under their own names instead (see AndroidFiles)
+        QString linkDir = QStandardPaths::writableLocation
+            (QStandardPaths::AppDataLocation) + "/vamp";
+        QStringList links = AndroidFiles::linkVampPlugins
+            (myDir, linkDir, { "pyin", "chp" }, problems);
+        for (QString link : links) {
+            QString problem = AndroidFiles::checkVampPlugin(link);
+            if (problem != "") problems << problem;
+        }
+        myVampPath = linkDir;
+        (void)sep; // unused
 #else
         if (binaryName != "") {
             myVampPath =
@@ -202,11 +269,17 @@ setupTonyVampPath()
 
     // Windows lacks setenv, must use putenv (different arg convention)
     putEnvQStr(env);
+
+    return problems;
 }
         
 int
 main(int argc, char **argv)
 {
+#ifdef Q_OS_ANDROID
+    sendOutputToSystemLog();
+#endif
+
     if (argc == 2 && (QString(argv[1]) == "--version" ||
                       QString(argv[1]) == "-v")) {
         cerr << TONY_VERSION << endl;
@@ -229,7 +302,7 @@ main(int argc, char **argv)
     QApplication::setOrganizationDomain("sonicvisualiser.org");
     QApplication::setApplicationName("Tony");
 
-    setupTonyVampPath();
+    QStringList pluginProblems = setupTonyVampPath();
 
     QStringList args = application.arguments();
 
@@ -252,6 +325,11 @@ main(int argc, char **argv)
     }
 
     if (args.contains("--no-audio")) audioOutput = false;
+
+#ifdef Q_OS_ANDROID
+    // There is no audio backend for Android yet
+    audioOutput = false;
+#endif
 
     if (args.contains("--no-sonification")) sonification = false;
 
@@ -332,6 +410,23 @@ main(int argc, char **argv)
     settings.endGroup();
     
     gui->show();
+
+#ifdef Q_OS_ANDROID
+    if (!pluginProblems.empty()) {
+        // Without the plugins no audio file can be analysed, and on a
+        // phone the log that says why is out of the user's sight
+        QStringList lines;
+        for (QString problem : pluginProblems) {
+            lines << problem.toHtmlEscaped();
+        }
+        QMessageBox::warning
+            (gui, QMessageBox::tr("Plugins not found"),
+             QMessageBox::tr("<b>The pitch analysis plugins could not be set up</b><p>%1</p>")
+             .arg(lines.join("<br>")));
+    }
+#else
+    (void)pluginProblems; // none but Android's
+#endif
 
     application.readyForFiles();
     

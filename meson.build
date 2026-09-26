@@ -536,6 +536,11 @@ elif system == 'android'
     '-Wl,--version-script=' + meson.current_source_dir() / 'vamp-plugin-sdk/vamp-plugin.map'
   ]
 
+  # Android's system log, which main.cpp passes stdout and stderr on to
+  feature_additional_libs = [
+    '-llog'
+  ]
+
 else
     error('This operating system ("' + system + '") is not supported by this build file')
 endif # system
@@ -1160,6 +1165,7 @@ tony_entry_files = [
 
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
+  'main/AndroidFiles.cpp',
   'main/Coverage.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
@@ -1454,6 +1460,7 @@ if system != 'android'
 
   tony_core_test_moc_files = qt.preprocess(
     moc_headers: [
+    'main/test/TestAndroidFiles.h',
     'main/test/TestRealtimeYin.h',
     'main/test/TestRealtimePitchTracker.h',
     'main/test/TestLatencyShift.h',

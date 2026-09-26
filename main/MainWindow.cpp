@@ -24,6 +24,11 @@
 #include "TakeLayers.h"
 #include "TakesFile.h"
 
+#ifdef Q_OS_ANDROID
+#include "AndroidFiles.h"
+#include <QStandardPaths>
+#endif
+
 #include "framework/Document.h"
 #include "framework/VersionTester.h"
 
@@ -508,6 +513,11 @@ MainWindow::setupMenus()
         // workaround, to remove the appmenu-qt5 package, but that is
         // awkward and the problem is so severe that it merits disabling
         // the system menubar integration altogether. Like this:
+        //
+        // Android defines Q_OS_LINUX as well, and there too the bar stays
+        // in the window: a native one would be an options menu in an
+        // action bar that Android adds above the window, taller than the
+        // bar it replaces.
 	menuBar()->setNativeMenuBar(false);
 #endif
 
@@ -2640,6 +2650,43 @@ MainWindow::closeSession()
     CommandHistory::getInstance()->documentSaved();
     documentRestored();
 }
+
+#ifdef Q_OS_ANDROID
+QString
+MainWindow::getOpenFileName(FileFinder::FileType type)
+{
+    QString path = MainWindowBase::getOpenFileName(type);
+    if (!path.startsWith("content:")) return path;
+
+    // The name the user knows the file by, which Qt asks the file's
+    // provider for: the URI need not contain it
+    QString name = QFileInfo(path).fileName();
+
+    // A session finds its audio and takes beside it, and the picker
+    // grants access to the one file picked and nothing next to it
+    if (QFileInfo(name).suffix().toLower() == "ton") {
+        QMessageBox::warning
+            (this, tr("Cannot open a session here"),
+             tr("<b>Sessions cannot be opened from the file picker yet</b><p>A session needs its audio and its takes folder beside it, and the picker lets %1 read the one file only. Open an audio file instead.")
+             .arg(QApplication::applicationName()));
+        return "";
+    }
+
+    QString dir = QStandardPaths::writableLocation
+        (QStandardPaths::AppDataLocation) + "/imported";
+    QString error;
+    QString copy = AndroidFiles::copyIn(path, name, dir, error);
+    if (copy == "") {
+        QMessageBox::critical
+            (this, tr("Failed to open file"),
+             tr("<b>File open failed</b><p>\"%1\" could not be copied into %2's own storage: %3")
+             .arg(name.toHtmlEscaped())
+             .arg(QApplication::applicationName())
+             .arg(error.toHtmlEscaped()));
+    }
+    return copy;
+}
+#endif
 
 void
 MainWindow::openFile()

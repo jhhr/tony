@@ -11,6 +11,7 @@
     COPYING included with this distribution for more information.
 */
 
+#include "TestAndroidFiles.h"
 #include "TestRealtimeYin.h"
 #include "TestRealtimePitchTracker.h"
 #include "TestLatencyShift.h"
@@ -43,6 +44,12 @@ int main(int argc, char *argv[])
     QCoreApplication app(argc, argv);
     app.setOrganizationName("tony-tests");
     app.setApplicationName("test-tony-core");
+
+    {
+        TestAndroidFiles t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
 
     {
         TestRealtimeYin t;

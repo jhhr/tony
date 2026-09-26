@@ -881,6 +881,13 @@ protected:
     bool checkSaveModified();
     bool waitForInitialAnalysis();
 
+#ifdef Q_OS_ANDROID
+    // Android's file picker gives content:// URIs, which svcore's readers
+    // cannot open: the file picked is copied into the app's own storage,
+    // and the copy's path returned
+    QString getOpenFileName(sv::FileFinder::FileType type) override;
+#endif
+
     // A session must not be saved in the middle of the analysis of a
     // recorded range: the take's pitch and notes still hold the state
     // before the merge, and the two models the run works in are in the
