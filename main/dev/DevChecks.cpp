@@ -533,7 +533,7 @@ DevChecks::start(const Options &options)
                          [this]() {
                              beginPunchInStage
                                  (m_reRecord, { reRecording() },
-                                  AudioCheckRunner::kPreRollSeconds);
+                                  kReRecordPreRollSeconds);
                          },
                          [this]() { return punchInStageDone(m_reRecord); },
                          kCheckStageTimeoutMs });
@@ -1476,6 +1476,9 @@ DevChecks::gapLooks(const LatencyCheck::Layout &layout,
         g.loudest = std::max(g.loudest, level);
         const double from = played(a.framesBefore) - block;
         const double to = played(b.framesAfter) + block;
+        if (from < until) {
+            g.longestWait = std::max(g.longestWait, (b.ms - a.ms) / 1000.0);
+        }
         if (from < start || to > until || !silent(from, to)) continue;
         ++g.looks;
         g.loudestInGaps = std::max(g.loudestInGaps, level);
@@ -1531,6 +1534,7 @@ DevChecks::speakersCheck(QString reason) const
     double loudest = 0.0;
     double loudestInGaps = 0.0;
     double margin = 0.0;
+    double longestWait = 0.0;
     int gapPolls = 0;
     QString firstHeard;
     int n = 0;
@@ -1587,6 +1591,7 @@ DevChecks::speakersCheck(QString reason) const
             loudest = std::max(loudest, g.loudest);
             loudestInGaps = std::max(loudestInGaps, g.loudestInGaps);
             margin = std::max(margin, g.margin);
+            longestWait = std::max(longestWait, g.longestWait);
             gapPolls += g.looks;
             if (g.heard > 0.0 && firstHeard == "") {
                 firstHeard = tr("%1 from %2 to %3 s, in punch-in %4")
@@ -1597,12 +1602,19 @@ DevChecks::speakersCheck(QString reason) const
     }
     if (n == 0) problems << tr("no punch-in was judged");
 
+    // With no look in any gap, the take played out would not have shown:
+    // that part is not judged, rather than failed
+    QString notJudged;
     if (loudest <= 0.0) {
         problems << tr("no output level was reported while the reference "
                        "played, so the silent gaps say nothing");
     } else if (gapPolls == 0) {
-        problems << tr("no look at the output fell wholly in one of the "
-                       "reference's silent gaps");
+        notJudged = tr("What Tony played was not judged: no look at the "
+                       "output lay wholly in one of the reference's silent "
+                       "gaps, where the take played out would show (the "
+                       "longest wait between two looks was %1, and a look "
+                       "reaches %2 either side).")
+            .arg(unsignedMs(longestWait)).arg(unsignedMs(margin));
     }
     if (firstHeard != "") {
         problems << tr("Tony played something where the reference is "
@@ -1615,14 +1627,19 @@ DevChecks::speakersCheck(QString reason) const
     c.numbers.push_back({ tr("margin either side of a look"),
                           unsignedMs(margin) });
 
-    if (problems.isEmpty()) {
+    if (problems.isEmpty() && notJudged == "") {
         c.verdict = CheckResult::Verdict::Pass;
         c.message = tr("No sweep arrived twice, Tony played nothing where the "
                        "reference is silent, and Play Singing Audio was as "
                        "it had been after each take.");
+    } else if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("No sweep arrived twice, and Play Singing Audio was as "
+                       "it had been after each take. %1").arg(notJudged);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+        if (notJudged != "") c.message += " " + notJudged;
     }
     return c;
 }
@@ -2145,10 +2162,13 @@ DevChecks::leadInCheck(QString reason) const
 
     // And while it played, Tony played the reference and nothing else:
     // item 4's looks at the output, those that lie wholly before P.  The
-    // take's audio is under them now, and kept silent as in any take
+    // take's audio is under them now, and kept silent as in any take.
+    // With no look in any gap, the take played out would not have shown:
+    // that part is not judged, rather than failed
     const Watched *w = stage.watched.empty() ? nullptr : &stage.watched[0];
     const TakeLatency t = stage.result.takes.empty() ? TakeLatency() :
         stage.result.takes[0];
+    QString notJudged;
     if (!w) {
         problems << tr("the punch-in was not watched");
     } else {
@@ -2158,9 +2178,14 @@ DevChecks::leadInCheck(QString reason) const
                            "lead-in played could not be placed");
         } else {
             if (g.looks == 0) {
-                problems << tr("no look at the output during the lead-in "
-                               "fell wholly in one of the reference's "
-                               "silent gaps");
+                notJudged = tr("What Tony played during the lead-in was "
+                               "not judged: no look at the output lay "
+                               "wholly in one of the reference's silent "
+                               "gaps, where the take played out would "
+                               "show (the longest wait between two looks "
+                               "was %1, and a look reaches %2 either "
+                               "side).")
+                    .arg(unsignedMs(g.longestWait)).arg(unsignedMs(g.margin));
             }
             if (g.heard > 0.0) {
                 problems << tr("during the lead-in Tony played something "
@@ -2173,19 +2198,29 @@ DevChecks::leadInCheck(QString reason) const
                 ({ tr("output in the lead-in's silent gaps"),
                    tr("%1, over %2 looks").arg(levelText(g.loudestInGaps))
                    .arg(g.looks) });
+            c.numbers.push_back
+                ({ tr("longest wait between two looks in the lead-in"),
+                   unsignedMs(g.longestWait) });
         }
     }
 
-    if (problems.isEmpty()) {
+    if (problems.isEmpty() && notJudged == "") {
         c.verdict = CheckResult::Verdict::Pass;
         c.message = tr("Before the punch-in the take's audio is the same bit "
                        "for bit, and its pitch and notes beyond %1 s of it; "
                        "and while the lead-in played over the take, Tony "
                        "played nothing where the reference is silent.")
             .arg(TakeDiff::kEventMarginSeconds);
+    } else if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Before the punch-in the take's audio is the same bit "
+                       "for bit, and its pitch and notes beyond %1 s of it. "
+                       "%2").arg(TakeDiff::kEventMarginSeconds)
+            .arg(notJudged);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+        if (notJudged != "") c.message += " " + notJudged;
     }
     return c;
 }

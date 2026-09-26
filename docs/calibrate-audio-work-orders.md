@@ -504,3 +504,25 @@ have a 60 s long song; the fault runs and the deletion test leave it out.
 Left open: item 12 (C1c) once found 0 looks in its 0.4 s lead-in gap (15–16 usual, 9 once):
 a silent GUI stall of 340 ms or more there, likely this VM's disk; a real run could show it.
 The runner's 60 s limit on the reference's analysis is 6× 240 s's 10 s. `test-tony-dev` 180 s.
+
+### Phase C2b — 2026-09-26
+Built: `DevChecks::kReRecordPreRollSeconds` (2.4 s) for stage 3: its lead-in runs from 16.8 s,
+where stage 2's second punch-in begins, over two silent gaps (16.8–17.7 and 18.8–19.2 s), the
+sweep at 17.7 s and the tone from 18 s; item 12's looks there went from 15–16 to 57.
+`GapLooks::longestWait` (the longest wait between two looks begun before `until`), a number
+of item 12. Items 4 and 12: no look in any gap makes that part "not judged", with the reason
+(longest wait, margin) in the message, not a Fail. `TestDevChecks`:
+`dev_checks_lead_in_through_a_stall`, two rows: 0.45 s over the gap before P (judged, Pass)
+and over the whole lead-in (not judged, Pass); `dev_checks_take_heard_during_the_lead_in`
+gains the 0.45 s stall and still fails items 4 and 12 on the take heard; `describe(item)`.
+Choices: the stall is a busy-wait in a 5 ms timer's slot, due by frames received since the
+record start (the record duration is counted on the GUI thread and stands still in a stall).
+A part not judged leaves the verdict to the other parts: Pass if they pass (Measured and
+Skipped mean other things), the message saying what was not judged.
+Items 7 and 14 read as before (14: 0.299 s past, earlier runs 0.31–0.35 s); item 13 unchanged.
+Seen failing: before the fix, both tests (0 looks, item 12 Fail: the flake); the whole-lead-in
+row with "not judged" put back among the problems.
+The next phase must know: the margin is the most frames received across one look's two reads;
+an OS stall between those reads (not the event loop) widens it for the whole take and can
+leave no look in any gap: now "not judged", not a Fail.
+Left open: `test-tony-dev` 13 tests, about 228 s (two runs of about 22 s added).

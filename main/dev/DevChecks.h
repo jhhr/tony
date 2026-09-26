@@ -166,6 +166,14 @@ public:
     /// this far below the loudest input's
     static constexpr double kMicChannelDb = 20.0;
 
+    /// Stage 3's pre-roll, in seconds: a lead-in from 16.8 s, where
+    /// stage 2's second punch-in begins, so that it plays over two of
+    /// the reference's silent gaps in what that punch-in recorded (16.8
+    /// to 17.7 s and 18.8 to 19.2 s).  Item 12 looks at the output in
+    /// both: a window held up over one still has the other to be judged
+    /// in
+    static constexpr double kReRecordPreRollSeconds = 2.4;
+
     /// Stage 4's pre-roll, in seconds: more than there is room for
     /// before nearTheStart()
     static constexpr double kNearStartPreRollSeconds = 3.0;
@@ -261,13 +269,13 @@ public:
     /**
      * Stage 3's punch-in, in seconds: [19.2, 21.2], over the end of
      * stage 2's second and past its first sweep, judging the sweep at
-     * 20.1 s.  Its 1 s lead-in plays over what stage 2 recorded there:
-     * the last of the tone from 18 s, and from 18.8 s a gap where the
-     * reference is silent and the take holds only what the mic heard
-     * besides.  Starting this late keeps the range short, gives the
-     * lead-in a gap to be looked at in, and leaves a whole note of the
-     * take (18 to 18.8 s) before it for the ranged analysis to leave
-     * alone.
+     * 20.1 s.  Its lead-in (kReRecordPreRollSeconds) plays over what
+     * stage 2 recorded from its start: a gap where the reference is
+     * silent and the take holds only what the mic heard besides (16.8
+     * to 17.7 s), the sweep at 17.7 s, the tone from 18 s, and another
+     * such gap from 18.8 s.  Starting this late keeps the range short
+     * and leaves a whole note of the take (18 to 18.8 s) before it for
+     * the ranged analysis to leave alone.
      */
     static LatencyCheck::PunchIn reRecording();
 
@@ -487,8 +495,15 @@ private:
         double heardFrom;
         double heardTo;
 
+        /// The longest wait between two looks while recording, in
+        /// seconds, of those beginning before "until": the window held
+        /// up.  The frames received jump meanwhile, so the look across
+        /// the wait reaches over a sound, and is left out
+        double longestWait;
+
         GapLooks() : placed(false), margin(0), loudest(0), loudestInGaps(0),
-                     looks(0), heard(0), heardFrom(0), heardTo(0) { }
+                     looks(0), heard(0), heardFrom(0), heardTo(0),
+                     longestWait(0) { }
     };
     GapLooks gapLooks(const LatencyCheck::Layout &layout,
                       const TakeObserver::Observation &seen,

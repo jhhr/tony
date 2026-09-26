@@ -52,6 +52,7 @@
 #include <QtTest>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMessageBox>
 #include <QRegularExpression>
 #include <QSettings>
@@ -93,6 +94,18 @@ class TestDevChecks : public QObject
     // How often a test's fault was put in
     int m_faults = 0;
 
+    // A stall of the GUI thread during the re-recording's lead-in
+    // (stallTheReRecording()): watched for from the runner's first
+    // report that it records; from where in the reference it is due, in
+    // seconds (negative for none), and how long; how often it came, and
+    // where playback was as it began and as it ended
+    QTimer m_stallWatch;
+    double m_stallAt = -1.0;
+    int m_stallMs = 0;
+    int m_stalls = 0;
+    double m_stalledFrom = 0.0;
+    double m_stalledTo = 0.0;
+
     void makeWindow(FakeAudioIO::Config config) {
         delete m_window;
         m_window = new TestMainWindow(config);
@@ -101,6 +114,10 @@ class TestDevChecks : public QObject
         m_stages.clear();
         m_checks.clear();
         m_faults = 0;
+        m_stallWatch.stop();
+        m_stallAt = -1.0;
+        m_stallMs = 0;
+        m_stalls = 0;
         connect(m_window->devChecks(), &DevChecks::finished,
                 this, [this](const DevReport &report) {
                     m_report = report;
@@ -222,10 +239,12 @@ class TestDevChecks : public QObject
         return lines.isEmpty() ? QString() : lines.last();
     }
 
-    QByteArray describe() {
+    // Every check, or only the item given: QtTest cuts a long message
+    QByteArray describe(int item = 0) {
         QStringList words;
         words << "failure: " + m_report.failure;
         for (const CheckResult &c : m_report.checks) {
+            if (item > 0 && c.item != item) continue;
             QStringList numbers;
             for (const auto &n : c.numbers) numbers << n.first + ": " + n.second;
             words << QString("item %1 %2 %3 (%4) [%5]").arg(c.item).arg(c.name)
@@ -313,6 +332,54 @@ class TestDevChecks : public QObject
         QCOMPARE(storedLatency(), storedBefore);
     }
 
+    // The GUI thread held up, busy, for ms, as a busy system can hold a
+    // window up: no timer fires meanwhile, so the observer takes no
+    // look. It begins once the re-recording has played the reference up
+    // to "at", in seconds. By default over the reference's silent gap
+    // just before the punch-in (18.8 to 19.2 s): no look there lies
+    // wholly in the gap
+    void stallTheReRecording(double at = DevChecks::reRecording().start - 0.45,
+                             int ms = 450) {
+        m_stallAt = at;
+        m_stallMs = ms;
+        connect(m_window->audioCheck(), &AudioCheckRunner::progress,
+                this, [this](const AudioCheckRunner::Progress &state) {
+                    // Reported again as the seconds left go down
+                    if (state.step == AudioCheckRunner::Step::Recording &&
+                        m_stalls == 0 && !m_stallWatch.isActive() &&
+                        !m_stages.isEmpty() &&
+                        m_stages.last().endsWith(": Re-record")) {
+                        m_stallWatch.start();
+                    }
+                });
+    }
+
+    // Not a slot: QtTest would run it as a test
+    void stallIfDue() {
+        sv::AudioCallbackRecordTarget *target =
+            m_window ? m_window->recordTarget() : nullptr;
+        if (m_stallAt < 0.0 || !target || !target->isRecording()) return;
+
+        // Where the reference being handed out is: where playback
+        // started, and the frames come in since, which the audio thread
+        // counts. The record duration, which the cursor goes by, is
+        // counted on this thread, and would stand still during the stall
+        const sv::sv_frame_t start =
+            m_window->playbackFrame() - target->getRecordDuration();
+        auto played = [&]() {
+            return double(start + target->getFramesReceived()) / rate;
+        };
+        const double at = played();
+        if (at < m_stallAt) return;
+        m_stallWatch.stop();
+        QElapsedTimer held;
+        held.start();
+        while (held.elapsed() < m_stallMs) { }
+        m_stalledFrom = at;
+        m_stalledTo = played();
+        ++m_stalls;
+    }
+
     // Not a slot: QtTest would run it as a test. As TestAudioCheck's
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -362,6 +429,10 @@ private slots:
         connect(&m_watchdog, &QTimer::timeout,
                 this, [this]() { dismissDialog(); });
         m_watchdog.start(50);
+
+        m_stallWatch.setInterval(5);
+        connect(&m_stallWatch, &QTimer::timeout,
+                this, [this]() { stallIfDue(); });
     }
 
     void init() {
@@ -385,6 +456,7 @@ private slots:
 
     void cleanup() {
         QSettings().remove("LatencyCalibration");
+        m_stallWatch.stop();
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -821,11 +893,15 @@ private slots:
     // that punch-in recording, before the reference starts to play. The
     // lead-in plays over what stage 1 recorded, which in a room holds
     // noise where the reference is silent, and items 4 and 12 fail on
-    // the output there; nothing before the punch-in changed. The run is
-    // cancelled as the stage after the re-recording begins: the checks
-    // of the stages it got through are worked out all the same
+    // the output there; nothing before the punch-in changed. The window
+    // is held up over the lead-in's last silent gap, as in
+    // dev_checks_lead_in_through_a_stall(): the take is heard in the gap
+    // before it all the same. The run is cancelled as the stage after
+    // the re-recording begins: the checks of the stages it got through
+    // are worked out all the same
     void dev_checks_take_heard_during_the_lead_in() {
         makeWindow(loopbackInARoom());
+        stallTheReRecording();
         connect(m_window->audioCheck(), &AudioCheckRunner::progress,
                 this, [this](const AudioCheckRunner::Progress &state) {
                     // Reported again as the seconds left go down
@@ -853,24 +929,25 @@ private slots:
         runDevChecks(roundTrip / rate, 0.0);
         if (QTest::currentTestFailed()) return;
         QCOMPARE(m_faults, 1);
+        QCOMPARE(m_stalls, 1);
         QCOMPARE(m_report.failure, QString("The dev checks were cancelled."));
         QCOMPARE(int(m_checks.size()), 2);
 
         const CheckResult *speakers = check(4);
         const CheckResult *leadIn = check(12);
         QVERIFY(speakers && leadIn);
-        QVERIFY2(speakers->verdict == CheckResult::Verdict::Fail, describe());
+        QVERIFY2(speakers->verdict == CheckResult::Verdict::Fail, describe(4));
         QVERIFY2(speakers->message.startsWith("Tony played something where "
                                               "the reference is silent: -"),
-                 describe());
-        QVERIFY2(speakers->message.contains(", in punch-in 3."), describe());
+                 describe(4));
+        QVERIFY2(speakers->message.contains(", in punch-in 3."), describe(4));
         QCOMPARE(number(*speakers, "second arrival"), QString("none heard"));
 
-        QVERIFY2(leadIn->verdict == CheckResult::Verdict::Fail, describe());
+        QVERIFY2(leadIn->verdict == CheckResult::Verdict::Fail, describe(12));
         QVERIFY2(leadIn->message.startsWith("during the lead-in Tony played "
                                             "something where the reference "
-                                            "is silent: -"), describe());
-        QVERIFY2(!leadIn->message.contains(";"), describe());
+                                            "is silent: -"), describe(12));
+        QVERIFY2(!leadIn->message.contains(";"), describe(12));
         QCOMPARE(number(*leadIn, "audio before 19.20 s"),
                  QString("the same, bit for bit"));
 
@@ -879,6 +956,81 @@ private slots:
             QVERIFY2(check(item) &&
                      check(item)->verdict == CheckResult::Verdict::Skipped,
                      describe());
+        }
+    }
+
+    // The window held up during the re-recording's lead-in, as a busy
+    // system may hold it up: the observer takes no look meanwhile, and
+    // the look across the stall reaches over the sounds either side, so
+    // it is left out. Held up for 0.45 s over the silent gap just before
+    // the punch-in, the lead-in still has the gap from 16.8 to 17.7 s
+    // looked at, so item 12 judges what was played, and passes, as do
+    // the re-recording's other checks. Held up over the whole lead-in,
+    // no look lies in a gap, and that part of item 12 is not judged,
+    // with the reason, rather than failed. Cancelled as the stage after
+    // the re-recording begins
+    void dev_checks_lead_in_through_a_stall_data() {
+        QTest::addColumn<double>("at");
+        QTest::addColumn<int>("ms");
+        QTest::addColumn<bool>("judged");
+        const double start = DevChecks::reRecording().start;
+        QTest::newRow("over the last gap") << start - 0.45 << 450 << true;
+        QTest::newRow("over the whole lead-in")
+            << start - DevChecks::kReRecordPreRollSeconds
+            << int(1000 * DevChecks::kReRecordPreRollSeconds) + 50 << false;
+    }
+
+    void dev_checks_lead_in_through_a_stall() {
+        QFETCH(double, at);
+        QFETCH(int, ms);
+        QFETCH(bool, judged);
+        makeWindow(loopbackInARoom());
+        stallTheReRecording(at, ms);
+        connect(m_window->devChecks(), &DevChecks::progress,
+                this, [this](QString stage, int, int) {
+                    if (stage == "Pre-roll near the start") {
+                        m_window->devChecks()->cancel();
+                    }
+                });
+
+        runDevChecks(roundTrip / rate, 0.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_report.failure, QString("The dev checks were cancelled."));
+        QCOMPARE(int(m_checks.size()), 2);
+
+        // Held up from where it was due until the punch-in, and the
+        // observer saw it
+        QCOMPARE(m_stalls, 1);
+        const double start = DevChecks::reRecording().start;
+        QVERIFY2(m_stalledFrom < at + 0.05 && m_stalledTo > start - 0.05,
+                 qPrintable(QString("stalled from %1 to %2 s")
+                            .arg(m_stalledFrom).arg(m_stalledTo)));
+        const CheckResult *leadIn = check(12);
+        QVERIFY(leadIn);
+        QVERIFY2(milliseconds(number(*leadIn, "longest wait between two "
+                                     "looks in the lead-in")) >= ms,
+                 describe(12));
+
+        QVERIFY2(leadIn->verdict == CheckResult::Verdict::Pass, describe(12));
+        const QString gaps =
+            number(*leadIn, "output in the lead-in's silent gaps");
+        if (judged) {
+            QVERIFY2(gaps.startsWith("silence, over ") &&
+                     !gaps.endsWith(" 0 looks"), describe(12));
+            QVERIFY2(!leadIn->message.contains("not judged"), describe(12));
+        } else {
+            QCOMPARE(gaps, QString("silence, over 0 looks"));
+            QVERIFY2(leadIn->message.contains
+                     ("What Tony played during the lead-in was not judged: "
+                      "no look at the output lay wholly in one of the "
+                      "reference's silent gaps"), describe(12));
+            QVERIFY2(!leadIn->message.contains("Tony played nothing"),
+                     describe(12));
+        }
+        for (int item : { 4, 7, 14 }) {
+            QVERIFY2(check(item) &&
+                     check(item)->verdict == CheckResult::Verdict::Pass,
+                     describe(item));
         }
     }
 
