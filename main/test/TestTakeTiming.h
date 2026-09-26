@@ -179,6 +179,8 @@ private slots:
         QCOMPARE(t.recordedToReference(frame_t(deviceRate)), frame_t(kRate));
         QCOMPARE(t.referenceToRecorded(frame_t(kRate)), frame_t(deviceRate));
         QCOMPARE(t.recordedToReference(12345), frame_t(11342));
+        // The same as a ratio, for the cursor while the take records
+        QCOMPARE(t.referenceFramesPerRecordedFrame(), kRate / deviceRate);
 
         // The splice reads the recording once it is at the reference's
         // rate: the latency is converted, the lead-in is not
@@ -221,6 +223,8 @@ private slots:
         QCOMPARE(same.spliceOffset(), frame_t(4500));
         QCOMPARE(take(5000, 3000, 1500).recordedToReference(12345),
                  frame_t(12345));
+        QCOMPARE(same.referenceFramesPerRecordedFrame(), 1.0);
+        QCOMPARE(take(5000, 3000, 1500).referenceFramesPerRecordedFrame(), 1.0);
     }
 
     // Recording into a selection: the one the playhead is in, else the

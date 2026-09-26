@@ -18,7 +18,8 @@
 // links) and when a file is picked (the copy into app storage, the path
 // of a picked content:// URI or where to look it up, the URI string
 // Android granted, the files Tony opens, the names Save Session As
-// suggests and accepts, the recent files that are still there), done
+// suggests and accepts, the recent files that are still there, what Save
+// Log makes of the size a provider gives for its document), done
 // here on plain files in a temporary directory and on URIs written as
 // Android writes them. What only a phone has -- a provider behind the
 // URI, MediaStore, the installed library directory -- is not here.
@@ -592,6 +593,35 @@ private slots:
         QVERIFY(!AndroidFiles::removeIfEmpty(dir + "/not-there.ton"));
         QVERIFY(!AndroidFiles::removeIfEmpty(newDir("folder")));
         QVERIFY(!AndroidFiles::removeIfEmpty(""));
+    }
+
+    // Save Log compares what went into the document with what its
+    // provider says it holds afterwards, from the _size column
+    void a_saved_document_is_compared_with_what_was_written() {
+        auto whole = AndroidFiles::savedSize(51234, "51234");
+        QVERIFY(whole.known());
+        QVERIFY(!whole.differs());
+        QCOMPARE(whole.written, qint64(51234));
+        QCOMPARE(whole.held, qint64(51234));
+
+        // The fifth phone test: all of it written, nothing there
+        auto empty = AndroidFiles::savedSize(51234, "0");
+        QVERIFY(empty.known());
+        QVERIFY(empty.differs());
+        QCOMPARE(empty.held, qint64(0));
+
+        QVERIFY(AndroidFiles::savedSize(51234, "4096").differs());
+        QVERIFY(AndroidFiles::savedSize(0, "0").known());
+        QVERIFY(!AndroidFiles::savedSize(0, "0").differs());
+
+        // A null column, as a provider that does not know the size gives
+        // it, is not a difference; nor is anything that is not a count
+        for (QString none : { "", " ", "-1", "big", "12 bytes" }) {
+            auto unknown = AndroidFiles::savedSize(51234, none);
+            QVERIFY2(!unknown.known(), qPrintable(none));
+            QVERIFY2(!unknown.differs(), qPrintable(none));
+            QCOMPARE(unknown.held, qint64(-1));
+        }
     }
 
     // --- The Vamp plugin links ---

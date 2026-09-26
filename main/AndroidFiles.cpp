@@ -473,3 +473,14 @@ AndroidFiles::removeIfEmpty(QString path)
     SVCERR << "AndroidFiles: removed the empty " << path << endl;
     return true;
 }
+
+AndroidFiles::SavedSize
+AndroidFiles::savedSize(qint64 written, QString held)
+{
+    SavedSize saved;
+    saved.written = written;
+    bool ok = false;
+    qint64 size = held.trimmed().toLongLong(&ok);
+    if (ok && size >= 0) saved.held = size;
+    return saved;
+}

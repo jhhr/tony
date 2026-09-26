@@ -1357,11 +1357,6 @@ class TestRecordWorkflow : public QObject
             m_window->recordTarget()->getRecordDuration();
         sv::sv_frame_t cursorWant = P1 + sv::sv_frame_t
             (std::llround(double(recordedSoFar) * rate / deviceRate));
-        if (deviceRate != int(rate)) {
-            QEXPECT_FAIL("", "ViewManager::getPlaybackFrame() adds the "
-                         "recorded duration in the device's frames to the "
-                         "record start frame (svgui fork)", Continue);
-        }
         QVERIFY2(std::llabs(during - cursorWant) <= 1,
                  qPrintable(QString("%1 frames at %2 Hz into a take from "
                                     "frame %3, the cursor is at %4, not %5")
@@ -2524,6 +2519,29 @@ private slots:
             QVERIFY(recording);
             path = recording->getLocation();
         }
+
+        // Once the lead-in is over, the cursor has run through it from
+        // its start at the reference's pace, not at the device's faster
+        // one. The record target's duration is the GUI thread's, as the
+        // cursor's is, so the two are read at the same point
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->getRecordDuration()
+                                 > sv::sv_frame_t(leadIn * otherDeviceRate),
+                                 5000);
+        QVERIFY(m_window->recordTarget()->isRecording());
+        sv::sv_frame_t during = m_window->playbackFrame();
+        sv::sv_frame_t recordedSoFar =
+            m_window->recordTarget()->getRecordDuration();
+        sv::sv_frame_t cursorWant = P - m_window->takePreRoll() +
+            sv::sv_frame_t(std::llround(double(recordedSoFar) * rate /
+                                        otherDeviceRate));
+        QVERIFY2(std::llabs(during - cursorWant) <= 1,
+                 qPrintable(QString("%1 frames at %2 Hz into a take whose "
+                                    "lead-in starts at frame %3, the cursor "
+                                    "is at %4, not %5")
+                            .arg(recordedSoFar).arg(otherDeviceRate)
+                            .arg(P - m_window->takePreRoll())
+                            .arg(during).arg(cursorWant)));
+        QVERIFY(during >= P);
 
         QTRY_VERIFY_WITH_TIMEOUT(!m_window->recordTarget()->isRecording(), 5000);
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);

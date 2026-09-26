@@ -50,6 +50,15 @@ TakeTiming::referenceToRecorded(sv_frame_t referenceFrames) const
     return sv_frame_t(std::llround(double(referenceFrames) * recordRate / rate));
 }
 
+double
+TakeTiming::referenceFramesPerRecordedFrame() const
+{
+    if (rate <= 0 || recordRate <= 0 || recordRate == rate) {
+        return 1.0;
+    }
+    return double(rate) / double(recordRate);
+}
+
 sv_frame_t
 TakeTiming::preRollBefore(sv_frame_t position, sv_frame_t wanted)
 {

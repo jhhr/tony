@@ -77,6 +77,10 @@ struct TakeTiming
     /// Frames of the reference's timeline as frames of the recording
     sv::sv_frame_t referenceToRecorded(sv::sv_frame_t referenceFrames) const;
 
+    /// How many of the reference's frames one frame of the recording
+    /// is: 1 unless both rates are known and differ
+    double referenceFramesPerRecordedFrame() const;
+
     /**
      * The lead-in there is room for before position: the pre-roll
      * asked for, shortened near the start of the song and nothing at

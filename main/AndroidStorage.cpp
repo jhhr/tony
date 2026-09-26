@@ -278,46 +278,135 @@ AndroidStorage::displayName(QString uri)
     return "";
 }
 
-int
-AndroidStorage::openDocument(QString uri, QString mode, QString &error)
+AndroidStorage::Document::Document() :
+    m_fd(-1)
 {
+}
+
+AndroidStorage::Document::~Document()
+{
+    if (!m_descriptor.isValid()) return;
+    QString error;
+    if (!close(error)) {
+        cerr << "AndroidStorage: closing a document: " << error.toStdString()
+             << endl;
+    }
+}
+
+bool
+AndroidStorage::Document::open(QString uri, QString mode, QString &error)
+{
+    if (m_descriptor.isValid()) {
+        error = "a document is open already";
+        return false;
+    }
+
     QJniObject resolver = contentResolver();
     QJniObject parsed = parseUri(uri);
     if (!resolver.isValid() || !parsed.isValid()) {
         error = "no content resolver";
-        return -1;
+        return false;
     }
 
     QJniEnvironment env;
     jclass resolverClass = env->GetObjectClass(resolver.object());
-    jmethodID open = env->GetMethodID
+    jmethodID openMethod = env->GetMethodID
         (resolverClass, "openFileDescriptor",
          "(Landroid/net/Uri;Ljava/lang/String;)"
          "Landroid/os/ParcelFileDescriptor;");
     env->DeleteLocalRef(resolverClass);
-    if (!open) {
+    if (!openMethod) {
         error = takeException(env);
-        return -1;
+        return false;
     }
 
     QJniObject modeString = QJniObject::fromString(mode);
     jobject descriptor = env->CallObjectMethod
-        (resolver.object(), open, parsed.object(), modeString.object());
+        (resolver.object(), openMethod, parsed.object(), modeString.object());
     QString thrown = takeException(env);
     if (thrown != "") {
         error = thrown;
-        return -1;
+        return false;
     }
     if (!descriptor) {
-        error = "the provider gave nothing to read";
-        return -1;
+        error = "the provider gave nothing to open";
+        return false;
     }
 
-    // Ours to close from here
-    QJniObject pfd = QJniObject::fromLocalRef(descriptor);
-    int fd = pfd.callMethod<jint>("detachFd", "()I");
-    if (fd < 0) error = "the provider gave no file descriptor";
-    return fd;
+    // The descriptor stays the ParcelFileDescriptor's, and is closed
+    // through it
+    m_descriptor = QJniObject::fromLocalRef(descriptor);
+    m_fd = m_descriptor.callMethod<jint>("getFd", "()I");
+    if (m_fd < 0) {
+        QString ignored;
+        close(ignored);
+        error = "the provider gave no file descriptor";
+        return false;
+    }
+    return true;
+}
+
+qint64
+AndroidStorage::Document::fileSize() const
+{
+    if (!m_descriptor.isValid()) return -1;
+    return qint64(m_descriptor.callMethod<jlong>("getStatSize", "()J"));
+}
+
+bool
+AndroidStorage::Document::close(QString &error)
+{
+    if (!m_descriptor.isValid()) return true;
+
+    QJniEnvironment env;
+    QString problem;
+    jclass descriptorClass = env->GetObjectClass(m_descriptor.object());
+    // Each looked up with no exception pending, as JNI requires
+    auto method = [&](const char *name, const char *signature) {
+        jmethodID id = env->GetMethodID(descriptorClass, name, signature);
+        QString thrown = takeException(env);
+        if (problem == "") problem = thrown;
+        return id;
+    };
+    jmethodID canDetect = method("canDetectErrors", "()Z");
+    jmethodID checkError = method("checkError", "()V");
+    jmethodID closeMethod = method("close", "()V");
+    env->DeleteLocalRef(descriptorClass);
+
+    // A provider that hands over a pipe says through it whether it went
+    // wrong at its end, which an end of file alone does not: asked
+    // before the close, which would not say
+    if (problem == "" && canDetect && checkError &&
+        env->CallBooleanMethod(m_descriptor.object(), canDetect)) {
+        env->CallVoidMethod(m_descriptor.object(), checkError);
+        problem = takeException(env);
+    }
+
+    if (closeMethod) {
+        env->CallVoidMethod(m_descriptor.object(), closeMethod);
+        QString thrown = takeException(env);
+        if (problem == "") problem = thrown;
+    }
+
+    m_descriptor = QJniObject();
+    m_fd = -1;
+
+    if (problem != "") {
+        error = problem;
+        return false;
+    }
+    return true;
+}
+
+QString
+AndroidStorage::sizeOf(QString uri, QString &error)
+{
+    QList<QStringList> rows = query(uri, { "_size" }, "", {}, error);
+    if (rows.size() == 1 && rows[0].size() == 1) return rows[0][0];
+    if (error == "") {
+        error = QString("the provider answered %1 rows").arg(rows.size());
+    }
+    return "";
 }
 
 bool

@@ -38,12 +38,12 @@
 #include "OboeAudioIO.h"
 #include "data/fileio/AudioFileReaderFactory.h"
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QPermissions>
 #include <QStandardPaths>
 #include <QThread>
-#include <unistd.h>
 #endif
 
 #ifdef TONY_DEV_CHECKS
@@ -3120,14 +3120,27 @@ MainWindow::getOpenFileName(FileFinder::FileType type)
         (QStandardPaths::AppDataLocation) + "/imported";
     QString error;
     QString copy;
-    int fd = AndroidStorage::openDocument(uri, "r", error);
-    if (fd >= 0) {
+    AndroidStorage::Document document;
+    if (document.open(uri, "r", error)) {
         QFile in;
-        if (in.open(fd, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle)) {
+        if (in.open(document.fd(), QIODevice::ReadOnly,
+                    QFileDevice::DontCloseHandle)) {
             copy = AndroidFiles::copyIn(in, uri, name, dir, error);
+            in.close();
         } else {
-            ::close(fd);
             error = in.errorString();
+        }
+        // A provider that streams the file through a pipe says at the
+        // close whether all of it came: a copy of part of it is no copy
+        QString closeError;
+        if (!document.close(closeError)) {
+            cerr << "MainWindow::getOpenFileName: closing " << uri << ": "
+                 << closeError << endl;
+            if (copy != "") {
+                QFile::remove(copy);
+                copy = "";
+                error = closeError;
+            }
         }
     }
     if (copy == "") {
@@ -3190,25 +3203,42 @@ MainWindow::saveLog()
     QString error;
     QFile out;
     bool opened = false;
+    AndroidStorage::Document document;
     if (urls[0].isLocalFile()) {
         out.setFileName(target);
         opened = out.open(QIODevice::WriteOnly | QIODevice::Truncate);
         if (!opened) error = out.errorString();
     } else {
-        int fd = AndroidStorage::openDocument(target, "w", error);
-        if (fd >= 0) {
-            opened = out.open(fd, QIODevice::WriteOnly,
-                              QFileDevice::AutoCloseHandle);
-            if (!opened) {
-                ::close(fd);
-                error = out.errorString();
-            }
+        // "wt", so that a document written over holds only what is
+        // written now; "w" if the provider will not take that, which for
+        // the new, empty document the picker made comes to the same
+        if (!document.open(target, "wt", error)) {
+            cerr << "MainWindow::saveLog: " << target << " could not be "
+                 << "opened with \"wt\": " << error << "; trying \"w\""
+                 << endl;
+            QString again;
+            if (!document.open(target, "w", again)) error = again;
+        }
+        if (document.isOpen()) {
+            opened = out.open(document.fd(), QIODevice::WriteOnly,
+                              QFileDevice::DontCloseHandle);
+            if (!opened) error = out.errorString();
         }
     }
 
-    bool written = opened && out.write(log) == log.size();
+    bool written = opened && out.write(log) == log.size() && out.flush();
     if (opened && !written) error = out.errorString();
     if (opened) out.close();
+
+    // What the file behind the descriptor holds before it goes back to
+    // the provider (-1 if the provider gave a pipe), and then the close,
+    // through the provider, which is when it takes what was written
+    qint64 inFile = document.fileSize();
+    QString closeError;
+    if (!document.close(closeError) && written) {
+        written = false;
+        error = closeError;
+    }
 
     if (!written) {
         cerr << "MainWindow::saveLog: could not write " << target << ": "
@@ -3219,8 +3249,48 @@ MainWindow::saveLog()
              .arg(error.toHtmlEscaped()) + pickDetails(target, "", ""));
         return;
     }
-    cerr << "MainWindow::saveLog: saved " << log.size() << " bytes to "
-         << target << endl;
+
+    if (urls[0].isLocalFile()) {
+        cerr << "MainWindow::saveLog: saved " << log.size() << " bytes to "
+             << target << endl;
+        return;
+    }
+
+    // What the document holds now, as its provider tells anyone who asks.
+    // A provider hears of the close on a thread of its own and may say so
+    // a little later: asked again, for up to a second, while it gives
+    // another size than was written
+    QElapsedTimer waited;
+    waited.start();
+    AndroidFiles::SavedSize saved;
+    QString sizeError;
+    for (int attempt = 1; ; ++attempt) {
+        sizeError = "";
+        saved = AndroidFiles::savedSize
+            (log.size(), AndroidStorage::sizeOf(target, sizeError));
+        if (!saved.differs() || attempt == 10) break;
+        QThread::msleep(100);
+    }
+
+    cerr << "MainWindow::saveLog: wrote " << saved.written << " bytes to "
+         << target << "; the file behind the descriptor held " << inFile
+         << " before the close; ";
+    if (saved.known()) {
+        cerr << "its provider says the document holds " << saved.held
+             << " bytes";
+    } else {
+        cerr << "its provider gives no size for the document";
+        if (sizeError != "") cerr << " (" << sizeError << ")";
+    }
+    cerr << ", " << waited.elapsed() << " ms after the close" << endl;
+
+    if (saved.differs()) {
+        QMessageBox::warning
+            (this, tr("The log may be incomplete"),
+             tr("<b>The log may not have been saved whole</b><p>%1 bytes were written to it, and the app that keeps it says it holds %2.</p>")
+             .arg(saved.written).arg(saved.held)
+             + pickDetails(target, "", ""));
+    }
 }
 
 bool
@@ -5252,7 +5322,13 @@ MainWindow::record()
     // the start of the lead-in, so the cursor runs through the lead-in in
     // step with the reference.
     sv_frame_t playbackStart = currentTakeTiming().playbackStart();
-    if (m_viewManager) m_viewManager->setRecordStartFrame(playbackStart);
+    if (m_viewManager) {
+        m_viewManager->setRecordStartFrame(playbackStart);
+        // What has been recorded is counted in the device's frames, and
+        // the device's rate is known only once it records: until then,
+        // and for a recording that becomes the session, one for one
+        m_viewManager->setRecordFrameRatio(1.0);
+    }
 
     MainWindowBase::record();
 
@@ -5276,6 +5352,10 @@ MainWindow::record()
     if (m_recordingAsSingingTrack && m_viewManager) {
         m_viewManager->setPlaybackFrame(playbackStart);
         m_viewManager->setGlobalCentreFrame(playbackStart);
+        // A device at 48 kHz against the reference at 44.1 would
+        // otherwise run the cursor 8.8% ahead of the reference
+        m_viewManager->setRecordFrameRatio
+            (currentTakeTiming().referenceFramesPerRecordedFrame());
     }
 
     updateAlternatePitchForTake();

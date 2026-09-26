@@ -151,10 +151,10 @@ report, list the files to stage and propose a message (`feat:` / `fix:` / `test:
   frames received, the live tracker) and reference frames (`recordRate`,
   `recordedToReference()`, `referenceToRecorded()`). An Oboe backend at 48 kHz needs
   nothing more from Tony for placement.
-- Known and not fixed: while recording at a device rate other than 44.1 kHz the play
-  cursor runs fast (svgui's `ViewManager::getPlaybackFrame()` adds device frames). A
-  `QEXPECT_FAIL` in `takes_placed_from_a_device_at_48000` marks it. It needs changes in
-  svcore, svgui and svapp; the lead has not made them.
+- While recording at a device rate other than 44.1 kHz the play cursor ran fast (svgui's
+  `ViewManager::getPlaybackFrame()` added device frames). Fixed in A11 with svgui alone
+  (`ViewManager::setRecordFrameRatio()`, which `record()` sets once the recording has
+  started), not svcore and svapp as was thought; the `QEXPECT_FAIL` is gone.
 
 ## 5. Phases
 
@@ -179,7 +179,7 @@ builds happen in the container.)
 - A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session. Done.
 - A9 — Live dots in real time on the phone. Done.
 - A10 — Plot elements sized for the screen. Done.
-- A11 — Fixes from the fifth phone test: the cursor at a 48 kHz device, Save Log.
+- A11 — Fixes from the fifth phone test: the cursor at a 48 kHz device, Save Log. Done.
 - A4c — Vertical zoom keeps the pitch in view.
 - A8 — Documentation pass.
 
@@ -949,3 +949,26 @@ strip and lyrics do not follow the plot size; forks.md not updated (A8). Not on 
 Tests seen failing: ViewProxy without the ratio (the old sizes at 3): sizes, hit area; plot
 scale x1.1 at 100 %: desktop_draws_as_before; no connection: the cache test; PlotSize not
 applying: its step test and the menu test.
+
+### Phase A11 — 2026-09-26
+Built: svgui `049c6d9` (view, not pushed or pinned): `ViewManager::setRecordFrameRatio()`
+(default 1); while recording the playback frame is the record start frame plus the duration
+times it (`getRecordingFrame()`, both places). `TakeTiming::referenceFramesPerRecordedFrame()`
+(tested). `record()` sets the ratio to 1 before the base call (the device's rate is unknown
+then; a recording that becomes the session is at its own rate) and to the take's after it,
+when the recording model is known. `takes_placed_from_a_device_at_48000`: `QEXPECT_FAIL`
+gone; `preroll_and_punch_out_with_a_device_at_48000` checks the cursor after the lead-in.
+The lyrics highlight follows the same frame, so it too was 8.8% fast in a 48 kHz take.
+Save Log: `AndroidStorage::Document` replaces `openDocument()`: it keeps the
+ParcelFileDescriptor, hands out `getFd()`, and `close()` asks `checkError()` (if it
+`canDetectErrors()`: a reliable pipe) and closes through Java. The likely cause, from the
+source: `detachFd()` sends the peer DETACHED at once, before anything is written, so a
+provider that takes the file on its close listener took it empty. Writes "wt" (then "w" if
+refused); `flush()` checked; the size behind the descriptor (`getStatSize()`) logged;
+`_size` through the resolver (`sizeOf()`), asked up to 10 times 100 ms apart while it
+differs (the provider's listener runs on its own thread). `AndroidFiles::savedSize()`
+(core, tested). A warning box when the provider gives another size; the log line always.
+The audio copy-in reads the same way and drops a copy whose close reports an error.
+Tests seen failing: both cursor checks with the ratio left at 1; `savedSize()` taking "" as 0.
+Left open: nothing run on a phone. forks.md (svgui) and recording.md "Start click" step 2 and
+6 name the start frame plus the duration: for A8.

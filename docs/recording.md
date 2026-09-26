@@ -50,7 +50,10 @@ the reference at P is therefore at file frame **L + R**, and the splice reads fr
 6. Record mode is switched to **`RecordCreateUnshownModel`** (svapp fork) around the base
    call: the recording becomes a model of the document with no pane, no layer and no
    "Import Recorded Audio" undo entry. `ViewManager::setRecordStartFrame(S)` (svgui fork)
-   makes the cursor run with the reference instead of crawling from frame 0.
+   makes the cursor run with the reference instead of crawling from frame 0; after the
+   base call, `setRecordFrameRatio()` gives it the reference's frames per recorded frame
+   (`TakeTiming::referenceFramesPerRecordedFrame()`), without which a device at 48 kHz ran
+   the cursor 8.8 % ahead of the reference. It is set back to 1 before every base call.
 7. `recordStatusChanged(true)` → `recordingStarted()` fires *inside* the base call, before
    the model is in the document. It defers with `QTimer::singleShot(0)`:
    `setupRealtimePitchLayer()`, and, if Play Reference While Recording is on, the latency

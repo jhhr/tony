@@ -92,7 +92,9 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `ViewManager::setRecordStartFrame()` / `getRecordStartFrame()`: while recording, the
   playback frame is this plus the recorded duration, not the duration alone. Without it a
   take recorded at P > 0 showed the cursor crawling from frame 0 and the pane scrolling
-  away from the dots.
+  away from the dots. `setRecordFrameRatio()` (branch `feat/tonyandroid`) scales the
+  duration, which the record target counts in the device's frames, to the timeline's: a
+  phone at 48 kHz against a reference at 44.1 kHz.
 - `RegionLayer::PlotStrip` plot style: the coverage strip. Saved through the existing
   `plotStyle` attribute.
 - `RegionLayer::PlotLyrics` plot style, after `PlotStrip` so saved numbers keep their
