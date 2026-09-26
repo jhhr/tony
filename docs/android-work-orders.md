@@ -204,6 +204,8 @@ since 2026-09-26 `.github/workflows/android.yml` builds the APK on CI as well.)
 - A14 — (Lead) The audio stream kept running between takes on Android, suspended once idle.
   Done.
 - A15 — The song scroll bar: a thin navigator in the compact layout. Done.
+- (Lead, 2026-09-26: feat/wasapi merged in again; items 1, 2, 7 and 13 allow ±6 ms.)
+- A16 — (Lead) The live dots' octave slips dropped. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -1358,3 +1360,20 @@ Tests seen failing: press always jumping (drag test, 6400 frames not 10000); no 
 connection (paging test); events not spanning their resolution (two core column tests).
 Left open: not on a phone: whether 24 dp suits a finger, and the contour's contrast in dark
 mode. Panes past the reference's end (a take past it) leave the thumb at the strip's end.
+
+### Phase A16 — 2026-09-27 (the lead)
+From the sixth dev run (137de87, Bluetooth out, the phone's microphone in, the input at
+-28 dBFS): the audio kept running, the calibration's punch-ins within 0.5 ms, every
+placement check passed; item 3 failed on 4 of about 280 dots a punch-in an octave under
+the 220.5 Hz tones (YIN's first dip under the threshold at twice the period). The user
+chose to drop the slips: `OctaveSlips` (tony_core) takes every hop of the tracker and drops
+a run of up to 8 hops an octave from the dot before it when the next dot is back at that
+pitch; longer runs, and runs ending in silence or elsewhere, are let through late.
+recording.md "The live tracker". Tests: `TestOctaveSlips` (core); `TestRealtimePitchTracker::
+an_octave_slip_is_dropped`, a tone with 30 ms of its subharmonic under it that slips 4 hops
+(modelled first: the dip at the period 0.25 or more there, 0.11 or less either side, at
+every alignment). Seen failing with the tracker bypassing the filter, and with a run
+back at its pitch let through.
+The run also showed a steady drift of about 1 ms a minute (+0.1 to +1.5 ms over 81 s),
+Bluetooth output against the phone's microphone: whether it goes on or corrects itself is
+for a 10-minute run to show.

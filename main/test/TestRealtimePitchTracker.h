@@ -332,6 +332,68 @@ private slots:
                      qPrintable(QString("%1 Hz").arg(hz)));
         }
     }
+
+    // A tone of 220.5 Hz with its harmonics to 4 kHz (as the audio
+    // check's, without the vibrato), and 30 ms of its subharmonic under
+    // it, faded in and out. In the windows that hold the burst the dip
+    // at the period rises over YIN's threshold (to 0.25 or more) while
+    // the one at twice the period stays under (0.08 or less): 4 hops
+    // slip an octave low, and the hops either side are on the tone
+    // (0.11 or less), at every alignment of the burst with the hops.
+    // The slips are dropped, and every other hop's dot is there
+    void an_octave_slip_is_dropped() {
+        const double hz = 220.5;
+        const int n = int(kRate);
+        const int harmonics = int(4000.0 / hz);
+        std::vector<float> signal(n);
+        double peak = 0.0;
+        std::vector<double> x(n, 0.0);
+        for (int i = 0; i < n; ++i) {
+            double t = i / kRate;
+            for (int k = 1; k <= harmonics; ++k) {
+                x[i] += std::sin(2.0 * M_PI * hz * k * t +
+                                 M_PI * k * k / harmonics) / k;
+            }
+            peak = std::max(peak, std::fabs(x[i]));
+        }
+        const int burstStart = 22082, burstLength = 1323;
+        for (int i = 0; i < n; ++i) {
+            double v = 0.25 * x[i] / peak;
+            int b = i - burstStart;
+            if (b >= 0 && b < burstLength) {
+                double hann = 0.5 - 0.5 * std::cos
+                    (2.0 * M_PI * b / (burstLength - 1));
+                v += 0.1 * hann * std::sin(2.0 * M_PI * (hz / 2.0) *
+                                           b / kRate);
+            }
+            signal[i] = float(v);
+        }
+
+        auto rec = makeRecording();
+        RealtimePitchTracker tracker(rec->id);
+        PitchCollector spy(&tracker);
+        tracker.start();
+        rec->appendMono(signal);
+        const int slipped = 4;
+        settle(spy, expectedHops(rec->written) - slipped);
+        tracker.stop();
+
+        sv::sv_frame_t widestGap = 0;
+        for (int i = 0; i < int(spy.events.size()); ++i) {
+            double cents = TestSignals::centsBetween(spy.events[i].hz, hz);
+            QVERIFY2(std::abs(cents) < 20.0,
+                     qPrintable(QString("a dot at %1 Hz, frame %2")
+                                .arg(spy.events[i].hz)
+                                .arg(spy.events[i].frame)));
+            if (i > 0) {
+                widestGap = std::max(widestGap, spy.events[i].frame -
+                                     spy.events[i-1].frame);
+            }
+        }
+        QCOMPARE(int(spy.events.size()),
+                 expectedHops(rec->written) - slipped);
+        QCOMPARE(widestGap, sv::sv_frame_t((slipped + 1) * kHop));
+    }
 };
 
 #endif

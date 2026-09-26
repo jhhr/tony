@@ -37,6 +37,10 @@ class FFT;
  * continuously polls a WritableWaveFileModel for new audio samples,
  * estimating pitch in real time using FFT-accelerated YIN.
  *
+ * An estimate an octave from the ones either side of it is taken for
+ * YIN's octave slip and dropped (OctaveSlips): a run an octave off is
+ * held back until the hops after it say which it was.
+ *
  * The estimates are kept until the GUI thread takes them, all at once
  * (takeEstimates()): there is one for each hop, about 170 a second, and
  * a signal for each would queue a call on the GUI thread that a slow

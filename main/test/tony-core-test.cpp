@@ -14,6 +14,7 @@
 #include "TestAndroidFiles.h"
 #include "TestRealtimeYin.h"
 #include "TestRealtimePitchTracker.h"
+#include "TestOctaveSlips.h"
 #include "TestLatencyShift.h"
 #include "TestCoverage.h"
 #include "TestDecodedPcm.h"
@@ -78,6 +79,12 @@ int main(int argc, char *argv[])
 
     {
         TestRealtimePitchTracker t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestOctaveSlips t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }
