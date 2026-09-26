@@ -170,9 +170,14 @@ class TestRecordWorkflow : public QObject
         QVERIFY(m_window->recordTarget()->isRecording());
     }
 
-    // Stop, then wait for pYIN on the take
+    // Stop, then wait for pYIN on the take.  Not before the take has some
+    // audio in it: a take stopped as soon as it started has none on a
+    // loaded machine, whose device has delivered nothing yet, and then
+    // there is no analysis to wait for
     void stopTake() {
         QVERIFY(m_window->recordTarget()->isRecording());
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->getFramesReceived()
+                                 >= sv::sv_frame_t(0.1 * rate), 5000);
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
