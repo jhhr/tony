@@ -167,6 +167,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   [recording.md](recording.md)); whether `m_model` can dangle otherwise was not looked into.
 - The play-start callback is passed the frames actually got, not the requested block size.
 - `View::removeLayer()` does not disconnect `layerMeasurementRectsChanged`.
+- `svcore/base/PlayParameterRepository.cpp` keeps its play parameters in a `std::map` with
+  no lock, which the audio fill thread reads (`AudioGenerator::mixModel()` through
+  `getPlayParameters()`) while the GUI thread adds and removes playables. Seen once as a
+  crash of `test-tony-app` in the fill thread, in a sharded run whose processes shared
+  their settings; not seen otherwise.
 
 ## Changes that would tidy Tony up but were not made
 

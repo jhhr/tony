@@ -1,9 +1,8 @@
 # Sharded test runs on Windows: plan
 
-Plan, not built. For a Linux cloud session to carry out; the last section is for the
-Windows machine afterwards. When all of it is done, what lasts goes into
-[testing.md](testing.md) and [AGENTS.md](../AGENTS.md), and this file and its row in
-[README.md](README.md) are deleted.
+Built and proven on Linux; the last section is left for the Windows machine. When that is
+done, what lasts goes into [testing.md](testing.md) and [AGENTS.md](../AGENTS.md), and
+this file and its row in [README.md](README.md) are deleted.
 
 ## Goal
 
@@ -29,11 +28,11 @@ The app suite uses 0.4 of one core on average (Linux: nearer 0.25); the machine 
 cores and no hyper-threading. So there is room for several processes at once, fewer than on
 Linux.
 
-## Why the Linux runner does not work on Windows
+## Why the Linux runner did not work on Windows
 
 Processes sharing a settings store clear each other's settings: `initTestCase()` of
 `TestRecordWorkflow` calls `QSettings().clear()`, and the shards of `test-tony-dev` failed
-on Linux in exactly this way until each got a `HOME` of its own. `run-tests.sh` gives every
+on Linux in exactly this way until each got a `HOME` of its own. `run-tests.sh` gave every
 process its own `HOME` and XDG directories.
 
 On Windows neither moves anything. QSettings in its native format is the registry key
@@ -50,7 +49,7 @@ variables. These are also shared by processes of one application name:
 All of them are keyed by the application name. So a shard runs under an application name
 of its own, on both platforms.
 
-## Design (decided)
+## Design (built)
 
 1. **`RunSuite.h`**: a pure function that gives the application name for a shard, taking
    the base name and the value of `TONY_TEST_SHARD`. No value: the base name, unchanged. A
@@ -70,50 +69,40 @@ of its own, on both platforms.
    `grep` and `xargs` are there. Leave the default `-j` (twice the cores) alone; the
    Windows step sets its own.
 
+All three are built as decided, but for one thing: the parse of `i/n` is stricter than
+`runSuite()`'s was. A part that is not a whole number (`a/2`, `1x/2`, `1.0/2`) used to
+run as shard 0; it is now invalid, so `runSuite()` refuses it and the name stays the base
+name.
+
 Not part of this: sharded `meson test` definitions (`meson test` and `build.bat test` stay
 the one-process run that [testing.md](testing.md) asks for after changes to lifetimes,
 threads or teardown), a PowerShell runner, any change in the library forks. If the work
 seems to need a fork change (for instance to `TempDirectory`), do not make it: report it.
 
-## Steps for the cloud session
+## Proven on Linux
 
-Read AGENTS.md, then [testing.md](testing.md) (Running, Shards, the Linux failures, Timing
-and races), `run-tests.sh`, `RunSuite.h` and `TestRunSuite.h`. Build as
-[building.md](building.md#building-on-linux) says.
+A copy of the old script in which every process shared one `HOME` and one set of XDG
+directories stood in for Windows: with one `HOME`, as on Windows, nothing but the
+application name can keep shards apart.
 
-1. **Baseline.** Run `run-tests.sh` for `test-tony-core`, `test-tony-app` and
-   `test-tony-dev` as it is, and record what fails. Only tests from testing.md's list of
-   Linux failures should.
-2. **The failure this prevents, before the change.** Copy the script to `tmp/` (not
-   committed) and make every process share one `HOME` and one set of XDG directories.
-   That is the Windows situation on Linux: nothing but the application name can then keep
-   shards apart. Run it for `test-tony-dev` and `test-tony-app` and record what fails. If
-   nothing does, run it three times. If still nothing fails, say so in the report: step 4
-   then proves less.
-3. **Build design 1 and 2**, with tests in `TestRunSuite`:
-   - no shard gives exactly the base name;
-   - every `i` of one `n` gives a different name;
-   - the same `i` with a different `n` gives a different name;
-   - an invalid value gives the base name.
-
-   Break the function for a moment and see a test fail (AGENTS.md), then put it back.
-4. **Proof.** The shared-`HOME` script from step 2 must now pass three runs in a row for
-   `test-tony-dev` and `test-tony-app`, apart from the known Linux failures. If it does
-   not, stop there and report what failed: Windows would fail the same way, and a
-   per-process `HOME` cannot help it there.
-5. **Design 3**, then run core, app and dev through the real script three times each.
-6. **One-process runs** of all three executables, as AGENTS.md gives them, from `build/`:
-   the path without `TONY_TEST_SHARD` is the one `meson test` and named tests use.
-7. **Docs.** [testing.md](testing.md)'s Shards paragraph: shards are kept apart by their
-   application name (settings, data directory, temp directories), on Linux and Windows;
-   remove "so the script is for Linux". Fix anything else the change makes false
-   ([building.md](building.md#building-on-linux) mentions the script). Leave AGENTS.md's
-   Windows commands and times alone: they need measuring on Windows.
-8. **Commits and PR.** One commit per step as AGENTS.md says. For example: the shard's
-   application name with its tests (`test:`), the script (`test:`), the docs (`docs:`).
-   Push the session's branch and open a PR against `default` with `gh`. Report as
-   AGENTS.md asks: the Totals of the final runs, the failures seen in steps 1 and 2, and
-   anything that did not go as planned.
+- **Before the change**, both suites failed. The suites clear the settings in
+  `initTestCase()` and write their own in `init()` and `cleanup()`, and with one settings
+  file the processes did it under each other: a setting such as the pre-roll read back as
+  another process had left it, and the network-permission setting, once cleared, brought
+  its dialog up. `test-tony-dev` failed two tests; `test-tony-app` had nine failures in
+  one run and twelve in another, nearly all of them that way.
+- **After it**, three runs of `test-tony-dev` with the shared `HOME` were clean, and so
+  were those of `test-tony-app`, but for a race in one test (a take stopped before the
+  fake device's first block), which failed with a `HOME` per process as well and is since
+  fixed. Now that the script itself shares `HOME`, three runs each of core, app and dev
+  through it, and one-process runs of all three, failed only the Linux failures
+  [testing.md](testing.md#running) lists.
+- **What each shard left**: one settings file under `~/.config/tony-tests/` and one data
+  folder, holding its log and any temp directory of svcore's, under
+  `~/.local/share/tony-tests/`, both named for the shard; the two suites that turn on
+  `QStandardPaths`' test mode put theirs under `~/.qttest/`, named the same way. One set
+  per `i` and `n`, so their number stays bounded. A one-process run adds only the base
+  name's.
 
 ## On the Windows machine, after the merge
 
@@ -121,7 +110,11 @@ From Git Bash with AGENTS.md's environment, after a build:
 
 1. `deploy/linux/run-tests.sh -j N build_mingw test-tony-app.exe` for N = 4, 6 and 8,
    watching CPU in Task Manager. Take the largest N that passes three runs in a row with
-   the CPU clearly below full; tests that race the analysis are the ones to watch.
+   the CPU clearly below full; tests that race the analysis are the ones to watch. On the
+   first run, check that each shard's results land in `tmp/tl/test-tony-app.exe/<i>/`:
+   the script passes `TONY_TEST_LOG_DIR` as a `/c/...` path and relies on Git Bash
+   converting it for a native program. If they are not there, the summary has no suite
+   counts.
 2. The same for `test-tony-dev.exe` and `test-tony-core.exe`.
 3. Check that each shard left its own key under `HKCU\Software\tony-tests` and its own
    folders under `%APPDATA%` and `%LOCALAPPDATA%` (`qttest` included, for the two suites
@@ -131,4 +124,5 @@ From Git Bash with AGENTS.md's environment, after a build:
    measured times, and gets a tool timeout to match. The one-process command stays, for
    named tests and for changes to lifetimes, threads or teardown. Update the times in
    [testing.md](testing.md) too.
-5. Delete this file and its row in [README.md](README.md).
+5. Delete this file, its row in [README.md](README.md) and the link to it in
+   [testing.md](testing.md#running).

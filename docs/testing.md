@@ -25,9 +25,9 @@ shorter: run it when a change touches what the development checks drive (see
   installed pYIN is never the one tested; the meson test `depends:` on `pyin_plugin`
   because nothing else builds `pyin.dll`. Build `pyin.dll` too when running by hand after
   a clean.
-- Both mains set the organisation/application names to `tony-tests` / `test-tony-*` and
-  every suite works in a `QTemporaryDir`, so the user's QSettings and record directory
-  are never touched.
+- The mains set the organisation/application names to `tony-tests` / `test-tony-*` (a
+  shard's name with a suffix of its own, see "Running") and every suite works in a
+  `QTemporaryDir`, so the user's QSettings and record directory are never touched.
 - `Tony.exe` links both libraries with `link_whole:`. A new source file that is in neither
   `tony_core_files` nor `tony_app_files` is invisible to the tests.
 - `build_mingw/meson-logs/testlog.txt` contains a dump of the whole inherited environment.
@@ -59,11 +59,18 @@ Windows path would start an escape in the C string.
   not run. The app suite nearly only waits on `FakeAudioIO`'s real-time clock, so n
   processes at once take about 1/n of the time: on four cores the load stayed under 2 with
   eight, and reached 3.5 with twelve. `deploy/linux/run-tests.sh` starts them and adds up
-  their results. Each process needs a `HOME` and XDG directories of its own: the suites'
-  QSettings are per user, and processes sharing them clear each other's settings.
-  `TestDevChecks` turns on `QStandardPaths`' test mode, which keeps them in `~/.qttest`
-  whatever the XDG variables say. On Windows QSettings is the registry, so the script is
-  for Linux. Do not combine shards with test names on the command line.
+  their results. Processes running at once must not share settings: the suites clear and
+  rewrite them, and would do it under each other. So each shard runs under an application
+  name of its own, `<base>-shard<i>of<n>` (`RunSuite.h`), and its settings, data location,
+  svcore temp directory and log are all keyed by that name, in `QStandardPaths`' test mode
+  too. That holds on Linux and Windows alike (on Windows they are the registry and known
+  folders, which no environment variable moves), so every process shares the user's
+  `HOME`; each shard leaves a settings file and a data folder of its own, one per `i` and
+  `n`. The script is written to run from Git Bash on Windows too, with the environment
+  AGENTS.md gives and executable names with `.exe`. It has not run there yet, and how many
+  processes suit that machine is not measured
+  ([windows-shards.md](windows-shards.md#on-the-windows-machine-after-the-merge)). Do not
+  combine shards with test names on the command line.
 - A sharded run is a whole run of the suites, but the tests that share a process are other
   ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
   run the one-process run as well.
@@ -136,6 +143,11 @@ Windows path would start an escape in the C string.
   dialogs a test does expect.
 - `analysed()` waits for analysis completion, no running transformers **and** no ranged
   run. `snapshotTake()`, `verifyStripMatchesTake()`, `takeLayers()`.
+- `waitUntilStopKeepsTake()` waits until Stop would keep the take being recorded
+  (`stopWouldKeepTake()` in `TestMainWindow`: more recorded than `finishSingingTake()`
+  discards, once the latency is final). A test that stops a take straight after looking at it
+  calls it first: Stop may otherwise come before the fake device's first block, and the
+  take is dropped with nothing to analyse.
 - `TestSignals.h`: sine, sawtooth, seeded noise, comparison in cents.
   `TestSingingAnalysis.h` works the expected ranges out for itself (`widenRange()`,
   `mergeWindow()`, `comparePitchAcrossFile()`, `verifyNothingLeftOver()`).
