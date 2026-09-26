@@ -110,15 +110,19 @@ Launch with `.\build.bat run`.
 37. **Legibility**: the words, dark on light boxes along the bottom of the pane, are
     readable over the waveform, the pitch tracks, the alternate pitch track and the live
     dots low in the range. The waveform is pale grey (225, 225, 225) while the lyrics are
-    on show: faint enough for the words, still enough to see where the singing is? Grey
-    bars under the boxes: right colour?
-38. **Rows and font** at the zoom used while singing: can the words be read while
-    singing, and do the two rows hide too much of the bottom of the pitch range? The font
-    grows as you zoom in (twice the usual size up to four times, never more than an eighth
-    of the pane's height): right size at each zoom, words centred in their boxes?
-39. **Density**: zoom out until words drop out (they are left out, never drawn over each
-    other, except the highlighted one) and back in (they return). At the usual zoom the
-    larger font leaves many words out: how many on a fast song, and are two rows enough?
+    on show: faint enough for the words, still enough to see where the singing is? Where
+    a word is longer than its box it runs over the box's edges with a light halo: still
+    readable over the waveform, and still clearly that box's word?
+38. **Box edges and rows** at the zoom used while singing: each box's edges are the
+    word's start and end, never widened, and words next to each other share an edge. Do
+    the words stay in one row, and is the space between two labels enough to tell them
+    apart? The font grows as you zoom in (twice the usual size up to four times, never
+    more than an eighth of the pane's height), more slowly than the boxes: does zooming in
+    put the words that were in the second row back in the first?
+39. **Density**: zoom out until words go to the second row, above the boxes, and then
+    drop out (their boxes stay; the highlighted one's word is still drawn) and back in
+    (they return). At the zoom you sing at, how many words leave the first row on a fast
+    song?
 40. **Bold line starts**: do they read as the start of a phrase, or as noise?
 41. **The left edge**: a word in the first ~30 px of the view is under the pane's vertical
     scale, at the bottom left (scroll so that a word is at the left edge). How much does
@@ -126,7 +130,7 @@ Launch with `.\build.bat run`.
 42. **Inferred ends**: the exporter writes no end times. With word timing the last word of
     a line ends at the next line but at most 2 s after it starts, unless a `♪` line marks
     the end; with line timing a line lasts until the next one, and the last line 5 s. Do
-    those boxes and bars mislead, and does the last word of a line stay highlighted too
+    those boxes mislead, and does the last word of a line stay highlighted too
     long? The start times are exact.
 43. **Hover readout**: with the lyrics shown, hovering over the pitch tracks gives the same
     readout and the same vertical scale as without them, also after turning the alternate

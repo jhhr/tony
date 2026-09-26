@@ -163,8 +163,8 @@ LyricsTrack::configureLayer()
     m_layer->setVerticalScale(RegionLayer::EqualSpaced);
     m_layer->setPlotStyle(RegionLayer::PlotLyrics);
 
-    // The bar under each word; the words themselves are dark on light
-    // boxes whatever the colours.  The layer's default would be black
+    // The words are dark on light boxes whatever this is; grey rather
+    // than the layer's default black wherever else its colour shows
     m_layer->setBaseColour
         (ColourDatabase::getInstance()->getColourIndex(tr("Grey")));
 

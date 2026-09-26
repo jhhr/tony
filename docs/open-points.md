@@ -56,14 +56,16 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   (about 86 px/s) showed 1.6 s before 0 s, so a word at 0 s was clear of the scale, but
   the half of its box before 0 s was under the pale wash the pane draws before the start
   of the reference.
-- **The lyrics' layout is a guess at what reads well**: two rows (a word with no room is
-  left out), the bold line starts, the font size, and the 2 s / 5 s caps on inferred ends
-  are all constants to be judged by eye ([manual checklist](manual-checklist.md)).
-- **At the usual zoom many words have no room**: with the font twice the view's at the
-  least, most labels are wider than the time their word takes on screen, so the boxes
-  overlap their neighbours and two rows do not hold them all (seen at 100 px/s). Only the
-  word being sung is always drawn, over the others if need be. Zooming in, a smaller font
-  or a third row would each help.
+- **The lyrics' layout is a guess at what reads well**: the gap between labels (a sixth of
+  the font size), how far a label may move from its box (until its middle would leave it),
+  the second row, the bold line starts, the font size and its growth, and the 2 s / 5 s
+  caps on inferred ends are all constants to be judged by eye
+  ([manual checklist](manual-checklist.md)).
+- **Zoomed out, words still go to the second row or are left out**: with the font twice
+  the view's at the least, a fast word's label is wider than its box. Rendered with
+  made-up but realistic timing (about three words a second) and a 26 px font: one row at
+  200 px/s and above, a few words in the second row at 150 px/s, many in it and some left
+  out at 100 px/s. Only the word being sung is always drawn.
 - **Right after `closeSession()`, Show Lyrics and the alternate pitch actions keep their
   enabled and checked states** until the next reference or session opens: nothing there
   calls `updateLayerStatuses()`. Show Lyrics then does nothing when chosen.

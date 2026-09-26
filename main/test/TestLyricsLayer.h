@@ -16,7 +16,7 @@
 
 // Tier 3: the lyrics plot style of RegionLayer (svgui fork), which
 // draws the words of the lyrics along the bottom of pane 0. Where each
-// box goes and how big its font is are worked out by pure functions,
+// label goes and how big its font is are worked out by pure functions,
 // tested first; then the layer is painted into images, with no
 // MainWindow.
 
@@ -44,7 +44,16 @@ class TestLyricsLayer : public QObject
 {
     Q_OBJECT
 
-    typedef std::vector<std::pair<double, double>> Spans;
+    typedef std::vector<std::pair<int, double>> Places;
+
+    static Places place(const std::vector<sv::RegionLayer::LyricsLabel> &labels,
+                        int rows = 2, double gap = 4) {
+        Places places;
+        for (const auto &p : sv::RegionLayer::placeLyricsLabels(labels, rows, gap)) {
+            places.push_back({ p.row, p.left });
+        }
+        return places;
+    }
 
     QTemporaryDir m_dir;
 
@@ -181,53 +190,65 @@ private slots:
 
     // --- Where labels go -------------------------------------------------
 
-    void labels_that_fit_share_the_first_row() {
-        Spans spans { { 0, 10 }, { 20, 10 }, { 40, 10 } };
-        QCOMPARE(sv::RegionLayer::assignLabelRows(spans, 2, 4),
-                 std::vector<int>({ 0, 0, 0 }));
+    void contiguous_labels_that_fit_their_boxes_share_the_first_row() {
+        // Each word ends where the next starts, as in the lyrics
+        QCOMPARE(place({ { 0, 100, 50 }, { 100, 200, 50 }, { 200, 300, 50 } }),
+                 Places({ { 0, 25 }, { 0, 125 }, { 0, 225 } }));
     }
 
-    void a_label_that_overlaps_goes_to_the_next_row() {
-        // The second runs into the first; the third clears the first
-        Spans spans { { 0, 30 }, { 10, 30 }, { 45, 10 } };
-        QCOMPARE(sv::RegionLayer::assignLabelRows(spans, 2, 4),
-                 std::vector<int>({ 0, 1, 0 }));
+    void a_label_wider_than_its_box_moves_right_into_room() {
+        QCOMPARE(place({ { 0, 40, 20 }, { 40, 80, 60 } }),
+                 Places({ { 0, 10 }, { 0, 34 } }));
+    }
+
+    void the_labels_before_move_left_to_make_room() {
+        QCOMPARE(place({ { 0, 40, 30 }, { 40, 60, 50 } }),
+                 Places({ { 0, 1 }, { 0, 35 } }));
+        // Through more than one of them, each only as far as it must
+        QCOMPARE(place({ { 0, 40, 30 }, { 40, 80, 30 }, { 80, 100, 60 } }),
+                 Places({ { 0, 2 }, { 0, 36 }, { 0, 70 } }));
+        QCOMPARE(place({ { 0, 40, 30 }, { 40, 80, 30 }, { 80, 100, 50 } }),
+                 Places({ { 0, 5 }, { 0, 41 }, { 0, 75 } }));
+    }
+
+    void a_label_whose_middle_would_leave_its_box_goes_to_the_next_row() {
+        // The first would have to move 34 left, but may move only 10;
+        // it stays where it was
+        QCOMPARE(place({ { 0, 20, 60 }, { 20, 40, 60 } }),
+                 Places({ { 0, -20 }, { 1, 0 } }));
+        // A long label centred on a short region reaches back past the
+        // label before it, and cannot move far enough
+        QCOMPARE(place({ { 95, 105, 10 }, { 105, 115, 100 }, { 120, 130, 10 } }),
+                 Places({ { 0, 95 }, { 1, 60 }, { 0, 120 } }));
     }
 
     void a_label_with_no_room_in_any_row_is_left_out() {
-        Spans spans { { 0, 50 }, { 10, 50 }, { 20, 50 }, { 70, 10 } };
-        QCOMPARE(sv::RegionLayer::assignLabelRows(spans, 2, 4),
-                 std::vector<int>({ 0, 1, -1, 0 }));
+        QCOMPARE(place({ { 0, 20, 60 }, { 20, 40, 60 }, { 40, 60, 60 },
+                         { 200, 220, 20 } }),
+                 Places({ { 0, -20 }, { 1, 0 }, { -1, 20 }, { 0, 200 } }));
     }
 
     void the_gap_is_the_least_space_between_labels() {
-        QCOMPARE(sv::RegionLayer::assignLabelRows({ { 0, 10 }, { 14, 10 } }, 2, 4),
-                 std::vector<int>({ 0, 0 }));
-        QCOMPARE(sv::RegionLayer::assignLabelRows({ { 0, 10 }, { 13.5, 10 } }, 2, 4),
-                 std::vector<int>({ 0, 1 }));
+        // Regions of no width: their labels cannot move
+        QCOMPARE(place({ { 5, 5, 10 }, { 19, 19, 10 } }),
+                 Places({ { 0, 0 }, { 0, 14 } }));
+        QCOMPARE(place({ { 5, 5, 10 }, { 18.5, 18.5, 10 } }),
+                 Places({ { 0, 0 }, { 1, 13.5 } }));
     }
 
-    void a_label_reaching_back_over_the_one_before_goes_to_the_next_row() {
-        // A long label centred on a short region can start left of the
-        // label of the region before it
-        Spans spans { { 100, 10 }, { 60, 100 }, { 115, 10 } };
-        QCOMPARE(sv::RegionLayer::assignLabelRows(spans, 2, 4),
-                 std::vector<int>({ 0, 1, 0 }));
-    }
-
-    void a_box_is_its_region_or_its_label_centred_on_the_region() {
-        typedef std::pair<double, double> Span;
-        QCOMPARE(sv::RegionLayer::getLyricsBoxSpan(100, 200, 50), Span(100, 100));
-        QCOMPARE(sv::RegionLayer::getLyricsBoxSpan(100, 200, 100), Span(100, 100));
-        QCOMPARE(sv::RegionLayer::getLyricsBoxSpan(100, 120, 60), Span(80, 60));
+    void no_labels_and_no_rows() {
+        QCOMPARE(place({}), Places());
+        QCOMPARE(place({ { 0, 10, 10 } }, 0), Places({ { -1, 0 } }));
     }
 
     void the_font_grows_with_the_zoom_from_twice_to_four_times() {
-        // Base 13 pixels in a tall view: 26 to 52, a pixel for every 10
-        // pixels per second in between
+        // Base 13 pixels in a tall view: 26 to 52, growing from 260
+        // pixels per second with the square root of the zoom
         QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(50, 13, 800), 26);
-        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(300, 13, 800), 30);
-        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(400, 13, 800), 40);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(260, 13, 800), 26);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(300, 13, 800), 28);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(585, 13, 800), 39);
+        QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(1040, 13, 800), 52);
         QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(5000, 13, 800), 52);
         // Never more than an eighth of the view, nor less than its font
         QCOMPARE(sv::RegionLayer::getLyricsFontPixelSize(5000, 13, 200), 25);
@@ -242,10 +263,18 @@ private slots:
         }
     }
 
-    void no_labels_and_no_rows() {
-        QCOMPARE(sv::RegionLayer::assignLabelRows({}, 2, 4), std::vector<int>());
-        QCOMPARE(sv::RegionLayer::assignLabelRows({ { 0, 10 } }, 0, 4),
-                 std::vector<int>({ -1 }));
+    void the_font_grows_more_slowly_than_the_boxes() {
+        // Zooming in twice as far makes every box twice as long and its
+        // word less than one and a half times as large, so that it fits
+        // better
+        for (double pps = 260; pps <= 520; pps *= 1.1) {
+            int size = sv::RegionLayer::getLyricsFontPixelSize(pps, 13, 800);
+            int zoomedIn = sv::RegionLayer::getLyricsFontPixelSize(pps * 2, 13, 800);
+            QVERIFY2(zoomedIn <= 1.5 * size,
+                     qPrintable(QString("%1 pixels at %2 pixels a second, %3 at "
+                                        "twice the zoom")
+                                .arg(size).arg(pps).arg(zoomedIn)));
+        }
     }
 
     // --- The layer --------------------------------------------------------
@@ -382,8 +411,111 @@ private slots:
         QVERIFY(m_layer->getHighlightedEvent(e));
         QCOMPARE(e.getLabel(), QString("sanaseppo2"));
         QImage highlighted = render({ QRect(0, 0, kWidth, kHeight) });
-        QVERIFY2(highlightPixels(highlighted) > 100,
+
+        // Its box is there whatever happens; its label, far wider,
+        // has the halo of a highlighted box around it
+        int x0 = m_pane->getXForFrame(e.getFrame());
+        int x1 = m_pane->getXForFrame(e.getFrame() + e.getDuration());
+        QImage outside = highlighted;
+        QPainter painter(&outside);
+        painter.fillRect(x0, 0, x1 - x0, kHeight, Qt::white);
+        painter.end();
+        QVERIFY2(highlightPixels(outside) > 50,
                  "the word being sung was not drawn: it had no row");
+    }
+
+    // The top edge of the boxes: the highest row in which this column
+    // has anything drawn in it
+    static int topDrawnRow(const QImage &image, int x) {
+        for (int y = 0; y < image.height(); ++y) {
+            if (image.pixel(x, y) != qRgb(255, 255, 255)) return y;
+        }
+        return -1;
+    }
+
+    static bool isBoxEdge(QRgb p) {
+        return qRed(p) < 200 && qBlue(p) - qRed(p) >= 20;
+    }
+
+    void contiguous_words_that_fit_are_drawn_in_one_row() {
+        // Each word ends where the next starts, and each label is far
+        // shorter than its box
+        auto model = sv::ModelById::getAs<sv::RegionModel>(m_layer->getModel());
+        QVERIFY(model);
+        const double length = 0.6;
+        for (int i = 0; i < 10; ++i) {
+            model->add(sv::Event(sv::sv_frame_t(kRate * length * i), 0.f,
+                                 sv::sv_frame_t(kRate * length),
+                                 QString("w%1").arg(i)));
+        }
+        QImage image = render({ QRect(0, 0, kWidth, kHeight) });
+
+        int top = -1;
+        for (int i = 0; i < 10; ++i) {
+            int x = m_pane->getXForFrame(sv::sv_frame_t(kRate * length * i)) + 8;
+            if (x >= kWidth) break;
+            int y = topDrawnRow(image, x);
+            QVERIFY2(y > 0, qPrintable(QString("nothing drawn for word %1").arg(i)));
+            if (top < 0) top = y;
+            QVERIFY2(y == top,
+                     qPrintable(QString("word %1's box starts at y = %2, the "
+                                        "first word's at y = %3")
+                                .arg(i).arg(y).arg(top)));
+        }
+        for (int y = 0; y < top; ++y) {
+            QVERIFY2(rowIsWhite(image, y),
+                     qPrintable(QString("something was drawn at y = %1, above "
+                                        "the boxes at y = %2").arg(y).arg(top)));
+        }
+    }
+
+    void a_box_is_its_region_even_when_its_label_is_wider() {
+        // Twenty pixels of region, and a label several times as wide
+        auto model = sv::ModelById::getAs<sv::RegionModel>(m_layer->getModel());
+        QVERIFY(model);
+        sv::Event e(sv::sv_frame_t(kRate * 3.0), 0.f, sv::sv_frame_t(kRate * 0.2),
+                    QString("sanaseppo"));
+        model->add(e);
+        QImage image = render({ QRect(0, 0, kWidth, kHeight) });
+
+        int x0 = m_pane->getXForFrame(e.getFrame());
+        int x1 = m_pane->getXForFrame(e.getFrame() + e.getDuration());
+        QCOMPARE(x1 - x0, 20);
+
+        // The box's top edge, a row above anything of the label's
+        int top = -1;
+        for (int y = 0; y < kHeight; ++y) {
+            if (isBoxEdge(image.pixel(x0 + 10, y))) {
+                top = y;
+                break;
+            }
+        }
+        QVERIFY2(top >= 0, "no box edge was found");
+
+        int left = -1, right = -1;
+        for (int x = 0; x < kWidth; ++x) {
+            if (isBoxEdge(image.pixel(x, top))) {
+                if (left < 0) left = x;
+                right = x;
+            }
+        }
+        QVERIFY2(left >= x0 && right <= x1 - 1,
+                 qPrintable(QString("the box's top edge runs from x = %1 to %2, "
+                                    "its region from %3 to %4")
+                            .arg(left).arg(right).arg(x0).arg(x1 - 1)));
+
+        // And the label is drawn, past both ends of the box
+        bool textLeft = false, textRight = false;
+        for (int y = top; y < kHeight; ++y) {
+            for (int x = 0; x < x0 - 2; ++x) {
+                if (qGray(image.pixel(x, y)) < 100) textLeft = true;
+            }
+            for (int x = x1 + 2; x < kWidth; ++x) {
+                if (qGray(image.pixel(x, y)) < 100) textRight = true;
+            }
+        }
+        QVERIFY2(textLeft && textRight,
+                 "the label is not drawn centred over its box, past both ends");
     }
 
     void painting_in_strips_matches_painting_whole() {
