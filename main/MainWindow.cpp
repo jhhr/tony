@@ -3122,8 +3122,15 @@ MainWindow::applicationStateChanged(Qt::ApplicationState state)
     }
 
     // Only a session that has a file of its own: one never saved stays as
-    // it is, as there is no one to ask where it should go
-    if (m_sessionFile == "" || !m_documentModified) return;
+    // it is, as there is no one to ask where it should go. Nor one that
+    // loaded without some of its audio, which its file would lose
+    if (!maySaveUnasked()) {
+        if (m_documentModified && sessionIsIncomplete()) {
+            cerr << "MainWindow::applicationStateChanged: the session "
+                 << "loaded incomplete; it is not saved" << endl;
+        }
+        return;
+    }
 
     m_suspendSavePath = m_sessionFile;
     saveWhenSuspended();
@@ -3136,7 +3143,7 @@ MainWindow::saveWhenSuspended()
 
     // Another session since, or saved since
     if (m_suspendSavePath == "" || m_suspendSavePath != m_sessionFile ||
-        !m_documentModified) {
+        !maySaveUnasked()) {
         m_suspendSavePath = "";
         return;
     }
@@ -6840,6 +6847,42 @@ MainWindow::checkSaveModified()
 }
 
 bool
+MainWindow::sessionIsIncomplete() const
+{
+    // Set by svapp's session reader for audio it could not read, and kept
+    // by the document until it is replaced (or saved, below)
+    return m_document && m_document->isIncomplete();
+}
+
+bool
+MainWindow::confirmSaveOfIncompleteSession()
+{
+    if (!sessionIsIncomplete()) return true;
+    return askToSaveIncompleteSession();
+}
+
+bool
+MainWindow::askToSaveIncompleteSession()
+{
+    // svapp's words at the load, asked again when it comes to it
+    return QMessageBox::warning
+        (this, tr("Save incomplete session?"),
+         tr("<b>Save this session without all of its audio?</b><p>Some of "
+            "the audio content referred to by the original session file "
+            "could not be loaded. If you save this session, it will be "
+            "saved without any reference to that audio, and information "
+            "may be lost.</p>"),
+         QMessageBox::Save | QMessageBox::Cancel,
+         QMessageBox::Cancel) == QMessageBox::Save;
+}
+
+bool
+MainWindow::maySaveUnasked() const
+{
+    return m_sessionFile != "" && m_documentModified && !sessionIsIncomplete();
+}
+
+bool
 MainWindow::waitForInitialAnalysis()
 {
     // Called before saving a session. We can't safely save while the
@@ -6921,6 +6964,9 @@ MainWindow::waitForRangedAnalysis()
 void
 MainWindow::saveSession()
 {
+    // (Save As asks for itself)
+    if (m_sessionFile != "" && !confirmSaveOfIncompleteSession()) return;
+
     // We do not want to save mid-analysis regions -- that would cause
     // confusion on reloading
     m_analyser->clearReAnalysis();
@@ -6934,6 +6980,7 @@ MainWindow::saveSession()
         } else {
             CommandHistory::getInstance()->documentSaved();
             documentRestored();
+            if (m_document) m_document->setIncomplete(false);
         }
     } else {
         saveSessionAs();
@@ -6944,6 +6991,8 @@ void
 MainWindow::saveSessionInAudioPath()
 {
     if (m_audioFile == "") return;
+
+    if (!confirmSaveOfIncompleteSession()) return;
 
     if (!waitForInitialAnalysis()) return;
 
@@ -7004,6 +7053,9 @@ MainWindow::saveSessionToPath(QString path)
     // from now on is written into its folder (spec 6.4)
     m_sessionFile = path;
 
+    // and the file is what the session is: nothing it names is missing
+    if (m_document) m_document->setIncomplete(false);
+
     CommandHistory::getInstance()->documentSaved();
     documentRestored();
     m_recentFiles.addFile(path);
@@ -7013,6 +7065,10 @@ MainWindow::saveSessionToPath(QString path)
 void
 MainWindow::saveSessionAs()
 {
+    // Before the picker, which on Android has made the file by the time
+    // it returns
+    if (!confirmSaveOfIncompleteSession()) return;
+
     // We do not want to save mid-analysis regions -- that would cause
     // confusion on reloading
     m_analyser->clearReAnalysis();

@@ -908,6 +908,22 @@ protected:
     bool checkSaveModified();
     bool waitForInitialAnalysis();
 
+    // A session that loaded without some of the audio it names (svapp's
+    // "Incomplete session loaded") is saved without any mention of that
+    // audio, so the file it came from, saved over, would lose it. It is
+    // saved only when the user asks and then says yes: Save, Save As and
+    // Save Session in Audio Path ask first, and a save no one asked for
+    // (Android's on suspend) passes it by. Once saved it is what its new
+    // file says, and is not asked about again
+    bool sessionIsIncomplete() const;
+    bool confirmSaveOfIncompleteSession();
+    // The question, which the tests answer: they cannot answer a dialog
+    virtual bool askToSaveIncompleteSession();
+
+    // Whether the session may be saved with no one asked: it has a file
+    // of its own, has been changed, and is not incomplete
+    bool maySaveUnasked() const;
+
 #ifdef Q_OS_ANDROID
     // Android's file picker gives content:// URIs, which svcore's readers
     // cannot open. A file in the phone's own storage is opened where it

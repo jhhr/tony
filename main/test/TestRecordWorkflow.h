@@ -144,6 +144,25 @@ public:
     bool doSaveSessionAs(QString path) { return saveSessionToPath(path); }
     QString sessionFile() { return m_sessionFile; }
 
+    // Save and Save As, as the File menu does them. Save As is given the
+    // file here, not by a dialog, if the test has named one
+    void doSaveSession() { saveSession(); }
+    void doSaveSessionAsAsked() { saveSessionAs(); }
+    void setSaveFileNameAnswer(QString path) { m_saveFileNameAnswer = path; }
+    int saveFileNameQuestions() const { return m_saveFileNameQuestions; }
+
+    // A session that loaded without some of its audio, and the question
+    // asked before it is saved, answered from here
+    bool isSessionIncomplete() const { return sessionIsIncomplete(); }
+    bool doMaySaveUnasked() const { return maySaveUnasked(); }
+    void setSaveIncompleteAnswer(bool yes) { m_saveIncompleteAnswer = yes; }
+    int saveIncompleteQuestions() const { return m_saveIncompleteQuestions; }
+
+    // As a change to the session does, and the session's own file as
+    // svapp's session reader would set it
+    void markModified() { documentModified(); }
+    void setSessionFile(QString path) { m_sessionFile = path; }
+
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
     bool isDocumentModified() { return m_documentModified; }
@@ -249,6 +268,17 @@ protected:
         return m_takeNameAnswer == "" ? current : m_takeNameAnswer;
     }
 
+    bool askToSaveIncompleteSession() override {
+        ++m_saveIncompleteQuestions;
+        return m_saveIncompleteAnswer;
+    }
+
+    QString getSaveFileName(sv::FileFinder::FileType type) override {
+        if (m_saveFileNameAnswer == "") return MainWindow::getSaveFileName(type);
+        ++m_saveFileNameQuestions;
+        return m_saveFileNameAnswer;
+    }
+
     // The base class deleteAudioIO() deletes m_audioIO, which is right
     // for the fake as well
 
@@ -260,6 +290,10 @@ private:
     bool m_deleteTakeAnswer = true;
     int m_deleteTakeQuestions = 0;
     QString m_takeNameAnswer;
+    bool m_saveIncompleteAnswer = false;
+    int m_saveIncompleteQuestions = 0;
+    QString m_saveFileNameAnswer;
+    int m_saveFileNameQuestions = 0;
 };
 
 class TestRecordWorkflow : public QObject
@@ -552,6 +586,43 @@ class TestRecordWorkflow : public QObject
         int to = document.indexOf("</takes>");
         if (from < 0 || to < from) return "no takes element in " + path;
         document.remove(from, to + int(strlen("</takes>")) - from);
+
+        sv::BZipFileDevice out(path);
+        if (!out.open(QIODevice::WriteOnly)) {
+            return "could not write " + path + ": " + out.errorString();
+        }
+        qint64 written = out.write(document);
+        out.close();
+        if (written != document.size()) {
+            return QString("wrote %1 of %2 bytes to ").arg(written)
+                .arg(document.size()) + path;
+        }
+        return "";
+    }
+
+    // A file's bytes, as they are on disk
+    static QByteArray fileContents(QString path) {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+    }
+
+    // Put text into a saved session file before the first occurrence of
+    // another, as removeTakesElement() takes some out.  "" on success,
+    // else what went wrong
+    QString insertIntoSession(QString path, QByteArray before,
+                              QByteArray text) {
+        QByteArray document;
+        {
+            sv::BZipFileDevice file(path);
+            if (!file.open(QIODevice::ReadOnly)) {
+                return "could not read " + path + ": " + file.errorString();
+            }
+            document = file.readAll();
+            file.close();
+        }
+        int at = document.indexOf(before);
+        if (at < 0) return "no " + QString(before) + " in " + path;
+        document.insert(at, text);
 
         sv::BZipFileDevice out(path);
         if (!out.open(QIODevice::WriteOnly)) {
@@ -5257,6 +5328,129 @@ private slots:
         QCOMPARE(m_window->takes()->getAudioPath(), before.path);
         QCOMPARE(m_window->takes()->getCoverage().getRanges(), before.coverage);
         QCOMPARE(stripEvents(), before.strip);
+    }
+
+    // The reference of a session cannot be read when it is opened (on the
+    // phone: a format it has no decoder for), and svapp says the session
+    // loaded incomplete. Saved over, its file would lose the reference: it
+    // is saved only when the user asks and then says yes, and a save no
+    // one asked for (Android's on suspend) passes it by
+    void incomplete_session_not_saved_unasked() {
+        FakeAudioIO::Config config;
+        makeWindow(config);
+        QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+
+        QString session = m_dir.filePath("no-reference.ton");
+        QVERIFY(m_window->doSaveSessionAs(session));
+        QVERIFY(!m_window->isSessionIncomplete());
+        m_window->markModified();
+        QVERIFY2(m_window->doMaySaveUnasked(),
+                 "a whole session, changed, with a file of its own, may not "
+                 "be saved unasked");
+        m_window->doCloseSession();
+        QByteArray saved = fileContents(session);
+        QVERIFY(!saved.isEmpty());
+
+        QVERIFY(QFile::remove(reference));
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        QCOMPARE(dialogsMatching("Incomplete session loaded").size(), 1);
+        QVERIFY2(m_window->isSessionIncomplete(),
+                 "the session is not known to have loaded incomplete");
+
+        // svapp gives such a session no file of its own; nor is it saved
+        // unasked if it has one
+        QCOMPARE(m_window->sessionFile(), QString());
+        m_window->markModified();
+        QVERIFY(!m_window->doMaySaveUnasked());
+        m_window->setSessionFile(session);
+        QVERIFY2(!m_window->doMaySaveUnasked(),
+                 "an incomplete session may be saved over its file unasked");
+
+        // Save, over that file: asked, and "no" saves nothing
+        m_window->setSaveIncompleteAnswer(false);
+        m_window->doSaveSession();
+        QCOMPARE(m_window->saveIncompleteQuestions(), 1);
+        QCOMPARE(fileContents(session), saved);
+        QVERIFY(m_window->isDocumentModified());
+
+        // Save with no file of its own is Save As, which asks before the
+        // file is picked (on Android the picker makes the file)
+        m_window->setSessionFile("");
+        QString other = m_dir.filePath("no-reference-saved.ton");
+        m_window->setSaveFileNameAnswer(other);
+        m_window->doSaveSession();
+        QCOMPARE(m_window->saveIncompleteQuestions(), 2);
+        m_window->doSaveSessionAsAsked();
+        QCOMPARE(m_window->saveIncompleteQuestions(), 3);
+        QCOMPARE(m_window->saveFileNameQuestions(), 0);
+        QVERIFY(!QFileInfo::exists(other));
+        QVERIFY(m_window->isSessionIncomplete());
+        QVERIFY(m_window->isDocumentModified());
+        QVERIFY(takeDialogs().isEmpty());
+    }
+
+    // The same, with the reference there and other audio the session names
+    // missing, so that it can be saved: once the user says yes, the session
+    // is what its new file says, and is neither asked about nor passed by
+    // again
+    void incomplete_session_saved_when_the_user_says_so() {
+        FakeAudioIO::Config config;
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QString session = m_dir.filePath("missing-audio.ton");
+        QVERIFY(m_window->doSaveSessionAs(session));
+        m_window->doCloseSession();
+        QString missing = m_dir.filePath("missing-audio.wav");
+        QString error = insertIntoSession
+            (session, "</data>",
+             QString("<model id=\"999\" name=\"missing-audio.wav\" "
+                     "sampleRate=\"44100\" start=\"0\" end=\"44100\" "
+                     "type=\"wavefile\" file=\"%1\"/>\n").arg(missing)
+             .toUtf8());
+        QVERIFY2(error == "", qPrintable(error));
+        QByteArray saved = fileContents(session);
+
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(dialogsMatching("Incomplete session loaded").size(), 1);
+        QVERIFY(m_window->isSessionIncomplete());
+        QCOMPARE(m_window->sessionFile(), QString());
+        m_window->markModified();
+        QVERIFY(!m_window->doMaySaveUnasked());
+
+        // Saved over the file it came from, as the user may choose: which
+        // then no longer names the audio that was missing
+        m_window->setSaveIncompleteAnswer(true);
+        m_window->setSaveFileNameAnswer(session);
+        m_window->doSaveSession();
+        QCOMPARE(m_window->saveIncompleteQuestions(), 1);
+        QCOMPARE(m_window->saveFileNameQuestions(), 1);
+        QVERIFY2(fileContents(session) != saved, "the session was not saved");
+        QCOMPARE(m_window->sessionFile(), session);
+        QVERIFY(!m_window->isDocumentModified());
+        QVERIFY(!m_window->isSessionIncomplete());
+        {
+            sv::BZipFileDevice file(session);
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            QByteArray document = file.readAll();
+            file.close();
+            QVERIFY(!document.contains("missing-audio.wav"));
+            QCOMPARE(int(document.count("type=\"wavefile\"")), 1);
+        }
+
+        m_window->markModified();
+        QVERIFY(m_window->doMaySaveUnasked());
+        m_window->doSaveSession();
+        QCOMPARE(m_window->saveIncompleteQuestions(), 1);
+        QCOMPARE(m_window->saveFileNameQuestions(), 1);
+        QVERIFY(!m_window->isDocumentModified());
+        QVERIFY(takeDialogs().isEmpty());
     }
 
     // --- The takes folder of a session (spec 6.4) ---
