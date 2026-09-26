@@ -175,6 +175,9 @@ common to both platforms. *(snippet)* marks a fact seen only in search results.
   can be empty, so svcore's scan of `VAMP_PATH` finds nothing. Two fixes:
   - Turn on legacy packaging (`android-legacy-packaging` for androiddeployqt, or
     `useLegacyPackaging` in Qt's gradle template) and name the plugin `libpyin.so`.
+    *(A3b: not enough by itself. svcore names a plugin after its file,
+    `vamp:libpyin:...`, and Tony asks for `vamp:pyin:...`; A3b links `pyin.so` to it
+    in app storage.)*
   - Link pYIN into the app and have svcore load it without a scan (a small svcore fork
     change).
 - Precedents link Vamp plugin code straight in rather than loading it, for example

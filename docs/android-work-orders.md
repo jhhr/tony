@@ -78,7 +78,9 @@ first.
   end, and again only if something failed. The app suite runs in real time (minutes):
   give it a 10-minute tool timeout.
 - Network: GitHub (git and release downloads), the Ubuntu archive, PyPI, conda-forge,
-  `download.qt.io` and `dl.google.com` are reachable; but `download.qt.io` answers every
+  `download.qt.io` and `dl.google.com` are reachable (but on 2026-09-26 the egress
+  gateway refused every CONNECT to `dl.google.com` for A3b's whole session; Gradle needs
+  it for the Android Gradle plugin); but `download.qt.io` answers every
   Qt binary archive with a redirect to a mirror, and all mirrors are blocked (A2 builds Qt
   from source). `breakfastquay.com` and
   `ppa.launchpadcontent.net` are blocked by the environment's policy, and `hg.sr.ht`
@@ -151,7 +153,9 @@ builds happen in the container.)
 - A1 — Sample rate: a device that is not at 44.1 kHz. Done.
 - A2 — Android toolchain and C libraries. Done.
 - A3a — Tony builds for Android. Done.
-- A3b — Tony as an APK (no audio): the test port.
+- A3b — Tony as an APK (no audio): the test port. Built but for the APK itself: Gradle
+  was blocked (`dl.google.com` refused); run `deploy/android/build-apk.sh` once it is
+  allowed (see the log).
 - A4 — Touch gestures on the panes.
 - A5 — Compact touch mode.
 - A6 — Oboe audio backend.
@@ -412,3 +416,28 @@ Xml, Network, Svg, and libc, libm, libdl, libc++_shared (zlib is linked in); it 
 androiddeployqt 6.11 has no strip option: check that the APK's copies are stripped (Qt's
 Gradle template sets `ndkVersion`, so the Android Gradle plugin should strip them).
 Left open: Qt's `Test` module stays in the dependency for Android; `--as-needed` drops it.
+
+### Phase A3b — 2026-09-26
+Built: `deploy/android/build-apk.sh` (after build-tony.sh; writes
+`build-android/android-Tony-deployment-settings.json`, runs androiddeployqt and Gradle,
+checks the APK: `build-android/apk/Tony-debug.apk`, log `/opt/android/logs/tony-apk.log`);
+`deploy/android/package/AndroidManifest.xml` (`io.github.jhhr.tony`, RECORD_AUDIO,
+sensorLandscape). `main/AndroidFiles` (tony_core; `TestAndroidFiles`). main.cpp on Android:
+stdout/stderr to logcat, `AUDIO_NONE`, the plugin links, a box if they fail. `MainWindow::
+getOpenFileName()` on Android copies a `content://` pick to `<files>/imported/<name>`.
+Choices / deviations:
+- Plugins: Android installs only `lib*.so`, svcore names a plugin after its file, and the
+  native library folder holds all of Qt: so the APK has `libpyin.so`, `libchp.so` (in
+  `libs/` directly: `android-extra-libs` would load them at every start), legacy
+  packaging, and VAMP_PATH is `<files>/vamp`, links `pyin.so`, `chp.so` to them, remade
+  at each start. `applicationDirPath()` is that folder (argv[0] is the library's path).
+- Our three libraries are stripped by the script; the Qt plugins are CMake's list (A2).
+- The menu bar stays in the window: a native one needs an action bar, taller than it.
+- A `.ton` from the picker is refused with a message (it needs its folder).
+Blocked: the egress gateway refused every CONNECT to `dl.google.com` (Google's Maven: the
+Android Gradle plugin) all session, so there is no APK yet. All up to Gradle was run and
+checked (libraries 16 KB aligned, their NEEDED all packaged or Android's; manifest).
+The next phase must know: logcat tag `Tony` has Tony's and svcore's cerr; SVDEBUG goes only
+to `files/log/sv-debug.log` (`adb shell run-as io.github.jhhr.tony cat ...`). Phone test:
+install; File > Open, pick audio: waveform, then pitch and notes; Play is off (no audio).
+Left open: saving and sessions through the picker (A7); `imported/` is never emptied.
