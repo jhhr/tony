@@ -10,10 +10,10 @@
 #   License, or (at your option) any later version.  See the file
 #   COPYING included with this distribution for more information.
 #
-# The setup script of the Claude cloud environment Tony is developed in.
-# It is pasted, whole, into the environment's "Setup script" field; this
-# copy is where it is reviewed and versioned, and a change here reaches
-# sessions only once it is pasted there too.
+# The setup of the Claude cloud environment Tony is developed in. The
+# environment's "Setup script" field holds cloud-setup-script.sh, which
+# runs this file as it is on default: the field keeps only about the
+# first 6000 characters of what is pasted there, and this is longer.
 #
 # The platform runs it as root after cloning the repository, the first
 # time a session starts after the script or the network settings change,

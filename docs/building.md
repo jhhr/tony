@@ -90,11 +90,14 @@ For a cloud session: Ubuntu 24.04, 4 cores, 16 GB, root, no sound card, and no W
 repoint does not run there, and hg.sr.ht, where six of the libraries live, cannot be
 reached. Three scripts in `deploy/linux/` do the work:
 
-- **`cloud-environment.sh` is the cloud environment's setup script.** Its text is pasted
-  into the environment's settings, with the network access and variables below; the copy in
-  the repository does nothing by itself. The platform runs it once and keeps a snapshot of
-  the disk, which later sessions start from, until the script or the allowed hosts change
-  or about a week has passed. It installs the packages, Qt, ccache and mold, the Android SDK
+- **`cloud-environment.sh` is the cloud environment's setup.** The environment's "Setup
+  script" field holds `cloud-setup-script.sh`, pasted whole, which runs this file as it is
+  on `default` (the checkout's copy if GitHub cannot be reached). This file cannot go in
+  the field itself: the field keeps only about its first 6000 characters, and the rest was
+  cut off ("unexpected end of file"). The platform runs the setup once and keeps a snapshot
+  of the disk, which later sessions start from, until the field's text or the allowed hosts
+  change or about a week has passed; changing the date in the field's text makes a change
+  to `cloud-environment.sh` reach sessions at once. It installs the packages, Qt, ccache and mold, the Android SDK
   and NDK when `dl.google.com` is reachable, and spends what is left of four minutes filling
   ccache from a build of the libraries. It also writes an `autoMode` entry to
   `/root/.claude/settings.json` by which auto mode trusts the four library forks as it does
