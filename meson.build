@@ -1191,10 +1191,10 @@ tony_core_files = [
   'main/LogFile.cpp',
   'main/LatencyCalibration.cpp',
   'main/LatencyCheck.cpp',
+  'main/LiveDotsFeed.cpp',
   'main/Lyrics.cpp',
   'main/LyricsEdit.cpp',
   'main/LyricsTtml.cpp',
-  'main/ModelChangeThrottle.cpp',
   'main/PinchZoom.cpp',
   'main/PopupArea.cpp',
   'main/RealtimePitchTracker.cpp',
@@ -1558,7 +1558,7 @@ if system != 'android'
     'main/test/TestLatencyCheck.h',
     'main/test/TestLatencyCalibration.h',
     'main/test/TestTakeDiff.h',
-    'main/test/TestModelChangeThrottle.h',
+    'main/test/TestLiveDotsFeed.h',
     'main/test/TestRunSuite.h',
   ])
 

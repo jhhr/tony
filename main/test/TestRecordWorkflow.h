@@ -1786,6 +1786,66 @@ private slots:
         QCOMPARE(m_window->statusText(), QString("after the analysis"));
     }
 
+    // A phone's GUI thread is several times slower than this machine's.
+    // Made slower than the tracker finds pitch (an estimate a hop, 5.8
+    // ms), it must still keep the dots up with the singing: given the
+    // dots one at a time it would fall further behind for as long as the
+    // take lasted
+    void live_dots_keep_up_with_a_slow_gui() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 5.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->setLiveDotsDelay(10);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+
+        // With no reference playing there is no latency, so a dot is at
+        // the frame of the recording its window was centred on. The most
+        // the newest may trail what the device has recorded: half a
+        // window, a record update, the tracker's poll, the wait for the
+        // next batch and the slow GUI thread, with room to spare. Per
+        // estimate, this GUI thread is 0.4 s behind after a second, 1.2 s
+        // after three
+        const sv::sv_frame_t bound = sv::sv_frame_t(0.4 * rate);
+        QElapsedTimer timer;
+        timer.start();
+        sv::sv_frame_t worst = 0;
+        int looked = 0;
+        QString detail;
+        while (timer.elapsed() < 3000) {
+            QTest::qWait(100);
+            // (the tracker starts an event-loop turn after the take)
+            if (timer.elapsed() < 500) continue;
+            auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+                (m_window->realtimeModelId());
+            QVERIFY(model);
+            auto events = model->getAllEvents();
+            if (events.empty()) continue;
+            ++looked;
+            sv::sv_frame_t recorded =
+                m_window->recordTarget()->getFramesReceived();
+            sv::sv_frame_t behind = recorded - events.back().getFrame();
+            if (behind > worst) {
+                worst = behind;
+                detail = QString("%1 ms into the take the newest dot is at "
+                                 "%2 s, %3 ms behind the %4 s recorded")
+                    .arg(timer.elapsed())
+                    .arg(double(events.back().getFrame()) / rate, 0, 'f', 2)
+                    .arg(1000.0 * double(behind) / rate, 0, 'f', 0)
+                    .arg(double(recorded) / rate, 0, 'f', 2);
+            }
+        }
+        m_window->setLiveDotsDelay(0);
+        qInfo("%s", qPrintable(detail));
+        QVERIFY2(worst <= bound, qPrintable(detail));
+        QVERIFY2(looked >= 10, "hardly any live dots");
+
+        stopTake();
+    }
+
     // Review finding 8: during the take, the dots sit where the pitch
     // track will. Same device and singer as latency_end_to_end, but
     // looked at before Stop

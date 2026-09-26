@@ -149,17 +149,22 @@ dot model outlives the take.
 ## The live tracker
 
 `RealtimePitchTracker::run()`: read a 2048-frame window of the **mixdown**
-(`getData(-1, ...)`, so a mic on input 2 works), YIN, emit, advance 256; sleep 5 ms when
-there is not a full window yet. `kHopSize` is also the resolution of the dot model, whose
+(`getData(-1, ...)`, so a mic on input 2 works), YIN, keep the estimate, advance 256;
+sleep 5 ms when there is not a full window yet. `kHopSize` is also the resolution of the dot model, whose
 unit must be `"Hz"` for the layer to align to the pane's log-frequency scale.
 
-**Telling the pane of the dots.** Every notice of a change to the dot model is a redraw of
-the pane, and a notice for each dot would be about 170 a second. So the dot model is made
-with `notifyOnAdd` false, and then it tells nobody of a dot at all: the dots were drawn
-only when one widened the model's pitch range, and stalled within half a second on a
-steady note. `onRealtimePitchDetected()` hands each dot's frames to
-`m_realtimeDotsNotifier` (`ModelChangeThrottle`, `tony_core`), which tells the pane at
-once and then at most every 40 ms.
+**Getting the dots to the pane.** The tracker finds about 170 estimates a second. Handed
+to the GUI thread one at a time (a queued call each), a GUI thread that needs longer for one
+than the tracker takes to find the next (5.8 ms) falls behind for good, and the dots trail
+the singing more and more for as long as the take lasts; a phone is that slow. So the
+tracker keeps its estimates, and `m_liveDotsFeed` (`LiveDotsFeed`, `tony_core`) takes all
+of them every 40 ms and hands them to `onRealtimePitchDetected()` as one batch: a slow GUI
+thread gets bigger batches, never a queue. The dot model is made with `notifyOnAdd` false,
+so it tells nobody of a dot (a notice has the pane draw all of itself; with no notice at
+all the dots were drawn only when one widened the model's pitch range); instead each batch
+has the pane draw only the strip where its dots go (`updateViewFrames()`, `PaneUtils`).
+Once a second the feed's costs go to the log ("live dots: ... s recorded, tracker at ...
+s, dots to ... s; ..."), which is how a phone's log says whether the dots keep up.
 
 **The dots are kept out of the pane's cache** (`Layer::setCachedInView(false)`, svgui
 fork). Told of a change to the model of a layer in its cache, a pane draws every layer in

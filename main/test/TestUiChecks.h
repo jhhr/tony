@@ -61,6 +61,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QScreen>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -530,6 +531,61 @@ private slots:
     void cleanupTestCase() {
         m_watchdog.stop();
         sv::RecordDirectory::setRecordContainerDirectory("");
+    }
+
+    // The pane draws again only where new dots go, not all of itself for
+    // each batch of them: at a phone's pixel ratio a whole pane costs
+    // several times as much, 25 times a second
+    void live_dots_draw_only_where_they_are() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 12.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // A take that stays on its page, and away from the start of the
+        // song, where the recording's own frames would be
+        const sv::sv_frame_t P = frames(6.0);
+        showSeconds(5.0, 11.0);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(500);
+
+        // Seen before the paint event reaches anything else
+        struct PaintWatch : public QObject {
+            int whole = 0, parts = 0;
+            bool eventFilter(QObject *object, QEvent *e) override {
+                if (e->type() == QEvent::Paint) {
+                    auto *widget = static_cast<QWidget *>(object);
+                    QRect r = static_cast<QPaintEvent *>(e)->rect();
+                    if (r.width() >= widget->width() - 2) ++whole;
+                    else ++parts;
+                }
+                return false;
+            }
+        } watch;
+        sv::Pane *pane = pane0();
+        sv::sv_frame_t pageStart = pane->getStartFrame();
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        QVERIFY(model);
+        int dotsBefore = model->getEventCount();
+        pane->installEventFilter(&watch);
+        QTest::qWait(1500);
+        pane->removeEventFilter(&watch);
+
+        QCOMPARE(pane->getStartFrame(), pageStart);
+        QVERIFY2(model->getEventCount() > dotsBefore + 100,
+                 "hardly any dots came");
+        QVERIFY2(watch.parts > 10, "the pane was hardly drawn at all");
+        // (a dot that widens the model's pitch range has it drawn whole)
+        QVERIFY2(watch.whole <= 5,
+                 qPrintable(QString("the pane was drawn whole %1 times in "
+                                    "1.5 s, and in part %2 times")
+                            .arg(watch.whole).arg(watch.parts)));
+        stopTake();
     }
 
     // Checklist: live dots appear under the playback cursor, not behind

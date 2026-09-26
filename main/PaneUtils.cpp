@@ -90,3 +90,16 @@ pruneExtraPane(Document *document, PaneStack *paneStack, Pane *extra,
     if (overview) overview->unregisterView(extra);
     if (paneStack) paneStack->deletePane(extra);
 }
+
+void
+updateViewFrames(View *view, sv_frame_t from, sv_frame_t to)
+{
+    if (!view || to <= from) return;
+
+    // A pixel either side: a layer draws at the view's x for a frame,
+    // scaled to the pixel ratio, and at least one physical pixel wide
+    int x0 = view->getXForFrame(from) - 1;
+    int x1 = view->getXForFrame(to) + 1;
+    if (x1 < 0 || x0 >= view->width()) return;
+    view->update(x0, 0, x1 - x0 + 1, view->height());
+}

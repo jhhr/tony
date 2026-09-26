@@ -31,13 +31,11 @@
 #include <memory>
 #include <vector>
 
-// Collects pitchDetected() on the test (GUI) thread through a queued
-// connection, which is how MainWindow receives it. QSignalSpy would
-// connect directly and be written to from the tracker thread.
-class PitchCollector : public QObject
+// Takes the tracker's estimates on the test (GUI) thread, which is how
+// MainWindow gets them (LiveDotsFeed): whatever has been found since the
+// last look, whenever the count is asked for
+class PitchCollector
 {
-    Q_OBJECT
-
 public:
     struct Event {
         sv::sv_frame_t frame;
@@ -46,17 +44,17 @@ public:
 
     std::vector<Event> events;
 
-    PitchCollector(RealtimePitchTracker *tracker) {
-        connect(tracker, &RealtimePitchTracker::pitchDetected,
-                this, &PitchCollector::pitchDetected);
+    PitchCollector(RealtimePitchTracker *tracker) : m_tracker(tracker) { }
+
+    int count() {
+        for (const auto &e : m_tracker->takeEstimates()) {
+            events.push_back({ e.frame, e.hz });
+        }
+        return int(events.size());
     }
 
-    int count() const { return int(events.size()); }
-
-public slots:
-    void pitchDetected(sv::sv_frame_t frame, double hz) {
-        events.push_back({ frame, hz });
-    }
+private:
+    RealtimePitchTracker *m_tracker;
 };
 
 class TestRealtimePitchTracker : public QObject

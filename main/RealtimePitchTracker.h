@@ -17,6 +17,8 @@
 
 #include <QThread>
 
+#include <atomic>
+#include <mutex>
 #include <vector>
 
 #include "base/BaseTypes.h"
@@ -35,16 +37,17 @@ class FFT;
  * continuously polls a WritableWaveFileModel for new audio samples,
  * estimating pitch in real time using FFT-accelerated YIN.
  *
- * pitch estimates are reported via pitchDetected() signals; the
- * connection to the GUI thread is automatically a QueuedConnection so
- * the slot (which writes to the model and updates the status bar) runs
- * safely on the GUI thread without blocking audio or rendering.
+ * The estimates are kept until the GUI thread takes them, all at once
+ * (takeEstimates()): there is one for each hop, about 170 a second, and
+ * a signal for each would queue a call on the GUI thread that a slow
+ * GUI thread falls behind with for good (LiveDotsFeed).
  *
  * Usage:
  *   1. Create a RealtimePitchTracker with the ModelId of the
  *      WritableWaveFileModel being recorded into.
  *   2. Call start() — the background thread starts immediately.
- *   3. Call stop() when recording ends — blocks until the thread exits.
+ *   3. Take what it has found with takeEstimates(), from any thread.
+ *   4. Call stop() when recording ends — blocks until the thread exits.
  */
 class RealtimePitchTracker : public QThread
 {
@@ -91,16 +94,24 @@ public:
     void setThreshold(double t) { m_threshold = t; }
     double getThreshold() const { return m_threshold; }
 
-signals:
+    /** A voiced pitch estimate. */
+    struct Estimate {
+        sv::sv_frame_t frame;   ///< centre frame of the analysis window
+        double hz;              ///< always > 0
+    };
+    typedef std::vector<Estimate> Estimates;
+
     /**
-     * Emitted from the background thread each time a new voiced pitch
-     * estimate is available. Via Qt::AutoConnection this arrives in the
-     * GUI thread's event loop (QueuedConnection cross-thread).
-     *
-     * @param frame  Centre frame of the analysis window.
-     * @param hz     Pitch in Hz (always > 0 when emitted).
+     * The estimates found since the last call, oldest first; they are
+     * not kept any longer. Any thread.
      */
-    void pitchDetected(sv::sv_frame_t frame, double hz);
+    Estimates takeEstimates();
+
+    /**
+     * The frame of the recording the tracker has analysed up to: the
+     * end of its latest window, voiced or not. Any thread.
+     */
+    sv::sv_frame_t getFramesAnalysed() const { return m_framesAnalysed; }
 
 protected:
     /** The background polling loop — do not call directly. */
@@ -114,6 +125,10 @@ private:
     double          m_minFreq;
     double          m_maxFreq;
     double          m_threshold;
+
+    std::mutex      m_estimatesMutex;
+    Estimates       m_estimates;
+    std::atomic<sv::sv_frame_t> m_framesAnalysed;
 
     // --- YIN helpers (all called only from run()) ---
 

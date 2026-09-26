@@ -28,7 +28,7 @@
 #include "TakeTiming.h"
 #include "LatencyUtils.h"
 #include "LatencyCalibration.h"
-#include "ModelChangeThrottle.h"
+#include "LiveDotsFeed.h"
 
 #include <vector>
 #include <string>
@@ -343,7 +343,6 @@ protected slots:
 
     // --- Real-time pitch tracking during microphone recording ---
     virtual void recordingStarted();
-    virtual void onRealtimePitchDetected(sv::sv_frame_t frame, double hz);
     virtual void recordingFinishedFull(Analyser *analysing = nullptr);
     virtual void finishSingingTake();
 
@@ -377,9 +376,9 @@ protected:
     // Model backing the realtime layer (owned by the document).
     sv::ModelId           m_realtimePitchModelId;
 
-    // Tells the pane of the dots added to that model, which tells nobody
-    // itself (see setupRealtimePitchLayer())
-    ModelChangeThrottle   m_realtimeDotsNotifier;
+    // Brings the tracker's estimates to onRealtimePitchDetected() in
+    // batches, and reports once a second what they cost
+    LiveDotsFeed          m_liveDotsFeed;
 
     sv::Overview  *m_overview;
 
@@ -863,6 +862,16 @@ protected:
     virtual void setupRealtimePitchLayer();
     virtual void teardownRealtimePitchLayer();
     virtual void stopRealtimePitchTracker();
+
+    // A batch of the live tracker's estimates, everything it has found
+    // since the last: dots for them, the pane told of them, the status
+    // bar set from the newest.  From m_liveDotsFeed
+    virtual void onRealtimePitchDetected
+        (const RealtimePitchTracker::Estimates &estimates);
+
+    // The once-a-second log line of a take: how far the recording, the
+    // tracker and the dots have got, and what the dots cost
+    void logLiveDots(const LiveDotsFeed::Report &report);
 
     // The raw recording of a take needs a layer of its own to hold it in
     // the document: the singing analyser is busy with the take's audio,

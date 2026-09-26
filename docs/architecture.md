@@ -32,7 +32,7 @@ only what they need:
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `ModelChangeThrottle`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h` |
 | `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `TakeCommands`, `TakeLayers`, `PaneUtils` |
 
 When adding a file: put it in the right `*_files` list, and in the matching `*_moc_files`
@@ -60,9 +60,10 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   (as must `m_analyser2`). `LyricsEditor` owns no layer: it finds the lyrics through
   `LyricsTrack` at every event, and is deleted before it.
 - `RealtimePitchTracker` is a `QThread` that only **reads** the recording's
-  `WritableWaveFileModel` and emits `pitchDetected(frame, hz)`. It never touches the pitch
-  model; `MainWindow::onRealtimePitchDetected()` writes it on the GUI thread (queued
-  connection). Stop the tracker **before** releasing the model it reads.
+  `WritableWaveFileModel` and keeps its estimates for `takeEstimates()`. It never touches
+  the pitch model; `LiveDotsFeed` takes the estimates on the GUI thread every 40 ms and
+  `MainWindow::onRealtimePitchDetected()` writes them there. Stop the feed, then the
+  tracker, **before** releasing the model it reads (`stopRealtimePitchTracker()`).
 
 The reference is the pane's **work model** (`Pane::setWorkModel()`, svgui fork, set in
 `analyseNewMainModel()`). Without that the pane greys itself out from the end of the

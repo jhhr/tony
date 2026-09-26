@@ -34,6 +34,7 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QMenu>
 #include <QTimer>
@@ -293,13 +294,30 @@ public:
     int lyricsShiftQuestions() const { return m_shiftQuestions; }
     void whileAskingLyricsShift(std::function<void()> f) { m_whileAskingShift = f; }
 
+    // An estimate of the live tracker's, handed to the window as the
+    // live dots feed does, in a batch of its own
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
-        onRealtimePitchDetected(frame, hz);
+        onRealtimePitchDetected({ { frame, hz } });
     }
+
+    // A GUI thread that takes this long, on top of the real work, each
+    // time the live dots are handed to it: a phone, several times slower
+    // than the machine the tests run on
+    void setLiveDotsDelay(int ms) { m_liveDotsDelayMs = ms; }
     QString statusText() { return getStatusLabel()->text(); }
     void setStatusText(QString text) { getStatusLabel()->setText(text); }
 
 protected:
+    void onRealtimePitchDetected
+    (const RealtimePitchTracker::Estimates &estimates) override {
+        if (m_liveDotsDelayMs > 0) {
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < m_liveDotsDelayMs) { }
+        }
+        MainWindow::onRealtimePitchDetected(estimates);
+    }
+
     void createAudioIO() override {
         if (m_audioIO || m_playTarget) return;
         if (m_useRealDevice) {
@@ -392,6 +410,7 @@ private:
     FakeAudioIO::Config m_fakeConfig;
     bool m_installDevice;
     bool m_useRealDevice = false;
+    int m_liveDotsDelayMs = 0;
     bool m_recordOverAnswer = true;
     bool m_recordOverInDialog = false;
     int m_recordOverQuestions = 0;

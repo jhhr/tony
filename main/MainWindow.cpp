@@ -161,7 +161,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_analyser2(nullptr),
     m_realtimePitchTracker(nullptr),
     m_realtimePitchLayer(nullptr),
-    m_realtimeDotsNotifier(40),
+    m_liveDotsFeed(40),
     m_overview(0),
     m_compactLayout(nullptr),
     m_playAction(nullptr),
@@ -593,6 +593,7 @@ MainWindow::~MainWindow()
     // Clean up secondary state that may not have been torn down if the
     // window was closed without going through closeSession() (e.g. on
     // application exit via the window close button).
+    m_liveDotsFeed.stop();
     if (m_realtimePitchTracker) {
         m_realtimePitchTracker->stop();
         delete m_realtimePitchTracker;
@@ -4891,9 +4892,10 @@ MainWindow::setupRealtimePitchLayer()
     // the pane's log-frequency coordinate system (same as the pYIN pitch track).
     //
     // notifyOnAdd false: a notice for each of the ~170 dots a second
-    // would be a redraw for each. The model then tells nobody of a dot,
-    // though, so m_realtimeDotsNotifier tells the pane of what was added,
-    // 25 times a second
+    // would be a redraw for each, and a notice has the pane draw all of
+    // itself. The model then tells nobody of a dot, though, so
+    // onRealtimePitchDetected() has the pane draw the part of it where
+    // each batch of dots goes, 25 times a second
     auto pitchModel = std::make_shared<SparseTimeValueModel>
         (sr, RealtimePitchTracker::kHopSize, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
@@ -4920,13 +4922,13 @@ MainWindow::setupRealtimePitchLayer()
     // Associate our pre-filled SparseTimeValueModel with the layer.
     // The model was already registered via addNonDerivedModel above.
     m_document->setModel(m_realtimePitchLayer, m_realtimePitchModelId);
-    m_realtimeDotsNotifier.setModel(m_realtimePitchModelId);
     m_realtimePitchLayer->setVerticalScale(TimeValueLayer::AutoAlignScale);
     m_realtimePitchLayer->setPlotStyle(TimeValueLayer::PlotPoints);
 
     // Out of the pane's cache: told of a change to the model of a layer
     // in it, the pane draws every layer in it again -- the reference's
-    // pitch track, notes and waveform, 25 times a second
+    // pitch track, notes and waveform, 25 times a second.  Out of it, a
+    // part of the pane can be drawn with the dots new there
     m_realtimePitchLayer->setCachedInView(false);
 
     // Singing/recording track uses the "Orange" colour so it is visually
@@ -4937,14 +4939,25 @@ MainWindow::setupRealtimePitchLayer()
     m_document->attachLayerToView(pane, m_realtimePitchLayer);
 
     // Create and start the pitch tracker.  Its thread reads new frames
-    // from audioSourceId (the WritableWaveFileModel) and emits
-    // pitchDetected(); onRealtimePitchDetected() writes the estimates into
-    // m_realtimePitchModelId on this thread.
+    // from audioSourceId (the WritableWaveFileModel) and keeps what it
+    // finds; m_liveDotsFeed takes it from there to
+    // onRealtimePitchDetected() in batches, which writes the estimates
+    // into m_realtimePitchModelId on this thread.  The feed is stopped
+    // before the tracker goes (stopRealtimePitchTracker())
     m_realtimePitchTracker = new RealtimePitchTracker(
         audioSourceId, this);
-    connect(m_realtimePitchTracker, &RealtimePitchTracker::pitchDetected,
-            this, &MainWindow::onRealtimePitchDetected);
     m_realtimePitchTracker->start();
+
+    RealtimePitchTracker *tracker = m_realtimePitchTracker;
+    m_liveDotsFeed.setReporter([this](const LiveDotsFeed::Report &report) {
+        logLiveDots(report);
+    });
+    m_liveDotsFeed.start
+        ([tracker]() { return tracker->takeEstimates(); },
+         [this](const RealtimePitchTracker::Estimates &estimates) {
+             onRealtimePitchDetected(estimates);
+         });
+    m_liveDotsFeed.timePaintsOf(pane);
 
     cerr << "setupRealtimePitchLayer: realtime pitch tracking started "
          << "(audio source model " << audioSourceId << ", sr=" << sr << ")" << endl;
@@ -4953,6 +4966,8 @@ MainWindow::setupRealtimePitchLayer()
 void
 MainWindow::stopRealtimePitchTracker()
 {
+    // First: the feed takes from the tracker
+    m_liveDotsFeed.stop();
     if (m_realtimePitchTracker) {
         m_realtimePitchTracker->stop();
         delete m_realtimePitchTracker;
@@ -4964,7 +4979,6 @@ void
 MainWindow::teardownRealtimePitchLayer()
 {
     stopRealtimePitchTracker();
-    m_realtimeDotsNotifier.setModel({});
 
     if (m_realtimeLayerTeardownConnection) {
         disconnect(m_realtimeLayerTeardownConnection);
@@ -5785,16 +5799,19 @@ MainWindow::wantedPreRollFrames() const
 }
 
 void
-MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
+MainWindow::onRealtimePitchDetected
+(const RealtimePitchTracker::Estimates &estimates)
 {
-    // Called on the GUI thread via Qt::QueuedConnection (RealtimePitchTracker
-    // emits from its background thread).  Write the point into the model here
-    // so all model mutations stay on the GUI thread.
+    // Everything the tracker has found since the last batch, handed over
+    // by m_liveDotsFeed on the GUI thread, so that all model mutations
+    // stay on this thread.  One estimate at a time, as they were found,
+    // a GUI thread slower than the tracker would fall further behind it
+    // for as long as the take lasted.
     //
-    // Events still queued when the take ended arrive here as well. The
-    // dots may still be on show then, waiting for pYIN, but the take is
-    // over: leave them, and the status bar, alone.
-    if (!m_recordingInProgress) return;
+    // The feed stops with the tracker when the take ends.  A batch that
+    // came even so would find the dots perhaps still on show, waiting for
+    // pYIN, but the take over: leave them, and the status bar, alone.
+    if (!m_recordingInProgress || estimates.empty()) return;
 
     // Draw the dot where the finished pitch track will put this sound: the
     // take is spliced into the singing track from m_takePosition on, with
@@ -5809,21 +5826,41 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
         for (const Event &e : m->getAllEvents()) m->remove(e);
     }
 
-    // The frame is the recording's, at the device's rate, and the answer
-    // the reference's.  A negative answer is sound sung during the lead-in
-    // of a pre-roll, or before the reference started at all: no dot for it
-    sv_frame_t intoTake = currentTakeTiming().liveFrameIntoTake(frame);
-    if (intoTake < 0) return;
-    sv_frame_t dotFrame = m_takePosition + intoTake;
+    // The frames are the recording's, at the device's rate, and the
+    // answers the reference's.  A negative answer is sound sung during the
+    // lead-in of a pre-roll, or before the reference started at all: no
+    // dot for it
+    TakeTiming timing = currentTakeTiming();
+    sv_frame_t from = 0, to = 0;
+    const RealtimePitchTracker::Estimate *newest = nullptr;
+    for (const auto &estimate : estimates) {
+        sv_frame_t intoTake = timing.liveFrameIntoTake(estimate.frame);
+        if (intoTake < 0) continue;
+        sv_frame_t dotFrame = m_takePosition + intoTake;
+        if (m) m->add(Event(dotFrame, float(estimate.hz), tr("")));
+        sv_frame_t dotEnd = dotFrame + RealtimePitchTracker::kHopSize;
+        if (!newest) {
+            from = dotFrame;
+            to = dotEnd;
+        } else {
+            from = std::min(from, dotFrame);
+            to = std::max(to, dotEnd);
+        }
+        newest = &estimate;
+    }
+    if (!newest) return;
 
-    if (m) {
-        m->add(Event(dotFrame, float(hz), tr("")));
-        m_realtimeDotsNotifier.changed
-            (dotFrame, dotFrame + RealtimePitchTracker::kHopSize);
+    // The pane draws again only where the new dots are.  The model's own
+    // notice would have it draw all of itself, which at a phone's pixel
+    // ratio is several times the cost, 25 times a second
+    if (m && m_paneStack && m_paneStack->getPaneCount() > 0) {
+        updateViewFrames(m_paneStack->getPane(0), from, to);
     }
 
-    // Convert Hz to MIDI note number and cents deviation.
-    // MIDI note 69 = A4 = 440 Hz.
+    // The status bar says what is being sung just now: the newest
+    // estimate of the batch.  Convert Hz to MIDI note number and cents
+    // deviation.  MIDI note 69 = A4 = 440 Hz.
+    double hz = newest->hz;
     double midiNote = 12.0 * std::log2(hz / 440.0) + 69.0;
     int nearestNote = int(std::round(midiNote));
     int cents = int(std::round((midiNote - nearestNote) * 100.0));
@@ -5851,6 +5888,36 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
         .arg(noteName)
         .arg(hz, 0, 'f', 1)
         .arg(centsStr));
+}
+
+void
+MainWindow::logLiveDots(const LiveDotsFeed::Report &report)
+{
+    // Once a second during a take, so that the log of a phone says
+    // whether the dots keep up with the singing there: how much has been
+    // recorded, how far the tracker has analysed it, and how far the dots
+    // handed to the pane have got, all in seconds of the recording; then
+    // what the dots cost the GUI thread
+    sv_samplerate_t rate = 0;
+    if (auto recording = ModelById::getAs<WritableWaveFileModel>
+        (m_currentRecordingModelId)) {
+        rate = recording->getSampleRate();
+    }
+    if (rate <= 0 || !m_recordTarget || !m_realtimePitchTracker) return;
+
+    auto seconds = [rate](sv_frame_t frame) {
+        return QString::number(double(frame) / rate, 'f', 2);
+    };
+    // A dot is at the middle of the window it was found in: the end of
+    // that window is the recording it has caught up with
+    sv_frame_t dotsTo = report.newestFrame < 0 ? 0 :
+        report.newestFrame + RealtimePitchTracker::kWindowSize / 2;
+
+    cerr << "MainWindow: live dots: "
+         << seconds(m_recordTarget->getFramesReceived()) << " s recorded, "
+         << "tracker at " << seconds(m_realtimePitchTracker->getFramesAnalysed())
+         << " s, dots to " << seconds(dotsTo) << " s; "
+         << LiveDotsFeed::describe(report) << endl;
 }
 
 void

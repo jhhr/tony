@@ -177,7 +177,7 @@ builds happen in the container.)
 - A7b — Fixes from the second phone test: menus, the picker, Downloads. Done.
 - A4b — Vertical zoom and scroll by touch. Done.
 - A7c — M4A/AAC and other formats through Android's decoders; no autosave of an incomplete session. Done.
-- A9 — Live dots in real time on the phone.
+- A9 — Live dots in real time on the phone. Done.
 - A10 — Plot elements sized for the screen.
 - A8 — Documentation pass.
 
@@ -840,3 +840,29 @@ already passed it by. With the reference missing, Save As waits for an analysis 
 Tests seen failing: DecodedPcm compaction; `maySaveUnasked()`'s guard; Save As's question.
 Left open: the decoder not run on a phone. SDK sources 36 installed in /opt/android/sdk.
 
+### Phase A9 — 2026-09-26
+Measured (container; `QT_SCALE_FACTOR=3`, 400x850 window, compact layout, 3-minute reference
+with pitch and notes, 4.4 s page, take with the reference playing): GUI thread 29-30% of a core.
+Per estimate 16 us (0.3%), record update 61 us per 10 ms (0.6%), tracker thread 1.3%: all keep
+up. Pane paints ~26%: each of the dots' 25 notices a second drew the whole pane (7 ms in a take;
+3.2 ms idle, 4-4.9 at ratio 2.75, the smooth downscale); the pointer's ~50 strips/s 2.7-3 ms each.
+Built: `RealtimePitchTracker` keeps its estimates (`takeEstimates()`, `getFramesAnalysed()`), no
+signal per hop. `LiveDotsFeed` (core, `TestLiveDotsFeed`): a 40 ms timer on the GUI thread hands
+all found since the last look to `onRealtimePitchDetected(estimates)`: dots added together, status
+bar set once, the pane drawn again only over the batch's frames (`PaneUtils::updateViewFrames()`).
+It times batches and the pane's paints (an event filter that delivers them itself) and logs once
+a second ("MainWindow: live dots: 12.03 s recorded, tracker at 12.01 s, dots to 12.01 s; 25
+batches of 6.8 dots, ..."). `ModelChangeThrottle` is gone (the interval is the throttle). After:
+18-20% of a core. Found: the phone's APK predates the merge: dots cached, told nothing, drawn at
+page turns only (~3.5 s on a 4.4 s page), which is "several seconds behind".
+On a core 4-5x slower the pointer's strip paints would dominate (50-75% of a core; they coalesce:
+fewer frames, no growing lag): `TimeValueLayer::paint` costs ~10 us a dot (`getModelsEndFrame()`,
+two `QFontMetrics`, a pen, a brush per point), paints 100 physical px past the area; svgui's
+pointer strip is 65 px. svgui candidates, not made.
+Tests seen failing: `live_dots_keep_up_with_a_slow_gui` on HEAD (1.9 s behind at 4.3 s);
+`live_dots_draw_only_where_they_are` with a whole-pane update; the feed per estimate.
+Flaky: tests needing the ranged analysis running just after Stop lose when pYIN ends inside
+`createDerivedLayers()` (~16 ms) and merges at once (seen in a log): one in 7 of 10 runner runs
+here, 0 of 3 at HEAD, which also lost one in a parallel repeat. Lead: `analyseRange()` now looks
+at a finished run from the event loop, never within the call; 5 of 5 runner runs green after.
+The lead also brought the docs naming `ModelChangeThrottle` up to date. Not on a phone.

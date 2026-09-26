@@ -35,7 +35,8 @@ RealtimePitchTracker::RealtimePitchTracker(ModelId audioSourceId,
       m_audioSourceId(audioSourceId),
       m_minFreq(60.0),
       m_maxFreq(1000.0),
-      m_threshold(0.15)
+      m_threshold(0.15),
+      m_framesAnalysed(0)
 {
 }
 
@@ -55,6 +56,15 @@ RealtimePitchTracker::stop()
 {
     requestInterruption();
     wait();
+}
+
+RealtimePitchTracker::Estimates
+RealtimePitchTracker::takeEstimates()
+{
+    Estimates taken;
+    std::lock_guard<std::mutex> guard(m_estimatesMutex);
+    taken.swap(m_estimates);
+    return taken;
 }
 
 void
@@ -110,11 +120,13 @@ RealtimePitchTracker::run()
                 double hz = sr / lagSamples;
                 if (hz >= m_minFreq && hz <= m_maxFreq) {
                     sv_frame_t centreFrame = nextFrameToProcess + kWindowSize / 2;
-                    emit pitchDetected(centreFrame, hz);
+                    std::lock_guard<std::mutex> guard(m_estimatesMutex);
+                    m_estimates.push_back({ centreFrame, hz });
                     processedAny = true;
                 }
             }
 
+            m_framesAnalysed = nextFrameToProcess + kWindowSize;
             nextFrameToProcess += kHopSize;
         }
 
