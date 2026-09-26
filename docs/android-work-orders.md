@@ -150,7 +150,7 @@ builds happen in the container.)
 - A0 — Desktop build and tests in the container. Done.
 - A1 — Sample rate: a device that is not at 44.1 kHz. Done.
 - A2 — Android toolchain and C libraries. Done.
-- A3a — Tony builds for Android.
+- A3a — Tony builds for Android. Done.
 - A3b — Tony as an APK (no audio): the test port.
 - A4 — Touch gestures on the panes.
 - A5 — Compact touch mode.
@@ -389,3 +389,26 @@ opus, zix, serd) are missing; meson then links the NDK's `libz.a`. Model deploym
 `logs/android-check-deployment-settings.json` (qt-cmake's). Gradle's first run got 429 Too
 Many Requests from repo.maven.apache.org: expect to retry.
 Left open: Oboe (A6) not built; sdkmanager takes the latest android-36/platform-tools revision.
+
+### Phase A3a — 2026-09-26
+Built: an `android` branch in `meson.build` (the Linux branch's defines less JACK, PulseAudio,
+ALSA, PortAudio, oggz, fishsound; `HAVE_OPUS_READ_ONLY`; every library `static: true`); there
+Tony is `shared_library('Tony_arm64-v8a')` with `-Wl,--exclude-libs,ALL`, and the tests are
+left out. `deploy/android/qt-arm64-v8a.ini` (a second cross file: Qt for Android's `qmake`),
+`deploy/android/build-tony.sh` (configure, build, check with readelf), `build-android` in
+`.gitignore`. No change in `main/` or the forks: everything compiled at the first attempt.
+Build: `deploy/android/build-tony.sh` (`--wipe` to configure afresh); 4 min from scratch. By
+hand: `meson setup build-android --cross-file /opt/android/cross-arm64-v8a.ini --cross-file
+deploy/android/qt-arm64-v8a.ini --buildtype=debugoptimized`, `ninja -j 4 -C build-android`.
+Logs: `/opt/android/logs/tony-setup.log`, `tony-build.log`.
+Choices / deviations:
+- meson 1.3.2 (Ubuntu's) finds Qt through that qmake (Qt for Android has no `.pc` files) and
+  takes moc, rcc, uic from its `QT_HOST_LIBEXECS`: meson issues 13018 and 6089 did not arise.
+- debugoptimized, like the desktop builds: asserts on, debug information (108 MB; 11.5 stripped).
+The next phase must know: `build-android/libTony_arm64-v8a.so` needs Qt6 Core, Gui, Widgets,
+Xml, Network, Svg, and libc, libm, libdl, libc++_shared (zlib is linked in); it exports `main`,
+`qInitResources_tony` and main.cpp's inline functions, nothing from the static libraries.
+`pyin.so`, `chp.so` beside it: no `lib` prefix yet, exporting `vampGetPluginDescriptor` only.
+androiddeployqt 6.11 has no strip option: check that the APK's copies are stripped (Qt's
+Gradle template sets `ndkVersion`, so the Android Gradle plugin should strip them).
+Left open: Qt's `Test` module stays in the dependency for Android; `--as-needed` drops it.

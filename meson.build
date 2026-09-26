@@ -470,6 +470,72 @@ elif system == 'windows'
     ]
   endif
 
+elif system == 'android'
+
+  # Cross-compiled with the NDK: see deploy/android/build-tony.sh. The
+  # libraries are static builds from deploy/android/build-deps.sh, found
+  # through pkg-config; static: true, because only then does pkg-config
+  # name their private libraries (ogg, opus, zix, serd) as well. As on
+  # Linux, less what a phone has no use for: JACK, PulseAudio, ALSA and
+  # PortAudio (with RtMidi's ALSA defines), and oggz and fishsound (Ogg
+  # Vorbis). Opus is read-only: there is no libopusenc.
+
+  if architecture == 'aarch64'
+    android_abi = 'arm64-v8a'
+  else
+    error('Build for architecture ' + architecture + ' is not supported on this platform')
+  endif # architecture
+
+  rc = []
+
+  bzip2_dep = dependency('bzip2', static: true)
+  fftw3_dep = dependency('fftw3', version: '>= 3.0.0', static: true)
+  sndfile_dep = dependency('sndfile', version: '>= 1.0.16', static: true)
+  samplerate_dep = dependency('samplerate', version: '>= 0.1.2', static: true)
+  rubberband_dep = dependency('rubberband', version: '>= 3.0.0', static: true)
+  sord_dep = dependency('sord-0', version: '>= 0.5', static: true)
+  serd_dep = dependency('serd-0', version: '>= 0.5', static: true)
+  mad_dep = dependency('mad', version: '>= 0.15.0', static: true)
+  id3tag_dep = dependency('id3tag', version: '>= 0.15.0', static: true)
+  opus_dep = dependency('opusfile', static: true)
+
+  feature_dependencies = [
+    vamphostsdk_dep,
+    bzip2_dep,
+    fftw3_dep,
+    sndfile_dep,
+    samplerate_dep,
+    rubberband_dep,
+    sord_dep,
+    serd_dep,
+    mad_dep,
+    id3tag_dep,
+    opus_dep,
+  ]
+
+  feature_defines = [
+    '-DHAVE_BZ2',
+    '-DHAVE_FFTW3',
+    '-DFFTW_DOUBLE_ONLY',
+    '-DHAVE_SNDFILE',
+    '-DHAVE_LIBSAMPLERATE',
+    '-DHAVE_RUBBERBAND',
+    '-DHAVE_SORD', '-DUSE_SORD',
+    '-DHAVE_SERD',
+    '-DHAVE_MAD',
+    '-DHAVE_ID3TAG',
+    '-DHAVE_OPUS',
+    '-DHAVE_OPUS_READ_ONLY',
+  ]
+
+  svcore_moc_args = [
+    '-DHAVE_MAD'
+  ]
+
+  vamp_symbol_args += [
+    '-Wl,--version-script=' + meson.current_source_dir() / 'vamp-plugin-sdk/vamp-plugin.map'
+  ]
+
 else
     error('This operating system ("' + system + '") is not supported by this build file')
 endif # system
@@ -1166,6 +1232,10 @@ endif
 
 if system == 'linux'
   tony_main_name = 'tony'
+elif system == 'android'
+  # androiddeployqt looks for lib<application-binary>_<abi>.so, and the
+  # deployment settings name the application-binary Tony
+  tony_main_name = 'Tony_' + android_abi
 else
   tony_main_name = 'Tony'
 endif # system
@@ -1226,207 +1296,246 @@ tony_app_dep = declare_dependency(
 
 # link_whole so that the application contains exactly the objects it did
 # when these sources were compiled straight into it.
-executable(
-  tony_main_name,
-  qt_resource_files,
-  tony_entry_files,
-  rc,
-  link_whole: [
-    tony_app_lib,
-    tony_core_lib,
-  ],
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    os_dep,
-    dl_dep
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'windows',
-  install: true,
-)
+if system == 'android'
+  # Qt for Android's Java launcher loads the application as a shared
+  # library and calls its main(), the one symbol it has to export.
+  # --exclude-libs keeps whatever comes from a static library (Tony's
+  # own, svcore, the C libraries) out of its dynamic symbol table.
+  shared_library(
+    tony_main_name,
+    qt_resource_files,
+    tony_entry_files,
+    link_whole: [
+      tony_app_lib,
+      tony_core_lib,
+    ],
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      os_dep,
+      dl_dep
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+      '-Wl,--exclude-libs,ALL',
+    ],
+    install: true,
+  )
+else
+  executable(
+    tony_main_name,
+    qt_resource_files,
+    tony_entry_files,
+    rc,
+    link_whole: [
+      tony_app_lib,
+      tony_core_lib,
+    ],
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      os_dep,
+      dl_dep
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'windows',
+    install: true,
+  )
+endif # system
 
-svcore_base_test_exe = executable(
-  'test-svcore-base',
-  svcore_base_test_moc_files,
-  'svcore/base/test/svcore-base-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
+# The tests run on the desktop only: the Android build is the
+# application and its plugins.
+if system != 'android'
 
-svcore_system_test_exe = executable(
-  'test-svcore-system',
-  svcore_system_test_moc_files,
-  'svcore/system/test/svcore-system-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
+  svcore_base_test_exe = executable(
+    'test-svcore-base',
+    svcore_base_test_moc_files,
+    'svcore/base/test/svcore-base-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
 
-svcore_data_model_test_exe = executable(
-  'test-svcore-data-model',
-  svcore_data_model_test_moc_files,
-  'svcore/data/model/test/MockWaveModel.cpp',
-  'svcore/data/model/test/svcore-data-model-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
+  svcore_system_test_exe = executable(
+    'test-svcore-system',
+    svcore_system_test_moc_files,
+    'svcore/system/test/svcore-system-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
 
-svcore_data_fileio_test_exe = executable(
-  'test-svcore-data-fileio',
-  svcore_data_fileio_test_moc_files,
-  'svcore/data/model/test/MockWaveModel.cpp',
-  'svcore/data/fileio/test/UnsupportedFormat.cpp',
-  'svcore/data/fileio/test/svcore-data-fileio-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
+  svcore_data_model_test_exe = executable(
+    'test-svcore-data-model',
+    svcore_data_model_test_moc_files,
+    'svcore/data/model/test/MockWaveModel.cpp',
+    'svcore/data/model/test/svcore-data-model-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
 
-# Tony's own tests. Two executables, because they differ in cost and in
-# what they link: test-tony-core needs no GUI and no audio device;
-# test-tony-app creates widgets (offscreen) and links svgui and svapp.
+  svcore_data_fileio_test_exe = executable(
+    'test-svcore-data-fileio',
+    svcore_data_fileio_test_moc_files,
+    'svcore/data/model/test/MockWaveModel.cpp',
+    'svcore/data/fileio/test/UnsupportedFormat.cpp',
+    'svcore/data/fileio/test/svcore-data-fileio-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
 
-tony_core_test_moc_files = qt.preprocess(
-  moc_headers: [
-  'main/test/TestRealtimeYin.h',
-  'main/test/TestRealtimePitchTracker.h',
-  'main/test/TestLatencyShift.h',
-  'main/test/TestCoverage.h',
-  'main/test/TestTakeAudio.h',
-  'main/test/TestTakeEvents.h',
-  'main/test/TestSingingTakes.h',
-  'main/test/TestTakesFile.h',
-  'main/test/TestTakeTiming.h',
-])
+  # Tony's own tests. Two executables, because they differ in cost and in
+  # what they link: test-tony-core needs no GUI and no audio device;
+  # test-tony-app creates widgets (offscreen) and links svgui and svapp.
 
-tony_core_test_exe = executable(
-  'test-tony-core',
-  tony_core_test_moc_files,
-  'main/test/PyinReference.cpp',
-  'pyin/YinUtil.cpp',
-  'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
-  'main/test/tony-core-test.cpp',
-  dependencies: [
-    tony_core_dep,
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
+  tony_core_test_moc_files = qt.preprocess(
+    moc_headers: [
+    'main/test/TestRealtimeYin.h',
+    'main/test/TestRealtimePitchTracker.h',
+    'main/test/TestLatencyShift.h',
+    'main/test/TestCoverage.h',
+    'main/test/TestTakeAudio.h',
+    'main/test/TestTakeEvents.h',
+    'main/test/TestSingingTakes.h',
+    'main/test/TestTakesFile.h',
+    'main/test/TestTakeTiming.h',
+  ])
 
-tony_app_test_moc_files = qt.preprocess(
-  moc_headers: [
-  'main/test/TestSingingDocument.h',
-  'main/test/TestSingingAnalysis.h',
-  'main/test/TestRecordWorkflow.h',
-])
+  tony_core_test_exe = executable(
+    'test-tony-core',
+    tony_core_test_moc_files,
+    'main/test/PyinReference.cpp',
+    'pyin/YinUtil.cpp',
+    'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
+    'main/test/tony-core-test.cpp',
+    dependencies: [
+      tony_core_dep,
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
 
-tony_app_test_exe = executable(
-  'test-tony-app',
-  tony_app_test_moc_files,
-  'main/test/tony-app-test.cpp',
-  dependencies: [
-    tony_app_dep,
-    tony_core_dep,
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    os_dep,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
+  tony_app_test_moc_files = qt.preprocess(
+    moc_headers: [
+    'main/test/TestSingingDocument.h',
+    'main/test/TestSingingAnalysis.h',
+    'main/test/TestRecordWorkflow.h',
+  ])
 
-test('tony-core', tony_core_test_exe)
-test('tony-app', tony_app_test_exe,
-     depends: pyin_plugin,
-     timeout: 900,
-     env: [ 'QT_QPA_PLATFORM=offscreen' ])
+  tony_app_test_exe = executable(
+    'test-tony-app',
+    tony_app_test_moc_files,
+    'main/test/tony-app-test.cpp',
+    dependencies: [
+      tony_app_dep,
+      tony_core_dep,
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      os_dep,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
 
-test('svcore-base', svcore_base_test_exe)
-test('svcore-system', svcore_system_test_exe)
-test('svcore-data-model', svcore_data_model_test_exe)
-test('svcore-data-fileio', svcore_data_fileio_test_exe,
-     args: [
-       '--testdir', meson.current_source_dir() / 'svcore/data/fileio/test'
-     ])
+  test('tony-core', tony_core_test_exe)
+  test('tony-app', tony_app_test_exe,
+       depends: pyin_plugin,
+       timeout: 900,
+       env: [ 'QT_QPA_PLATFORM=offscreen' ])
+
+  test('svcore-base', svcore_base_test_exe)
+  test('svcore-system', svcore_system_test_exe)
+  test('svcore-data-model', svcore_data_model_test_exe)
+  test('svcore-data-fileio', svcore_data_fileio_test_exe,
+       args: [
+         '--testdir', meson.current_source_dir() / 'svcore/data/fileio/test'
+       ])
+
+endif # system
 
 summary({'prefix': get_option('prefix'),
          'bindir': get_option('bindir'),
