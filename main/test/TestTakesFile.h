@@ -211,8 +211,12 @@ private slots:
     void takes_folder() {
         QCOMPARE(TakesFile::takesFolder("C:/songs/My Song.ton"),
                  QString("C:/songs/My Song.takes"));
+#ifdef Q_OS_WIN
+        // Back slashes separate the parts of a path on Windows only;
+        // elsewhere they are part of a name
         QCOMPARE(TakesFile::takesFolder("C:\\songs\\My Song.ton"),
                  QString("C:/songs/My Song.takes"));
+#endif
         QCOMPARE(TakesFile::takesFolder("C:/Käännös/Säkeistö 2.ton"),
                  QString("C:/Käännös/Säkeistö 2.takes"));
         // Only the extension goes, so a name with dots of its own keeps them
@@ -232,10 +236,12 @@ private slots:
                  ("C:/songs/My Song.ton",
                   "C:/songs/My Song.takes/take-1.wav"),
                  QString("My Song.takes/take-1.wav"));
+#ifdef Q_OS_WIN
         QCOMPARE(TakesFile::relativeAudioPath
                  ("C:/songs/My Song.ton",
                   "C:\\songs\\My Song.takes\\take-1.wav"),
                  QString("My Song.takes/take-1.wav"));
+#endif
         QCOMPARE(TakesFile::relativeAudioPath
                  ("C:/Käännös/Säkeistö.ton",
                   "C:/Käännös/Säkeistö.takes/take-1.wav"),
@@ -268,15 +274,23 @@ private slots:
         QCOMPARE(TakesFile::resolveAudioPath
                  ("C:/songs/My Song.ton", "My Song.takes/take-1.wav"),
                  QString("C:/songs/My Song.takes/take-1.wav"));
+#ifdef Q_OS_WIN
         QCOMPARE(TakesFile::resolveAudioPath
                  ("C:\\songs\\My Song.ton", "My Song.takes\\take-1.wav"),
                  QString("C:/songs/My Song.takes/take-1.wav"));
+#endif
         QCOMPARE(TakesFile::resolveAudioPath
                  ("C:/Käännös/Säkeistö.ton", "Säkeistö.takes/take-1.wav"),
                  QString("C:/Käännös/Säkeistö.takes/take-1.wav"));
-        QCOMPARE(TakesFile::resolveAudioPath
-                 ("C:/songs/My Song.ton", "C:/recorded/take-1.wav"),
-                 QString("C:/recorded/take-1.wav"));
+        // An absolute path is one in the form of the system the session
+        // is read on: a drive letter makes one only on Windows
+#ifdef Q_OS_WIN
+        QString elsewhere = "C:/recorded/take-1.wav";
+#else
+        QString elsewhere = "/recorded/take-1.wav";
+#endif
+        QCOMPARE(TakesFile::resolveAudioPath("C:/songs/My Song.ton", elsewhere),
+                 elsewhere);
         QCOMPARE(TakesFile::resolveAudioPath("C:/songs/My Song.ton", ""),
                  QString());
 
@@ -302,9 +316,15 @@ private slots:
     void in_folder() {
         QVERIFY(TakesFile::isInFolder("C:/songs/My Song.takes",
                                       "C:/songs/My Song.takes/take-1.wav"));
+#ifdef Q_OS_WIN
         // Windows tells no two names apart by their case
         QVERIFY(TakesFile::isInFolder("C:/songs/my song.takes",
                                       "C:\\Songs\\My Song.takes\\take-1.wav"));
+#else
+        // Other systems do
+        QVERIFY(!TakesFile::isInFolder("/songs/my song.takes",
+                                       "/Songs/My Song.takes/take-1.wav"));
+#endif
         QVERIFY(TakesFile::isInFolder("C:/songs/My Song.takes/",
                                       "C:/songs/My Song.takes/in/take-1.wav"));
         QVERIFY(!TakesFile::isInFolder("C:/songs/My Song.takes",

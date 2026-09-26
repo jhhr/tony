@@ -83,17 +83,10 @@ Windows path would start an escape in the C string.
   Qt 6.4, `TestUiChecks`' `live_dots_under_the_cursor` failed in both of two runs in eight
   processes (the tracker itself 313 and 325 ms behind the cursor, over the test's 300 ms)
   and passed with `-j 4`. Judge a failure of it there by running it alone.
-- **On Linux some tests fail whatever the change.** With the Qt of the cloud setup,
-  conda-forge's 6.11 ([building.md](building.md#building-on-linux)), only
-  `TestTakesFile`'s `takes_folder`, `relative_audio_path`, `resolve_audio_path` and
-  `in_folder`, which test Windows paths (`C:\...`, case-insensitive). Built against
-  Ubuntu's Qt 6.4 instead, `TestRecordWorkflow`'s `undo_during_analysis_then_redo` and
-  `analyse_now_reanalyses_the_take` can fail too, where the analysis finishes before the
-  race they need can be set up; which, and where, changes from run to run:
-  `undo_during_analysis_then_redo` fails either before the undo, with no ranged analysis
-  left running, or after the redo, with `analysedRangeStart()` already 0 — the same race.
-  Five other tests failed so as well until they held the take's merge ("Timing and
-  races"), which these two do not yet.
+- **On Linux no test is expected to fail** in a one-process run, with Ubuntu's Qt 6.4 as
+  with conda-forge's 6.11 ([building.md](building.md#building-on-linux)). `TestTakesFile`
+  checks Windows paths (`C:\...`, case-insensitive) on Windows only, and the tests that
+  race the analysis of a take hold its merge ("Timing and races").
 - **Qt 6.4's watchdog times the whole suite**, not one test function: with
   `QTEST_FUNCTION_TIMEOUT=20000` it ended `TestRecordWorkflow` 20 s after the suite began,
   2.5 s into a test. That suite runs for longer than the five-minute default, so
@@ -101,6 +94,9 @@ Windows path would start an escape in the C string.
   After such a fatal error the executable does not exit: it spins, or waits for the gdb
   that Qt starts for a backtrace. A run that has written nothing for minutes has
   stopped; kill it.
+- CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
+  suite at a time. When a run fails, its `test-failures` step lists each failed test with
+  the lines QTest indents under it, from meson's full log.
 
 ## Design principles
 

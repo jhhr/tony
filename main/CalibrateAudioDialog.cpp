@@ -78,8 +78,10 @@ paragraph(QString html)
     return "<p>" + html + "</p>";
 }
 
+// Not "bold": the macOS SDK declares an enumerator of that name in the
+// global namespace, which makes every unqualified call ambiguous there
 QString
-bold(QString html)
+boldHtml(QString html)
 {
     return "<b>" + html + "</b>";
 }
@@ -289,7 +291,7 @@ CalibrateAudioDialog::devHtml() const
     if (m_devNote != "") html += paragraph(m_devNote.toHtmlEscaped());
     if (!m_haveDevReport) return html;
 
-    html += paragraph(bold(tr("Dev checks")));
+    html += paragraph(boldHtml(tr("Dev checks")));
     if (m_devReport.failure != "") {
         html += paragraph(tr("They ended early: %1")
                           .arg(m_devReport.failure.toHtmlEscaped()));
@@ -559,10 +561,10 @@ CalibrateAudioDialog::instructionsHtml() const
         (tr("Tony plays short chirps and records them, to measure how late "
             "recordings arrive through your devices. What it measures is "
             "used to place your takes on the reference."));
-    html += paragraph(bold(tr("Before you start:")));
+    html += paragraph(boldHtml(tr("Before you start:")));
     html += "<ul><li>" +
         tr("Hold one earcup of your headphones against the microphone, "
-           "%1: the chirps are sharp.").arg(bold(tr("off your ears"))) +
+           "%1: the chirps are sharp.").arg(boldHtml(tr("off your ears"))) +
         "</li><li>" +
         tr("Set a moderate volume, and keep the room quiet.") +
         "</li></ul>";
@@ -599,7 +601,7 @@ CalibrateAudioDialog::calibrationHtml() const
     const AudioCheckResult &r = m_result;
 
     if (r.failure != "") {
-        return paragraph(bold(tr("The check did not finish."))) +
+        return paragraph(boldHtml(tr("The check did not finish."))) +
             paragraph(r.failure.toHtmlEscaped());
     }
 
@@ -613,7 +615,7 @@ CalibrateAudioDialog::calibrationHtml() const
     // by it, further the later they come
     QString html;
     if (r.rateMismatch) {
-        html += paragraph(bold(tr("The recording device runs at %1 Hz; takes "
+        html += paragraph(boldHtml(tr("The recording device runs at %1 Hz; takes "
                                   "cannot line up until that is fixed.")
                                .arg(hertz(r.recordingRate))));
         html += paragraph
@@ -624,14 +626,14 @@ CalibrateAudioDialog::calibrationHtml() const
     } else {
         switch (s.verdict) {
         case Verdict::Ok:
-            html += paragraph(bold(tr("The test sounds came back steadily, "
+            html += paragraph(boldHtml(tr("The test sounds came back steadily, "
                                       "%1 after they were played.")
                                    .arg(measured)));
             html += paragraph
                 (tr("Press Use this latency to place your takes with it."));
             break;
         case Verdict::NoSignal:
-            html += paragraph(bold(tr("Tony could not hear the test sounds: "
+            html += paragraph(boldHtml(tr("Tony could not hear the test sounds: "
                                       "it found %1 of %2.")
                                    .arg(s.found).arg(s.judged)));
             html += "<ul><li>" +
@@ -647,14 +649,14 @@ CalibrateAudioDialog::calibrationHtml() const
                 "</li></ul>";
             break;
         case Verdict::Clipped:
-            html += paragraph(bold(tr("The test sounds were too loud: the "
+            html += paragraph(boldHtml(tr("The test sounds were too loud: the "
                                       "recording reached full scale.")));
             html += paragraph(tr("Turn the volume down, or hold the earcup a "
                                  "little away from the microphone, and "
                                  "check again."));
             break;
         case Verdict::Fading:
-            html += paragraph(bold(tr("The test sounds got quieter as the "
+            html += paragraph(boldHtml(tr("The test sounds got quieter as the "
                                       "check went on, by %1 dB.")
                                    .arg(QLocale().toString
                                         (s.fadingDb, 'f', 0))));
@@ -665,14 +667,14 @@ CalibrateAudioDialog::calibrationHtml() const
                     "enhancements, and check again."));
             break;
         case Verdict::PositionDependent:
-            html += paragraph(bold(tr("The delay grew from one punch-in to "
+            html += paragraph(boldHtml(tr("The delay grew from one punch-in to "
                                       "the next.")));
             html += paragraph
                 (tr("The recording seems to run at another speed than the "
                     "playback, so no one latency places every take right."));
             break;
         case Verdict::Scattered:
-            html += paragraph(bold(tr("The driver's timing varies from take "
+            html += paragraph(boldHtml(tr("The driver's timing varies from take "
                                       "to take by %1.").arg(timing)));
             html += paragraph
                 (tr("No one latency places every take right when it varies "
@@ -680,7 +682,7 @@ CalibrateAudioDialog::calibrationHtml() const
                     "check again."));
             break;
         case Verdict::Unsteady:
-            html += paragraph(bold(tr("The driver's timing varies from take "
+            html += paragraph(boldHtml(tr("The driver's timing varies from take "
                                       "to take by %1.").arg(timing)));
             html += paragraph
                 (tr("That is small enough to use: the measured round trip, "
@@ -700,7 +702,7 @@ CalibrateAudioDialog::calibrationHtml() const
     }
 
     if (m_latencyKept) {
-        html += paragraph(bold(tr("Kept.")) + " " +
+        html += paragraph(boldHtml(tr("Kept.")) + " " +
                           tr("Takes on these devices are now placed with %1.")
                           .arg(measured));
     }
