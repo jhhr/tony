@@ -157,7 +157,7 @@ builds happen in the container.)
   was blocked (`dl.google.com` refused); run `deploy/android/build-apk.sh` once it is
   allowed (see the log).
 - A4 — Touch gestures on the panes. Done.
-- A5 — Compact touch mode.
+- A5 — Compact touch mode. Done.
 - A6 — Oboe audio backend.
 - A7 — Android files, permission and lifecycle.
 - A8 — Documentation pass.
@@ -466,3 +466,28 @@ Choices / deviations:
 The next phase must know: touch tests need the window shown and a fresh device per test.
 Left open: not tried on a touch screen. Windows desktop touch (OS-made mouse events, its own
 press-and-hold right click) untested. For A8: architecture.md, testing.md, manual-checklist.
+
+### Phase A5 — 2026-09-26
+Built: `main/CompactLayout` (tony_app): one toolbar in place of the menu bar, every other
+toolbar and the overview. View > Compact Layout switches it; main() switches it on before the
+window is shown on Android and with `--compact` (`isWantedAtStart()`). Buttons: Menu (a popup
+holding the menu bar's own menus), Play, Record, Record into Selection, the take box, Undo,
+Redo (`CommandHistory::registerToolbar()`), Erase, Zoom In, Zoom Out, Show and Play (shows
+the two bottom toolbars). 40 px icons; the text-only buttons as tall. Hidden while compact:
+the Navigate and Edit tools (Navigate is selected first), the two audio device submenus, the
+menus' tear-off handles. `MainWindow`: members for what were locals, `setupCompactLayout()`,
+`setCompactLayout()`; toolbars named (saveState); Erase's iconText "Erase". `TestCompactLayout`.
+Choices / deviations:
+- The take box is moved (its QWidgetAction, back before the action that followed it), not
+  copied: one widget, nothing to keep in step.
+- A shortcut needs a visible widget holding its action or its menu: with only the hidden menu
+  bar holding the menus, every menu-only shortcut dies. The popup's button carries them.
+- Kept: the status bar (pre-roll countdown, sung note). No property stacks to hide (Tony uses
+  `NoPropertyStacks`). The spectrogram stays a panel toggle; the Edit and long-press menus
+  keep their pitch and note actions (only the tool modes go). Not saved in the settings.
+- `test-tony-app` now links `tony.qrc`: without icons every button is its text, and the bar
+  was 1023 px wide (703 with icons); the other app suites pass with the icons too.
+The next phase must know: switching off restores what switching on saved; the tool mode stays.
+Left open: not seen on a phone: the take box's height (22 px in Fusion), popup menu rows, and
+under ~710 dp wide the last buttons go into the toolbar's extension. For A8: architecture.md,
+testing.md (icons in the app tests), mobile-port.md, manual-checklist.md.
