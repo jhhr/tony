@@ -292,7 +292,25 @@ Read: [mobile-port.md](mobile-port.md) "The window", "Work common to both ports"
 
 ### A6 — Oboe audio backend
 
-After the user's phone test of A3b. Detailed when it starts.
+Read: [port-android.md](port-android.md) "Audio", "Permissions and lifecycle";
+[mobile-port.md](mobile-port.md) "Audio I/O", "Sample rate"; [recording.md](recording.md)
+all of it; the A1 log entry.
+
+- Oboe (github.com/google/oboe, a pinned 1.x release) built as a static library into the
+  A2 prefix by `deploy/android/build-deps.sh`, with whatever meson needs to find it.
+- `OboeAudioIO` in `main/`, compiled for Android only: a `breakfastquay::SystemAudioIO`
+  as `PortAudioIO` (bqaudioio) and the tests' `FakeAudioIO` are. One full-duplex callback
+  (`oboe::FullDuplexStream`), input handed over before output is asked for, low-latency
+  performance mode, the device's native rate (A1 made Tony handle any rate), latencies
+  reported through `setSystemRecordLatency()` / `setSystemPlaybackLatency()` from Oboe's
+  estimates, `suppressRecordSide()` honoured, playback-only when there is no input.
+- `MainWindow::createAudioIO()` overridden on Android to install it, as the tests install
+  `FakeAudioIO`; `AUDIO_NONE` on Android removed.
+- The microphone permission (`QMicrophonePermission`) asked for before input is opened;
+  without it, playback only, and the user told why.
+- A device change (headphones in or out) reopens the streams rather than going silent.
+- Pure arithmetic (latency from timestamps and the like) in `tony_core` with core tests;
+  the rest can only be judged on the phone.
 
 ### A7 — Android files, permission and lifecycle
 
