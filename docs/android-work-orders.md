@@ -160,7 +160,7 @@ builds happen in the container.)
 - A5 — Compact touch mode. Done.
 - A6 — Oboe audio backend. Done.
 - A7 — Sessions in place on the phone, and fixes from the first phone test. Done.
-- A7b — Fixes from the second phone test: menus, the picker, Downloads.
+- A7b — Fixes from the second phone test: menus, the picker, Downloads. Done.
 - A4b — Vertical zoom and scroll by touch.
 - A8 — Documentation pass.
 
@@ -366,6 +366,12 @@ granted; playback stopping in the background. Did not:
   All files access, MediaStore gives their path (the `_data` column, through the
   `ContentResolver`); map those too. The refusal message names the provider, so that a
   case still unmapped can be reported; and log the URI.
+
+Later evidence (the user): "File or URL ... could not be opened" came from Open Recent
+after the file had been moved; "File does not exist ... content://...primary%3AMusic%2F(vocals)
+Avi Kaplan - Peace Somehow.ton" came from svgui's `InteractiveFileFinder`, whose
+`QFileInfo::exists()` on the URI Qt's content file engine answers wrongly for a name with
+parentheses.
 
 ### A4b — Vertical zoom and scroll by touch
 
@@ -623,3 +629,23 @@ hide() does not end exec()): DontUseNativeDialog. `activeModalWidget()` misses n
 Left open: not run on a phone. Below Android 11 no in-place sessions. Downloads (`msf:` ids)
 refused for sessions. Save to Audio Path with copied audio saves into app storage. For A8:
 port-android.md "Files, storage..." (bundle superseded) and "Permissions and lifecycle".
+
+### Phase A7b — 2026-09-26 (the agent stopped twice; the lead finished MainWindow.cpp)
+Built: `PopupArea` (menus kept inside the safe area, a finger's width from the screen's top
+and bottom; TouchMenuStyle applies it), `LogFile` (the logcat lines kept in
+`<AppData>/log/tony.log`, 512 KB and one older part; Help > Save Log... writes a copy through
+the save picker), `AndroidFiles::grantedUri()`, `providerOf()`, `pathLookupFor()`,
+`mediaStoreUriFor()`, `chooseDownload()`, `hasExtensionIn()`, `usableRecentFiles()`;
+`AndroidStorage::pathFor(uri, why)` (static; MediaStore `_data` for `msf:`/`audio:` ids,
+name and size for numbered downloads), `displayName()`, `openDocument()` (a descriptor
+from the ContentResolver), `removeIfEmpty(uri)`. MainWindow: Tony's own Open picker for
+sessions and audio (no type filter; the extension checked after), mapped path used only if
+it is a file, otherwise audio copied in through `openDocument()`; every refusal carries
+`pickDetails()` (provider, path looked for, why); Open Recent says a moved file is gone,
+and the menu lists only files that are there.
+Cause found: Qt's content file engine re-encodes '(' and ')' and then has no grant for the
+URI, so `QFileInfo::exists()` and `QFile` fail for such names; hence descriptors from the
+ContentResolver with the URI exactly as Android wrote it.
+Tests seen failing: `the_uri_is_opened_as_android_wrote_it` with `PrettyDecoded` (lead).
+Left open: none of it run on a phone. Layer import still goes through svgui's dialog.
+
