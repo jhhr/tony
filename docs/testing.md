@@ -94,9 +94,19 @@ Windows path would start an escape in the C string.
   After such a fatal error the executable does not exit: it spins, or waits for the gdb
   that Qt starts for a backtrace. A run that has written nothing for minutes has
   stopped; kill it.
+- **Qt 6.4 takes a finger's press for a double click** whenever the press before it, on
+  any device, was with the same button and nothing has moved since: it compares the
+  press's time with its own. A touch test that ended on a tap made the next test's first
+  finger a double click, and the pane opened an item's edit dialog. `TestTouchGestures`'
+  `openWindow()` moves the mouse away first on that Qt; a new suite that touches needs
+  the same.
 - CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
   suite at a time. When a run fails, its `test-failures` step lists each failed test with
   the lines QTest indents under it, from meson's full log.
+- **CI's macOS runs timers and sleeps late**: a 20 ms `QTimer` fired every 60 to 67 ms and
+  a 5.8 ms sleep took about 30. A test that needs something to have happened a number of
+  times waits for it (`QTRY_*`), and one that checks what was timed checks it against its
+  own clock, not against the interval asked for.
 
 ## Design principles
 
@@ -157,7 +167,8 @@ Windows path would start an escape in the C string.
   below.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
-  dialogs a test does expect.
+  dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
+  title macOS does not keep, so that there its text alone must tell it apart.
 - `analysed()` waits for analysis completion, no running transformers **and** no ranged
   run. `snapshotTake()`, `verifyStripMatchesTake()`, `takeLayers()`.
 - `TestSignals.h`: sine, sawtooth, seeded noise, comparison in cents.

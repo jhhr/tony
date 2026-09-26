@@ -231,6 +231,20 @@ class TestTouchGestures : public QObject
         m_window->show();
         QVERIFY(QTest::qWaitForWindowExposed(m_window));
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+        // Qt 6.4 takes a finger's press for the second click of a double
+        // click whenever the press before it, on any device, was with the
+        // same button and nothing has moved since: it compares the press's
+        // time with its own. A test that ended on a tap made the next
+        // one's first touch a double click, and the pane opened an item's
+        // edit dialog. A mouse move far from where the mouse was pressed
+        // clears it; one of two moves far apart always is
+        QWindow *handle = m_window->windowHandle();
+        QTest::mouseMove(handle, QPoint(1, 1));
+        QTest::mouseMove(handle, QPoint(handle->width() - 2,
+                                        handle->height() - 2));
+#endif
+
         if (path == "") path = sineFile("reference.wav", referenceHz);
         QVERIFY(path != "");
 
