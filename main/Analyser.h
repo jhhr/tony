@@ -104,6 +104,13 @@ public:
     bool getDisplayFrequencyExtents(double &min, double &max);
     bool setDisplayFrequencyExtents(double min, double max);
 
+    // Add to values, in Hz, those of the pitch track and the notes that
+    // are drawn between the frames start and end, of whichever of the
+    // two are on show: the pitch a zoom of the frequency range keeps in
+    // view (TouchGestures)
+    void getPitchOnShow(sv::sv_frame_t start, sv::sv_frame_t end,
+                        std::vector<double> &values) const;
+
     // Return completion %age for initial analysis -- 100 means it's done
     int getInitialAnalysisCompletion();
 

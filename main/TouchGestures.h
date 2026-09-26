@@ -46,8 +46,9 @@ class Pane;
  *
  * The time axis zooms by the fingers' spread across the pane and
  * follows them across it. Given a vertical range (setVerticalRange()),
- * the range zooms by their spread up the pane and follows them up and
- * down, each axis only once the fingers plainly move along it
+ * the range zooms by their spread up the pane, about the pitch on show
+ * if there is any, and follows them up and down, each axis only once
+ * the fingers plainly move along it
  * (PinchZoom::AxisMovement): a pinch across the pane leaves the range
  * alone, and a pinch up the pane the zoom level.
  *
@@ -95,6 +96,12 @@ public:
         /// Show another
         std::function<void(const VerticalZoom::Range &)> set;
         VerticalZoom::Limits limits;
+        /// The values drawn on it in the pane's time range now (its
+        /// pitch), for a zoom to keep in view: it zooms about their
+        /// middle (VerticalZoom::middleShown()), which comes towards
+        /// the middle of the pane as it zooms in. Unset, or none on
+        /// the range: about what is between the fingers
+        std::function<std::vector<double>()> drawn;
     };
 
     void setVerticalRange(const VerticalRange &range);
@@ -176,12 +183,16 @@ private:
     PinchZoom::AxisMovement m_travelY;
 
     // The vertical range, as it was when they came down and as last
-    // shown, and the value that was under the point between them
+    // shown, and the value it zooms about: the middle of what was drawn
+    // on it, which goes towards the middle of the pane, or what was
+    // under the point between the fingers; and where that was
     VerticalRange m_verticalRange;
     bool m_haveRange = false;
     VerticalZoom::Range m_startRange;
     VerticalZoom::Range m_shownRange;
     double m_anchorValue = 0.0;
+    double m_anchorY = 0.0;
+    bool m_anchorToMiddle = false;
 };
 
 #endif

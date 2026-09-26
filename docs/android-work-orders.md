@@ -180,7 +180,7 @@ builds happen in the container.)
 - A9 — Live dots in real time on the phone. Done.
 - A10 — Plot elements sized for the screen. Done.
 - A11 — Fixes from the fifth phone test: the cursor at a 48 kHz device, Save Log. Done.
-- A4c — Vertical zoom keeps the pitch in view.
+- A4c — Vertical zoom keeps the pitch in view. Done.
 - A8 — Documentation pass.
 
 ### A0 — Desktop build and tests in the container
@@ -972,3 +972,29 @@ The audio copy-in reads the same way and drops a copy whose close reports an err
 Tests seen failing: both cursor checks with the ratio left at 1; `savedSize()` taking "" as 0.
 Left open: nothing run on a phone. forks.md (svgui) and recording.md "Start click" step 2 and
 6 name the start frame plus the duration: for A8.
+
+### Phase A4c — 2026-09-26
+Built: `VerticalZoom` (core): `middleShown(values, range)`, the middle on the range's scale of
+the values it shows, half way from lowest to highest less a twentieth at each end (an octave
+jump, a breath); `towardsMiddle(y, height, factor)`, zooming in the held value's distance from
+the pane's middle divided by the factor, zooming out where it was. `VerticalRange::drawn`;
+`TouchGestures::beginPinch()` asks it once a pinch: with values on the start range the zoom is
+about their middle, pulled towards the pane's middle; with none, about the fingers as before.
+Scroll (travel) and re-anchoring at a limit as A4b. `Analyser::getPitchOnShow()`: pitch track
+and notes, each if not dormant (a temporary hide counts), notes spanning the frames.
+`paneAdded()` gathers both analysers in their pane over its start to end frame.
+Choices / deviations:
+- On show = in the pane's time range and on the range: pitch all off the range falls back to
+  the fingers. Wider than the zoomed range: still the middle of its extent, both ends cut
+  alike; a gap there (voices an octave apart) shows empty far in, two fingers scroll to
+  either. The median was not taken: it centres a skewed phrase badly while it still fits.
+- The pull: the middle held where it was keeps a low voice's middle in view but loses its
+  lower half once it fills a third of the pane (B1-G2 from 40-1500: at 2.8x); pulled, all of
+  it stays until it fills about 90%. Not asked for in words; the user's "centered".
+- Once a pinch (every two-finger touch): an event copy per point in view, ~700 per analyser
+  on a 4 s page. Not counted: the alternate pitch track, other takes' layers, live dots.
+Tests: TestVerticalZoom +5; TestTouchGestures +3 (the low voice, checked at each step; the
+fingers when nothing is on show; the singing counted); narrows/widens/diagonal now check the
+pitch. Pitch checks allow for the whole-Hz range (~3 px at a bottom near 40 Hz).
+Tests seen failing: anchor off (5); no pull (3 app, 2 core); singing not gathered; dormancy
+ignored (2). Left open: not on a phone; no follow in playback, no "fit the pitch" action.

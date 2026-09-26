@@ -15,11 +15,14 @@
 #ifndef TONY_VERTICAL_ZOOM_H
 #define TONY_VERTICAL_ZOOM_H
 
+#include <vector>
+
 /**
  * The arithmetic of two fingers on a pane's vertical axis: the value
  * at a height in the pane, the range that zooms about a value held at
- * a height, and the limits a range is kept within. TouchGestures does
- * as the answers say.
+ * a height, the limits a range is kept within, and the value a zoom is
+ * about when the pane has pitch to keep in view. TouchGestures does as
+ * the answers say.
  *
  * The mapping is svgui's CoordinateScale's for a vertical scale: y
  * from the top of the pane, the range's minimum at the bottom edge (y
@@ -83,6 +86,26 @@ namespace VerticalZoom
      */
     Range limited(const Range &range, const Limits &limits,
                   double height, double y);
+
+    /**
+     * What a zoom of range is anchored at to keep values in view (the
+     * pitch a pane draws, say): the middle, on range's scale, of those
+     * of them that range shows, half way between the lowest and the
+     * highest, less a twentieth of them at each end, so that a few
+     * that stray from the rest do not move it. False if range shows
+     * none of them, or shows nothing.
+     */
+    bool middleShown(const std::vector<double> &values, const Range &range,
+                     double &middle);
+
+    /**
+     * Where a value that was at y is held as a range zooms by factor
+     * about it: nearer the middle of the pane as it zooms in, its
+     * distance from there divided by the factor, so that what is about
+     * it comes into the middle as it grows; where it was as it zooms
+     * out.
+     */
+    double towardsMiddle(double y, double height, double factor);
 }
 
 #endif

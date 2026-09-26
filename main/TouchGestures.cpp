@@ -433,8 +433,23 @@ TouchGestures::beginPinch()
         m_shownRange = shown;
         m_startRange = VerticalZoom::limited
             (shown, m_verticalRange.limits, height, m_startCentre.y());
+        m_anchorY = m_startCentre.y();
         m_anchorValue = VerticalZoom::valueAtY
-            (m_startRange, height, m_startCentre.y());
+            (m_startRange, height, m_anchorY);
+        m_anchorToMiddle = false;
+
+        // Or rather the middle of the pitch on show, which a zoom about
+        // the fingers pushes out of the pane when it is far from them (a
+        // low voice). Asked for once a pinch: it is the same pitch
+        // however the pinch goes on
+        double middle = 0.0;
+        if (m_verticalRange.drawn &&
+            VerticalZoom::middleShown(m_verticalRange.drawn(), m_startRange,
+                                      middle)) {
+            m_anchorValue = middle;
+            m_anchorY = VerticalZoom::yForValue(m_startRange, height, middle);
+            m_anchorToMiddle = true;
+        }
     }
 }
 
@@ -508,16 +523,22 @@ TouchGestures::updateVerticalRange(double factor, double travel)
     double height = m_pane->height();
     if (!(height > 0)) return;
 
-    // The value that was between the fingers goes where they are now,
-    // with the range narrowed by as much as they have spread
-    double y = m_startCentre.y() + travel;
+    // The value zoomed about goes as far up or down as the fingers have
+    // gone, with the range narrowed by as much as they have spread; the
+    // middle of the pitch towards the middle of the pane as it narrows,
+    // what was between the fingers with them
+    double y = m_anchorY;
+    if (m_anchorToMiddle) {
+        y = VerticalZoom::towardsMiddle(y, height, factor);
+    }
+    y += travel;
     VerticalZoom::Range wanted = VerticalZoom::zoomedAbout
         (m_startRange, factor, m_anchorValue, height, y);
     VerticalZoom::Range range = VerticalZoom::limited
         (wanted, m_verticalRange.limits, height, y);
 
     // Held at a limit, the range stays while the fingers go on: what is
-    // under them then is what they hold, as at the ends of the audio
+    // at y then is what is held, as at the ends of the audio
     if (range != wanted) {
         m_anchorValue = VerticalZoom::valueAtY(range, height, y);
     }

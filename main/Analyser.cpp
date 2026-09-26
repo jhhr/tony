@@ -334,6 +334,35 @@ Analyser::setDisplayFrequencyExtents(double min, double max)
     return true;
 }
 
+void
+Analyser::getPitchOnShow(sv_frame_t start, sv_frame_t end,
+                         std::vector<double> &values) const
+{
+    if (end <= start) return;
+
+    if (isVisible(PitchTrack)) {
+        auto model = ModelById::getAs<SparseTimeValueModel>
+            (m_layers[PitchTrack]->getModel());
+        if (model) {
+            for (const Event &e : model->getEventsSpanning(start, end - start)) {
+                values.push_back(e.getValue());
+            }
+        }
+    }
+
+    // A note that starts before the pane and ends in it is on show too:
+    // spanning, not within
+    if (isVisible(Notes)) {
+        auto model = ModelById::getAs<NoteModel>
+            (m_layers[Notes]->getModel());
+        if (model) {
+            for (const Event &e : model->getEventsSpanning(start, end - start)) {
+                values.push_back(e.getValue());
+            }
+        }
+    }
+}
+
 int
 Analyser::getInitialAnalysisCompletion()
 {

@@ -144,4 +144,42 @@ limited(const Range &range, const Limits &limits, double height, double y)
     return result;
 }
 
+bool
+middleShown(const std::vector<double> &values, const Range &range,
+            double &middle)
+{
+    if (!shows(range)) return false;
+
+    std::vector<double> shown;
+    shown.reserve(values.size());
+    for (double value : values) {
+        // False for NaN as well
+        if (value >= range.min && value <= range.max) {
+            shown.push_back(map(range.log, value));
+        }
+    }
+    if (shown.empty()) return false;
+
+    // An octave jump at the start of a note, or a breath taken for a
+    // pitch, is not what is sung: a few points either way are left out
+    size_t stray = shown.size() / 20;
+    auto lowest = shown.begin() + stray;
+    auto highest = shown.end() - 1 - stray;
+    std::nth_element(shown.begin(), lowest, shown.end());
+    double low = *lowest;
+    std::nth_element(shown.begin(), highest, shown.end());
+    double high = *highest;
+
+    middle = unmap(range.log, (low + high) / 2.0);
+    return true;
+}
+
+double
+towardsMiddle(double y, double height, double factor)
+{
+    if (!(factor > 1.0)) return y;
+    double middle = height / 2.0;
+    return middle + (y - middle) / factor;
+}
+
 }

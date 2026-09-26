@@ -196,6 +196,114 @@ private slots:
         }
     }
 
+    // Half way between the lowest and the highest on the range's scale:
+    // the geometric mean on a log one, however many are in between
+    void middle_is_half_way_between_lowest_and_highest() {
+        std::vector<double> values { 110.0, 400.0, 100.0, 105.0, 120.0 };
+        double middle = 0.0;
+        QVERIFY(VerticalZoom::middleShown(values, range(40.0, 1500.0, true),
+                                          middle));
+        QVERIFY(near(middle, 200.0, 1.0e-9));
+        QVERIFY(VerticalZoom::middleShown(values, range(40.0, 1500.0, false),
+                                          middle));
+        QVERIFY(near(middle, 250.0, 1.0e-9));
+
+        QVERIFY(VerticalZoom::middleShown({ 73.5 }, range(40.0, 1500.0, true),
+                                          middle));
+        QVERIFY(near(middle, 73.5, 1.0e-9));
+    }
+
+    // Only what the range shows: values above or below it, and not
+    // values at all, are not on show. None on show: no middle
+    void middle_is_of_what_is_on_show() {
+        double nan = std::numeric_limits<double>::quiet_NaN();
+        std::vector<double> values { 20.0, 100.0, nan, 400.0, 3000.0, -1.0 };
+        double middle = 0.0;
+        QVERIFY(VerticalZoom::middleShown(values, range(50.0, 1000.0, true),
+                                          middle));
+        QVERIFY(near(middle, 200.0, 1.0e-9));
+        QVERIFY(VerticalZoom::middleShown(values, range(100.0, 400.0, true),
+                                          middle));
+        QVERIFY(near(middle, 200.0, 1.0e-9));
+
+        middle = -5.0;
+        QVERIFY(!VerticalZoom::middleShown(values, range(500.0, 1000.0, true),
+                                           middle));
+        QVERIFY(!VerticalZoom::middleShown({}, range(40.0, 1500.0, true),
+                                           middle));
+        QVERIFY(!VerticalZoom::middleShown(values, range(0.0, 1500.0, true),
+                                           middle));
+        QVERIFY(!VerticalZoom::middleShown(values, range(500.0, 50.0, false),
+                                           middle));
+        QCOMPARE(middle, -5.0);
+    }
+
+    // Two strays in forty, an octave jump or a breath, leave the middle
+    // where the rest put it; five are more than strays
+    void a_few_strays_do_not_move_the_middle() {
+        std::vector<double> values;
+        for (int i = 0; i < 19; ++i) values.push_back(70.0);
+        for (int i = 0; i < 19; ++i) values.push_back(90.0);
+        values.push_back(700.0);
+        values.push_back(35.0);
+        double middle = 0.0;
+        QVERIFY(VerticalZoom::middleShown(values, range(30.0, 1500.0, true),
+                                          middle));
+        QVERIFY2(near(middle, std::sqrt(70.0 * 90.0), 1.0e-9),
+                 qPrintable(QString("%1").arg(middle)));
+
+        values.clear();
+        for (int i = 0; i < 17; ++i) values.push_back(70.0);
+        for (int i = 0; i < 18; ++i) values.push_back(90.0);
+        for (int i = 0; i < 5; ++i) values.push_back(700.0);
+        QVERIFY(VerticalZoom::middleShown(values, range(30.0, 1500.0, true),
+                                          middle));
+        QVERIFY2(near(middle, std::sqrt(70.0 * 700.0), 1.0e-9),
+                 qPrintable(QString("%1").arg(middle)));
+    }
+
+    // Zoomed in, a value comes towards the middle of the pane, its
+    // distance from there divided by the factor; zoomed out it stays
+    void towards_the_middle_by_the_factor() {
+        QCOMPARE(VerticalZoom::towardsMiddle(380.0, 400.0, 2.0), 290.0);
+        QCOMPARE(VerticalZoom::towardsMiddle(380.0, 400.0, 4.0), 245.0);
+        QCOMPARE(VerticalZoom::towardsMiddle(0.0, 400.0, 2.0), 100.0);
+        QCOMPARE(VerticalZoom::towardsMiddle(200.0, 400.0, 8.0), 200.0);
+        QCOMPARE(VerticalZoom::towardsMiddle(380.0, 400.0, 1.0), 380.0);
+        QCOMPARE(VerticalZoom::towardsMiddle(380.0, 400.0, 0.5), 380.0);
+    }
+
+    // A low voice, B1 to G2, near the bottom of the default range: zoomed
+    // about its middle, which comes towards the middle of the pane, all
+    // of it stays in view until it is nearly as tall as the pane. Zoomed
+    // about the middle of the pane, it is gone below by three times
+    void a_low_pitch_stays_in_view_as_the_range_narrows() {
+        const double height = 400.0;
+        Range start = range(40.0, 1500.0, true);
+        std::vector<double> pitch { 61.7, 73.4, 82.4, 98.0, 65.4, 87.3 };
+        double middle = 0.0;
+        QVERIFY(VerticalZoom::middleShown(pitch, start, middle));
+        double y = VerticalZoom::yForValue(start, height, middle);
+        QVERIFY(y > 0.8 * height);
+
+        for (double factor : { 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0 }) {
+            Range r = VerticalZoom::zoomedAbout
+                (start, factor, middle, height,
+                 VerticalZoom::towardsMiddle(y, height, factor));
+            double bottom = VerticalZoom::yForValue(r, height, 61.7);
+            double top = VerticalZoom::yForValue(r, height, 98.0);
+            QVERIFY2(bottom <= height && top >= 0.0,
+                     qPrintable(QString("by %1: %2, the pitch from %3 to %4")
+                                .arg(factor).arg(text(r)).arg(bottom)
+                                .arg(top)));
+        }
+
+        double centre = VerticalZoom::valueAtY(start, height, height / 2);
+        Range r = VerticalZoom::zoomedAbout(start, 3.0, centre, height,
+                                            height / 2);
+        QVERIFY(VerticalZoom::yForValue(r, height, 98.0) > height);
+    }
+
     // Nothing within the dead zone; beyond it, all but the dead zone,
     // and then all the way back through it
     void movement_counts_beyond_the_dead_zone() {
