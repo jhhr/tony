@@ -16,7 +16,8 @@
 
 // Which test functions a shard of a suite runs (TONY_TEST_SHARD): each
 // exactly once over the shards, and nothing QTest would not run as a
-// test.
+// test. And the application name a shard's process runs under: one of
+// its own, which is what keeps shards running at once apart.
 
 #include "RunSuite.h"
 
@@ -92,6 +93,82 @@ private slots:
         ShardFixture fixture;
         QCOMPARE(shardFunctions(&fixture, 4, 6), QStringList({ "fifth" }));
         QVERIFY(shardFunctions(&fixture, 5, 6).isEmpty());
+    }
+
+    // A run that is not sharded keeps the executable's own name, the one
+    // meson test and named tests have always used
+    void no_shard_is_the_base_name() {
+        QCOMPARE(shardApplicationName("test-tony-app", QString()),
+                 QString("test-tony-app"));
+        QCOMPARE(shardApplicationName("test-tony-app", ""),
+                 QString("test-tony-app"));
+    }
+
+    // The name says which shard of how many, after the base name
+    void a_shard_name_says_which_shard() {
+        QCOMPARE(shardApplicationName("test-tony-app", "3/8"),
+                 QString("test-tony-app-shard3of8"));
+    }
+
+    // The shards of one run are processes at once: none may share a name
+    void every_shard_of_a_count_has_its_own_name() {
+        for (int count = 1; count <= 8; ++count) {
+            QStringList names;
+            for (int shard = 0; shard < count; ++shard) {
+                names << shardName(shard, count);
+            }
+            QVERIFY2(QSet<QString>(names.begin(), names.end()).size() == count,
+                     qPrintable(QString("%1 shards are named %2")
+                                .arg(count).arg(names.join(", "))));
+        }
+    }
+
+    // Shard i of another count runs other tests, so it is another name
+    void the_same_shard_of_another_count_has_another_name() {
+        for (int count = 1; count <= 8; ++count) {
+            for (int other = count + 1; other <= 8; ++other) {
+                for (int shard = 0; shard < count; ++shard) {
+                    QString name = shardName(shard, count);
+                    QVERIFY2(shardName(shard, other) != name,
+                             qPrintable(QString("%1/%2 and %1/%3 are both %4")
+                                        .arg(shard).arg(count).arg(other)
+                                        .arg(name)));
+                }
+            }
+        }
+    }
+
+    // runSuite() refuses to run with a value that is not a shard, and
+    // the name is then the base name, as for no value
+    void an_invalid_shard_is_the_base_name() {
+        for (QString value : { "x", "2/2", "-1/2", "0/0", "1/2/3", "/" }) {
+            QString name = shardApplicationName("test-tony-app", value);
+            QVERIFY2(name == "test-tony-app",
+                     qPrintable(QString("\"%1\" gives %2")
+                                .arg(value).arg(name)));
+        }
+    }
+
+    // Both parts must be whole numbers. Otherwise a slip such as "1x/2"
+    // would be read as shard 0, and run it a second time under its name
+    void a_shard_is_two_whole_numbers() {
+        int shard = -1, count = -1;
+        QVERIFY(parseShard("3/8", shard, count));
+        QCOMPARE(shard, 3);
+        QCOMPARE(count, 8);
+        for (QString value : { "a/2", "/2", "1x/2", "1/x", "1/2x", "1.0/2" }) {
+            QVERIFY2(!parseShard(value, shard, count),
+                     qPrintable(QString("\"%1\" taken as %2/%3")
+                                .arg(value).arg(shard).arg(count)));
+            QCOMPARE(shardApplicationName("test-tony-app", value),
+                     QString("test-tony-app"));
+        }
+    }
+
+private:
+    static QString shardName(int shard, int count) {
+        return shardApplicationName
+            ("test-tony-app", QString("%1/%2").arg(shard).arg(count));
     }
 };
 

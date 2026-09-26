@@ -462,7 +462,9 @@ class TestUiChecks : public QObject
         return [=](QWidget *modal) {
             auto box = qobject_cast<QMessageBox *>(modal);
             if (!box || !box->button(button)) return false;
-            if (asked) asked->push_back(box->windowTitle());
+            // The text, not the title: macOS shows no title on a message
+            // box, and Qt keeps none there
+            if (asked) asked->push_back(box->text());
             if (tick && box->checkBox()) box->checkBox()->setChecked(true);
             box->button(button)->click();
             return true;
@@ -1468,7 +1470,9 @@ private slots:
         QStringList asked;
         m_answerDialog = answerWith(QMessageBox::Cancel, false, &asked);
         QVERIFY(!m_window->close());
-        QCOMPARE(asked, QStringList({ tr("Session modified") }));
+        QCOMPARE(asked.size(), 1);
+        QVERIFY2(asked[0].startsWith(tr("The current session has been modified.")),
+                 qPrintable(asked[0]));
         QVERIFY2(m_window->isVisible(), "Cancel did not keep the window open");
         QVERIFY(m_window->takes()->haveTake());
     }
@@ -1496,7 +1500,9 @@ private slots:
         QStringList asked;
         m_answerDialog = answerWith(QMessageBox::No, false, &asked);
         QVERIFY(m_window->close());
-        QCOMPARE(asked, QStringList({ tr("Session modified") }));
+        QCOMPARE(asked.size(), 1);
+        QVERIFY2(asked[0].startsWith(tr("The current session has been modified.")),
+                 qPrintable(asked[0]));
         delete m_window;
         m_window = nullptr;
 

@@ -1471,7 +1471,10 @@ private slots:
         startCheck(onePunchIn(), false);
         if (QTest::currentTestFailed()) return;
         QTRY_VERIFY_WITH_TIMEOUT(!m_dialogs.isEmpty(), 10000);
-        QVERIFY2(m_dialogs.first().startsWith("Session modified"),
+        // By its text: macOS shows no title on a message box, and Qt
+        // keeps none there
+        QVERIFY2(m_dialogs.first().contains
+                 ("The current session has been modified."),
                  qPrintable(m_dialogs.join(" | ")));
         QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0 ||
                                  m_window->recordTarget()->isRecording(),
@@ -1491,7 +1494,8 @@ private slots:
         startCheck(onePunchIn(), false);
         if (QTest::currentTestFailed()) return;
         QTRY_VERIFY_WITH_TIMEOUT(!m_dialogs.isEmpty(), 10000);
-        QVERIFY2(m_dialogs.first().startsWith("Session modified"),
+        QVERIFY2(m_dialogs.first().contains
+                 ("The current session has been modified."),
                  qPrintable(m_dialogs.join(" | ")));
         QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0 ||
                                  m_window->recordTarget()->isRecording(),

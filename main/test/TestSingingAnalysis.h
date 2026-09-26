@@ -37,6 +37,7 @@
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
+#include "transform/ModelTransformerFactory.h"
 #include "base/PlayParameters.h"
 
 #include <QObject>
@@ -174,6 +175,14 @@ class TestSingingAnalysis : public QObject
         QVERIFY(analyser.getLayer(Analyser::Notes));
         QVERIFY2(done.count() > 0 || done.wait(30000),
                  "pYIN did not complete within 30 seconds");
+
+        // and for the transform to be gone. The first notice at 100 comes
+        // from one of the two outputs, and the other's can still be
+        // queued behind it: a test would count that as a second
+        // initialAnalysisCompleted(), long after pYIN finished. The
+        // factory lets a transform go only after its notices are in
+        QTRY_VERIFY_WITH_TIMEOUT(!sv::ModelTransformerFactory::getInstance()
+                                 ->haveRunningTransformers(), 30000);
     }
 
     sv::ModelId addSingingModel(const std::vector<float> &data) {

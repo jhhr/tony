@@ -3,9 +3,9 @@
 The development machine builds with meson + ninja under MSYS2's `mingw64` toolchain
 (default prefix `C:\msys64\mingw64`) into `build_mingw/`: that is most of this page. An
 agent in a cloud session builds on Linux instead, into `build/`: see
-[Building on Linux](#building-on-linux) at the end. The CI workflows in
-`.github/workflows/` build the upstream way on Linux, macOS and MSVC and are not what is
-described here.
+[Building on Linux](#building-on-linux) at the end. The Windows CI workflow in
+`.github/workflows/` builds as the development machine does, from MSYS2's packages; the
+Linux and macOS ones build the upstream way.
 
 # Building on Windows (MSYS2 MinGW-w64)
 
@@ -28,7 +28,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -46,9 +46,11 @@ Each part of that is there because of something that went wrong:
 - **Spell `MINGW_PREFIX` exactly `C:/msys64/mingw64`.** A reconfigure with a different
   spelling than the build directory was set up with changes the include flags and
   rebuilds everything (about 560 steps).
-- **`-j 3`.** At ninja's default parallelism a large rebuild runs this machine out of
-  memory (`cc1plus.exe: out of memory`, bash cannot fork). If it happens, run the same
-  command again; ninja carries on where it stopped.
+- **`-j 4`**, one job per core. It relies on Windows' page file being on. Without one,
+  Windows can promise programs no more memory than the RAM, and with an editor and a
+  browser open a large rebuild ran out (`cc1plus.exe: out of memory`, bash cannot fork)
+  while RAM was still free. If it happens, run the same command again; ninja carries on
+  where it stopped.
 - **Redirect to a log and never pipe ninja.** The output is large and can stall or time out
   the tool. `tmp/` is gitignored and is the place for logs.
 - **Write ninja's exit status into the log.** The status of a `ninja ...; tail ...` chain
@@ -66,7 +68,7 @@ Reconfigure from scratch (rarely needed):
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 3 -C build_mingw Tony.exe >> tmp/build.log 2>&1
+meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 4 -C build_mingw Tony.exe >> tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 ```
 
@@ -78,6 +80,10 @@ echo "exit:$?" >> tmp/build.log
   include directories for `opus`, `sord-0`, `serd-0`.
 - `-DHAVE_MEDIAFOUNDATION` with `-lmfplat -lmfreadwrite -lmfuuid -lpropsys`; needs the
   `bqaudiostream` fork.
+- `general_defines` goes on every target, svcore and the plugins included, so a change to
+  it recompiles everything (about 620 steps, 20 minutes). A define that only Tony's code
+  reads goes in `tony_defines`, which only Tony's own targets get. `tony_app` compiles
+  svgui and svapp too, so a change there still recompiles those, but not svcore.
 - `tony_core` / `tony_app` static libraries and the test executables; see
   [architecture.md](architecture.md) for what goes where. A new source file goes into
   `tony_core_files` or `tony_app_files`, and its header into the matching `*_moc_files`
@@ -90,6 +96,10 @@ echo "exit:$?" >> tmp/build.log
   ([calibrate-audio.md](calibrate-audio.md), §6).
 - Windows headers define macros named `near` and `far` (empty), `min`, `max`, `ERROR`, `IN`
   and `OUT`. Do not use them as identifiers: a build on Linux does not catch it.
+- The macOS SDK's `MacTypes.h` declares `normal`, `bold`, `italic`, `underline`,
+  `outline`, `shadow`, `condense` and `extend` in the global namespace. A function of one
+  of those names, even in an anonymous namespace, makes each unqualified call to it
+  ambiguous on macOS, and nothing else catches it.
 
 # Building on Linux
 
@@ -164,10 +174,8 @@ Why each part is as it is:
 - **Qt 6.11 from conda-forge, not Ubuntu's 6.4**: the Qt of the Windows machine. Qt 6.4
   does not match a `SIGNAL()`/`SLOT()` string naming `ModelId` or `sv_frame_t` against a
   slot moc recorded with `sv::`, so such a connection fails silently there and works on
-  Windows (member-pointer connects, which AGENTS.md asks for, work on both). And with 6.4
-  two of the tests that race the analysis against a take can fail whatever the change
-  ([testing.md](testing.md#running)); with 6.11 none do. download.qt.io's mirrors are
-  blocked by the session's proxy; conda-forge is not. Only Qt's own `.pc` files are put on meson's pkg-config path
+  Windows (member-pointer connects, which AGENTS.md asks for, work on both).
+  download.qt.io's mirrors are blocked by the session's proxy; conda-forge is not. Only Qt's own `.pc` files are put on meson's pkg-config path
   (`/opt/qt6-conda/tony-pkgconfig`), so that nothing else of conda's is picked up; meson
   puts Qt's library directory in the executables' RPATH.
 - **The Mercurial libraries come from their GitHub mirrors.** hg.sr.ht is blocked, and
@@ -183,8 +191,8 @@ Why each part is as it is:
   new `build/`; a build directory keeps the linker it was set up with. Every change to
   `main/` relinks all four executables.
 - **Run the app suite with nothing else building**: it records in real time.
-- Four tests of `TestTakesFile` fail on Linux and nowhere else: they are about Windows
-  paths (backslashes, drive letters, case).
+- `TestTakesFile` checks Windows paths (backslashes, drive letters, case) on Windows only;
+  elsewhere it checks that names are case-sensitive and uses a POSIX absolute path.
 - Measured and left alone: `-g1` compiles svcore in 19 % less time than `-g`, but Windows
   builds `debugoptimized`, with full debug information; clang is no faster than GCC; and a
   unity build fails in the libraries, which define the same names in several files.
