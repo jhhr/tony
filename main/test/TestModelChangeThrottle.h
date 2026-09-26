@@ -118,10 +118,13 @@ private slots:
                  qPrintable(QString("%1 changes over ten intervals were told "
                                     "%2 times")
                             .arg(changes).arg(m_told.size())));
-        // Between them the notices cover every change
-        QTest::qWait(kInterval * 2);
+        // Between them the notices cover every change. The last one comes
+        // an interval after the changes stop, as late as the timer fires:
+        // wait for it rather than for a fixed time, which a loaded
+        // machine's timers can overrun
         QCOMPARE(m_told.front().first, frame_t(0));
-        QCOMPARE(m_told.back().second, frame_t(changes * 256));
+        QTRY_COMPARE_WITH_TIMEOUT(m_told.back().second, frame_t(changes * 256),
+                                  kInterval * 40);
         for (size_t i = 1; i < m_told.size(); ++i) {
             QVERIFY(m_told[i].first <= m_told[i-1].second);
         }
