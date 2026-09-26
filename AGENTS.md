@@ -29,7 +29,7 @@ from sh. In a Linux cloud session, set up and build as in
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe > tmp/build.log 2>&1
+ninja -j 3 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-tony-device.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 ```
 
@@ -44,7 +44,7 @@ Run tests from `build_mingw/` with the same environment:
 ```sh
 mkdir -p ../tmp/tl
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "exit:$?"
-TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~5 min, real time
+TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~8 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ```
@@ -53,8 +53,12 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 - A test name on the command line goes to **every** suite in the executable; the suites
   that lack it fail, so the exit status is only meaningful for a run with no names.
 - Run named tests while working; run **both whole suites** before calling anything done.
+- `test-tony-dev.exe` (development builds only) holds the development checks' suite,
+  about a minute and more of real-time takes. Run it as well, whole, when a change touches
+  the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
+  `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
-- Give the app suite a tool timeout of 10 minutes.
+- Give the app suite a tool timeout of 15 minutes.
 
 ## Rules for working here
 

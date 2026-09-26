@@ -127,6 +127,12 @@ dot model outlives the take.
 - **Pre-roll**: R = `MainWindow/prerollseconds` (3 s, no UI on purpose) clipped to the
   start of the song. The device records from the press of Record as always; the splice
   simply starts R frames later. With Play Reference off it is just a pause.
+- **Constrain Playback to Selection is lifted for a take** (`liftPlaySelectionForTake()`,
+  just before `play(S)`) and put back in `recordingFinishedFull()` and `closeSession()`.
+  Constrained, the play source starts in the selection rather than at S and stops or loops
+  at its end, while the take counts the reference as playing on from S without a break:
+  with a pre-roll, what was sung landed a whole pre-roll early. Done through `ViewManager`,
+  which writes no settings; the button follows, and is greyed out during the take.
 - **Record into Selection**: the take stops itself when `getFramesReceived()` reaches
   `L + R + (E − P) + 0.25 s` (`autoStopFrames()`). `pollTakeProgress()` calls `record()` —
   the same path as the Stop button, so everything that ends a take is in one place. The
@@ -146,6 +152,22 @@ dot model outlives the take.
 (`getData(-1, ...)`, so a mic on input 2 works), YIN, emit, advance 256; sleep 5 ms when
 there is not a full window yet. `kHopSize` is also the resolution of the dot model, whose
 unit must be `"Hz"` for the layer to align to the pane's log-frequency scale.
+
+**Telling the pane of the dots.** Every notice of a change to the dot model is a redraw of
+the pane, and a notice for each dot would be about 170 a second. So the dot model is made
+with `notifyOnAdd` false, and then it tells nobody of a dot at all: the dots were drawn
+only when one widened the model's pitch range, and stalled within half a second on a
+steady note. `onRealtimePitchDetected()` hands each dot's frames to
+`m_realtimeDotsNotifier` (`ModelChangeThrottle`, `tony_core`), which tells the pane at
+once and then at most every 40 ms.
+
+**The dots are kept out of the pane's cache** (`Layer::setCachedInView(false)`, svgui
+fork). Told of a change to the model of a layer in its cache, a pane draws every layer in
+the cache again: the reference's waveform, pitch track and notes, 25 times a second. Kept
+out, each notice costs a copy of the cache and the dots. During a take in a 1920 px window
+on the cloud machine the GUI thread used about 22 % of a core, against 35 % with the dots
+in the cache. Every layer in front of the dots is drawn at every paint as well: only cheap
+ones, such as the coverage strip, may be raised above them.
 
 Correct as they are, though they look wrong:
 

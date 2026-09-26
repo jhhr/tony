@@ -23,7 +23,7 @@
 // dialog and records it; each test then fails in cleanup().
 
 #include "TestSignals.h"
-#include "FakeAudioIO.h"
+#include "TestMainWindow.h"
 
 #include "../MainWindow.h"
 #include "../Analyser.h"
@@ -72,10 +72,12 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPointer>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -85,261 +87,6 @@
 #include <cstring>
 #include <functional>
 #include <vector>
-
-/**
- * MainWindow with the fake device in place of a real one, and the
- * protected state of the singing workflow opened up for inspection.
- */
-class TestMainWindow : public MainWindow
-{
-public:
-    TestMainWindow(FakeAudioIO::Config config, bool installDevice = true) :
-        MainWindow(AUDIO_PLAYBACK_AND_RECORD, true, false),
-        m_fakeConfig(config),
-        m_installDevice(installDevice) { }
-
-    FakeAudioIO *fake() { return dynamic_cast<FakeAudioIO *>(m_audioIO); }
-
-    void doRecord() { record(); }
-    void doPlay() { play(); } // and again to stop
-    void doAnalyseNow() { analyseNow(); }
-    void doLoadBackgroundMusic(QString path) { loadBackgroundMusic(path); }
-
-    // Another audio file under the take's pitch and notes layers
-    QString doSwapSingingAudio(QString path) {
-        return swapSingingAudio(path);
-    }
-
-    // Editing the singing of a take, as the two Edit menu actions do
-    void doEraseSingingInSelection() { eraseSingingInSelection(); }
-    void doSelectRecordingAtPlayhead() { selectRecordingAtPlayhead(); }
-    QAction *eraseSingingAction() { return m_eraseSingingAction; }
-    QAction *selectRecordingAction() { return m_selectRecordingAction; }
-    void doUpdateMenuStates() { updateMenuStates(); }
-
-    // The takes of the session, as the Takes menu and the combo box do
-    bool doSwitchToTake(int index) { return switchToTake(index); }
-    void doChooseTakeInCombo(int index) { m_takeCombo->setCurrentIndex(index); }
-    void doNewEmptyTake() { newEmptyTake(); }
-    void doDuplicateTake() { duplicateTake(); }
-    void doRenameTake() { renameTake(); }
-    void doDeleteTake() { deleteTake(); }
-    bool doDeleteTakeAt(int index) { return deleteTakeAt(index); }
-    QComboBox *takeCombo() { return m_takeCombo; }
-    QAction *newTakeAction() { return m_newTakeAction; }
-    QAction *duplicateTakeAction() { return m_duplicateTakeAction; }
-    QAction *renameTakeAction() { return m_renameTakeAction; }
-    QAction *deleteTakeAction() { return m_deleteTakeAction; }
-
-    // The two questions the take operations ask, answered from here: the
-    // suite cannot answer a dialog
-    void setDeleteTakeAnswer(bool yes) { m_deleteTakeAnswer = yes; }
-    int deleteTakeQuestions() const { return m_deleteTakeQuestions; }
-    void setTakeNameAnswer(QString name) { m_takeNameAnswer = name; }
-
-    // True between the start of the analysis of a recorded range and the
-    // merge of its result into the take's pitch and notes
-    bool analysingRange() {
-        return m_analyser2 && m_analyser2->isAnalysingRange();
-    }
-    sv::sv_frame_t analysedRangeStart() { return m_takeAnalysisRange.start; }
-    sv::sv_frame_t analysedRangeEnd() { return m_takeAnalysisRange.end; }
-
-    // Save As, with the file name given here instead of by a dialog: the
-    // session's own file is set, so that what is recorded next goes into
-    // its takes folder
-    bool doSaveSessionAs(QString path) { return saveSessionToPath(path); }
-    QString sessionFile() { return m_sessionFile; }
-
-    // As answering "No" to "do you want to save?"
-    void discardModifications() { m_documentModified = false; }
-    bool isDocumentModified() { return m_documentModified; }
-    void doCloseSession() { discardModifications(); closeSession(); }
-
-    void setPlayReferenceWhileRecording(bool on) {
-        m_playRefWhileRecording->setChecked(on);
-    }
-    void setPreRoll(bool on) { m_preRoll->setChecked(on); }
-    void setRecordIntoSelection(bool on) {
-        m_recordIntoSelection->setChecked(on);
-    }
-    QAction *playSingingAudioAction() { return m_playSingingAudio; }
-
-    Analyser *analyser() { return m_analyser; }
-    Analyser *analyser2() { return m_analyser2; }
-    sv::Document *document() { return m_document; }
-    sv::PaneStack *paneStack() { return m_paneStack; }
-    sv::Layer *timeRuler() { return m_timeRulerLayer; }
-    sv::AudioCallbackRecordTarget *recordTarget() { return m_recordTarget; }
-    sv::AudioCallbackPlaySource *playSource() { return m_playSource; }
-    sv::ModelId mainModelId() { return getMainModelId(); }
-
-    RealtimePitchTracker *realtimeTracker() { return m_realtimePitchTracker; }
-    sv::TimeValueLayer *realtimeLayer() { return m_realtimePitchLayer; }
-    sv::ModelId realtimeModelId() { return m_realtimePitchModelId; }
-    sv::ModelId currentRecordingModelId() { return m_currentRecordingModelId; }
-    sv::WaveformLayer *recordingLayer() { return m_recordingLayer; }
-    SingingTakes *takes() { return m_takes; }
-    sv::sv_frame_t takePosition() { return m_takePosition; }
-    sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
-    sv::sv_frame_t takeEnd() { return m_takeEnd; }
-    bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
-
-    void seekTo(sv::sv_frame_t frame) {
-        m_viewManager->setPlaybackFrame(frame);
-    }
-    sv::sv_frame_t playbackFrame() { return m_viewManager->getPlaybackFrame(); }
-
-    void selectRange(sv::sv_frame_t start, sv::sv_frame_t end) {
-        m_viewManager->addSelection(sv::Selection(start, end));
-    }
-    void clearSelections() { m_viewManager->clearSelections(); }
-    sv::MultiSelection::SelectionList selections() {
-        return m_viewManager->getSelections();
-    }
-
-    // The question about recording over singing that is there is answered
-    // from here: the suite cannot answer a dialog
-    void setRecordOverAnswer(bool yes) { m_recordOverAnswer = yes; }
-    int recordOverQuestions() const { return m_recordOverQuestions; }
-    void clearRecordOverQuestions() { m_recordOverQuestions = 0; }
-
-    sv::ModelId pendingSingingModelId() { return m_pendingSingingModelId; }
-    sv::ModelId backgroundMusicModelId() { return m_backgroundMusicModelId; }
-    sv::WaveformLayer *backgroundMusicLayer() { return m_backgroundMusicLayer; }
-    bool recordingInProgress() { return m_recordingInProgress; }
-    bool recordingAsSingingTrack() { return m_recordingAsSingingTrack; }
-    sv::sv_frame_t recordingLatencyFrames() { return m_recordingLatencyFrames; }
-    int pendingExtraPaneCount() { return int(m_pendingExtraPanes.size()); }
-
-    CoverageStrip *coverageStrip() { return m_coverageStrip; }
-
-    AlternatePitchTrack *alternatePitch() { return m_alternatePitch; }
-    void doToggleAlternatePitch() { alternatePitchToggled(); }
-    void doStepAlternatePitch(bool up) {
-        if (up) alternatePitchUp(); else alternatePitchDown();
-    }
-    QAction *alternatePitchAction() { return m_showAlternatePitch; }
-    QAction *alternatePitchUpAction() { return m_alternatePitchUpAction; }
-    QAction *alternatePitchDownAction() { return m_alternatePitchDownAction; }
-
-    // The timed lyrics, and the four menu actions that act on them
-    LyricsTrack *lyrics() { return m_lyrics; }
-    bool doImportLyricsFrom(QString path) { return importLyricsFrom(path); }
-    bool doExportLyricsTo(QString path) { return exportLyricsTo(path); }
-    QAction *importLyricsAction() { return m_importLyricsAction; }
-    QAction *exportLyricsAction() { return m_exportLyricsAction; }
-    QAction *removeLyricsAction() { return m_removeLyricsAction; }
-    QAction *showLyricsAction() { return m_showLyrics; }
-
-    // Edit > Edit Lyrics, and the editor it switches on
-    QAction *editLyricsAction() { return m_editLyricsAction; }
-    LyricsEditor *lyricsEditor() { return m_lyricsEditor; }
-
-    // The file Import Lyrics asks for, answered from here: "" is Cancel
-    void setLyricsFileAnswer(QString path) { m_lyricsFileAnswer = path; }
-    int lyricsFileQuestions() const { return m_lyricsFileQuestions; }
-
-    // The file Export Lyrics asks for, likewise, and the path it offered
-    void setLyricsExportAnswer(QString path) { m_lyricsExportAnswer = path; }
-    int lyricsExportQuestions() const { return m_lyricsExportQuestions; }
-    QString lyricsExportSuggestion() const { return m_lyricsExportSuggestion; }
-
-    // The texts the lyrics editor asks for, answered from here in turn.
-    // A question with no answer left is cancelled
-    void answerWordText(QString text) { m_wordTextAnswers.push_back({true, text}); }
-    void cancelWordText() { m_wordTextAnswers.push_back({false, QString()}); }
-    int wordTextQuestions() const { return m_wordTextQuestions; }
-    int wordTextAnswersLeft() const { return int(m_wordTextAnswers.size()); }
-    // The text the last question offered, and whether it was for a new word
-    QString wordTextOffered() const { return m_wordTextOffered; }
-    bool wordTextWasNew() const { return m_wordTextWasNew; }
-    // Done while the next question is open, as anything can be while its
-    // dialog runs an event loop
-    void whileAskingWordText(std::function<void()> f) { m_whileAskingWordText = f; }
-
-    void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
-        onRealtimePitchDetected(frame, hz);
-    }
-    QString statusText() { return getStatusLabel()->text(); }
-    void setStatusText(QString text) { getStatusLabel()->setText(text); }
-
-protected:
-    void createAudioIO() override {
-        if (m_audioIO || m_playTarget) return;
-        if (!m_installDevice) return;
-        m_fakeConfig.inputIsKept = [this]() {
-            return m_recordTarget->isRecording();
-        };
-        m_audioIO = new FakeAudioIO
-            (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
-             m_fakeConfig);
-        m_playSource->setSystemPlaybackTarget(m_audioIO);
-    }
-
-    bool confirmRecordingOverTake() override {
-        ++m_recordOverQuestions;
-        return m_recordOverAnswer;
-    }
-
-    bool confirmDeleteTake(QString) override {
-        ++m_deleteTakeQuestions;
-        return m_deleteTakeAnswer;
-    }
-
-    QString askForTakeName(QString current) override {
-        return m_takeNameAnswer == "" ? current : m_takeNameAnswer;
-    }
-
-    QString askForLyricsFile() override {
-        ++m_lyricsFileQuestions;
-        return m_lyricsFileAnswer;
-    }
-
-    QString askForLyricsExportFile(QString suggested) override {
-        ++m_lyricsExportQuestions;
-        m_lyricsExportSuggestion = suggested;
-        return m_lyricsExportAnswer;
-    }
-
-    bool askForLyricsWordText(QString &text, bool isNew) override {
-        ++m_wordTextQuestions;
-        m_wordTextOffered = text;
-        m_wordTextWasNew = isNew;
-        if (m_whileAskingWordText) {
-            auto during = m_whileAskingWordText;
-            m_whileAskingWordText = nullptr;
-            during();
-        }
-        if (m_wordTextAnswers.isEmpty()) return false;
-        auto answer = m_wordTextAnswers.takeFirst();
-        if (!answer.first) return false;
-        text = answer.second;
-        return true;
-    }
-
-    // The base class deleteAudioIO() deletes m_audioIO, which is right
-    // for the fake as well
-
-private:
-    FakeAudioIO::Config m_fakeConfig;
-    bool m_installDevice;
-    bool m_recordOverAnswer = true;
-    int m_recordOverQuestions = 0;
-    bool m_deleteTakeAnswer = true;
-    int m_deleteTakeQuestions = 0;
-    QString m_takeNameAnswer;
-    QString m_lyricsFileAnswer;
-    int m_lyricsFileQuestions = 0;
-    QString m_lyricsExportAnswer;
-    int m_lyricsExportQuestions = 0;
-    QString m_lyricsExportSuggestion;
-    QList<QPair<bool, QString>> m_wordTextAnswers;
-    int m_wordTextQuestions = 0;
-    QString m_wordTextOffered;
-    bool m_wordTextWasNew = false;
-    std::function<void()> m_whileAskingWordText;
-};
 
 class TestRecordWorkflow : public QObject
 {
@@ -436,6 +183,22 @@ class TestRecordWorkflow : public QObject
         if (QTest::currentTestFailed()) return;
         QTest::qWait(ms);
         stopTake();
+    }
+
+    // A round trip as the audio check would have kept it for the fake
+    // device (the default devices, the Preferences naming none) at 44.1
+    // kHz, measured while the device reported the given latencies, in
+    // frames. cleanup() forgets it
+    static void storeRoundTrip(int roundTrip, int reportedOutput,
+                               int reportedInput) {
+        LatencyCalibration::Figure figure;
+        figure.roundTrip = roundTrip / rate;
+        figure.date = QDateTime::currentDateTimeUtc();
+        figure.reportedOutput = reportedOutput / rate;
+        figure.reportedInput = reportedInput / rate;
+        QSettings settings;
+        LatencyCalibration::store
+            (settings, LatencyCalibration::currentKey(settings, rate), figure);
     }
 
     static sv::EventVector pitchEvents(sv::Layer *layer) {
@@ -891,7 +654,17 @@ class TestRecordWorkflow : public QObject
         s.pitch = pitchEvents(a2);
         s.notes = a2 ? noteEvents(a2->getLayer(Analyser::Notes))
             : sv::EventVector();
-        if (takeAudio()) s.frames = takeAudio()->getFrameCount();
+        // Waited for, as verifyTakeMatches() waits: the model of a file
+        // just opened (as after an erase) says 0 frames until it has read
+        // the file, and under load that can outlast the call
+        if (auto audio = takeAudio()) {
+            QElapsedTimer waited;
+            waited.start();
+            while (!audio->isReady() && waited.elapsed() < 30000) {
+                QTest::qWait(10);
+            }
+            s.frames = audio->getFrameCount();
+        }
         return s;
     }
 
@@ -1421,6 +1194,10 @@ private slots:
     }
 
     void cleanup() {
+        // A round trip a test stored would place the next test's takes.
+        // First, as the waits below return early when they fail
+        QSettings().remove("LatencyCalibration");
+
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
                 m_window->doRecord();
@@ -1517,6 +1294,8 @@ private slots:
         QVERIFY(m_window->realtimeTracker());
         QVERIFY(m_window->realtimeLayer());
         QVERIFY(paneHasLayer(0, m_window->realtimeLayer()));
+        // Drawn by itself as dots come, not with every layer of the pane
+        QVERIFY(!m_window->realtimeLayer()->isCachedInView());
         auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
             (m_window->realtimeModelId());
         QVERIFY(model);
@@ -1531,6 +1310,39 @@ private slots:
                           (medianHz(events), highHz)) < 10.0);
 
         stopTake();
+    }
+
+    // A microphone on input 2 of an interface, nothing on input 1: the
+    // dots and the take's pitch come from the mixdown, so they are there
+    void live_dots_from_the_second_input() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 1;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(1000);
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        QVERIFY(model);
+        auto events = model->getAllEvents();
+        QVERIFY2(events.size() > 20,
+                 qPrintable(QString("only %1 live dots after a second of "
+                                    "singing into input 2")
+                            .arg(events.size())));
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(events), highHz)) < 10.0);
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        auto pitch = pitchEvents(m_window->analyser2());
+        QVERIFY2(pitch.size() > 20, "the take of input 2 has no pitch track");
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(pitch), highHz)) < 10.0);
     }
 
     void live_dots_removed() {
@@ -1624,10 +1436,14 @@ private slots:
         // it, so it would make a dot. The tracker may have queued
         // events of its own as well; the same goes for them
         QCOMPARE(m_window->recordingLatencyFrames(), sv::sv_frame_t(0));
+        // Queued as a functor: invoking the slot by name depends on the
+        // Qt version matching "sv::sv_frame_t" against what moc recorded,
+        // and Qt 6.4 does not
+        TestMainWindow *window = m_window;
         QVERIFY2(QMetaObject::invokeMethod
-                 (m_window, "onRealtimePitchDetected", Qt::QueuedConnection,
-                  Q_ARG(sv::sv_frame_t, sv::sv_frame_t(20000)),
-                  Q_ARG(double, 440.0)),
+                 (m_window, [window]() {
+                      window->doRealtimePitchDetected(20000, 440.0);
+                  }, Qt::QueuedConnection),
                  "the pitch event could not be queued");
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
@@ -1764,6 +1580,155 @@ private slots:
             .arg(gap).arg(assumedGap);
 
         QVERIFY2(std::llabs(error) <= 2 * hop, qPrintable(detail));
+    }
+
+    // latency_end_to_end with a device that reports 50 ms less than its
+    // round trip of K frames, and the round trip the audio check measured
+    // kept for it: the take is placed with the measured figure, and the
+    // two pitch tracks line up
+    void latency_measured_round_trip_used() {
+        const int K = 3 * 4096;
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096 - 2205;
+        FakeAudioIO::Config config;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = melody(0.75);
+        config.inputDelay = K;
+        config.inputFollowsPlayback = true;
+        storeRoundTrip(K, reportedOut, reportedIn);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(melody(0.75)));
+        if (QTest::currentTestFailed()) return;
+
+        take(2200);
+        if (QTest::currentTestFailed()) return;
+
+        sv::sv_frame_t refStep = stepFrame(pitchEvents(m_window->analyser()));
+        sv::sv_frame_t sungStep = stepFrame(pitchEvents(m_window->analyser2()));
+        QVERIFY(refStep > 0);
+        QVERIFY2(sungStep > 0, "the take never reached the second note");
+        sv::sv_frame_t error = sungStep - refStep;
+        QVERIFY2(std::llabs(error) <= 2 * hop,
+                 qPrintable(QString("sung step at %1, reference step at %2: "
+                                    "%3 frames (%4 ms) apart; the take was "
+                                    "placed with a round trip of %5 frames")
+                            .arg(sungStep).arg(refStep).arg(error)
+                            .arg(1000.0 * double(error) / rate, 0, 'f', 1)
+                            .arg(m_window->takeLatency().roundTrip)));
+
+        TakeLatency used = m_window->takeLatency();
+        QVERIFY(used.measured);
+        QCOMPARE(used.roundTrip, sv::sv_frame_t(K));
+        QCOMPARE(used.reportedOutput, reportedOut / rate);
+        QCOMPARE(used.reportedInput, reportedIn / rate);
+    }
+
+    // A round trip measured while the device reported other latencies
+    // (its buffers have been changed since) is stale: the take is placed
+    // with the reported pair. With the latencies it was measured with,
+    // the same figure would be in use
+    void latency_stale_round_trip_ignored() {
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096;
+        FakeAudioIO::Config config;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = tone(highHz, 2.0);
+        const int stale = reportedOut +
+            int(2 * LatencyCalibration::kStaleToleranceSeconds * rate);
+        storeRoundTrip(15000, stale, reportedIn);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency used = m_window->takeLatency();
+        QVERIFY(!used.measured);
+        QCOMPARE(used.roundTrip, sv::sv_frame_t(reportedOut + reportedIn));
+
+        LatencyCalibration::InUse inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Reported);
+        QVERIFY(inUse.stale);
+        QCOMPARE(inUse.roundTrip, (reportedOut + reportedIn) / rate);
+
+        storeRoundTrip(15000, reportedOut, reportedIn);
+        inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Measured);
+        QCOMPARE(inUse.roundTrip, 15000 / rate);
+    }
+
+    // A device at 48 kHz reporting 2 x 4096 frames out and 4096 in: the
+    // take is placed with those 3 x 4096 frames of the recording,
+    // although the play source has the output latency in frames of the
+    // session, converted as it resamples; the take keeps each latency in
+    // seconds, the output's from those converted frames
+    void latency_reported_at_the_device_rate() {
+        const double deviceRate = 48000.0;
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096;
+        FakeAudioIO::Config config;
+        config.sampleRate = int(deviceRate);
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = tone(highHz, 2.0);
+        makeWindow(config);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency used = m_window->takeLatency();
+        QCOMPARE(used.recordingRate, deviceRate);
+        QVERIFY(!used.measured);
+        QCOMPARE(used.reportedOutput,
+                 std::lround(reportedOut * rate / deviceRate) / rate);
+        QCOMPARE(used.reportedInput, reportedIn / deviceRate);
+        QVERIFY2(std::llabs(used.roundTrip - (reportedOut + reportedIn)) <= 2,
+                 qPrintable(QString("placed with %1 frames at %2 Hz; the "
+                                    "device reports %3 + %4")
+                            .arg(used.roundTrip).arg(used.recordingRate)
+                            .arg(reportedOut).arg(reportedIn)));
+    }
+
+    // The same device, chosen before any file is open, as from the audio
+    // device menu at startup. The play source has no rate yet, so its
+    // resampler passes the output latency on as the device counts it,
+    // and tells the play source the device's rate is 0: the round trip
+    // is the same, and so is the output latency in seconds
+    void latency_reported_with_device_opened_first() {
+        const double deviceRate = 48000.0;
+        const int reportedOut = 2 * 4096;
+        const int reportedIn = 4096;
+        FakeAudioIO::Config config;
+        config.sampleRate = int(deviceRate);
+        config.playbackLatency = reportedOut;
+        config.recordLatency = reportedIn;
+        config.input = tone(highHz, 2.0);
+        makeWindow(config);
+        m_window->recreateAudioIO();
+        QVERIFY(m_window->fake());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        m_window->setPlayReferenceWhileRecording(true);
+
+        take(800);
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency used = m_window->takeLatency();
+        QCOMPARE(used.recordingRate, deviceRate);
+        QCOMPARE(used.reportedOutput, reportedOut / deviceRate);
+        QVERIFY2(std::llabs(used.roundTrip - (reportedOut + reportedIn)) <= 2,
+                 qPrintable(QString("placed with %1 frames at %2 Hz; the "
+                                    "device reports %3 + %4")
+                            .arg(used.roundTrip).arg(used.recordingRate)
+                            .arg(reportedOut).arg(reportedIn)));
     }
 
     void latency_zero_when_toggle_off() {
@@ -3552,6 +3517,61 @@ private slots:
         m_window->document()->deleteLayer(notes, true);
         QVERIFY2(!a->getLayer(Analyser::Notes),
                  "the analyser still points at its deleted note layer");
+    }
+
+    // Pitch candidates are the analyser's own layers: they come and go
+    // with no entry in the undo history, an undo leaves them alone, and
+    // the next re-analysis deletes them. As undoable layers they could be
+    // undone out of the pane while the analyser went on listing them, and
+    // the next re-analysis then made a command of each that a later undo
+    // crashed on
+    void candidates_make_no_undo_entries() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        sv::Pane *pane = a->getPane();
+        auto candidates = [&]() {
+            std::vector<QPointer<sv::Layer>> found;
+            for (int i = 0; i < pane->getLayerCount(); ++i) {
+                sv::Layer *layer = pane->getLayer(i);
+                if (layer->getLayerPresentationName() == "candidate") {
+                    found.push_back(layer);
+                }
+            }
+            return found;
+        };
+        sv::CommandHistory::getInstance()->clear();
+
+        std::vector<QPointer<sv::Layer>> earlier;
+        for (double start : { 0.5, 0.8 }) {
+            QString error = a->reAnalyseSelection
+                (sv::Selection(sv::sv_frame_t(start * rate),
+                               sv::sv_frame_t((start + 0.7) * rate)),
+                 Analyser::FrequencyRange());
+            QVERIFY2(error.isEmpty(), qPrintable(error));
+            QTRY_VERIFY_WITH_TIMEOUT(a->haveHigherPitchCandidate(), 30000);
+            QVERIFY(!candidates().empty());
+            for (const QPointer<sv::Layer> &layer : earlier) {
+                QVERIFY2(!layer, "a re-analysis left the candidates of the "
+                         "one before it alive");
+            }
+            QString undone = undoOnce();
+            QVERIFY2(undone.isEmpty(),
+                     qPrintable("the re-analysis left \"" + undone +
+                                "\" in the undo history"));
+            QVERIFY2(a->haveHigherPitchCandidate() && !candidates().empty(),
+                     "an undo took the pitch candidates away");
+            earlier = candidates();
+        }
+
+        a->clearReAnalysis();
+        QVERIFY2(candidates().empty(),
+                 "clearing the re-analysis left candidates in the pane");
+        for (const QPointer<sv::Layer> &layer : earlier) {
+            QVERIFY2(!layer, "clearing the re-analysis left its candidates "
+                     "alive");
+        }
     }
 
     void load_background_music() {

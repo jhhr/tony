@@ -23,6 +23,10 @@
 #include "TestLyrics.h"
 #include "TestLyricsTtml.h"
 #include "TestLyricsEdit.h"
+#include "TestLatencyCheck.h"
+#include "TestLatencyCalibration.h"
+#include "TestTakeDiff.h"
+#include "TestModelChangeThrottle.h"
 
 #include "RunSuite.h"
 
@@ -115,6 +119,30 @@ int main(int argc, char *argv[])
 
     {
         TestLyricsEdit t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLatencyCheck t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestLatencyCalibration t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeDiff t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestModelChangeThrottle t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

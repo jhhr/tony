@@ -32,7 +32,7 @@ only what they need:
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `ModelChangeThrottle`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h` |
 | `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `TakeCommands`, `TakeLayers`, `PaneUtils` |
 
 When adding a file: put it in the right `*_files` list, and in the matching `*_moc_files`
@@ -100,13 +100,15 @@ These were all learned from crashes or wrong behaviour. They hold for any new co
 
 ### Tony's own layers make no undo commands
 
-Every layer Tony makes for itself — analysers' layers, live dots, the recording's hidden
-waveform, the alternate pitch track, the coverage strip, the lyrics, background music — is
-added with **`Document::attachLayerToView()`** (svapp fork): in the view and in the
-layer-view map, so the session keeps it, but no command and no modified flag.
+Every layer Tony makes for itself — analysers' layers, pitch candidates, live dots, the
+recording's hidden waveform, the alternate pitch track, the coverage strip, the lyrics,
+background music — is added with **`Document::attachLayerToView()`** (svapp fork): in the view and in
+the layer-view map, so the session keeps it, but no command and no modified flag.
 `addLayerToView()` (the undoable Add Layer) must not be used for these: Undo after a take
-has to find the take.
-Whoever attaches the layer calls `documentModified()` if the change should count.
+has to find the take. Whoever attaches the layer calls `documentModified()` if the change
+should count. Such a layer is shown and hidden with `showLayer()` and removed with
+`deleteLayer(layer, true)`, never by command: an undo that takes a layer out of the pane
+leaves whoever keeps a pointer to it holding a layer that the redo stack owns and deletes.
 
 ### Commands
 
