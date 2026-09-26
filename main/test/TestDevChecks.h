@@ -78,6 +78,10 @@ class TestDevChecks : public QObject
     static constexpr int reportedIn = 4096;
     static constexpr int roundTrip = 3 * 4096 + 123;
 
+    // How far the fake's input moves against its output each time its
+    // stream starts again: 10 ms, as TestAudioCheck's
+    static constexpr int restartShift = 441;
+
     // The long song of the passing run: a quarter of the real one, long
     // enough that its analysis takes well over twice a punch-in's
     static constexpr double longSeconds = 60.0;
@@ -893,6 +897,40 @@ private slots:
         QCOMPARE(lastReportLine(),
                  QString("Totals: %1 passed, %2 failed, 1 measured, 1 skipped")
                  .arg(dotsPass ? 5 : 4).arg(dotsPass ? 4 : 5));
+    }
+
+    // A device whose input moves 10 ms against its output each time its
+    // stream starts, with the stream kept running between takes, as the
+    // application keeps it on desktop: started once, at the run's first
+    // take, so that every take shares one alignment, and every item
+    // passes. Suspended at each Stop, as svapp does unless told
+    // otherwise, the takes land 10 ms apart in turn, and items 1, 2, 7
+    // and 13 fail
+    void dev_checks_pass_with_the_stream_kept_running() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.restartShift = restartShift;
+        makeWindow(config);
+        m_window->keepAudioRunning(true);
+
+        runDevChecks(roundTrip / rate);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_checks.size()), 5);
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            // Item 5 is measured only: the loopback is on both inputs
+            const CheckResult::Verdict expected = (c.item == 5 ?
+                CheckResult::Verdict::Measured : CheckResult::Verdict::Pass);
+            QVERIFY2(c.verdict == expected, describe(c.item));
+        }
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+        QVERIFY(check(10));
+        QCOMPARE(number(*check(10), "second punch-in against the first"),
+                 QString("0.0 ms"));
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+        QVERIFY(!m_window->fake()->isSuspended());
     }
 
     // The loopback heard a second time, 50 ms later at half the level, as

@@ -381,8 +381,8 @@ namespace LatencyCheck
         int found;
 
         /// Across punch-ins, over those with an event found: the
-        /// median of their median offsets, which weighs every stream
-        /// start alike, and the largest minus the smallest of them
+        /// median of their median offsets, which weighs every take
+        /// alike, and the largest minus the smallest of them
         double medianOffset;
         double spread;
 

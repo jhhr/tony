@@ -498,8 +498,9 @@ LatencyCheck::judgeTake(const Layout &layout,
     }
 
     // Across punch-ins: each one that found anything counts once, at
-    // its median, since what moves from one to the next is the stream
-    // start, which every punch-in makes once
+    // its median, since what moves from one to the next is the take: a
+    // stream started again for each (Android, or svapp's default) moves
+    // its input against its output
     vector<double> positions, medians;
     double within = 0.0;
     for (const PunchInResult &r : summary.punchIns) {

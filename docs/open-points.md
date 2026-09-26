@@ -37,8 +37,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 - **Beyond the three drivers** ([audio-drivers.md](audio-drivers.md), §8): WASAPI's
   exclusive mode and WDM-KS, lower still but taking the device from every other program.
-  Next: keeping the stream running between takes (an svapp change), as WASAPI's restarts
-  turned out as unsteady as MME's.
 - Showing two takes at once, or any comparison of takes other than switching.
 - Singing track gain and pan are not saved in the session.
 - Background music is not saved in the session; it is reloaded by hand.
@@ -142,11 +140,14 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
 
-- **Restart jitter on MME.** Every take restarts the stream, and on the user's PC the
-  offset between input and output moved by about 13 ms from one start to the next. No one
-  round trip then places every take: the dev checks' items 1 and 2, and 7 and 13 whenever
-  their punch-in lands more than 2 ms off, fail on MME today, and on WASAPI as much
-  ([audio-drivers.md](audio-drivers.md), §7): next, keeping the stream running.
+- **Restart jitter.** Each start of the stream moved the offset between input and output
+  by up to about 8 ms either way on the user's PC, on MME and WASAPI alike, and items 1,
+  2, 7 and 13 failed on it. The stream is now kept running between takes on desktop
+  ([recording.md](recording.md#latency)); a dev run on WASAPI at 20 ms is to show that
+  they pass. Opening the device again (a driver, latency or device chosen, a device menu
+  opened, Tony started again) still moves the alignment, so a figure kept from an earlier
+  session is up to about 8 ms off: calibrate at the start of a session. And the
+  microphone shows as in use from the first take until Tony quits.
 - **A round trip is kept per driver, not per latency**: after a latency change the kept
   figure is used unless the latencies the device reports moved by more than 1 ms. And
   before a device's first take, the menu line, Forget Measured Latency and the dialog

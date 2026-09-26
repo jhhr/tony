@@ -80,30 +80,40 @@ used. Then, item by item:
 - **14** `record_into_selection_stops_by_itself`: how far past its selection each take
   recorded before it stopped itself, the coverage it added, and no dialog during it.
 
-**What fails on MME today, and why.** Every take restarts the audio stream, and on MME the
-offset between input and output moves by about 13 ms from one restart to the next, while
-the sweeps within one take agree to 0.3 ms; the start gap does not see it. No one round
-trip then places every take within ±2 ms: expect items 1 and 2 to fail, and items 7 and 13
-whenever their punch-in lands more than 2 ms off. Item 10 shows two punch-ins that landed
-apart only in its number "second punch-in against the first": the join is a 10 ms dip, which
-hides a jump. That is the true reading, not a fault of the check: WASAPI is there to be
-measured against it, below.
+**What failed before the stream was kept running, and why.** Every take restarted the
+audio stream, and each start moved the offset between input and output by up to about 8 ms
+either way (13 ms on MME at first), on MME and WASAPI alike, while the sweeps within one
+take agreed to 0.3 ms; the start gap does not see it. No one round trip then placed every
+take within ±2 ms: items 1, 2, 7 and 13 failed. Item 10 shows two punch-ins that landed
+apart only in its number "second punch-in against the first": the join is a 10 ms dip,
+which hides a jump. The stream now runs on between takes, from the first take until the
+device is opened again, so a calibration and the dev run after it share one alignment.
 
-**On each driver (Windows).** Run on 2026-09-26; their results, and the default they
-decided, are in [audio-drivers.md](audio-drivers.md), §7. The same setup each time, wired
+**The alignment moves when the device is opened again**: choosing a driver, a latency or a
+device, opening either device menu (which opens the device again to list what is connected
+now), and starting Tony again. A figure kept from an earlier session is therefore up to
+about 8 ms off: calibrate at the start of a session, with **Use this latency**, for the
+best placement, and do not open the device menus between the calibration and the run or
+the singing. Windows shows the microphone in use from the first take until Tony quits.
+
+**On each driver (Windows).** Runs 1 to 3 were made on 2026-09-26; their results, and the
+default they decided, are in [audio-drivers.md](audio-drivers.md), §7. The same setup each time, wired
 headphones with one earcup against the microphone:
 
 1. **MME at 200 ms**: what Tony has always asked for.
 2. **WASAPI at 20 ms.**
 3. **WASAPI at 10 ms.**
+4. **WASAPI at 20 ms again**, with a build that keeps the stream running between takes:
+   Calibrate Audio carrying on into a whole dev run, as the others. Items 1, 2, 7 and 13
+   should now pass; send the pair back as before (`DevChecks-wasapi-20-running.txt`).
 
 Each is steps 2 to 5 above, with that driver and latency and the devices chosen under it:
 Calibrate Audio carrying on into the dev checks. After each, select and copy the result
 page's text, and copy `DevChecks.txt` to a name that says which run it was
-(`DevChecks-wasapi-20.txt`, say): the next run writes over it. Send back the three pairs,
+(`DevChecks-wasapi-20.txt`, say): the next run writes over it. Send back each pair,
 and whether anything crackled or dropped out during a run. Press **Use this latency** on
 the driver and latency you will sing with: the figure is kept for that driver only.
-Done once, before the stream was kept running between takes; again after it.
+Runs 1 to 3 were before the stream was kept running between takes; run 4 is still to do.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and

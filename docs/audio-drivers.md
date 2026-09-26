@@ -18,14 +18,14 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
 
 - **MME is slow and unsteady.** On the user's PC Calibrate Audio measured a round trip of
   about 300 ms, with every stream asking for 0.2 s on both sides, and the offset between
-  input and output moved by about 13 ms from one take to the next (every take restarts the
-  stream), 5 to 20 ms over three calibrations, while the sweeps within one take agreed to
-  0.3 ms ([calibrate-audio.md](calibrate-audio.md), §10). No one stored figure then places
-  every take; the dev checks' items 1 and 2 fail on it.
+  input and output moved by about 13 ms from one take to the next (every take then
+  restarted the stream), 5 to 20 ms over three calibrations, while the sweeps within one
+  take agreed to 0.3 ms ([calibrate-audio.md](calibrate-audio.md), §10). No one stored
+  figure then placed every take; the dev checks' items 1 and 2 failed on it.
 - **WASAPI** is the Windows audio engine itself; MME and DirectSound are layers over it.
   Its shared mode mixes with other programs as MME does, with buffers as small as the
-  engine's period (typically 10 ms). Whether it is steadier across stream restarts is what
-  the measurements of §7 are for.
+  engine's period (typically 10 ms). It turned out no steadier across stream restarts
+  (§7), so the stream is now kept running between takes (§5).
 - **The latency asked for was fixed at 0.2 s.** At that figure WASAPI would keep MME's
   buffers and gain nothing.
 - **The device menus mixed every host API.** PortAudio lists every device once per host
@@ -98,8 +98,12 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
   named the menus would be empty: hence the default.
 - **`LatencyCalibration::Key`** holds `implementation` (from `audio-target`), both device
   names and the recording rate: a figure is kept per driver, and not per latency.
-- **Every take restarts the stream** (`MainWindowBase::stop()` suspends, `record()`
-  resumes: `Pa_StopStream` / `Pa_StartStream`).
+- **Every take restarted the stream** (`MainWindowBase::stop()` suspended, `record()`
+  resumed: `Pa_StopStream` / `Pa_StartStream`). The svapp fork's `stop()` now asks
+  `suspendAudioOnStop()` first. bqaudioio's `PortAudioIO::resume()` and `suspend()` do
+  nothing when the stream is already in that state, so a running stream survives the
+  next take's `resume()`; svapp copes with a device that never stops, as it never
+  suspends JACK.
 - **At 48 kHz**: `SingingTakes::spliceRecording()` resamples the recording to the
   reference's rate, `TakeTiming` keeps the latency and the frames received in device
   frames, and the cursor keeps the reference's pace during a take (the svgui fork).
@@ -128,6 +132,13 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   driver may record at another rate, as another device may), and recreates the audio IO.
 - **The report's latency** is the one last handed to bqaudioio, not the Preferences', so
   that it says what the device was opened with.
+- **The stream kept running between takes** (desktop): `MainWindow::suspendAudioOnStop()`
+  is false, so neither Stop nor the end of a take suspends the device, and every take
+  until the device is opened again shares one alignment of input against output. Opening
+  it again (a driver, a latency or a device chosen, either device menu opened, Tony
+  started again) moves the alignment, by up to about 8 ms on the user's PC. The input
+  stays open from the first take on, and Windows shows the microphone in use until Tony
+  quits. Android suspends as before ([recording.md](recording.md#latency)).
 
 ## 6. Tests
 
@@ -146,15 +157,22 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   check. The drivers are given through `TestMainWindow` ([testing.md](testing.md)), as
   Linux's bqaudioio has none.
 - **Dev** (`TestDevChecks`): the report's header names the driver and the latency.
-- Seen failing with the code broken: the default, the latency per driver, the greying.
+- **The stream kept running**, with a fake whose loopback moves 10 ms at each restart:
+  `TestAudioCheck`'s check lands its punch-ins 10 ms apart when the window suspends at
+  Stop, and alike when it keeps the stream running, as the application does on desktop,
+  resumed once and never suspended; `TestDevChecks`' whole run passes kept running
+  ([testing.md](testing.md), "The audio check and the dev checks").
+- Seen failing with the code broken: the default, the latency per driver, the greying;
+  the kept-running check and dev run with the stream suspended at Stop (items 1, 2, 7 and
+  13), and the check with the end of a take suspending again.
 - Not tested: that a choice stops playback. Nothing here runs the fork's Windows code.
 
 ## 7. State, and the measurements on the user's PC
 
 **Built**, on `feat/wasapi`: the fork, pinned; Calibrate Audio at any device rate; the two
-menus, the default and the reports. The fork's Windows part is compiled by the
-cross-compile only: nothing of it has run on Windows yet, and no figure has been measured
-through DirectSound or WASAPI.
+menus, the default and the reports; the stream kept running between takes (§5). The
+fork's Windows part was compiled by the cross-compile only until the user's runs below.
+Nothing has been measured through DirectSound.
 
 **The user's runs, 2026-09-26** (Windows; wired headphones with one earcup against the
 microphone; (System Default) devices; on each, Calibrate Audio and Use this latency, then
@@ -173,10 +191,10 @@ What they showed:
 
 - **WASAPI's round trip is a third of MME's**, and the dots trail the cursor half as far.
   10 ms gains 7 ms over 20 ms.
-- **Takes are no steadier.** On every driver each take lands up to about 8 ms either way,
-  15 ms from lowest to highest, while one take's sweeps agree within 0.3 ms: the stream's
-  restart at every take moves input against output, whatever the driver. Items 1, 2, 7
-  and 13 fail on it on all three.
+- **Takes are no steadier.** On every driver each take landed up to about 8 ms either way,
+  15 ms from lowest to highest, while one take's sweeps agreed within 0.3 ms: the stream's
+  restart at every take moved input against output, whatever the driver. Items 1, 2, 7
+  and 13 failed on it on all three.
 - WASAPI's start gap comes in whole periods of its engine, 10 ms.
 - Two failures were the checks' own, since fixed: item 14 misread a 48 kHz take's overrun
   (it reads about 0.3 s, as on MME), and item 3 judged dots in a sound's first window,
@@ -184,8 +202,10 @@ What they showed:
   ([calibrate-audio.md](calibrate-audio.md), §8).
 - Whether 10 ms crackled was not reported.
 
-**Decided** (the user, 2026-09-26): WASAPI at 20 ms is the default; next, the stream is
-kept running between takes (§8), and a dev run on WASAPI at 20 ms follows.
+**Decided** (the user, 2026-09-26): WASAPI at 20 ms is the default, and the stream is
+kept running between takes (done, §5). **Next:** Calibrate Audio and a whole dev run on
+WASAPI at 20 ms, where items 1, 2, 7 and 13 should now pass
+([manual-checklist.md](manual-checklist.md), §1).
 
 ## 8. Open points
 
@@ -199,8 +219,11 @@ kept running between takes (§8), and a dev run on WASAPI at 20 ms follows.
   before the first take, from svapp ([calibrate-audio.md](calibrate-audio.md), §5).
 - WDM-KS (in PortAudio's build too) and WASAPI's exclusive mode would be lower still, but
   take the device from every other program; not built.
-- **Next: keeping the stream running between takes** (the user's decision, 2026-09-26),
-  which takes the restart out of the take path: an svapp change, then a dev run.
+- **Kept running, not yet measured**: whether one alignment holds over a session's takes
+  on a real device is for the next dev run (§7). Opening the device again still moves it,
+  so a figure kept from an earlier session is up to about 8 ms off: calibrate at the start
+  of a session for the best placement. The microphone shows as in use from the first
+  take until Tony quits.
 - On the loopback fake at 48 kHz, two runs in four read an output peak near 0 dBFS in the
   first block after a stream started, where the reference peaks at −12 dBFS; never at
   44.1 kHz. It may be an audible click at a take's start on a 48 kHz device.

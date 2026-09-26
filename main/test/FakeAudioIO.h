@@ -80,6 +80,13 @@ public:
         int echoDelay = 0;
         float echoGain = 0.f;
 
+        // How far the loopback (and its echo) moves at each resume after
+        // the first, in frames: restartShift early, then late, then on
+        // time, and so on, as a real stream's input moves against its
+        // output by several ms each time it starts. inputDelay less this
+        // must still be at least a block. 0 for none
+        int restartShift = 0;
+
         // Tell the application the peak of each block's input and output,
         // left and right, as PortAudioIO does for its level meters
         bool reportLevels = false;
@@ -108,7 +115,8 @@ public:
         m_playStartFrame(-1),
         m_sinceResume(0),
         m_framesBeforePlayStart(-1),
-        m_resumeCount(0)
+        m_resumeCount(0),
+        m_loopbackDelay(config.inputDelay)
     {
         m_source->setSystemPlaybackBlockSize(m_config.blockSize);
         m_source->setSystemPlaybackSampleRate(m_config.sampleRate);
@@ -152,6 +160,7 @@ public:
         m_sinceResume = 0;
         m_framesBeforePlayStart = -1;
         ++m_resumeCount;
+        m_loopbackDelay = m_config.inputDelay + restartOffset(m_resumeCount);
     }
 
     bool isSuspended() const {
@@ -201,7 +210,16 @@ private:
     long m_sinceResume;
     long m_framesBeforePlayStart;
     int m_resumeCount;
+    int m_loopbackDelay;
     std::vector<float> m_captured;
+
+    // Where the loopback lands after the given number of starts, against
+    // inputDelay: on time at the first, then -, +, 0 times the shift
+    int restartOffset(int starts) const {
+        if (starts < 2) return 0;
+        static const int cycle[] = { -1, 1, 0 };
+        return cycle[(starts - 2) % 3] * m_config.restartShift;
+    }
 
     void run() {
         using namespace std::chrono;
@@ -249,7 +267,7 @@ private:
         for (int i = 0; i < n; ++i) {
             in[i] = inputAt(base + i);
             if (m_config.loopback) {
-                long j = base + i - m_config.inputDelay;
+                long j = base + i - m_loopbackDelay;
                 if (j >= 0 && j < base) in[i] += m_captured[size_t(j)];
                 if (m_config.echoGain != 0.f) {
                     j -= m_config.echoDelay;

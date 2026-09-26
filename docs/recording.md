@@ -89,9 +89,10 @@ nothing to do since `RecordCreateUnshownModel`. They are kept as a safety net.
 5. The undo command is made, the audio swapped, the ranged analysis started, the command
    pushed, and `syncCoverageStrip()` called **after** the swap.
 6. `recordingFinishedFull(analysing ? m_analyser2 : nullptr)` clears flags, restores
-   audibility, stops reference playback. With an analyser, the live dots stay until it
-   emits `initialAnalysisCompleted` (`m_realtimeLayerTeardownConnection`); without one
-   they go at once.
+   audibility, stops reference playback, and suspends the device only where Stop does
+   (`suspendAudioOnStop()`: on Android, not on desktop; see [Latency](#latency)). With an
+   analyser, the live dots stay until it emits `initialAnalysisCompleted`
+   (`m_realtimeLayerTeardownConnection`); without one they go at once.
 
 `recordingStarted(false)` only calls `updateAlternatePitchForTake()`,
 `updateSingingTrackForTake()` and `updateLayerStatuses()`, so the reference pitch track
@@ -139,9 +140,24 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
   `shift_aligns_onset` still cover it, and the svapp fork still restores the `start`
   attribute so that older `.ton` files open right.
 - L is per take, not per device: each recording measures its start gap afresh. The round
-  trip is per device and rate, but every take restarts the stream, and on MME the offset
-  between input and output moves by about 13 ms from one start to the next, which the start
-  gap does not see ([calibrate-audio.md](calibrate-audio.md), §10).
+  trip is per device and rate. Each start of the stream moves the offset between input
+  and output, which the start gap does not see: on the user's PC by up to about 8 ms
+  either way, on MME and WASAPI alike, while one take's sweeps agreed within 0.3 ms
+  ([audio-drivers.md](audio-drivers.md), §7).
+- **The stream is kept running between takes on desktop**, so that every take of a
+  session shares one alignment and one measured round trip places them all.
+  `MainWindow::suspendAudioOnStop()` (a virtual of the svapp fork's `MainWindowBase`,
+  which `stop()` asks before it suspends the device) says no on desktop, and
+  `recordingFinishedFull()` follows it. `record()` still resumes the device at every
+  take, which does nothing to a running stream. On Android it says yes: a phone should
+  not keep its microphone open. What still moves the alignment is **opening the device
+  again**: choosing a driver, a latency or a device; opening either device menu, which
+  rebuilds the device to list what is connected now (`rescanAudioDevices()`); and
+  starting Tony again. A figure measured in an earlier session is therefore up to about
+  8 ms off; calibrating at the start of a session places its takes best. Once recording
+  has been asked for, the input runs from the first take until the device is opened
+  again or Tony quits, so Windows shows the microphone in use meanwhile; before any
+  take, the output alone runs on from the first playback.
 - `m_takeLatency` keeps what the last take was placed with: the round trip, whether it was
   measured, the reported pair in seconds, the recording's rate, and the start gap and
   whether it was measured. The audio check reads it for each of its takes.

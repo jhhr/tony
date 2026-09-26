@@ -1173,6 +1173,13 @@ protected:
     // of its own, has been changed, and is not incomplete
     bool maySaveUnasked() const;
 
+    // Whether Stop, and the end of a take, suspend the audio device. Not
+    // on desktop: each start of a stream can move its input against its
+    // output by several ms, which no one measured figure can place every
+    // take with, so the stream is kept running from the first take on.
+    // On Android they do: a phone should not keep its microphone open
+    bool suspendAudioOnStop() const override;
+
 #ifdef Q_OS_ANDROID
     // Android's file picker gives content:// URIs, which svcore's readers
     // cannot open. A file in the phone's own storage is opened where it

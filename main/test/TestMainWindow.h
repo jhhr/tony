@@ -196,6 +196,16 @@ public:
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
+    // Whether Stop, and the end of a take, leave the device running, as
+    // the application has them do on desktop. Not unless a test asks:
+    // the fake starts its programmed input again at every resume, and
+    // many tests rely on each take resuming it once
+    void keepAudioRunning(bool on) { m_keepAudioRunning = on; }
+    // What the application itself chooses, whatever this window does
+    bool applicationSuspendsAudioOnStop() const {
+        return MainWindow::suspendAudioOnStop();
+    }
+
     // How often a device has been opened, and the driver and devices the
     // Preferences named for the last one
     int audioIOOpened() const { return m_audioIOOpened; }
@@ -357,6 +367,10 @@ protected:
         return m_implementations;
     }
 
+    bool suspendAudioOnStop() const override {
+        return !m_keepAudioRunning;
+    }
+
     bool confirmRecordingOverTake() override {
         ++m_recordOverQuestions;
         if (m_recordOverInDialog) {
@@ -443,6 +457,7 @@ private:
     FakeAudioIO::Config m_fakeConfig;
     bool m_installDevice;
     QStringList m_implementations;
+    bool m_keepAudioRunning = false;
     int m_audioIOOpened = 0;
     LatencyCalibration::Key m_audioIOOpenedFor;
     int m_liveDotsDelayMs = 0;

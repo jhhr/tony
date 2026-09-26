@@ -46,7 +46,7 @@ Run tests from `build_mingw/` with the same environment:
 ```sh
 mkdir -p ../tmp/tl
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "exit:$?"
-TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~9 min, real time
+TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~10 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
 ```

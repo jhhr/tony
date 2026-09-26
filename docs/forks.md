@@ -87,6 +87,9 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `AudioGenerator::removeModel()`/`clearModels()` also delete the continuous synth.
 - `SVFileReader` restores the `start` attribute of wave file models (upstream wrote it and
   never read it). Only older `.ton` files need it now.
+- `MainWindowBase::suspendAudioOnStop()`, a virtual that `stop()` asks before it suspends
+  the device: Tony's is false on desktop, so the stream runs on between takes
+  ([recording.md](recording.md#latency)).
 
 ### svgui
 

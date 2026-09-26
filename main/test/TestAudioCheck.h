@@ -74,6 +74,11 @@ class TestAudioCheck : public QObject
     static constexpr int reportedIn = 4096;
     static constexpr int roundTrip = 3 * 4096 + 123;
 
+    // How far the fake's input moves against its output each time its
+    // stream starts again: 10 ms, as a real driver's did by up to 8 ms
+    // either way (FakeAudioIO::Config::restartShift)
+    static constexpr int restartShift = 441;
+
     QTemporaryDir m_dir;
     TestMainWindow *m_window = nullptr;
     QTimer m_watchdog;
@@ -879,6 +884,69 @@ private slots:
         }
         QVERIFY2(std::fabs(r.calibratedRoundTrip - measured) <= allowed,
                  describe(r).constData());
+    }
+
+    // A device whose input moves 10 ms against its output each time its
+    // stream starts, and a window that suspends it at Stop, as svapp
+    // does unless told otherwise: each take starts the stream again, and
+    // the second punch-in lands 10 ms from the first, which is Unsteady.
+    // The negative of the next test, and the proof that the fake's shift
+    // works
+    void check_takes_move_apart_when_the_stream_restarts() {
+        FakeAudioIO::Config config = loopback();
+        config.restartShift = restartShift;
+        makeWindow(config);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(m_window->fake()->getResumeCount(), 2);
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        const double apart = r.summary.punchIns[0].medianOffset -
+            r.summary.punchIns[1].medianOffset;
+        QVERIFY2(std::fabs(apart * rate - restartShift) <= 4.0,
+                 qPrintable(QString("the second punch-in %1 frames before "
+                                    "the first: %2")
+                            .arg(apart * rate).arg(describe(r).constData())));
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Unsteady,
+                 describe(r).constData());
+    }
+
+    // The same device with the stream kept running between takes, as
+    // the application keeps it on desktop: started once, at the first
+    // take, and suspended neither by Stop nor by the end of a take, so
+    // that both punch-ins land alike and the check is Ok
+    void check_takes_agree_with_the_stream_kept_running() {
+        FakeAudioIO::Config config = loopback();
+        config.restartShift = restartShift;
+        makeWindow(config);
+#ifdef Q_OS_ANDROID
+        QVERIFY(m_window->applicationSuspendsAudioOnStop());
+#else
+        QVERIFY(!m_window->applicationSuspendsAudioOnStop());
+#endif
+        m_window->keepAudioRunning(true);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        const double apart = r.summary.punchIns[0].medianOffset -
+            r.summary.punchIns[1].medianOffset;
+        QVERIFY2(std::fabs(apart) <= 0.0002,
+                 qPrintable(QString("the second punch-in %1 ms before the "
+                                    "first: %2")
+                            .arg(apart * 1000.0).arg(describe(r).constData())));
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+        QVERIFY(!m_window->fake()->isSuspended());
     }
 
     // Cancel during a take stops it through the Stop path, clears the

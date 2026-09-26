@@ -1731,6 +1731,22 @@ MainWindow::audioLatencyChosen(double)
     recreateAudioIO();
 }
 
+bool
+MainWindow::suspendAudioOnStop() const
+{
+    // On the user's PC each take landed up to about 8 ms either way from
+    // the last, on MME and WASAPI alike, while one take's sweeps agreed
+    // within 0.3 ms: every start of the stream moved its input against
+    // its output. Kept running, every take of a session shares one
+    // alignment. Opening the device again (a driver, a latency or a
+    // device chosen, the device menus rescanning) still moves it
+#ifdef Q_OS_ANDROID
+    return true;
+#else
+    return false;
+#endif
+}
+
 #ifndef Q_OS_ANDROID
 void
 MainWindow::createAudioIO()
@@ -6133,13 +6149,16 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
         teardownRealtimePitchLayer();
     }
 
-    // Stop reference playback that was started for the singer's benefit.
-    // Suspend the audio IO so it doesn't keep consuming CPU while idle.
+    // Stop reference playback that was started for the singer's benefit,
+    // and suspend the audio IO where Stop does (suspendAudioOnStop()):
+    // on desktop the stream keeps running for the next take
     if (m_playSource && m_playSource->isPlaying()) {
         cerr << "MainWindow::recordingFinishedFull: stopping reference playback" << endl;
         m_playSource->stop();
-        if (m_audioIO) m_audioIO->suspend();
-        else if (m_playTarget) m_playTarget->suspend();
+        if (suspendAudioOnStop()) {
+            if (m_audioIO) m_audioIO->suspend();
+            else if (m_playTarget) m_playTarget->suspend();
+        }
     }
     restorePlaySelectionAfterTake();
 
