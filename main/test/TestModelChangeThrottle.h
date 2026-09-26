@@ -104,7 +104,14 @@ private slots:
         while (timer.elapsed() < kInterval * 10) {
             throttle.changed(changes * 256, changes * 256 + 256);
             ++changes;
-            QTest::qWait(2);
+            // A change every 2 ms by the clock, the throttle's timer
+            // running meanwhile. Not qWait(2): on Windows a wait that
+            // short lasts a timer tick of about 15 ms
+            QElapsedTimer step;
+            step.start();
+            while (step.nsecsElapsed() < 2000000) {
+                QCoreApplication::processEvents();
+            }
         }
         QVERIFY(changes > 100);
         QVERIFY2(m_told.size() >= 5 && m_told.size() <= 13,
