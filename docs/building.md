@@ -88,8 +88,8 @@ on 2026-09-25 (Ubuntu 24.04, no sound card):
   same tips.
 - `-j 4` on four cores; the whole build takes about 20 minutes. Run the app suite with
   nothing else building: it records in real time.
-- Four tests of `TestTakesFile` fail on Linux and nowhere else: they are about Windows
-  paths (backslashes, drive letters, case).
+- `TestTakesFile` checks Windows paths (backslashes, drive letters, case) on Windows only;
+  elsewhere it checks that names are case-sensitive and uses a POSIX absolute path.
 
 ## What is particular about this `meson.build`
 

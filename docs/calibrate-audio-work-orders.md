@@ -185,9 +185,8 @@ The detailed figures are awaited. So the ±2 ms of items 1 and 2 will fail on th
 machine as things stand: thresholds get tuned from real report files, not now. Whether to
 keep the stream running between takes (an svapp change) waits on those figures.
 
-**Linux baseline** (Qt 6.4.2): core all green but 4 `TestTakesFile` tests
-(`takes_folder`, `relative_audio_path`, `resolve_audio_path`, `in_folder`: Windows paths);
-your final runs must show exactly these 4. `test-tony-app` green in about 8 minutes
+**Linux baseline** (Qt 6.4.2): core all green (`TestTakesFile` checks Windows paths on
+Windows only). `test-tony-app` green in about 8 minutes
 (`TestRecordWorkflow` 98, `TestUiChecks` 19, `TestAudioCheck` 23, …); `test-tony-dev`
 green. `tony-app-test.cpp` draws text without sub-pixel anti-aliasing, or Qt 6.4's
 coloured fringes on the scale's labels read as live dots in `TestUiChecks`.
