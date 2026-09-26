@@ -94,6 +94,10 @@ MinGW setup.
     with moc's `sv::` names: the connection fails at run time with "No such slot". The
     user's Qt happens to match them, so a string connect can pass there and fail here.
     Use member-pointer `connect` only, and grep test output for "No such slot".
+- **Windows traps** (the user builds with MinGW; Linux will not catch these):
+  - Windows headers define `near` and `far` as empty macros, so a variable named `near`
+    compiles here and breaks the user's build. Avoid those two names, and other
+    Windows macro names such as `min`, `max`, `ERROR`, `IN`, `OUT`.
 
 **Docs: almost none.** The documentation phase (D) brings `docs/` up to date. You
 write only:
