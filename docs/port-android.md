@@ -94,8 +94,8 @@ only in search results.
     (sord) and Oboe were needed too.
   - JACK, PulseAudio, ALSA, PortAudio, oggz and fishsound are left out.
 - **Built on Linux, not on the MSYS2 machine**, which has no Android toolchain: in a cloud
-  session, and by `.github/workflows/android.yml` on every push, which keeps the APK as
-  the run's artifact `Tony-debug-apk` ([building.md](building.md#building-for-android)).
+  session, and by `.github/workflows/android.yml` when started by hand, which keeps the APK
+  as the run's artifact `Tony-debug-apk` ([building.md](building.md#building-for-android)).
 
 ### Audio
 

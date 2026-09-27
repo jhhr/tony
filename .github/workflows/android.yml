@@ -1,6 +1,6 @@
 name: Android CI
 
-on: [push, pull_request]
+on: workflow_dispatch
 
 # The APK, built by the scripts in deploy/android/ as the cloud container
 # builds it (docs/building.md). Qt for Android and the C libraries are
