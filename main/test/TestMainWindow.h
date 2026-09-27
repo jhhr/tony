@@ -24,6 +24,7 @@
 #include "../AudioDriverMenus.h"
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
+#include "../VoiceThresholdMenu.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -204,6 +205,8 @@ public:
     }
     AudioDriverMenus *audioDriverMenus() { return m_audioDriverMenus; }
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
+    // Playback > Voice Threshold, which is always shown
+    VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as

@@ -54,6 +54,7 @@ class LyricsSize;
 class AudioCheckRunner;
 struct AudioCheckResult;
 class AudioDriverMenus;
+class VoiceThresholdMenu;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -866,6 +867,9 @@ protected:
 
     // Playback > Audio Driver and Audio Latency, before the device menus
     AudioDriverMenus *m_audioDriverMenus;
+
+    // Playback > Voice Threshold, after Record
+    VoiceThresholdMenu *m_voiceThresholdMenu;
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;

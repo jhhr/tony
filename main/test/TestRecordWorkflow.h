@@ -71,6 +71,7 @@
 #include <QtTest>
 #include <QAbstractButton>
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QComboBox>
 #include <QElapsedTimer>
@@ -1449,6 +1450,37 @@ class TestRecordWorkflow : public QObject
     static void setVoiceThreshold(double dbfs) {
         QSettings settings;
         VoiceThreshold::setThreshold(settings, dbfs);
+    }
+
+    static double storedVoiceThreshold() {
+        QSettings settings;
+        return VoiceThreshold::threshold(settings);
+    }
+
+    // Playback > Voice Threshold opened, as the user does before choosing
+    void openVoiceThresholdMenu() {
+        emit m_window->voiceThresholdMenu()->menu()->aboutToShow();
+    }
+
+    // Its entry ticked, if any
+    QAction *voiceThresholdTicked() {
+        for (QAction *a : m_window->voiceThresholdMenu()->menu()->actions()) {
+            if (a->isChecked()) return a;
+        }
+        return nullptr;
+    }
+
+    // It opened, and the entry of the threshold chosen, by its text
+    void chooseVoiceThreshold(double dbfs) {
+        openVoiceThresholdMenu();
+        const QString label = VoiceThreshold::label(dbfs);
+        for (QAction *a : m_window->voiceThresholdMenu()->menu()->actions()) {
+            if (a->text() == label) {
+                a->trigger();
+                return;
+            }
+        }
+        QFAIL(qPrintable(label + " not in the menu"));
     }
 
     // A tone as quiet as music heard from speakers across the room, and a
@@ -4164,6 +4196,124 @@ private slots:
         QVERIFY2(eventsBetween(pitch, ranges[1].start,
                                ranges[1].end + 4 * hop).empty(),
                  "the redone recording was analysed without the threshold");
+    }
+
+    // Playback > Voice Threshold, straight after Record, which it is for:
+    // Off and then the thresholds, quietest first, by VoiceThreshold's
+    // labels, one to be ticked at a time.  With none set, Off is
+    void voice_threshold_menu_offers_the_choices() {
+        makeWindow(FakeAudioIO::Config());
+        QMenu *menu = m_window->voiceThresholdMenu()->menu();
+        QCOMPARE(menu->title(), QString("Voice &Threshold"));
+        QVERIFY(menu->menuAction()->isVisible());
+        QVERIFY(menu->menuAction()->isEnabled());
+        QVERIFY2(menu->menuAction()->statusTip().contains("speakers"),
+                 qPrintable(menu->menuAction()->statusTip()));
+
+        const QList<QAction *> playback = m_window->playbackMenu()->actions();
+        const qsizetype recordAt = playback.indexOf(m_window->recordAction());
+        QVERIFY(recordAt >= 0);
+        QCOMPARE(playback.indexOf(menu->menuAction()), recordAt + 1);
+
+        const std::vector<double> choices = VoiceThreshold::choices();
+        const QList<QAction *> entries = menu->actions();
+        QCOMPARE(int(entries.size()), int(choices.size()));
+        for (int i = 0; i < int(choices.size()); ++i) {
+            QAction *a = entries[i];
+            QCOMPARE(a->text(), VoiceThreshold::label(choices[i]));
+            QCOMPARE(a->data().toDouble(), choices[i]);
+            QVERIFY(a->isCheckable());
+            QVERIFY(a->actionGroup() && a->actionGroup()->isExclusive());
+        }
+        QCOMPARE(entries[0]->text(), QString("Off"));
+
+        openVoiceThresholdMenu();
+        QCOMPARE(voiceThresholdTicked(), entries[0]);
+    }
+
+    // The tick follows the settings, which are what the takes read, each
+    // time the menu opens.  A threshold kept that is none of the choices
+    // ticks none; one at or below the tracker's own floor is Off
+    void voice_threshold_menu_ticks_the_stored_value() {
+        setVoiceThreshold(-40.0);
+        makeWindow(FakeAudioIO::Config());
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->data().toDouble(), -40.0);
+
+        setVoiceThreshold(-25.0);
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->data().toDouble(), -25.0);
+        QCOMPARE(voiceThresholdTicked()->text(), VoiceThreshold::label(-25.0));
+
+        setVoiceThreshold(-42.0);
+        openVoiceThresholdMenu();
+        QAction *ticked = voiceThresholdTicked();
+        QVERIFY2(!ticked, qPrintable((ticked ? ticked->text() : QString()) +
+                                     " ticked for -42 dBFS"));
+
+        setVoiceThreshold(VoiceThreshold::kOff);
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), QString("Off"));
+
+        setVoiceThreshold(-35.0);
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->data().toDouble(), -35.0);
+        QSettings().setValue("MainWindow/voicethreshold", "-70");
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), QString("Off"));
+    }
+
+    // A choice is written to the settings, where the next take and the
+    // next analysis read it; Off as no setting at all
+    void voice_threshold_menu_writes_the_setting() {
+        makeWindow(FakeAudioIO::Config());
+
+        chooseVoiceThreshold(-25.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(storedVoiceThreshold(), -25.0);
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), VoiceThreshold::label(-25.0));
+
+        chooseVoiceThreshold(-45.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(storedVoiceThreshold(), -45.0);
+
+        chooseVoiceThreshold(VoiceThreshold::kOff);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(storedVoiceThreshold(), VoiceThreshold::kOff);
+        QVERIFY(!QSettings().contains("MainWindow/voicethreshold"));
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), QString("Off"));
+    }
+
+    // Greyed out while a take is being recorded, which keeps the
+    // threshold it started with, and back after Stop.  The one chosen
+    // before the take is the one it has
+    void voice_threshold_menu_greyed_out_during_a_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+        QAction *menu = m_window->voiceThresholdMenu()->menu()->menuAction();
+        QVERIFY(menu->isEnabled());
+
+        chooseVoiceThreshold(-40.0);
+        if (QTest::currentTestFailed()) return;
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeVoiceThreshold(), -40.0);
+        QVERIFY(!menu->isEnabled());
+        waitForSomethingRecorded();
+        QVERIFY(!menu->isEnabled());
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(menu->isEnabled(), 10000);
     }
 
     void load_singing_track() {

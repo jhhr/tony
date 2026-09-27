@@ -35,6 +35,7 @@
 #include "TakesFile.h"
 #include "TouchGestures.h"
 #include "VoiceThreshold.h"
+#include "VoiceThresholdMenu.h"
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
@@ -237,6 +238,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioInputDeviceMenu(0),
     m_audioInputDeviceGroup(0),
     m_audioDriverMenus(nullptr),
+    m_voiceThresholdMenu(nullptr),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -2023,6 +2025,11 @@ MainWindow::setupToolbars()
     menu->addAction(selectOneRightAction);
     menu->addSeparator();
     menu->addAction(recordAction);
+
+    // With Record, which it is for, and not with the driver menus below:
+    // the compact layout hides those on a phone, where this is wanted
+    // as much
+    m_voiceThresholdMenu = new VoiceThresholdMenu(menu, this);
     menu->addSeparator();
 
     // The driver and the latency asked of it, before the devices, which
@@ -2739,6 +2746,11 @@ MainWindow::updateMenuStates()
     // Choosing either opens the device afresh
     if (m_audioDriverMenus) {
         m_audioDriverMenus->setEnabled(!inTake && !checking);
+    }
+    // A take keeps the threshold it started with, and the check's takes
+    // have none: a choice made meanwhile would look as if it applied
+    if (m_voiceThresholdMenu) {
+        m_voiceThresholdMenu->setEnabled(!inTake && !checking);
     }
     for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (m) m->menuAction()->setEnabled(!checking);

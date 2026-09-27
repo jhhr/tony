@@ -1249,6 +1249,7 @@ tony_app_files = [
   'main/TakeLayers.cpp',
   'main/TouchGestures.cpp',
   'main/TouchMenuStyle.cpp',
+  'main/VoiceThresholdMenu.cpp',
 ]
 
 if system == 'android'
@@ -1282,6 +1283,7 @@ tony_app_moc_headers = [
   'main/SongScrollBar.h',
   'main/TouchGestures.h',
   'main/TouchMenuStyle.h',
+  'main/VoiceThresholdMenu.h',
 ]
 
 if dev_checks
