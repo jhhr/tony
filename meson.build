@@ -1215,6 +1215,8 @@ tony_core_files = [
   'main/TakesFile.cpp',
   'main/TakeTiming.cpp',
   'main/VerticalZoom.cpp',
+  'main/VoiceGate.cpp',
+  'main/VoiceThreshold.cpp',
 ]
 
 # Android's decoders for the audio its libraries cannot read (M4A, FLAC,
@@ -1589,6 +1591,8 @@ if system != 'android'
     'main/test/TestAudioDriverSettings.h',
     'main/test/TestTakeDiff.h',
     'main/test/TestLiveDotsFeed.h',
+    'main/test/TestVoiceThreshold.h',
+    'main/test/TestVoiceGate.h',
     'main/test/TestRunSuite.h',
   ])
 

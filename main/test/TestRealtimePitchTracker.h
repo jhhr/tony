@@ -18,6 +18,7 @@
 // model during a take.
 
 #include "../RealtimePitchTracker.h"
+#include "../VoiceThreshold.h"
 
 #include "TestSignals.h"
 
@@ -141,6 +142,26 @@ class TestRealtimePitchTracker : public QObject
     static int expectedHops(sv::sv_frame_t frames) {
         if (frames < kWindow) return 0;
         return int((frames - kWindow) / kHop) + 1;
+    }
+
+    // All the tracker finds in a recording made in full before it
+    // starts, with the level floor given: every hop is analysed in one
+    // pass, so the same input gives the same estimates every time
+    void trackAll(const std::vector<float> &signal, double floor,
+                  std::vector<PitchCollector::Event> &found) {
+        auto rec = makeRecording();
+        rec->appendMono(signal);
+        RealtimePitchTracker tracker(rec->id);
+        tracker.setMinLevel(floor);
+        PitchCollector spy(&tracker);
+        tracker.start();
+        const sv::sv_frame_t lastWindowEnd =
+            sv::sv_frame_t(expectedHops(rec->written) - 1) * kHop + kWindow;
+        QTRY_COMPARE_WITH_TIMEOUT(tracker.getFramesAnalysed(),
+                                  lastWindowEnd, 5000);
+        tracker.stop();
+        spy.count();
+        found = spy.events;
     }
 
 private slots:
@@ -306,6 +327,87 @@ private slots:
 
         QVERIFY2(spy.count() == 0,
                  qPrintable(QString("%1 pitches").arg(spy.count())));
+    }
+
+    // The voice threshold raises the floor (VoiceThreshold::liveFloor()):
+    // music the microphone hears from speakers, under it, gives no
+    // pitch, where at the tracker's own floor it gives one nearly every
+    // hop
+    void a_tone_under_the_threshold_gives_no_pitch() {
+        const std::vector<float> tone =
+            TestSignals::sine(330.0, kRate, int(kRate / 2), peakAt(-45.0));
+
+        std::vector<PitchCollector::Event> atFloor, raised;
+        trackAll(tone, RealtimePitchTracker::kMinLevel, atFloor);
+        if (QTest::currentTestFailed()) return;
+        trackAll(tone, VoiceThreshold::liveFloor(-40.0), raised);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(int(atFloor.size()) > expectedHops(tone.size()) * 3 / 4,
+                 qPrintable(QString("%1 pitches at the tracker's own floor")
+                            .arg(atFloor.size())));
+        QVERIFY2(raised.empty(),
+                 qPrintable(QString("%1 pitches under the threshold, the "
+                                    "first at frame %2")
+                            .arg(raised.size())
+                            .arg(raised.empty() ? -1 : raised[0].frame)));
+    }
+
+    // With the threshold under the singing, the tracker finds exactly
+    // what it finds without one: the same frames and the same Hz. The
+    // threshold moves no dot and delays none; it only spares YIN the
+    // windows it gates. The phrases start and stop on the hop grid, in
+    // room noise at about -71 dBFS, so that every window's first half
+    // holds either none of them (under both floors) or a hop's worth or
+    // more (about -29 dBFS or louder, over both)
+    void a_threshold_under_the_singing_changes_no_pitch() {
+        const int n = int(kRate);
+        std::vector<float> signal = TestSignals::whiteNoise(n, 11, 0.0005);
+
+        // A steady phrase, then one gliding from 200 to 300 Hz
+        const double amplitude = peakAt(-23.0);
+        for (int i = 10 * kHop; i < 70 * kHop; ++i) {
+            signal[i] += float(amplitude *
+                               std::sin(2.0 * M_PI * 220.5 * i / kRate));
+        }
+        double phase = 0.0;
+        const int glideFrom = 90 * kHop, glideTo = 160 * kHop;
+        for (int i = glideFrom; i < glideTo; ++i) {
+            double hz = 200.0 + 100.0 * (i - glideFrom) / (glideTo - glideFrom);
+            phase += 2.0 * M_PI * hz / kRate;
+            signal[i] += float(amplitude * std::sin(phase));
+        }
+
+        std::vector<PitchCollector::Event> atFloor, raised;
+        trackAll(signal, RealtimePitchTracker::kMinLevel, atFloor);
+        if (QTest::currentTestFailed()) return;
+        trackAll(signal, VoiceThreshold::liveFloor(-40.0), raised);
+        if (QTest::currentTestFailed()) return;
+
+        // Not vacuous: dots on most hops of both phrases, at many pitches
+        const int phraseHops = 60 + 70;
+        QVERIFY2(int(atFloor.size()) > phraseHops * 3 / 4,
+                 qPrintable(QString("%1 pitches").arg(atFloor.size())));
+        double lowest = 1e9, highest = 0.0;
+        for (const auto &e : atFloor) {
+            lowest = std::min(lowest, e.hz);
+            highest = std::max(highest, e.hz);
+        }
+        QVERIFY2(lowest < 215.0 && highest > 280.0,
+                 qPrintable(QString("pitches from %1 to %2 Hz")
+                            .arg(lowest).arg(highest)));
+
+        QCOMPARE(raised.size(), atFloor.size());
+        for (size_t i = 0; i < atFloor.size(); ++i) {
+            QVERIFY2(raised[i].frame == atFloor[i].frame &&
+                     raised[i].hz == atFloor[i].hz,
+                     qPrintable(QString("pitch %1: %2 Hz at frame %3 with "
+                                        "the threshold, %4 Hz at %5 without")
+                                .arg(i).arg(raised[i].hz, 0, 'g', 17)
+                                .arg(raised[i].frame)
+                                .arg(atFloor[i].hz, 0, 'g', 17)
+                                .arg(atFloor[i].frame)));
+        }
     }
 
     void stop_is_prompt() {
