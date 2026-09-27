@@ -52,8 +52,8 @@ measurements) was a separate report, not kept in the repository.
 - **Forget Measured Latency**, enabled while a figure is kept for these devices, stale or
   not.
 
-While a check runs, Record, the driver and latency menus and both device submenus are
-disabled as well.
+While a check runs, Record, the driver and latency menus, both device submenus and Voice
+Threshold are disabled as well.
 
 **The dialog** is not modal: the check's session is in the window and can be looked at
 meanwhile. It is about 64 characters wide and as tall as its page's text, never more than
@@ -538,7 +538,8 @@ What it rests on:
   While Recording and Pre-roll write QSettings when toggled, so the runner sets an override
   (`m_audioCheckTakes`, with the plan's pre-roll and round trip) that `record()`,
   `recordingStarted()` and `wantedPreRollFrames()` read, and clears it when the take stops
-  or the run ends.
+  or the run ends. It also records them with the voice threshold Off, whatever the setting
+  ([recording.md](recording.md#the-audio-checks-takes)).
 - **Record during a check.** The Record action goes to `recordPressed()`, which ignores a
   press while a check runs: `record()` itself cannot tell a press from the runner's calls or
   `pollTakeProgress()`'s, and a press would stop the check's take or record one of the
@@ -660,11 +661,15 @@ below).
 
 **Later candidates:**
 
-- A measured noise floor for the live dots: `RealtimePitchTracker`'s floor is a fixed
-  −60 dBFS ([recording.md](recording.md#the-live-tracker)), which kept out the room noise
-  that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS). A microphone noisier
-  than that still gives dots in silence; Calibrate Audio could measure its floor in the
-  silence between its sounds, and put it on the result page with the microphone's channel.
+- A measured noise floor, and a suggested voice threshold: `RealtimePitchTracker`'s own
+  floor is a fixed −60 dBFS ([recording.md](recording.md#the-live-tracker)), which kept
+  out the room noise that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS). A
+  microphone noisier than that still gives dots in silence, unless the user raises
+  Playback > Voice Threshold over it; and a singer with the music on speakers chooses
+  that threshold blind, by recording the music alone. Calibrate Audio could measure the
+  microphone's floor in the silence between its sounds and, played through the speakers
+  as they are sung with, the level they reach the microphone at, put both on the result
+  page with the microphone's channel, and suggest a threshold over them.
 - A quick re-measure after the device is opened or resumed again (a Bluetooth reconnect;
   on a phone, a resume after two idle minutes), without a test session.
 - A getter for the rate the record target records at (svapp fork), so that on a desktop

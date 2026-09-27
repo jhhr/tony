@@ -14,7 +14,7 @@ methods, and they do not tell the story of fixed bugs.
 | [building.md](building.md) | The MinGW build, and every way the environment has gone wrong; the Linux build of a cloud session; the Android build, its toolchain and the APK; CI |
 | [testing.md](testing.md) | The test executables (core, app, and the dev checks'), the fakes and helpers, how tests turned out to be worthless, races, and testing the phone's code on the desktop |
 | [architecture.md](architecture.md) | What the fork adds, `tony_core` / `tony_app`, who owns what, and the rules for layers, models, commands, playback and session files; the smaller features, the lyrics and their editor among them |
-| [recording.md](recording.md) | Record to Stop, step by step and why in that order; latency; pre-roll; record into selection; the live tracker |
+| [recording.md](recording.md) | Record to Stop, step by step and why in that order; latency; pre-roll; record into selection; the live tracker and the voice threshold |
 | [takes.md](takes.md) | Takes: decisions, the audio swap, ranged analysis and merge, undo, the coverage strip, files and sessions, limitations |
 | [forks.md](forks.md) | The `jhhr/*` library forks: how to change one, what each adds, known defects |
 | [open-points.md](open-points.md) | Decisions waiting for the user, things not built, weak spots |

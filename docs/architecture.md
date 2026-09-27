@@ -41,8 +41,8 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
 Android-only code elsewhere is under `#ifdef Q_OS_ANDROID`; neither may change what the
@@ -311,6 +311,30 @@ saved in the session.
 after `openPath()`, and only then prune the extra pane — the imported waveform in that pane
 is the only reference to the model until `m_analyser2` has a layer of its own. It ends with
 `clearTakeHistory()`, which also disposes of the "Import" command for the pruned pane.
+
+**Voice threshold** (`VoiceThreshold`, `VoiceGate`, `VoiceThresholdMenu`): for singing
+with the music on speakers, which the microphone hears as well. A level in dBFS under
+which what the microphone hears is not taken for singing: no live dots are drawn for it,
+and the take's ranged analysis keeps no pitch or notes there. What is found in the audio
+is gated, never the audio, which is recorded, spliced and played as it is. A noise gate in
+the splice was rejected: it would cut quiet singing out of playback for good, where a
+threshold that proves too high is lowered and the take analysed again. One measure
+throughout, the level of the half window whose frames YIN compares to find a pitch (the
+window's first half, and in pYIN's Unbiased Timing its middle half), the channels'
+average, as the live tracker's floor has it ([recording.md](recording.md#the-live-tracker);
+the gate in [takes.md](takes.md#the-voice-threshold)). pYIN's own `lowampsuppression` is
+not used for it: it only lowers the voicing probability, and `pyin` is upstream. A take
+keeps the threshold it started with; the audio check's takes have none.
+
+Playback > Voice Threshold sits straight after Record, which it is for, and not with the
+Audio Driver and Audio Latency menus after it: the compact layout hides those, while a
+phone on its own speaker needs this as much, so it is not among the compact layout's
+hidden actions and the menu button reaches it. It is greyed out during a take and while an
+audio check runs. The setting is QSettings `MainWindow/voicethreshold` in dBFS (Off is no
+key at all, and anything at or under the tracker's −60 dBFS floor reads as Off): one value
+for every driver and device, and not in the session. A choice only writes it: `record()`
+reads it at every Start, and Analyse Now and a redo that analyses again read it when they
+run.
 
 **Touch** (`TouchGestures`, one per pane: an event filter in `main/`, not a change to
 svgui, so that synthetic touch events test it on the desktop). One finger is left to Qt,

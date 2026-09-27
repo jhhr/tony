@@ -121,6 +121,12 @@ call returns, and waits for the merge the same way whatever pYIN took.
   the whole file's grid, no correction. The **notes** output is variable-rate and pYIN
   times a note by frame number *within the run*: `m_rangedStart` is added back. That is
   what the grid alignment is for.
+- **The voice threshold gates the run's events** ([below](#the-voice-threshold)) after
+  W's far end is worked out and before anything is removed or added. After, because the
+  far end is where the run stamped, loud or not: a run whose last hops are quiet must
+  still replace what the models held out to there. Before, because the notes' edges below
+  are then worked out from what is kept, and the undo record is what was merged. With the
+  threshold Off the merge is as it was without one.
 - **Pitch**: old events in W go, new events in W are added.
 - **Notes, by onset**: old notes with onset in W go; new notes with onset in W are added.
   A new note that would overlap an old note starting at or after the end of W is cut back
@@ -156,6 +162,42 @@ call returns, and waits for the merge the same way whatever pYIN took.
 Analyse Now on a take re-analyses all coverage as **one** run from the first range to the
 last (silence in between is cheaper than a queue). It is not undoable and closes the open
 command first.
+
+### The voice threshold
+
+For a singer with the music on speakers: what pYIN found where the take is quieter than
+the threshold, where the microphone heard only the music, is not merged. The measure is
+the live tracker's for its dots ([recording.md](recording.md#the-live-tracker)): the level
+of the half window whose frames YIN compared to find a result, the channels' average, a
+level at the threshold counting as voice. For a stamp f that is **[f − 512, f + 512) in
+either timing**. With the default timing pYIN stamps a block 512 frames in and compares
+its first half, as the live tracker does; with the Analysis menu's Unbiased Timing
+(`precisetime`) it stamps the block 1024 frames in but compares its middle half
+(`YinUtil::slowDifference()`, a little wider at longer lags), which begins 512 frames
+before the stamp too. Measuring from where the block begins in that timing, [f − 1024, f),
+would take the first hops of every phrase and leave the hops of music after it. A pitch
+event under the threshold
+goes. A note is trimmed to begin at its first stamp at or over it and to end a hop after
+its last (quiet stamps between them stay), and goes if it has none; its value is left as
+pYIN gave it. The rules are `VoiceGate`'s, in `tony_core`.
+
+- **The take's file is read again, raw; never the audio model.** Tony has every audio file
+  read normalised to its peak (`MainWindow` sets the "normalise audio" preference), so the
+  model's levels are relative to the take's loudest sample, and a take of quiet music
+  alone reads as loud as any. A take's file holds what was recorded, at the level the
+  microphone gave it. A WAV at the model's rate is read through a `WavFileReader`, a block
+  at a time and only around the stamps, so a long take is never in memory whole; anything
+  else goes through `AudioFileReaderFactory`, unnormalised, which decodes all of it first.
+  Audio that cannot be read so is merged ungated, and the log says so.
+- **Which threshold.** At Stop, the one the take started with
+  ([recording.md](recording.md#start-click), step 3). Analyse Now and a redo that analyses
+  again use the setting as it is then: the command holds no threshold, and Analyse Now is
+  how a threshold chosen later is had on singing already recorded. Nothing is taken out of
+  the audio, so a lower threshold and Analyse Now give back what a higher one left out. A
+  run widened at Stop over an earlier take's range gates all of it with the new take's
+  threshold.
+- It runs on the GUI thread, in the merge: about 140 ms per 90 s of take where it was
+  measured ([open-points.md](open-points.md)).
 
 ## Undo and redo (`SingingTakeCommand`)
 
@@ -309,3 +351,12 @@ Things to know, none of which stops the feature being used. See also
   frames, since coverage counts the reference's.
 - A session that loaded without its reference cannot be saved as it is: Save As waits for
   the reference's analysis (`waitForInitialAnalysis()`), which never comes, until Cancel.
+- **The voice threshold gates ranged runs only.** A file loaded with Load Singing Track is
+  analysed in full, ungated (Analyse Now of it is gated), and so is a recording made with
+  no reference, which becomes the session and is analysed as a reference is, though its
+  live dots were gated.
+- A run widened at Stop over an earlier take's range gates that range with the new take's
+  threshold, which is not the one the earlier take started with if the setting changed
+  between the two.
+- A note the voice threshold trims keeps the value pYIN gave it, over its whole length,
+  the quiet ends included.

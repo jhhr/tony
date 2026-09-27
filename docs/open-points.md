@@ -67,6 +67,11 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   the amount in the status bar (the dialog's) or by the words stopping (the drag's).
 - **TTML and LRC only**: no SRT or Moises JSON. Another format is another parser that
   `parseLyrics()` chooses.
+- **No level meter for the voice threshold**: the user chooses it blind, by recording the
+  music alone and raising it until the music gives no dots (the README says how). A meter
+  of the input beside the menu, or Calibrate Audio suggesting a threshold
+  ([calibrate-audio.md](calibrate-audio.md), §10), would show where the music and the
+  voice are.
 
 ## Weak spots
 
@@ -236,10 +241,12 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   shown before the round trip is known.
 - Live dots trail the cursor by about the round trip (and 40 ms more on the fake): the
   cursor runs with what has been recorded.
-- **The live dots' level floor is fixed at −60 dBFS**, which keeps out the room noise
+- **The live dots' own level floor is fixed at −60 dBFS**, which keeps out the room noise
   that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS, 25 dB below the quietest
-  dot on a tone). A microphone noisier than −60 dBFS still gives dots in silence
-  ([recording.md](recording.md#the-live-tracker)).
+  dot on a tone). A microphone noisier than −60 dBFS still gives dots in silence, unless
+  the user sets the voice threshold over its noise
+  ([recording.md](recording.md#the-live-tracker)). The checks' takes record with the
+  threshold Off.
 - Items 3 and 5 judge the fresh punch-ins only. Item 14 cannot see an overwrite question,
   which `record()` would ask before the observer starts.
 - Not in the dev run, of what the retired `test-tony-device` did: a take with no lead-in
@@ -249,3 +256,28 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   svapp fork ([forks.md](forks.md), known defects).
 - The calibration's result page does not give the microphone's channel or the noise
   floor, which nothing in it measures.
+
+### The voice threshold
+
+The design is in [recording.md](recording.md#the-live-tracker) and
+[takes.md](takes.md#the-voice-threshold).
+
+- **Only ranged runs are gated.** Load Singing Track's first, whole-file analysis is not
+  (Analyse Now of it is), nor is a recording made with no reference, which becomes the
+  session and is analysed whole ([takes.md](takes.md#known-limitations)).
+- **The gate runs on the GUI thread**, in the merge: 136 to 150 ms for 90 s of stereo take
+  in `test-tony-app` on the cloud machine, most of it `level()`. Analyse Now of a take
+  that covers a whole song holds the window for a few hundred ms.
+- **Inside `test-tony-app`, `level()` ran five times slower than in a program of its
+  own**: 7.5 µs against 1.4 µs for 1024 frames. A `vzeroupper` before it brought it back
+  to 1.3 µs, so something in the process leaves the upper halves of the AVX registers
+  dirty, which slows every SSE loop without VEX encoding that runs after it. Which library
+  does it was not found. It may slow the live tracker's YIN in the application as well;
+  with the state clean the gate would take about 50 ms per 90 s.
+- **The menu's status tip is one line**, all the status bar shows, and a narrow window
+  cuts it short; the Playback menu shows no tooltips. How to choose a threshold, and that
+  it applies from the next take and to recorded takes through Analyse Now, is in the
+  README only. On a phone nothing explains the entries, unless touch shows the status tip
+  (not checked).
+- **Greyed out while an audio check runs** is tested only during one of the check's takes,
+  as for the driver menus; nothing checks it between the check's takes.
