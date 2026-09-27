@@ -305,6 +305,68 @@ private slots:
         QCOMPARE(record, QString("unchanged"));
     }
 
+    // Before its first take a desktop's device cannot say what rate it
+    // will record at: the one rate a figure is kept at for the driver and
+    // devices, if there is only one, whatever the key's own rate. Other
+    // devices' and other drivers' figures do not count, and names that
+    // hold what is encoded in a group's name are found
+    void only_rate_for_the_devices() {
+        QSettings settings(m_path, QSettings::IniFormat);
+        sv::sv_samplerate_t rate = 12345;
+        QVERIFY(!LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Mic"), rate));
+        QCOMPARE(rate, 12345.0);
+
+        LatencyCalibration::store(settings, key("Speakers", "Mic", 48000),
+                                  figure(0.03, 0.005, 0.003));
+        LatencyCalibration::store(settings, key("Speakers", "Line In", 96000),
+                                  figure(0.04, 0.005, 0.003));
+        LatencyCalibration::store(settings, key("Headphones", "Mic", 44100),
+                                  figure(0.05, 0.005, 0.003));
+        LatencyCalibration::store
+            (settings, key("Speakers", "Mic", 88200, "portaudio"),
+             figure(0.06, 0.005, 0.003));
+        const Key odd = key("Line 1/2", "Mic | 100%", 22050);
+        LatencyCalibration::store(settings, odd, figure(0.07, 0.005, 0.003));
+
+        QVERIFY(LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Mic"), rate));
+        QCOMPARE(rate, 48000.0);
+        QVERIFY(LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Mic", 96000), rate));
+        QCOMPARE(rate, 48000.0);
+        QVERIFY(LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Line In"), rate));
+        QCOMPARE(rate, 96000.0);
+        QVERIFY(LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Mic", 44100, "portaudio"), rate));
+        QCOMPARE(rate, 88200.0);
+        QVERIFY(LatencyCalibration::onlyRate
+                (settings, key("Line 1/2", "Mic | 100%"), rate));
+        QCOMPARE(rate, 22050.0);
+
+        rate = 12345;
+        QVERIFY(!LatencyCalibration::onlyRate
+                (settings, key("Speakers", ""), rate));
+        QVERIFY(!LatencyCalibration::onlyRate
+                (settings, key("Speaker", "Mic"), rate));
+        QVERIFY(!LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Mic", 44100, "jack"), rate));
+        QCOMPARE(rate, 12345.0);
+
+        // A second rate for the same devices: which one they will record
+        // at is not known. Forgotten again, the other is the one
+        LatencyCalibration::store(settings, key("Speakers", "Mic", 96000),
+                                  figure(0.08, 0.005, 0.003));
+        QVERIFY(!LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Mic"), rate));
+        QCOMPARE(rate, 12345.0);
+        LatencyCalibration::forget(settings, key("Speakers", "Mic", 48000));
+        QVERIFY(LatencyCalibration::onlyRate
+                (settings, key("Speakers", "Mic"), rate));
+        QCOMPARE(rate, 96000.0);
+    }
+
     // A device that describes its streams is stale when it opened either
     // otherwise, not when the latencies it reports move: Oboe's moved by
     // 4 ms from one take to the next on the phone. A stream it does not
@@ -367,6 +429,73 @@ private slots:
             QVERIFY(LatencyCalibration::isStale(f, out + sign * beyond, in));
             QVERIFY(LatencyCalibration::isStale(f, out, in + sign * beyond));
         }
+    }
+
+    // A latency reported as nothing is a stream that is not open: on a
+    // desktop there is no device before the first file, and it is open
+    // for playback only until the first take, its input reporting 0. It
+    // is not compared, and with neither open the figure is not stale.
+    // One that is open is compared as ever. A device that describes its
+    // streams is judged by them, open or not, as before
+    void stale_with_a_stream_not_open() {
+        const double out = 8192 / 48000.0;
+        const double in = 4096 / 48000.0;
+        const Figure f = figure(0.28, out, in);
+        const double beyond = 1.1 * LatencyCalibration::kStaleToleranceSeconds;
+
+        QVERIFY(!LatencyCalibration::isStale(f, out, 0.0));
+        QVERIFY(!LatencyCalibration::isStale(f, 0.0, in));
+        QVERIFY(!LatencyCalibration::isStale(f, 0.0, 0.0));
+        QVERIFY(!LatencyCalibration::isStale(f, -0.5, -0.001));
+        for (double sign : { 1.0, -1.0 }) {
+            QVERIFY(LatencyCalibration::isStale(f, out + sign * beyond, 0.0));
+            QVERIFY(LatencyCalibration::isStale(f, 0.0, in + sign * beyond));
+            QVERIFY(LatencyCalibration::isStale(f, out + sign * beyond, -1.0));
+        }
+
+        // A figure measured while a latency was reported as nothing: one
+        // reported now is another
+        const Figure none = figure(0.28, out, 0.0);
+        QVERIFY(!LatencyCalibration::isStale(none, out, 0.0));
+        QVERIFY(LatencyCalibration::isStale(none, out, in));
+
+        Figure phone = figure(0.030, 0.0, 0.0);
+        phone.outputStreams = "AAudio (MMAP), 48000 Hz, Exclusive, burst 96";
+        QVERIFY(LatencyCalibration::isStale
+                (phone, 0.0, 0.0, "AAudio, 48000 Hz, Shared, burst 96", ""));
+        QVERIFY(!LatencyCalibration::isStale
+                (phone, 0.0, 0.0, phone.outputStreams, ""));
+    }
+
+    // Nothing open, or the input not yet: the figure, while the stream
+    // that is open reports what it reported then; the reported pair
+    // otherwise, which is then the output alone
+    void round_trip_in_use_with_streams_not_open() {
+        const double out = 0.2;
+        const double in = 0.1;
+        const Figure f = figure(0.345, out, in);
+
+        InUse closed = LatencyCalibration::roundTripInUse(&f, 0.0, 0.0);
+        QVERIFY(closed.source == Source::Measured);
+        QCOMPARE(closed.roundTrip, 0.345);
+        QCOMPARE(closed.date, f.date);
+        QVERIFY(!closed.stale);
+        QCOMPARE(closed.reportedOutput, 0.0);
+        QCOMPARE(closed.reportedInput, 0.0);
+
+        InUse playbackOnly = LatencyCalibration::roundTripInUse(&f, out, 0.0);
+        QVERIFY(playbackOnly.source == Source::Measured);
+        QCOMPARE(playbackOnly.roundTrip, 0.345);
+
+        InUse moved = LatencyCalibration::roundTripInUse(&f, out + 0.01, 0.0);
+        QVERIFY(moved.source == Source::Reported);
+        QVERIFY(moved.stale);
+        QCOMPARE(moved.roundTrip, out + 0.01);
+
+        InUse nothing = LatencyCalibration::roundTripInUse(nullptr, 0.0, 0.0);
+        QVERIFY(nothing.source == Source::Reported);
+        QVERIFY(!nothing.stale);
+        QCOMPARE(nothing.roundTrip, 0.0);
     }
 
     // The stored figure while it is fresh, the reported sum otherwise;

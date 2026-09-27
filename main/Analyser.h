@@ -21,6 +21,7 @@
 #include <QMutex>
 
 #include <map>
+#include <set>
 #include <vector>
 
 #include "TakeEvents.h"
@@ -123,6 +124,10 @@ public:
         Spectrogram = 3,
     };
 
+    // For the user's own toggles: each writes its own setting (in this
+    // analyser's group, see getSettingsGroup()), which every file this
+    // analyser shows later starts from.  Not for a temporary state: for
+    // that, the layer's showLayer() or its play parameters
     bool isVisible(Component c) const;
     void setVisible(Component c, bool v);
     void toggleVisible(Component c) { setVisible(c, !isVisible(c)); }
@@ -130,6 +135,17 @@ public:
     bool isAudible(Component c) const;
     void setAudible(Component c, bool v);
     void toggleAudible(Component c) { setAudible(c, !isAudible(c)); }
+
+    /**
+     * Keep a track hidden, or silent, whatever the settings say: for
+     * what the command line leaves out (--no-spectrogram,
+     * --no-sonification), which is not the user's choice.  Applied now
+     * and again whenever this analyser loads its layers (Analyse Now
+     * makes them anew), and written to no setting, so that a launch
+     * with the track has it as the user left it.
+     */
+    void keepHidden(Component c);
+    void keepSilent(Component c);
 
     /**
      * Draw the waveform paler than usual, for while something is drawn
@@ -164,6 +180,10 @@ public:
         return sv::ModelById::getAs<sv::WaveFileModel>(m_fileModel);
     }
 
+    // For the user's own level controls, as setVisible() and
+    // setAudible() are for the toggles: each writes its own setting.
+    // Only the reference's audio, pitch and notes have controls and
+    // keep a level: the singing analyser keeps none
     float getGain(Component c) const;
     void setGain(Component c, float gain);
 
@@ -454,6 +474,10 @@ protected:
     // See setWaveformFaded()
     bool m_waveformFaded;
 
+    // See keepHidden() and keepSilent()
+    std::set<Component> m_keptHidden;
+    std::set<Component> m_keptSilent;
+
     QString doAllAnalyses(bool withPitchTrack);
 
     QString addVisualisations();
@@ -507,8 +531,24 @@ protected:
     void layersCreated(sv::Document::LayerCreationAsyncHandle,
                        std::vector<sv::Layer *>, std::vector<sv::Layer *>);
 
-    void saveState(Component c) const;
+    // Where this analyser keeps its toggles: PlaybackSettings'
+    // reference group, or the singing one for the secondary colours
+    QString getSettingsGroup() const;
+
+    // Apply the settings to our layers, writing none
     void loadState(Component c);
+
+    // Whether a track keeps its level and pan in the settings: see
+    // setGain()
+    bool keepsLevel(Component c) const;
+
+    // setVisible(), setAudible(), setGain() and setPan() without the
+    // write to the settings.  False if there is no layer (or play
+    // parameters) to apply it to
+    bool applyVisible(Component c, bool v);
+    bool applyAudible(Component c, bool a);
+    bool applyGain(Component c, float gain);
+    bool applyPan(Component c, float pan);
 };
 
 #endif

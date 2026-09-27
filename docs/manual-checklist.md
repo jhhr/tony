@@ -183,11 +183,13 @@ Only on Windows, where the menus are shown. The design is in
 5. **The reports name the driver.** Calibrate Audio's first page and its result page
    show "Driver: WASAPI"; `DevChecks.txt` has "Audio driver: WASAPI" and "Latency asked
    for: 20.0 ms" under the devices at its head.
-6. **After Use this latency on WASAPI** the latency line gives the measured figure. Once
-   Tony is started again, or the driver chosen again, it may read "driver's figure" until
-   the first take: the device's rate, often 48 kHz there, is not known before. Takes use
-   the kept figure from the first; a known limit ([audio-drivers.md](audio-drivers.md),
-   §8).
+6. **After Use this latency on WASAPI** the latency line gives the measured figure. Quit
+   and launch Tony again (`.\build.bat launch`): the line gives the same "measured N ms,
+   date" before any file is opened, with a file open, and after the first take; so it
+   does after the driver is chosen again. If it reads "(the measured one is out of date)"
+   with a file open and "measured" after the first take, the device, open for playback
+   only, reports another output latency than it did at the check: note both lines
+   ([audio-drivers.md](audio-drivers.md), §8).
 
 Not tried yet.
 
@@ -219,11 +221,30 @@ Not tried yet.
    smoothly, and neither they nor the cursor stutter, in a maximised window. None appear
    between phrases, and none are lost on soft singing: with Voice Threshold Off the
    tracker ignores only what is quieter than −60 dBFS.
-8. **Background music in a session**: load it, turn its level down, save, close and open
+8. **The bottom bar after a relaunch.** With a song open, a take recorded and background
+   music loaded (File > Load Background Music...), set each of these away from its
+   default: the reference's Show and Play toggles (hiding a track also stops its Play,
+   and showing it brings Play back as it was), Show Singing Pitch Track, Show Singing
+   Notes and Play Singing Audio; the level and pan of the reference's audio, pitch track
+   and notes (the wheel, Ctrl with the wheel for the pan, or a click, which pops both
+   up); the master volume fader on the Playback Controls bar; Mix Background Music, its
+   level and pan. Change the playback speed, Loop Playback and Constrain Playback to
+   Selection too. Quit (the session need not be saved) and launch again (`.\build.bat
+   launch`, or `run`). Before any file the fader, and Mix Background Music and its level
+   (greyed out), are as left. Open the song's audio file, not a session (File > Open
+   Recent): the reference's toggles, levels and pans are as left, though a new file's
+   tracks are made at fixed levels, playback sounds as it did, the master volume
+   included, and nothing moves on its own once the analysis is done. Record a short take:
+   after it the singing toggles are as left. Load the background music again: mixed or
+   not, at the level and pan left. A session opened shows the reference's the same,
+   whatever levels it was saved with; background music saved in a session comes back
+   as the session has it (item 9). The speed dial, Loop and Constrain are back at their
+   defaults on purpose: they belong to a song or a moment.
+9. **Background music in a session**: load it, turn its level down, save, close and open
    the session: it plays with the reference at that level, and during a take. Move the
    music file and open the session again: Tony asks where it is, and Locate file... finds
    it.
-9. **Music on speakers: Playback > Voice Threshold.** With the reference or the
+10. **Music on speakers: Playback > Voice Threshold.** With the reference or the
    background music on speakers, at the volume you sing with, and the threshold Off:
    record the music alone, not singing, and see its dots and, after Stop, its pitch.
    Raise the threshold a step at a time, recording the music alone each time, until the
@@ -413,7 +434,7 @@ The design is in [port-android.md](port-android.md) and
     way in use?
 13. **Voice Threshold on the phone's own speaker**: from the compact layout's menu button,
     Playback > Voice Threshold opens, shows which is ticked, and takes a tap; then
-    section 3, item 9, with the reference on the phone's speaker. Nothing on the phone
+    section 3, item 10, with the reference on the phone's speaker. Nothing on the phone
     explains the entries: are "Off" and the dBFS figures clear enough there?
 
 A Windows touch screen has not been tried either: Windows makes its own mouse events from

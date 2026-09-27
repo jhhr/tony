@@ -55,14 +55,16 @@ and the splice reads from there.
    recording adds to the take.
 7. The take's existing audio is muted for the duration (`muteSingingAudioForTake()`,
    directly on the play parameters). What the Play Singing Audio button asks for meanwhile
-   is kept in `m_singingAudioAfterTake` and applied when the take is over. The take's
-   pitch track and notes are hidden for the duration too (`updateSingingTrackForTake()`,
-   called after the base call and again when the take stops): they are drawn over the same
-   part of the pane as what is being sung now, the pitch in the same orange as the live
-   dots, so with them on show the singer cannot tell what they are singing from what they
-   sang before. Hidden with `Layer::showLayer()`, not `Analyser::setVisible()`, which would
-   write the state to the shared settings. Only what was on show is hidden, and only what
-   was hidden here is shown again.
+   is kept in `m_singingAudioAfterTake` and applied when the take is over; being the
+   user's choice, it is also written to the singing track's settings at once, which the
+   next take's analyser and the next launch start from. The take's pitch track and notes
+   are hidden for the duration too (`updateSingingTrackForTake()`, called after the base
+   call and again when the take stops): they are drawn over the same part of the pane as
+   what is being sung now, the pitch in the same orange as the live dots, so with them on
+   show the singer cannot tell what they are singing from what they sang before. Hidden
+   with `Layer::showLayer()`, not `Analyser::setVisible()`, which would write the state to
+   the settings as the user's choice. Only what was on show is hidden, and only what was
+   hidden here is shown again.
 8. Record mode is switched to **`RecordCreateUnshownModel`** (svapp fork) around the base
    call: the recording becomes a model of the document with no pane, no layer and no
    "Import Recorded Audio" undo entry. `ViewManager::setRecordStartFrame(S)` (svgui fork)

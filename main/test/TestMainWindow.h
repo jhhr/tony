@@ -31,6 +31,8 @@
 #endif
 
 #include "view/ViewManager.h"
+#include "widgets/Fader.h"
+#include "widgets/LevelPanToolButton.h"
 #include "audio/AudioCallbackPlaySource.h"
 #include "audio/AudioCallbackRecordTarget.h"
 
@@ -51,8 +53,11 @@
 class TestMainWindow : public MainWindow
 {
 public:
-    TestMainWindow(FakeAudioIO::Config config, bool installDevice = true) :
-        MainWindow(AUDIO_PLAYBACK_AND_RECORD, true, false),
+    // Without the spectrogram, as every test window is; without the
+    // sonification as well, as --no-sonification has it, when asked
+    TestMainWindow(FakeAudioIO::Config config, bool installDevice = true,
+                   bool withSonification = true) :
+        MainWindow(AUDIO_PLAYBACK_AND_RECORD, withSonification, false),
         m_fakeConfig(config),
         m_installDevice(installDevice) { }
 
@@ -234,6 +239,19 @@ public:
     }
     TakeLatency takeLatency() { return m_takeLatency; }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
+    QAction *showSingingPitchAction() { return m_showSingingPitch; }
+    QAction *showSingingNotesAction() { return m_showSingingNotes; }
+    QAction *playAudioAction() { return m_playAudio; }
+    QAction *playPitchAction() { return m_playPitch; }
+    QAction *playNotesAction() { return m_playNotes; }
+
+    // The toolbar's level and pan controls of the reference's tracks
+    sv::LevelPanToolButton *audioLevelControl() { return m_audioLPW; }
+    sv::LevelPanToolButton *pitchLevelControl() { return m_pitchLPW; }
+    sv::LevelPanToolButton *notesLevelControl() { return m_notesLPW; }
+
+    // The master volume's fader
+    sv::Fader *fader() { return m_fader; }
 
     Analyser *analyser() { return m_analyser; }
     Analyser *analyser2() { return m_analyser2; }

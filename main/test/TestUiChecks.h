@@ -506,8 +506,15 @@ private slots:
         settings.setValue("preroll", false);
         settings.setValue("recordintoselection", false);
         settings.remove("prerollseconds");
+        settings.remove("mastervolume");
+        settings.remove("backgroundmusicmix");
+        settings.remove("backgroundmusicgain");
+        settings.remove("backgroundmusicpan");
         settings.endGroup();
         settings.beginGroup("Analyser");
+        settings.remove("");
+        settings.endGroup();
+        settings.beginGroup("SingingAnalyser");
         settings.remove("");
         settings.endGroup();
         SingingTakes::setOverwriteConfirmationWanted(true);

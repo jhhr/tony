@@ -31,6 +31,7 @@
 #include "../AudioCheckRunner.h"
 #include "../CalibrateAudioDialog.h"
 #include "../LatencyCheck.h"
+#include "../PlaybackSettings.h"
 
 #include "version.h"
 
@@ -523,38 +524,53 @@ class TestAudioCheck : public QObject
         return problems.join(", ");
     }
 
-    // The settings the analysers' show and play toggles are kept in, as
-    // Analyser::loadState() reads them
+    // The settings the analysers' show and play toggles and the
+    // reference's levels are kept in, as Analyser::loadState() reads
+    // them: the reference's, and the singing track's in a group of its
+    // own. The spectrogram has no play toggle of its own. The singing
+    // track keeps no level, looked for all the same; a level or pan never
+    // set reads as "none", so that one the check writes shows
     static QStringList analyserSettings() {
         QSettings settings;
-        settings.beginGroup("Analyser");
         QStringList state;
-        for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
-            state << QString("component %1 visible %2 audible %3").arg(c)
-                .arg(settings.value(QString("visible-%1").arg(c),
-                                    c != Analyser::Spectrogram).toBool())
-                .arg(settings.value(QString("audible-%1").arg(c), true)
-                     .toBool());
+        const double none = -99.0;
+        auto number = [none](double value) {
+            return value == none ? QString("none") : QString::number(value);
+        };
+        for (QString group : { PlaybackSettings::kReferenceGroup,
+                               PlaybackSettings::kSingingGroup }) {
+            for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
+                state << QString("%1 component %2 visible %3").arg(group)
+                    .arg(c).arg(PlaybackSettings::visible
+                                (settings, group, c,
+                                 c != Analyser::Spectrogram));
+                if (c == Analyser::Spectrogram) continue;
+                state << QString("%1 component %2 audible %3").arg(group)
+                    .arg(c).arg(PlaybackSettings::audible
+                                (settings, group, c, true));
+                state << QString("%1 component %2 gain %3 pan %4")
+                    .arg(group).arg(c)
+                    .arg(number(PlaybackSettings::gain
+                                (settings, group, c, none)))
+                    .arg(number(PlaybackSettings::pan
+                                (settings, group, c, none)));
+            }
         }
-        settings.endGroup();
         return state;
     }
 
-    // The reference muted in the user's own sessions. Its spectrogram's
-    // setting as well: both are read for the reference's model, the
-    // spectrogram's last
+    // The reference muted in the user's own sessions
     static void muteReferenceInSettings() {
         QSettings settings;
-        settings.beginGroup("Analyser");
-        settings.setValue(QString("audible-%1").arg(Analyser::Audio), false);
-        settings.setValue(QString("audible-%1").arg(Analyser::Spectrogram),
-                          false);
-        settings.endGroup();
+        PlaybackSettings::setAudible(settings,
+                                     PlaybackSettings::kReferenceGroup,
+                                     Analyser::Audio, false);
     }
 
     // How the session open now plays its reference, and its pitch and
-    // notes. Not the gain of those two: the toolbar moves it to a notch
-    // of its own level control in the first session of a window only
+    // notes. Their gains too: the toolbar's level controls show a gain
+    // without setting one, so that each session of a window has those
+    // it was made with
     QStringList sessionPlayback() {
         QStringList state;
         auto reference = sv::PlayParameterRepository::getInstance()
@@ -572,9 +588,11 @@ class TestAudioCheck : public QObject
             sv::Layer *layer = m_window->analyser()->getLayer(c);
             auto params = layer ? layer->getPlayParameters() : nullptr;
             if (params) {
-                state << QString("layer %1 audible %2 pan %3").arg(int(c))
+                state << QString("layer %1 audible %2 pan %3 gain %4")
+                    .arg(int(c))
                     .arg(params->isPlayAudible())
-                    .arg(params->getPlayPan());
+                    .arg(params->getPlayPan())
+                    .arg(params->getPlayGain());
             } else {
                 state << QString("no layer %1").arg(int(c));
             }
@@ -759,8 +777,15 @@ private slots:
         settings.setValue("preroll", false);
         settings.setValue("recordintoselection", false);
         settings.remove("prerollseconds");
+        settings.remove("mastervolume");
+        settings.remove("backgroundmusicmix");
+        settings.remove("backgroundmusicgain");
+        settings.remove("backgroundmusicpan");
         settings.endGroup();
         settings.beginGroup("Analyser");
+        settings.remove("");
+        settings.endGroup();
+        settings.beginGroup("SingingAnalyser");
         settings.remove("");
         settings.endGroup();
         settings.beginGroup("Preferences");

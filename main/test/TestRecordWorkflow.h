@@ -32,6 +32,7 @@
 #include "../LyricsEditor.h"
 #include "../LyricsTrack.h"
 #include "../LyricsTtml.h"
+#include "../PlaybackSettings.h"
 #include "../SingingTakes.h"
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
@@ -80,10 +81,12 @@
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPointer>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -139,9 +142,55 @@ class TestRecordWorkflow : public QObject
         return path;
     }
 
-    void makeWindow(FakeAudioIO::Config config, bool installDevice = true) {
+    void makeWindow(FakeAudioIO::Config config, bool installDevice = true,
+                    bool withSonification = true) {
         delete m_window;
-        m_window = new TestMainWindow(config, installDevice);
+        m_window = new TestMainWindow(config, installDevice, withSonification);
+    }
+
+    // As a relaunch: the session closed as cleanup() closes it, and a
+    // new window, which starts from the settings the old one left
+    void relaunch(FakeAudioIO::Config config, bool withSonification = true) {
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        m_window->doCloseSession();
+        makeWindow(config, true, withSonification);
+    }
+
+    // A toolbar level control's wheel turned by that many steps, as the
+    // user turns it: its level moves that many notches, or with Ctrl its
+    // pan that many places, and the control says so to the window
+    static void turnWheel(sv::LevelPanToolButton *control, int steps,
+                          bool pan) {
+        const QPointF at(control->width() / 2.0, control->height() / 2.0);
+        for (int i = 0; i < std::abs(steps); ++i) {
+            QWheelEvent wheel(at, control->mapToGlobal(at), QPoint(),
+                              QPoint(0, steps > 0 ? 120 : -120),
+                              Qt::NoButton,
+                              pan ? Qt::ControlModifier : Qt::NoModifier,
+                              Qt::NoScrollPhase, false);
+            QApplication::sendEvent(control, &wheel);
+        }
+    }
+
+    // The master volume's fader dragged sideways by that many pixels, as
+    // the user drags it: pressed, moved and let go. (Its wheel says so
+    // to the window but moves nothing)
+    static void dragFader(sv::Fader *fader, int pixels) {
+        const QPointF from(fader->width() / 2.0, fader->height() / 2.0);
+        const QPointF to = from + QPointF(pixels, 0);
+        QMouseEvent press(QEvent::MouseButtonPress, from,
+                          fader->mapToGlobal(from), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(fader, &press);
+        QMouseEvent move(QEvent::MouseMove, to, fader->mapToGlobal(to),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(fader, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, to,
+                            fader->mapToGlobal(to), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(fader, &release);
     }
 
     // Complete, and with the transform threads gone as well. A model
@@ -197,19 +246,28 @@ class TestRecordWorkflow : public QObject
     }
 
     // A round trip as the audio check would have kept it for the fake
-    // device (the default devices, the Preferences naming none) at 44.1
-    // kHz, measured while the device reported the given latencies, in
-    // frames. cleanup() forgets it
+    // device (the default devices, the Preferences naming none) recording
+    // at deviceRate, 44.1 kHz unless given, measured while the device
+    // reported the given latencies, in frames at that rate. cleanup()
+    // forgets it
     static void storeRoundTrip(int roundTrip, int reportedOutput,
-                               int reportedInput) {
+                               int reportedInput, double deviceRate = rate) {
         LatencyCalibration::Figure figure;
-        figure.roundTrip = roundTrip / rate;
+        figure.roundTrip = roundTrip / deviceRate;
         figure.date = QDateTime::currentDateTimeUtc();
-        figure.reportedOutput = reportedOutput / rate;
-        figure.reportedInput = reportedInput / rate;
+        figure.reportedOutput = reportedOutput / deviceRate;
+        figure.reportedInput = reportedInput / deviceRate;
         QSettings settings;
         LatencyCalibration::store
-            (settings, LatencyCalibration::currentKey(settings, rate), figure);
+            (settings, LatencyCalibration::currentKey(settings, deviceRate),
+             figure);
+    }
+
+    // The Playback menu's line about the latency, as it reads when the
+    // menu is opened
+    QString latencyLine() {
+        emit m_window->playbackMenu()->aboutToShow();
+        return m_window->latencyLineAction()->text();
     }
 
     static sv::EventVector pitchEvents(sv::Layer *layer) {
@@ -1167,6 +1225,17 @@ class TestRecordWorkflow : public QObject
         return changed;
     }
 
+    // As settingsChanged() up to now, but for the file finder's keys:
+    // opening a file keeps the folder it is in, for the next Open
+    static QStringList settingsChangedByOpening
+    (const QMap<QString, QString> &before) {
+        QStringList changed;
+        for (const QString &change : settingsChanged(before, allSettings())) {
+            if (!change.startsWith("FileFinder/")) changed << change;
+        }
+        return changed;
+    }
+
     static QString lyricsFixture(const char *name) {
         return QString(TONY_TEST_DATA_DIR) + "/lyrics/" + name;
     }
@@ -1602,14 +1671,24 @@ private slots:
         settings.setValue("preroll", false);
         settings.setValue("recordintoselection", false);
         settings.remove("prerollseconds");
+        // The master volume and the background music as a new user has
+        // them
+        settings.remove("mastervolume");
+        settings.remove("backgroundmusicmix");
+        settings.remove("backgroundmusicgain");
+        settings.remove("backgroundmusicpan");
         settings.endGroup();
 
         // No voice threshold, whatever a test that set one left behind
         VoiceThreshold::setThreshold(settings, VoiceThreshold::kOff);
 
-        // The audible flags are shared by both analysers; a test that
-        // failed half way must not leave the next one's tracks muted
+        // The toggles of the reference's tracks and the singing track's;
+        // a test that failed half way must not leave the next one's
+        // tracks muted
         settings.beginGroup("Analyser");
+        settings.remove("");
+        settings.endGroup();
+        settings.beginGroup("SingingAnalyser");
         settings.remove("");
         settings.endGroup();
 
@@ -3470,6 +3549,632 @@ private slots:
 
         // The reference was not touched by any of this
         QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+    }
+
+    // Play Audio switched off is off after a relaunch, and on again once
+    // switched on. The spectrogram plays through the reference's play
+    // parameters, and the audible setting it used to keep of its own,
+    // read after the audio's, is not what the audio comes back as
+    void play_audio_off_survives_a_relaunch() {
+        QSettings().setValue(QString("%1/audible-%2")
+                             .arg(PlaybackSettings::kReferenceGroup)
+                             .arg(int(Analyser::Spectrogram)), true);
+        makeWindow(FakeAudioIO::Config());
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+
+        m_window->playAudioAction()->trigger();
+        QVERIFY(!m_window->analyser()->isAudible(Analyser::Audio));
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(!m_window->analyser()->isAudible(Analyser::Audio),
+                 "Play Audio came back on after a relaunch");
+        QVERIFY(!m_window->playAudioAction()->isChecked());
+
+        m_window->playAudioAction()->trigger();
+        QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_window->analyser()->isAudible(Analyser::Audio),
+                 "Play Audio came back off after a relaunch");
+        QVERIFY(m_window->playAudioAction()->isChecked());
+    }
+
+    // The singing track's toggles are kept apart from the reference's.
+    // The reference's Play Audio switched off does not mute the audio of
+    // the next take; Show Singing Pitch Track, Show Singing Notes and
+    // Play Singing Audio write the singing track's settings and none of
+    // the reference's, and the first take after a relaunch has them
+    void singing_toggles_kept_apart_from_the_reference() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+
+        m_window->playAudioAction()->trigger();
+        QVERIFY(!m_window->analyser()->isAudible(Analyser::Audio));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        Analyser *a2 = m_window->analyser2();
+        QVERIFY2(a2->isAudible(Analyser::Audio),
+                 "the reference's Play Audio off muted the take");
+        QVERIFY(m_window->playSingingAudioAction()->isChecked());
+        QVERIFY(a2->isVisible(Analyser::PitchTrack));
+        QVERIFY(a2->isVisible(Analyser::Notes));
+
+        const auto before = allSettings();
+        m_window->showSingingPitchAction()->trigger();
+        m_window->showSingingNotesAction()->trigger();
+        m_window->playSingingAudioAction()->trigger();
+        QVERIFY(!a2->isVisible(Analyser::PitchTrack));
+        QVERIFY(!a2->isVisible(Analyser::Notes));
+        QVERIFY(!a2->isAudible(Analyser::Audio));
+        QStringList changed = settingsChanged(before, allSettings());
+        changed.sort();
+        QCOMPARE(changed, QStringList()
+                 << "SingingAnalyser/audible-0 added: false"
+                 << "SingingAnalyser/visible-1 added: false"
+                 << "SingingAnalyser/visible-2 added: false");
+        Analyser *a = m_window->analyser();
+        QVERIFY(a->isVisible(Analyser::PitchTrack));
+        QVERIFY(a->isVisible(Analyser::Notes));
+        QVERIFY(!a->isAudible(Analyser::Audio));
+
+        relaunch(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        a = m_window->analyser();
+        QVERIFY(a->isVisible(Analyser::PitchTrack));
+        QVERIFY(a->isVisible(Analyser::Notes));
+        QVERIFY(!a->isAudible(Analyser::Audio));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        a2 = m_window->analyser2();
+        QVERIFY(!a2->isVisible(Analyser::PitchTrack));
+        QVERIFY(!a2->isVisible(Analyser::Notes));
+        QVERIFY(!a2->isAudible(Analyser::Audio));
+        QVERIFY(!m_window->showSingingPitchAction()->isChecked());
+        QVERIFY(!m_window->showSingingNotesAction()->isChecked());
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
+    }
+
+    // Play Singing Audio pressed while a take is being recorded, when the
+    // singing that is there is muted whatever the button says, is the
+    // user's setting at once, and does not unmute the take. Switched
+    // off, it holds for the next take, the first after a relaunch too
+    void play_singing_audio_off_during_a_take_remembered() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        auto takeParams = [this]() {
+            return m_window->analyser2()->getLayer(Analyser::Audio)
+                ->getPlayParameters();
+        };
+        auto setting = []() {
+            QSettings settings;
+            return PlaybackSettings::audible
+                (settings, PlaybackSettings::kSingingGroup, Analyser::Audio,
+                 true);
+        };
+        QAction *play = m_window->playSingingAudioAction();
+        QVERIFY(takeParams()->isPlayAudible());
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!takeParams()->isPlayAudible());
+        play->trigger();
+        QVERIFY(!play->isChecked());
+        QVERIFY2(!setting(), "Play Singing Audio off was not kept at once");
+        play->trigger();
+        QVERIFY(play->isChecked());
+        QVERIFY(setting());
+        QVERIFY2(!takeParams()->isPlayAudible(),
+                 "Play Singing Audio on unmuted the take being recorded");
+        play->trigger();
+        QVERIFY(!play->isChecked());
+        QVERIFY(!setting());
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!takeParams()->isPlayAudible());
+        QVERIFY(!play->isChecked());
+
+        // Before there is a singing track, the button says what the one
+        // to come will be given, as the dev checks' punch-ins expect it to
+        relaunch(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->analyser2());
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(!takeParams()->isPlayAudible(),
+                 "Play Singing Audio came back on after a relaunch");
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
+        QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+    }
+
+    // Play Pitch Track and Play Notes switched off are off after a
+    // relaunch and its first file. The pitch and notes are made at a
+    // level between two notches of their level controls; shown it, a
+    // control used to move to a notch and say so, and the window took
+    // that for the user's own level and switched the track on again
+    void play_pitch_and_notes_off_survive_a_relaunch() {
+        makeWindow(FakeAudioIO::Config());
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QVERIFY(a->isAudible(Analyser::PitchTrack));
+        QVERIFY(a->isAudible(Analyser::Notes));
+
+        m_window->playPitchAction()->trigger();
+        m_window->playNotesAction()->trigger();
+        QVERIFY(!a->isAudible(Analyser::PitchTrack));
+        QVERIFY(!a->isAudible(Analyser::Notes));
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        a = m_window->analyser();
+        QVERIFY2(!a->isAudible(Analyser::PitchTrack),
+                 "Play Pitch Track was on again after the first file of a "
+                 "relaunch");
+        QVERIFY2(!a->isAudible(Analyser::Notes),
+                 "Play Notes was on again after the first file of a "
+                 "relaunch");
+        QVERIFY(!m_window->playPitchAction()->isChecked());
+        QVERIFY(!m_window->playNotesAction()->isChecked());
+        QSettings settings;
+        for (Analyser::Component c : { Analyser::PitchTrack,
+                                       Analyser::Notes }) {
+            QVERIFY(!PlaybackSettings::audible
+                    (settings, PlaybackSettings::kReferenceGroup, c, true));
+            // The level they were made at, and not the notch it is shown at
+            QCOMPARE(a->getGain(c), 0.5f);
+        }
+    }
+
+    // The levels and pans of the reference's audio, pitch and notes, as
+    // the user sets them with the toolbar's controls, are kept at once,
+    // and are what the first file after a relaunch plays at and its
+    // controls show
+    void levels_and_pans_survive_a_relaunch() {
+        makeWindow(FakeAudioIO::Config());
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+
+        auto control = [this](Analyser::Component c) {
+            return c == Analyser::Audio ? m_window->audioLevelControl() :
+                c == Analyser::PitchTrack ? m_window->pitchLevelControl() :
+                m_window->notesLevelControl();
+        };
+        struct Track {
+            Analyser::Component component;
+            int levelSteps;
+            int panSteps;
+            float level;
+            float pan;
+        };
+        // Made at 1 on the left (audio), and 0.5 on the right (pitch and
+        // notes): each moved off both
+        Track tracks[] = {
+            { Analyser::Audio, -3, 1, 0.f, 0.f },
+            { Analyser::PitchTrack, 2, -2, 0.f, 0.f },
+            { Analyser::Notes, -1, -4, 0.f, 0.f },
+        };
+        const auto before = allSettings();
+        Analyser *a = m_window->analyser();
+        for (Track &t : tracks) {
+            sv::LevelPanToolButton *c = control(t.component);
+            QVERIFY(c);
+            const float madeAt = a->getGain(t.component);
+            turnWheel(c, t.levelSteps, false);
+            turnWheel(c, t.panSteps, true);
+            t.level = c->getLevel();
+            t.pan = c->getPan();
+            QVERIFY(t.level != madeAt);
+            QCOMPARE(a->getGain(t.component), t.level);
+            QCOMPARE(a->getPan(t.component), t.pan);
+        }
+        QVERIFY(tracks[0].pan != -1.f && tracks[1].pan != 1.f &&
+                tracks[2].pan != 1.f);
+
+        // A level moved switches the track on, as it always did
+        QStringList keys;
+        for (const QString &change : settingsChanged(before, allSettings())) {
+            keys << change.section(' ', 0, 0);
+        }
+        keys.sort();
+        QCOMPARE(keys, QStringList()
+                 << "Analyser/audible-0" << "Analyser/audible-1"
+                 << "Analyser/audible-2" << "Analyser/gain-0"
+                 << "Analyser/gain-1" << "Analyser/gain-2"
+                 << "Analyser/pan-0" << "Analyser/pan-1" << "Analyser/pan-2");
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        a = m_window->analyser();
+        for (const Track &t : tracks) {
+            QCOMPARE(a->getGain(t.component), t.level);
+            QCOMPARE(a->getPan(t.component), t.pan);
+            QVERIFY(a->isAudible(t.component));
+            QCOMPARE(control(t.component)->getLevel(), t.level);
+            QCOMPARE(control(t.component)->getPan(), t.pan);
+        }
+    }
+
+    // A session keeps its tracks' levels and pans, but the settings are
+    // the user's mixer, and win when they hold one: a session saved at
+    // other levels opens at the settings'. Without them, its tracks keep
+    // the session's (its waveform is taken over, not made again with the
+    // level every new one is given)
+    void session_opens_with_the_levels_of_the_settings() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const Analyser::Component components[] = {
+            Analyser::Audio, Analyser::PitchTrack, Analyser::Notes
+        };
+        // Straight on the play parameters, and so in the session only
+        const float sessionGain[] = { 0.75f, 0.25f, 0.125f };
+        const float sessionPan[] = { 0.5f, -0.5f, 0.f };
+        Analyser *a = m_window->analyser();
+        for (int i = 0; i < 3; ++i) {
+            auto params = a->getLayer(components[i])->getPlayParameters();
+            QVERIFY(params);
+            params->setPlayGain(sessionGain[i]);
+            params->setPlayPan(sessionPan[i]);
+        }
+        const QString session = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(session));
+
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        a = m_window->analyser();
+        for (int i = 0; i < 3; ++i) {
+            QCOMPARE(a->getGain(components[i]), sessionGain[i]);
+            QCOMPARE(a->getPan(components[i]), sessionPan[i]);
+        }
+
+        const float userGain[] = { 0.5f, 1.f, 0.375f };
+        const float userPan[] = { 1.f, 0.f, -1.f };
+        {
+            QSettings settings;
+            for (int i = 0; i < 3; ++i) {
+                PlaybackSettings::setGain(settings,
+                                          PlaybackSettings::kReferenceGroup,
+                                          components[i], userGain[i]);
+                PlaybackSettings::setPan(settings,
+                                         PlaybackSettings::kReferenceGroup,
+                                         components[i], userPan[i]);
+            }
+        }
+        const auto before = allSettings();
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        for (int i = 0; i < 3; ++i) {
+            QCOMPARE(a->getGain(components[i]), userGain[i]);
+            QCOMPARE(a->getPan(components[i]), userPan[i]);
+        }
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+    }
+
+    // Opening a file writes no setting (but the folder the next Open is
+    // to start in): the settings are what the user chose, and a load is
+    // no choice. Nor does Analyse Now, nor what the
+    // command line leaves out, which the analyser keeps off through
+    // Analyse Now as well: a window without the spectrogram (as every
+    // test window is) keeps it hidden though the user showed it in a
+    // launch that has one, and a window without the sonification keeps
+    // the pitch and notes silent though the user plays them
+    void opening_a_file_writes_no_settings() {
+        {
+            QSettings settings;
+            PlaybackSettings::setVisible(settings,
+                                         PlaybackSettings::kReferenceGroup,
+                                         Analyser::Spectrogram, true);
+        }
+        makeWindow(FakeAudioIO::Config());
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        auto before = allSettings();
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QVERIFY2(!a->isVisible(Analyser::Spectrogram),
+                 "the spectrogram is shown in a window without one");
+        QVERIFY(a->isAudible(Analyser::PitchTrack));
+        QVERIFY(a->isAudible(Analyser::Notes));
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a), 30000);
+        QVERIFY2(!a->isVisible(Analyser::Spectrogram),
+                 "Analyse Now showed the spectrogram in a window without one");
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+
+        relaunch(FakeAudioIO::Config(), false);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->playPitchAction());
+        QVERIFY(!m_window->pitchLevelControl());
+        before = allSettings();
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        a = m_window->analyser();
+        QVERIFY2(!a->isAudible(Analyser::PitchTrack),
+                 "the pitch track plays in a window without sonification");
+        QVERIFY2(!a->isAudible(Analyser::Notes),
+                 "the notes play in a window without sonification");
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a), 30000);
+        QVERIFY2(!a->isAudible(Analyser::PitchTrack),
+                 "Analyse Now made the pitch track play in a window "
+                 "without sonification");
+        QVERIFY2(!a->isAudible(Analyser::Notes),
+                 "Analyse Now made the notes play in a window without "
+                 "sonification");
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+    }
+
+    // The master volume the user drags the fader to is kept at once, and
+    // is what every device the window opens after it plays at: one
+    // opened again from the menus, and a relaunch's, opened at its first
+    // file. A device opens at full volume, whatever the fader shows
+    void master_volume_survives_a_relaunch() {
+        makeWindow(FakeAudioIO::Config());
+        QVERIFY(m_window->fader());
+        QCOMPARE(m_window->fader()->getValue(), 1.f);
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), 1.f);
+
+        auto before = allSettings();
+        dragFader(m_window->fader(), -30);
+        const float volume = m_window->fader()->getValue();
+        QVERIFY(volume > 0.f && volume < 1.f);
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+        QStringList keys;
+        for (const QString &change : settingsChanged(before, allSettings())) {
+            keys << change.section(' ', 0, 0);
+        }
+        QCOMPARE(keys, QStringList() << "MainWindow/mastervolume");
+        {
+            QSettings settings;
+            QCOMPARE(float(PlaybackSettings::masterVolume(settings)), volume);
+        }
+
+        // Opened again as the device menus open it, to list what is
+        // connected now, and as a device, driver or latency chosen does
+        const int opened = m_window->audioIOOpened();
+        m_window->doRescanAudioDevices();
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), opened + 2);
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->fader()->getValue(), volume);
+        QVERIFY(!m_window->fake());
+        before = allSettings();
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+    }
+
+    // Mix Background Music, its level and its pan, as the user sets them,
+    // are kept at once, and are what the next track loaded plays at, in
+    // this launch or the next; before one is loaded the toggle and the
+    // level control show what it will be. The level taken to nothing
+    // switches the mix off and keeps the level it had, which the mix
+    // switched on again brings back
+    void background_music_settings_survive_a_relaunch() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *mix = m_window->playBackgroundMusicAction();
+        QVERIFY(mix && mix->isChecked() && !mix->isEnabled());
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        const QString music = writeWav(tone(highHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        m_window->doLoadBackgroundMusic(music);
+        QVERIFY(m_window->backgroundMusicLayer());
+        auto params = m_window->backgroundMusicLayer()->getPlayParameters();
+        QVERIFY(params);
+        QVERIFY(params->isPlayAudible());
+        QCOMPARE(params->getPlayGain(), 1.f);
+        QCOMPARE(params->getPlayPan(), 0.f);
+        QVERIFY(mix->isChecked() && mix->isEnabled());
+
+        auto before = allSettings();
+        sv::LevelPanToolButton *control =
+            m_window->backgroundMusicLevelPan();
+        QVERIFY(control);
+        turnWheel(control, -2, false);
+        turnWheel(control, 3, true);
+        const float level = control->getLevel();
+        const float pan = control->getPan();
+        QVERIFY(level > 0.f && level < 1.f);
+        QVERIFY(pan > 0.f);
+        QCOMPARE(params->getPlayGain(), level);
+        QCOMPARE(params->getPlayPan(), pan);
+        QVERIFY(params->isPlayAudible());
+
+        // Taken to nothing, as the control's own mute sends it (its notches
+        // stop short of nothing)
+        emit control->levelChanged(0.f);
+        QVERIFY(!params->isPlayAudible());
+        QVERIFY(!mix->isChecked());
+
+        QStringList keys;
+        for (const QString &change : settingsChanged(before, allSettings())) {
+            keys << change.section(' ', 0, 0);
+        }
+        keys.sort();
+        QCOMPARE(keys, QStringList()
+                 << "MainWindow/backgroundmusicgain"
+                 << "MainWindow/backgroundmusicmix"
+                 << "MainWindow/backgroundmusicpan");
+        {
+            QSettings settings;
+            QVERIFY(!PlaybackSettings::backgroundMusicMix(settings));
+            QCOMPARE(float(PlaybackSettings::backgroundMusicGain(settings)),
+                     level);
+            QCOMPARE(float(PlaybackSettings::backgroundMusicPan(settings)),
+                     pan);
+        }
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        mix = m_window->playBackgroundMusicAction();
+        QVERIFY2(!mix->isChecked(), "Mix Background Music was on in a new "
+                 "window, with no track loaded");
+        before = allSettings();
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(!mix->isChecked(), "Mix Background Music was on after the "
+                 "first file, with no track loaded");
+        control = m_window->backgroundMusicLevelPan();
+        QCOMPARE(control->getLevel(), level);
+        QCOMPARE(control->getPan(), pan);
+        m_window->doLoadBackgroundMusic(music);
+        QVERIFY(m_window->backgroundMusicLayer());
+        params = m_window->backgroundMusicLayer()->getPlayParameters();
+        QVERIFY(params);
+        QVERIFY2(!params->isPlayAudible(), "the background music loaded "
+                 "after a relaunch was mixed in");
+        QCOMPARE(params->getPlayGain(), level);
+        QCOMPARE(params->getPlayPan(), pan);
+        QVERIFY(!mix->isChecked() && mix->isEnabled());
+        QCOMPARE(control->getLevel(), level);
+        QCOMPARE(control->getPan(), pan);
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+
+        mix->trigger();
+        QVERIFY(params->isPlayAudible());
+        QCOMPARE(params->getPlayGain(), level);
+        QSettings settings;
+        QVERIFY(PlaybackSettings::backgroundMusicMix(settings));
+    }
+
+    // After a relaunch the Playback menu's line shows the figure the
+    // check kept for the devices, as the takes use it, and Forget drops
+    // that one. The device records at 48 kHz, as most desktop devices do,
+    // and the figure is kept at that rate, which nothing says before the
+    // first take: the session's is 44.1 kHz. Nor is the device open
+    // before the first file, and until the first take a desktop's is open
+    // for playback only (svapp's AUDIO_PLAYBACK_NOW_RECORD_LATER), its
+    // input reporting a latency of 0. The test window's fake is duplex
+    // from the start: "no device" is the new window before any file is
+    // opened, and "input not open" the fake reporting a record latency
+    // of 0 against a figure measured while the input reported 4096 frames
+    void measured_latency_shown_after_a_relaunch() {
+        const int reportedOut = 2 * 4096;
+        storeRoundTrip(14400, reportedOut, 4096, otherDeviceRate);
+        FakeAudioIO::Config config;
+        config.sampleRate = otherDeviceRate;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = 0;
+        makeWindow(config);
+
+        QVERIFY(!m_window->fake());
+        QString line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured 300 ms, "),
+                 qPrintable(line + ", before any file is opened"));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->recordTarget()->getSystemRecordLatency(), 0);
+        QVERIFY(m_window->latencyInUse().reportedOutput > 0.0);
+        line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured 300 ms, "),
+                 qPrintable(line + ", with a file open"));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+
+        // The figure the line showed is the one forgotten, and the line
+        // says so: the driver's figure, 8192 frames at 48 kHz, which the
+        // play source has as 7526 at 44.1
+        m_window->forgetLatencyAction()->trigger();
+        {
+            QSettings settings;
+            LatencyCalibration::Figure figure;
+            QVERIFY(!LatencyCalibration::load
+                    (settings,
+                     LatencyCalibration::currentKey(settings, otherDeviceRate),
+                     figure));
+        }
+        QCOMPARE(latencyLine(), QString("Latency: driver's figure, 171 ms"));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+    }
+
+    // Figures kept for the devices at two rates, neither the session's:
+    // before the first take which one the device will record at is not
+    // known, and the line takes neither. It shows the driver's figure,
+    // not known before any file is opened and the reported one after,
+    // and not "out of date", with nothing to forget
+    void latency_line_with_figures_at_two_rates() {
+        const int reportedOut = 2 * 4096;
+        storeRoundTrip(14400, reportedOut, 4096, otherDeviceRate);
+        storeRoundTrip(28800, reportedOut, 4096, 96000);
+        FakeAudioIO::Config config;
+        config.sampleRate = otherDeviceRate;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = 0;
+        makeWindow(config);
+
+        QCOMPARE(latencyLine(),
+                 QString("Latency: driver's figure, not known yet"));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyLine(), QString("Latency: driver's figure, 171 ms"));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
     }
 
     // The take's stored pitch track and notes sit over the same part of

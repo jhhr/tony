@@ -30,6 +30,7 @@
 #include "Lyrics.h"
 #include "LyricsTtml.h"
 #include "PaneUtils.h"
+#include "PlaybackSettings.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
 #include "TakesFile.h"
@@ -433,6 +434,17 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(m_fader, SIGNAL(mouseEntered()), this, SLOT(mouseEnteredWidget()));
     connect(m_fader, SIGNAL(mouseLeft()), this, SLOT(mouseLeftWidget()));
 
+    // At the master volume the user left it at. setValue() says nothing:
+    // the fader speaks only when the user moves it, and that is kept,
+    // device or none. Each device takes the fader's value as it opens
+    // (createAudioIO())
+    {
+        QSettings settings;
+        m_fader->setValue(float(PlaybackSettings::masterVolume(settings)));
+    }
+    connect(m_fader, &Fader::valueChanged,
+            this, &MainWindow::mainModelGainChanged);
+
     m_playSpeed = new AudioDial(frame);
     m_playSpeed->setMeterColor(Qt::darkBlue);
     m_playSpeed->setMinimum(0);
@@ -476,6 +488,9 @@ MainWindow::MainWindow(AudioMode audioMode,
         m_notesLPW->setObjectName(tr("Note Track Level and Pan"));
         connect(m_notesLPW, SIGNAL(levelChanged(float)), this, SLOT(notesGainChanged(float)));
         connect(m_notesLPW, SIGNAL(panChanged(float)), this, SLOT(notesPanChanged(float)));
+    } else {
+        m_pitchLPW = nullptr;
+        m_notesLPW = nullptr;
     }
 
     layout->setSpacing(4);
@@ -1841,6 +1856,12 @@ MainWindow::createAudioIO()
     if (m_audioDriverMenus) m_audioDriverMenus->applyLatency();
 
     openAudioIO();
+
+    // A device opens at full volume. Every one the window opens is
+    // opened here (at the first file, for the first take, for a device,
+    // driver or latency chosen, as the device menus list the devices),
+    // and plays at the fader's volume from the start
+    applyMasterVolume(m_fader->getValue());
 }
 
 void
@@ -2428,7 +2449,12 @@ MainWindow::setupToolbars()
 
     m_playBackgroundMusic = toolbar->addAction(il.load("speaker"), tr("Mix Background Music"));
     m_playBackgroundMusic->setCheckable(true);
-    m_playBackgroundMusic->setChecked(true);
+    {
+        // As the next track loaded will be (updateLayerStatuses())
+        QSettings settings;
+        m_playBackgroundMusic->setChecked
+            (PlaybackSettings::backgroundMusicMix(settings));
+    }
     m_playBackgroundMusic->setToolTip(
         tr("Enable/disable mixing the background music track during playback and recording"));
     m_playBackgroundMusic->setEnabled(false);
@@ -2885,12 +2911,38 @@ void
 MainWindow::playSingingAudioToggled()
 {
     if (m_singingAudioMutedForTake) {
-        // Muted whatever the button says; it takes effect after the take
+        // Muted whatever the button says; it takes effect after the take.
+        // The user's choice all the same, kept at once as it is at any
+        // other time: the next take, or the next launch, starts from it
         m_singingAudioAfterTake = !m_singingAudioAfterTake;
+        QSettings settings;
+        PlaybackSettings::setAudible(settings, PlaybackSettings::kSingingGroup,
+                                     Analyser::Audio, m_singingAudioAfterTake);
     } else if (m_analyser2) {
         m_analyser2->toggleAudible(Analyser::Audio);
     }
     updateLayerStatuses();
+}
+
+namespace {
+
+// Show a level and a pan on a toolbar control without a word from it.
+// Given a level between its notches, the control moves to the nearest
+// and says so, as if the user had moved it, and the window would set
+// that level and switch the track on, both written to the settings as
+// the user's choice: Play Pitch Track and Play Notes, switched off, were
+// on again after the first file of every launch.  Only the control is
+// quiet: the widget inside it still tells the control's own slot, which
+// keeps its mute state right
+void
+showLevelAndPan(LevelPanToolButton *control, float level, float pan)
+{
+    if (!control) return;
+    QSignalBlocker quiet(control);
+    control->setLevel(level);
+    control->setPan(pan);
+}
+
 }
 
 void
@@ -2899,20 +2951,30 @@ MainWindow::updateLayerStatuses()
     m_showAudio->setChecked(m_analyser->isVisible(Analyser::Audio));
     m_playAudio->setChecked(m_analyser->isAudible(Analyser::Audio));
     m_audioLPW->setEnabled(m_analyser->isAudible(Analyser::Audio));
-    m_audioLPW->setLevel(m_analyser->getGain(Analyser::Audio));
-    m_audioLPW->setPan(m_analyser->getPan(Analyser::Audio));
-    
+    showLevelAndPan(m_audioLPW, m_analyser->getGain(Analyser::Audio),
+                    m_analyser->getPan(Analyser::Audio));
+
+    // Without sonification (--no-sonification) pitch and notes have no
+    // play toggle and no level control
     m_showPitch->setChecked(m_analyser->isVisible(Analyser::PitchTrack));
-    m_playPitch->setChecked(m_analyser->isAudible(Analyser::PitchTrack));
-    m_pitchLPW->setEnabled(m_analyser->isAudible(Analyser::PitchTrack));
-    m_pitchLPW->setLevel(m_analyser->getGain(Analyser::PitchTrack));
-    m_pitchLPW->setPan(m_analyser->getPan(Analyser::PitchTrack));
+    if (m_playPitch) {
+        m_playPitch->setChecked(m_analyser->isAudible(Analyser::PitchTrack));
+    }
+    if (m_pitchLPW) {
+        m_pitchLPW->setEnabled(m_analyser->isAudible(Analyser::PitchTrack));
+    }
+    showLevelAndPan(m_pitchLPW, m_analyser->getGain(Analyser::PitchTrack),
+                    m_analyser->getPan(Analyser::PitchTrack));
 
     m_showNotes->setChecked(m_analyser->isVisible(Analyser::Notes));
-    m_playNotes->setChecked(m_analyser->isAudible(Analyser::Notes));
-    m_notesLPW->setEnabled(m_analyser->isAudible(Analyser::Notes));
-    m_notesLPW->setLevel(m_analyser->getGain(Analyser::Notes));
-    m_notesLPW->setPan(m_analyser->getPan(Analyser::Notes));
+    if (m_playNotes) {
+        m_playNotes->setChecked(m_analyser->isAudible(Analyser::Notes));
+    }
+    if (m_notesLPW) {
+        m_notesLPW->setEnabled(m_analyser->isAudible(Analyser::Notes));
+    }
+    showLevelAndPan(m_notesLPW, m_analyser->getGain(Analyser::Notes),
+                    m_analyser->getPan(Analyser::Notes));
 
     m_showSpect->setChecked(m_analyser->isVisible(Analyser::Spectrogram));
 
@@ -2948,7 +3010,12 @@ MainWindow::updateLayerStatuses()
         } else if (m_analyser2) {
             m_playSingingAudio->setChecked(m_analyser2->isAudible(Analyser::Audio));
         } else {
-            m_playSingingAudio->setChecked(true); // default on when track arrives
+            // What the singing track is given when it arrives
+            QSettings settings;
+            m_playSingingAudio->setChecked
+                (PlaybackSettings::audible(settings,
+                                           PlaybackSettings::kSingingGroup,
+                                           Analyser::Audio, true));
         }
     }
 
@@ -2988,11 +3055,19 @@ MainWindow::updateLayerStatuses()
             m_playBackgroundMusic->setChecked(audible);
             if (m_bgMusicLPW) {
                 m_bgMusicLPW->setEnabled(audible);
-                m_bgMusicLPW->setLevel(params ? params->getPlayGain() : 1.f);
-                m_bgMusicLPW->setPan(params ? params->getPlayPan() : 0.f);
+                showLevelAndPan(m_bgMusicLPW,
+                                params ? params->getPlayGain() : 1.f,
+                                params ? params->getPlayPan() : 0.f);
             }
         } else {
-            m_playBackgroundMusic->setChecked(true); // default on when track arrives
+            // What the next track loaded is given (loadBackgroundMusic())
+            QSettings settings;
+            m_playBackgroundMusic->setChecked
+                (PlaybackSettings::backgroundMusicMix(settings));
+            showLevelAndPan
+                (m_bgMusicLPW,
+                 float(PlaybackSettings::backgroundMusicGain(settings)),
+                 float(PlaybackSettings::backgroundMusicPan(settings)));
         }
     }
 }
@@ -3733,6 +3808,9 @@ MainWindow::createAudioIO()
         }
     }
 
+    // At the fader's volume, as the desktop's createAudioIO() has it
+    applyMasterVolume(m_fader->getValue());
+
     if (m_audioIO) {
         m_audioIO->suspend();
         m_playSource->setSystemPlaybackTarget(m_audioIO);
@@ -4021,8 +4099,8 @@ MainWindow::swapSingingAudio(QString path)
     }
 
     // What the swap must leave as it was.  The analyser of the new audio
-    // starts from the settings the two analysers share, which know
-    // nothing of what a take has done to these layers
+    // starts from the singing track's settings, which know nothing of
+    // what a take has done to these layers
     const Analyser::Component components[] = {
         Analyser::Audio, Analyser::PitchTrack, Analyser::Notes
     };
@@ -4076,9 +4154,9 @@ MainWindow::swapSingingAudio(QString path)
     }
 
     // 6. What the swap was not to change.  On the layers themselves:
-    // setVisible() and setAudible() write to the shared settings, and
-    // neither the muting of a take nor the pane's own stacking is the
-    // user's wish about the reference
+    // setVisible() and setAudible() write to the settings, and neither
+    // the muting of a take nor the pane's own stacking is the user's
+    // wish
     for (int i = 0; i < componentCount; ++i) {
         Layer *layer = m_analyser2->getLayer(components[i]);
         if (!layer) continue;
@@ -4220,12 +4298,17 @@ MainWindow::loadBackgroundMusic(QString path)
                 // the play source — we don't want it rendered on screen.
                 m_backgroundMusicLayer->showLayer(pane, false);
 
-                // Set initial audibility from the toggle state.
+                // Mixed in or not, and at the level and pan, the user
+                // last chose, in this launch or an earlier one
                 auto params = m_backgroundMusicLayer->getPlayParameters();
                 if (params) {
-                    bool wantAudible = !m_playBackgroundMusic ||
-                                       m_playBackgroundMusic->isChecked();
-                    params->setPlayAudible(wantAudible);
+                    QSettings settings;
+                    params->setPlayAudible
+                        (PlaybackSettings::backgroundMusicMix(settings));
+                    params->setPlayGain
+                        (float(PlaybackSettings::backgroundMusicGain(settings)));
+                    params->setPlayPan
+                        (float(PlaybackSettings::backgroundMusicPan(settings)));
                 }
 
                 cerr << "loadBackgroundMusic: waveform layer added for model "
@@ -4329,6 +4412,10 @@ MainWindow::backgroundMusicToggled()
     if (m_bgMusicLPW) m_bgMusicLPW->setEnabled(wantAudible);
     cerr << "backgroundMusicToggled: background music "
          << (wantAudible ? "unmuted" : "muted") << endl;
+
+    // Nothing but the user switches the mix: kept for the next track
+    QSettings settings;
+    PlaybackSettings::setBackgroundMusicMix(settings, wantAudible);
 }
 
 void
@@ -4337,13 +4424,21 @@ MainWindow::backgroundMusicGainChanged(float gain)
     if (!m_backgroundMusicLayer) return;
     auto params = m_backgroundMusicLayer->getPlayParameters();
     if (!params) return;
+
+    // As the reference's level: taken to nothing, the mix is switched
+    // off and the level kept, so that switching it on again brings the
+    // level back; any other switches the mix on at that level
+    QSettings settings;
     if (gain == 0.f) {
         params->setPlayAudible(false);
         if (m_playBackgroundMusic) m_playBackgroundMusic->setChecked(false);
+        PlaybackSettings::setBackgroundMusicMix(settings, false);
     } else {
         params->setPlayAudible(true);
         if (m_playBackgroundMusic) m_playBackgroundMusic->setChecked(true);
         params->setPlayGain(gain);
+        PlaybackSettings::setBackgroundMusicMix(settings, true);
+        PlaybackSettings::setBackgroundMusicGain(settings, gain);
     }
 }
 
@@ -4352,7 +4447,10 @@ MainWindow::backgroundMusicPanChanged(float pan)
 {
     if (!m_backgroundMusicLayer) return;
     auto params = m_backgroundMusicLayer->getPlayParameters();
-    if (params) params->setPlayPan(pan);
+    if (!params) return;
+    params->setPlayPan(pan);
+    QSettings settings;
+    PlaybackSettings::setBackgroundMusicPan(settings, pan);
 }
 
 void
@@ -4463,7 +4561,7 @@ MainWindow::updateSingingTrackForTake()
     // one from the other, and neither helps them follow the track they
     // are singing to.  So the stored pitch and notes make way, and come
     // back when the take stops.  Not with Analyser::setVisible(), which
-    // would write the state to the settings the reference shares.
+    // would write the state to the settings as the user's choice.
     bool inTake = (m_recordingAsSingingTrack &&
                    m_recordTarget && m_recordTarget->isRecording());
 
@@ -5059,9 +5157,9 @@ MainWindow::muteSingingAudioForTake()
     // The singing that is there is not heard while it is being recorded
     // into: the singer would hear themselves along with the reference,
     // and on speakers that goes back into the microphone.  Not with
-    // setAudible(), which would write the state to the settings the
-    // reference shares; the button goes on saying what the user asked
-    // for, and restoreSingingAudioAfterTake() applies it afterwards.
+    // setAudible(), which would write the state to the settings as the
+    // user's choice; the button goes on saying what the user asked for,
+    // and restoreSingingAudioAfterTake() applies it afterwards.
     m_singingAudioAfterTake =
         (m_analyser2 ? m_analyser2->isAudible(Analyser::Audio) : true);
 
@@ -6119,8 +6217,26 @@ MainWindow::expectedRecordingRate() const
     // A device that knows its route knows its rate as soon as it is open,
     // and records at it (OboeAudioIO opens its input at its output's)
     AudioRoute::Route route;
-    if (deviceRoute(route) && route.rate > 0) return route.rate;
-    return m_lastRecordingRate > 0 ? m_lastRecordingRate : sessionRate();
+    const bool routed = deviceRoute(route);
+    if (routed && route.rate > 0) return route.rate;
+    if (m_lastRecordingRate > 0) return m_lastRecordingRate;
+
+    // Before the first take on a desktop, the rate the device will record
+    // at is not known: it is open for playback only, if at all, and
+    // AudioCallbackRecordTarget has no getter for the rate.  The
+    // session's (always 44.1 kHz), unless figures are kept for these
+    // devices at one rate only: the rate the check found they record at,
+    // usually 48 kHz.  A guess, as onlyRecordDevice() is for a phone's
+    // input; the take itself looks its figure up at the rate it records
+    // at.  With figures at more than one rate, the session's
+    const sv_samplerate_t session = sessionRate();
+    if (routed) return session; // a route without a rate: no desktop's
+    QSettings settings;
+    sv_samplerate_t kept = 0;
+    if (LatencyCalibration::onlyRate(settings, latencyKey(session), kept)) {
+        return kept;
+    }
+    return session;
 }
 
 LatencyCalibration::InUse
@@ -6167,11 +6283,12 @@ MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
 void
 MainWindow::forgetMeasuredLatency()
 {
+    // Asked once: with the figure gone, the rate expected may be another
+    const sv_samplerate_t rate = expectedRecordingRate();
     QSettings settings;
-    LatencyCalibration::forget
-        (settings, latencyKey(expectedRecordingRate()));
-    cerr << "MainWindow::forgetMeasuredLatency: at "
-         << expectedRecordingRate() << " Hz" << endl;
+    LatencyCalibration::forget(settings, latencyKey(rate));
+    cerr << "MainWindow::forgetMeasuredLatency: at " << rate << " Hz"
+         << endl;
     updateLatencyMenuLine();
 }
 
@@ -9414,15 +9531,19 @@ MainWindow::mainModelChanged(ModelId model)
     MainWindowBase::mainModelChanged(model);
 
     syncSongScrollBar();
-
-    if (m_playTarget || m_audioIO) {
-        connect(m_fader, SIGNAL(valueChanged(float)),
-                this, SLOT(mainModelGainChanged(float)));
-    }
 }
 
 void
 MainWindow::mainModelGainChanged(float gain)
+{
+    // The user has moved the fader
+    QSettings settings;
+    PlaybackSettings::setMasterVolume(settings, gain);
+    applyMasterVolume(gain);
+}
+
+void
+MainWindow::applyMasterVolume(float gain)
 {
     if (m_playTarget) {
         m_playTarget->setOutputGain(gain);
@@ -9612,13 +9733,17 @@ MainWindow::analyseNewMainModel()
     // session saved faded whose lyrics have gone since
     updateWaveformFade();
 
+    // What the command line leaves out is not the user's choice: kept off
+    // by the analyser, for Analyse Now too, and not written to the
+    // settings, which a launch with the spectrogram or the sonification
+    // reads
     if (!m_withSpectrogram) {
-        m_analyser->setVisible(Analyser::Spectrogram, false);
+        m_analyser->keepHidden(Analyser::Spectrogram);
     }
 
     if (!m_withSonification) {
-        m_analyser->setAudible(Analyser::PitchTrack, false);
-        m_analyser->setAudible(Analyser::Notes, false);
+        m_analyser->keepSilent(Analyser::PitchTrack);
+        m_analyser->keepSilent(Analyser::Notes);
     }
 
     // A session used to be searched here for a second WaveFileModel, which

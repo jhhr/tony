@@ -127,10 +127,12 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   A choice is written to the Preferences, then signalled; `MainWindow` does the rest.
 - **`MainWindow::createAudioIO()`** (desktop): names the default driver, hands the
   latency chosen for the driver to bqaudioio (`AudioFactory::setSuggestedLatency()`, for
-  the streams opened after), then `openAudioIO()`, which opens the device as svapp does.
-  Every device is opened through it: the first, and each recreate. The Playback menu names
-  the default too, as it opens, before the device menus read the driver. On Android
-  `createAudioIO()` opens `OboeAudioIO` instead, and none of this applies.
+  the streams opened after), then `openAudioIO()`, which opens the device as svapp does,
+  then gives the device the master volume: a device opens at unity gain
+  ([architecture.md](architecture.md#the-bottom-bars-settings)). Every device is opened
+  through it: the first, and each recreate. The Playback menu names the default too, as
+  it opens, before the device menus read the driver. On Android `createAudioIO()` opens
+  `OboeAudioIO` instead, and none of this applies but the master volume.
 - **A choice** stops playback, forgets the device's rate when the driver changed (another
   driver may record at another rate, as another device may), and recreates the audio IO.
 - **The report's latency** is the one last handed to bqaudioio, not the Preferences', so
@@ -298,10 +300,14 @@ checks' placement ends here.
   figure is used unless the latencies the device reports moved by more than 1 ms (then it
   is stale, and the menu line says so): calibrate again after changing the latency.
 - **Before a device's first take** the menu line, Forget Measured Latency and the dialog
-  look the figure up at the session's rate, and choosing a driver forgets the device's rate
-  as choosing a device does. On a device at 48 kHz they then show the driver's figure
-  although a 48 kHz one is kept; takes use the kept one. A fix needs the device's rate
-  before the first take, from svapp ([calibrate-audio.md](calibrate-audio.md), §5).
+  do not know the device's rate (choosing a driver forgets it, as choosing a device does):
+  they take the rate of the figure kept for these devices when there is one rate only,
+  else the session's. With figures kept at two rates they may show another rate's figure,
+  or the driver's, until the first take; takes use the one at their own rate. A fix needs
+  the device's rate before the first take, from svapp. And until the first take the device
+  is open for playback only: if the output latency it reports then differs by more than
+  1 ms from the duplex stream's, the line says the figure is out of date until the first
+  take. Not yet tried on the user's PC ([calibrate-audio.md](calibrate-audio.md), §5).
 - WDM-KS (in PortAudio's build too) and WASAPI's exclusive mode would be lower still, but
   take the device from every other program; not built.
 - **Kept running on two sound cards** the alignment drifts and slips by a period (§7):

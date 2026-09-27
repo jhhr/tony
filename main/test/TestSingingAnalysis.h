@@ -25,6 +25,7 @@
 
 #include "../Analyser.h"
 #include "../LatencyCheck.h"
+#include "../PlaybackSettings.h"
 
 #include "framework/Document.h"
 #include "framework/SVFileReader.h"
@@ -707,17 +708,18 @@ private slots:
         QVERIFY(audible(primary.getLayer(Analyser::PitchTrack)));
         QVERIFY(audible(primary.getLayer(Analyser::Notes)));
 
-        // Muting them must not have gone through the settings that
-        // the two analysers share
+        // Muting them must not have gone through the settings, as if the
+        // user had asked for it: neither the singing track's nor the
+        // reference's
         QSettings settings;
-        settings.beginGroup("Analyser");
-        QVERIFY(settings.value
-                (QString("audible-%1").arg(int(Analyser::PitchTrack)),
-                 true).toBool());
-        QVERIFY(settings.value
-                (QString("audible-%1").arg(int(Analyser::Notes)),
-                 true).toBool());
-        settings.endGroup();
+        for (QString group : { PlaybackSettings::kReferenceGroup,
+                               PlaybackSettings::kSingingGroup }) {
+            for (int c : { int(Analyser::PitchTrack), int(Analyser::Notes) }) {
+                QVERIFY2(PlaybackSettings::audible(settings, group, c, true),
+                         qPrintable(QString("%1 %2 muted in the settings")
+                                    .arg(group).arg(c)));
+            }
+        }
     }
 
     void secondary_colours() {
