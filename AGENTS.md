@@ -67,62 +67,6 @@ build into `build/` in the background; run `deploy/linux/cloud-session.sh wait` 
 first build or test (if it says none was started, run `deploy/linux/cloud-session.sh start`
 first). The rest is in [docs/building.md](docs/building.md#building-on-linux).
 
-### CI's jobs, run here
-
-The workflows in `.github/workflows/` run only when started by hand, so nothing checks a
-push on GitHub. **Before every push, run here each CI job this machine can run**, on the
-tree being pushed. A change to Markdown alone needs none. The desktop jobs differ from the
-builds above: they build `release`, which has none of the development checks, and the Linux
-job builds against Ubuntu's Qt 6.4, where a string-based connect fails silently. So they
-build in a directory of their own, `build_ci/`.
-
-| Job | Runs on | Here |
-| --- | --- | --- |
-| Windows (`windows.yml`) | the Windows machine | a release build, `meson test` |
-| Linux (`linux.yml`) | a Linux cloud session | a release build against Qt 6.4, `meson test` |
-| Android (`android.yml`) | a Linux cloud session | the APK; not needed for a change to tests alone |
-| macOS (`macos.yml`) | nowhere | always left to the user |
-
-On the Windows machine, from Git Bash (a first build of `build_ci/` takes up to 30 minutes;
-the tests about 13, in the background):
-
-```sh
-export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-[ -f build_ci/build.ninja ] || meson setup build_ci --buildtype release > tmp/ci.log 2>&1
-ninja -j 4 -C build_ci >> tmp/ci.log 2>&1; echo "exit:$?" >> tmp/ci.log; tail -5 tmp/ci.log
-mkdir -p tmp/tl-ci
-TONY_TEST_LOG_DIR=$(cygpath -m "$PWD/tmp/tl-ci") meson test -C build_ci --print-errorlogs --num-processes 1 > tmp/ci-test.log 2>&1; echo "exit:$?"
-grep -a -E -A3 "^(FAIL!|XPASS|QFATAL)" tmp/tl-ci/*.txt; tail -20 tmp/ci-test.log
-```
-
-In a Linux cloud session (Qt 6.4 is installed once per session; `meson setup` must report
-`qt6 ... found: YES 6.4.2`; a first build takes about 5 minutes, the tests about 12, in the
-background, with nothing else building):
-
-```sh
-apt-get install -y -q --no-install-recommends qt6-base-dev qt6-base-dev-tools qt6-svg-dev qt6-pdf-dev > tmp/ci-apt.log 2>&1
-[ -f build_ci/build.ninja ] || CC_LD=mold CXX_LD=mold meson setup build_ci --buildtype release > tmp/ci.log 2>&1
-ninja -j 4 -C build_ci >> tmp/ci.log 2>&1; echo "exit:$?" >> tmp/ci.log; tail -5 tmp/ci.log
-meson test -C build_ci --print-errorlogs --num-processes 1 > tmp/ci-test.log 2>&1; echo "exit:$?"
-grep -a -E -A3 "^(FAIL!|XPASS|QFATAL)|Received signal" build_ci/meson-logs/testlog.txt; tail -20 tmp/ci-test.log
-```
-
-Then, in the same session, the Android job. Its scripts take about 20 minutes the first
-time in a session, for Qt and the C libraries, and a few after that
-([docs/building.md](docs/building.md#building-for-android)):
-
-```sh
-deploy/android/setup-toolchain.sh && deploy/android/build-qt.sh && deploy/android/build-deps.sh &&
-  deploy/android/build-tony.sh && deploy/android/build-apk.sh
-```
-
-- The `grep` prints each failed test with its details, as CI's `test-failures` step does,
-  and nothing when all passed; the `tail` is meson's line per test executable.
-- A job that fails here is a red CI run: fix it before pushing.
-- CI checks the libraries out at `repoint-lock.json`'s pins. A fork change that is not
-  pushed and pinned there is in the tree built here and not in CI's
-  ([docs/forks.md](docs/forks.md)).
-
 ## Rules for working here
 
 ### Scope
@@ -173,8 +117,6 @@ deploy/android/setup-toolchain.sh && deploy/android/build-qt.sh && deploy/androi
 - Commit only when asked, and only with both whole suites green. One commit per coherent
   step, staged by file name (never `git add -A`; `tmp/` and all of `.claude/` but
   `settings.json` stay out).
-- Push only after the CI jobs this machine can run have passed here
-  ([CI's jobs, run here](#cis-jobs-run-here)).
 - Messages: `feat:` / `fix:` / `test:` / `docs:`, lower case, then a short what-and-why
   body. End with a `Co-Authored-By` trailer naming the model that wrote the code.
 - Use the `gh` CLI for anything on GitHub.
@@ -182,11 +124,10 @@ deploy/android/setup-toolchain.sh && deploy/android/build-qt.sh && deploy/androi
 ### Reporting
 
 Say what was built, by file; copy the `Totals` lines of the final full test runs verbatim;
-say which tests were seen to fail; name the CI jobs run here, with their results, and those
-left for the user to start by hand (macOS always); list deviations and anything fragile or
-unfinished. A problem reported is cheap, one found later is not. If a change needs a real
-device or real eyes to judge, name the items of
-[docs/manual-checklist.md](docs/manual-checklist.md) the user should try.
+say which tests were seen to fail; list deviations and anything fragile or unfinished. A
+problem reported is cheap, one found later is not. If a change needs a real device or real
+eyes to judge, name the items of [docs/manual-checklist.md](docs/manual-checklist.md) the
+user should try.
 
 ### Keeping the docs true
 
