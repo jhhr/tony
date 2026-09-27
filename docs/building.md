@@ -217,6 +217,36 @@ Why each part is as it is:
   builds `debugoptimized`, with full debug information; clang is no faster than GCC; and a
   unity build fails in the libraries, which define the same names in several files.
 
+## The CI jobs in a cloud session
+
+`deploy/linux/ci-local.sh` runs here what the Linux and Android workflows run, so that a
+change can be checked without them. The Windows workflow's build and suites are
+`build.bat test` on the Windows machine; the macOS one has no stand-in.
+
+```sh
+deploy/linux/ci-local.sh linux             # about 12 min, and 4 more for a session's first build
+deploy/linux/ci-local.sh --quick linux     # about 3 min, and the same 4
+deploy/linux/ci-local.sh android           # 2 min once Qt for Android is built; see below
+deploy/linux/ci-local.sh all               # Linux, then Android
+```
+
+- **`linux`** installs Ubuntu's Qt 6.4 if it is missing, builds a release build against
+  it in `build-linux-ci/`, runs every meson test in one process and lists the tests that
+  failed, as the workflow's steps do. `--quick` runs the core and app suites in one
+  process per core instead, half of `run-tests.sh`'s default, to load the machine less:
+  the tests that share a process are then others ([testing.md](testing.md#running)).
+  Expect `live_dots_under_the_cursor` to fail here either way
+  ([testing.md](testing.md#running)).
+- **`android`** runs `deploy/android/`'s five scripts in the workflow's order. The first
+  run in a session builds Qt for Android and the C libraries into `/opt/android`, which
+  the environment's snapshot cannot hold: about 25 minutes more.
+- It waits for the session's background build first, which would load the machine while
+  the app suite records in real time, and writes its logs to `tmp/ci-local/`.
+- **Where it differs from the runner**: the libraries are `container-setup.sh`'s, not
+  repoint's; meson and Rubber Band are Ubuntu's; and `libopusenc` is installed here and not
+  on the runner, so this build can write Opus files (`HAVE_OPUS_READ_ONLY` is not
+  defined).
+
 ## Checking the fork's Windows code
 
 The bqaudioio fork's drivers ([forks.md](forks.md#bqaudioio)) are under `#ifdef _WIN32`,
