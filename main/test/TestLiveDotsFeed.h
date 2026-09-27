@@ -90,11 +90,13 @@ private slots:
     void hands_over_everything_at_once() {
         Found found;
         std::vector<Estimates> batches;
+        int looked = 0;
         LiveDotsFeed feed(kInterval);
         found.add(100);
-        feed.start([&]() { return found.take(); },
+        feed.start([&]() { ++looked; return found.take(); },
                    [&](const Estimates &e) { batches.push_back(e); });
-        QTest::qWait(kInterval * 5);
+        // Until it has looked a few times, however late the timer fires
+        QTRY_VERIFY_WITH_TIMEOUT(looked >= 3, 5000);
         feed.stop();
 
         QCOMPARE(int(batches.size()), 1);
@@ -158,7 +160,7 @@ private slots:
         QTest::qWait(1500);
         producing = false;
         producer.join();
-        QTest::qWait(kInterval * 5);
+        QTRY_COMPARE_WITH_TIMEOUT(found.waiting(), 0, 5000);
         feed.stop();
         qint64 elapsed = timer.elapsed();
 
