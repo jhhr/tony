@@ -219,6 +219,10 @@ Not tried yet.
    smoothly, and neither they nor the cursor stutter, in a maximised window. None appear
    between phrases, and none are lost on soft singing: the tracker ignores what is quieter
    than −60 dBFS.
+8. **Background music in a session**: load it, turn its level down, save, close and open
+   the session: it plays with the reference at that level, and during a take. Move the
+   music file and open the session again: Tony asks where it is, and Locate file... finds
+   it.
 
 ## 4. Lyrics
 

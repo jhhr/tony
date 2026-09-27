@@ -65,6 +65,7 @@
 #include "transform/ModelTransformerFactory.h"
 #include "widgets/CommandHistory.h"
 #include "widgets/InteractiveFileFinder.h"
+#include "widgets/LevelPanToolButton.h"
 
 #include <QObject>
 #include <QtTest>
@@ -322,6 +323,14 @@ class TestRecordWorkflow : public QObject
         int n = 0;
         for (sv::Layer *layer : m_window->document()->getLayers()) {
             if (layer->getModel() == id) ++n;
+        }
+        return n;
+    }
+
+    int backgroundMusicLayersInDocument() {
+        int n = 0;
+        for (sv::Layer *layer : m_window->document()->getLayers()) {
+            if (layer->objectName() == "Background Music") ++n;
         }
         return n;
     }
@@ -4405,6 +4414,145 @@ private slots:
         take(600);
         if (QTest::currentTestFailed()) return;
         verifyRulerIntact();
+    }
+
+    // Saved with the session and found again when it is opened, beside
+    // the session's take and not taken for its audio: hidden, heard at the
+    // level and pan it was saved at, and muted if it was muted
+    void background_music_session_round_trip() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 1.5)));
+        if (QTest::currentTestFailed()) return;
+
+        take(600);
+        if (QTest::currentTestFailed()) return;
+
+        QString music = writeWav(tone(highHz, 1.0));
+        m_window->doLoadBackgroundMusic(music);
+        QVERIFY(m_window->backgroundMusicLayer());
+
+        // A notch of the level control, as a click leaves it, and the pan
+        // half left
+        sv::LevelPanToolButton *levelPan = m_window->backgroundMusicLevelPan();
+        levelPan->setLevel(0.3f);
+        emit levelPan->panChanged(-0.5f);
+        auto params = m_window->backgroundMusicLayer()->getPlayParameters();
+        QVERIFY(params);
+        float gain = params->getPlayGain();
+        QVERIFY2(gain > 0.f && gain < 0.9f, qPrintable(QString::number(gain)));
+        QCOMPARE(params->getPlayPan(), -0.5f);
+        QVERIFY(params->isPlayAudible());
+
+        QString session = m_dir.filePath("background-music.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        QString takePath = m_window->takes()->getAudioPath();
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        // The same file, with the one layer that holds it, in pane 0 and
+        // hidden, and in the play source
+        sv::WaveformLayer *layer = m_window->backgroundMusicLayer();
+        QVERIFY2(layer, "the background music of the session was not adopted");
+        sv::ModelId model = m_window->backgroundMusicModelId();
+        QCOMPARE(layer->getModel(), model);
+        QVERIFY(model != m_window->mainModelId());
+        auto wave = sv::ModelById::getAs<sv::WaveFileModel>(model);
+        QVERIFY(wave);
+        QCOMPARE(QFileInfo(wave->getLocation()).canonicalFilePath(),
+                 QFileInfo(music).canonicalFilePath());
+        QVERIFY(paneHasLayer(0, layer));
+        QVERIFY(layer->isLayerDormant(m_window->paneStack()->getPane(0)));
+        QCOMPARE(layersOnModel(model), 1);
+        QCOMPARE(backgroundMusicLayersInDocument(), 1);
+        QVERIFY(m_window->playSource()->getModels().count(model));
+        verifyPlaySourceClean();
+
+        params = layer->getPlayParameters();
+        QVERIFY(params);
+        QVERIFY(params->isPlayAudible());
+        QVERIFY(std::fabs(params->getPlayGain() - gain) < 1e-5);
+        QCOMPARE(params->getPlayPan(), -0.5f);
+        QVERIFY(m_window->playBackgroundMusicAction()->isEnabled());
+        QVERIFY(m_window->playBackgroundMusicAction()->isChecked());
+        QVERIFY(levelPan->isEnabled());
+        QVERIFY(std::fabs(levelPan->getLevel() - gain) < 1e-5);
+        QCOMPARE(levelPan->getPan(), -0.5f);
+
+        // The take is the take, on its own audio, and the music is not a
+        // singing track of its own
+        QCOMPARE(m_window->takes()->getTakeNames(), QStringList { "Take 1" });
+        QCOMPARE(m_window->takes()->getAudioPath(), takePath);
+        QVERIFY(m_window->analyser2());
+        QVERIFY(takeAudio());
+        QVERIFY(m_window->analyser2()->getMainModelId() != model);
+        QCOMPARE(QFileInfo(takeAudio()->getLocation()).canonicalFilePath(),
+                 QFileInfo(takePath).canonicalFilePath());
+
+        // Opening a session is not a change to it
+        QVERIFY(!m_window->isDocumentModified());
+
+        // Muted, saved and opened again: muted, and the toggle says so
+        m_window->playBackgroundMusicAction()->trigger();
+        QVERIFY(!params->isPlayAudible());
+        session = m_dir.filePath("background-music-muted.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+
+        layer = m_window->backgroundMusicLayer();
+        QVERIFY(layer);
+        params = layer->getPlayParameters();
+        QVERIFY(params);
+        QVERIFY2(!params->isPlayAudible(), "the background music was saved "
+                 "muted and is heard");
+        QVERIFY(std::fabs(params->getPlayGain() - gain) < 1e-5);
+        QVERIFY(m_window->playBackgroundMusicAction()->isEnabled());
+        QVERIFY(!m_window->playBackgroundMusicAction()->isChecked());
+        QCOMPARE(backgroundMusicLayersInDocument(), 1);
+    }
+
+    // The music has gone since the session was saved: the session reader
+    // asks where it is, and without an answer the session opens without
+    // it, as it does without any audio it names.  Nothing of it is left,
+    // and music loaded again is the session's
+    void background_music_missing_from_session() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QString music = writeWav(tone(highHz, 1.0));
+        m_window->doLoadBackgroundMusic(music);
+        QVERIFY(m_window->backgroundMusicLayer());
+        QString session = m_dir.filePath("background-music-gone.ton");
+        QVERIFY(m_window->saveSessionFile(session));
+        m_window->doCloseSession();
+        QVERIFY(QFile::remove(music));
+        takeDialogs();
+
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        QStringList dialogs = takeDialogs();
+        QStringList asked = dialogs.filter("Do you want to locate it?");
+        QCOMPARE(asked.size(), 1);
+        QVERIFY2(asked[0].contains(QFileInfo(music).fileName()),
+                 qPrintable(asked[0]));
+        QCOMPARE(dialogs.filter("referred to by the original session "
+                                "file could not be loaded").size(), 1);
+        QVERIFY(m_window->isSessionIncomplete());
+
+        QVERIFY(!m_window->backgroundMusicLayer());
+        QVERIFY(m_window->backgroundMusicModelId().isNone());
+        QCOMPARE(backgroundMusicLayersInDocument(), 0);
+        QVERIFY(!m_window->playBackgroundMusicAction()->isEnabled());
+        QVERIFY(!m_window->analyser2());
+        verifyPlaySourceClean();
+
+        m_window->doLoadBackgroundMusic(writeWav(tone(highHz, 1.0)));
+        QVERIFY(m_window->backgroundMusicLayer());
+        QVERIFY(m_window->playBackgroundMusicAction()->isEnabled());
+        QCOMPARE(backgroundMusicLayersInDocument(), 1);
     }
 
     void session_round_trip() {

@@ -275,7 +275,7 @@ leaves whoever keeps a pointer to it holding a layer that the redo stack owns an
   frames exactly and values with a tolerance.
 - Layer **object names carry identity** across a save: `"Alternate Pitch Track -1"` holds
   the octave count, `"Take 2 Pitch"` links a layer to its take, `"Lyrics"` marks the
-  lyrics. They are not translated.
+  lyrics, `"Background Music"` the background music. They are not translated.
 
 ### Miscellaneous
 
@@ -304,8 +304,14 @@ recording stops.
 
 **Background music**: loaded with `openPath(CreateAdditionalModel)` under the
 `m_loadingBackgroundMusic` flag so `modelAdded()` does not take it for a singing track;
-given a hidden waveform layer of Tony's own **before** the extra pane is pruned; not
-saved in the session.
+given a hidden waveform layer of Tony's own **before** the extra pane is pruned. The
+session saves that layer and its model, and with the model its mute, gain and pan; the
+file is looked for as the reference is, and one that is not found leaves the session
+incomplete. On opening, `adoptBackgroundMusic()` finds the layer by its object name
+`"Background Music"`, **before** `dropRestoredSingingTrack()`, which would otherwise take
+its model for a singing track's, and drops the layer of music that could not be read (a
+waveform layer may be without a model). Sessions saved before the layer had its name
+open without their music.
 
 **Load Singing Track** follows the same order: `analyseNewSingingModel()` synchronously
 after `openPath()`, and only then prune the extra pane — the imported waveform in that pane
