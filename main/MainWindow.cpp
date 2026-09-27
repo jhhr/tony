@@ -6137,8 +6137,26 @@ MainWindow::expectedRecordingRate() const
     // A device that knows its route knows its rate as soon as it is open,
     // and records at it (OboeAudioIO opens its input at its output's)
     AudioRoute::Route route;
-    if (deviceRoute(route) && route.rate > 0) return route.rate;
-    return m_lastRecordingRate > 0 ? m_lastRecordingRate : sessionRate();
+    const bool routed = deviceRoute(route);
+    if (routed && route.rate > 0) return route.rate;
+    if (m_lastRecordingRate > 0) return m_lastRecordingRate;
+
+    // Before the first take on a desktop, the rate the device will record
+    // at is not known: it is open for playback only, if at all, and
+    // AudioCallbackRecordTarget has no getter for the rate.  The
+    // session's (always 44.1 kHz), unless figures are kept for these
+    // devices at one rate only: the rate the check found they record at,
+    // usually 48 kHz.  A guess, as onlyRecordDevice() is for a phone's
+    // input; the take itself looks its figure up at the rate it records
+    // at.  With figures at more than one rate, the session's
+    const sv_samplerate_t session = sessionRate();
+    if (routed) return session; // a route without a rate: no desktop's
+    QSettings settings;
+    sv_samplerate_t kept = 0;
+    if (LatencyCalibration::onlyRate(settings, latencyKey(session), kept)) {
+        return kept;
+    }
+    return session;
 }
 
 LatencyCalibration::InUse
@@ -6185,11 +6203,12 @@ MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
 void
 MainWindow::forgetMeasuredLatency()
 {
+    // Asked once: with the figure gone, the rate expected may be another
+    const sv_samplerate_t rate = expectedRecordingRate();
     QSettings settings;
-    LatencyCalibration::forget
-        (settings, latencyKey(expectedRecordingRate()));
-    cerr << "MainWindow::forgetMeasuredLatency: at "
-         << expectedRecordingRate() << " Hz" << endl;
+    LatencyCalibration::forget(settings, latencyKey(rate));
+    cerr << "MainWindow::forgetMeasuredLatency: at " << rate << " Hz"
+         << endl;
     updateLatencyMenuLine();
 }
 

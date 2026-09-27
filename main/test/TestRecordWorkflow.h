@@ -243,19 +243,28 @@ class TestRecordWorkflow : public QObject
     }
 
     // A round trip as the audio check would have kept it for the fake
-    // device (the default devices, the Preferences naming none) at 44.1
-    // kHz, measured while the device reported the given latencies, in
-    // frames. cleanup() forgets it
+    // device (the default devices, the Preferences naming none) recording
+    // at deviceRate, 44.1 kHz unless given, measured while the device
+    // reported the given latencies, in frames at that rate. cleanup()
+    // forgets it
     static void storeRoundTrip(int roundTrip, int reportedOutput,
-                               int reportedInput) {
+                               int reportedInput, double deviceRate = rate) {
         LatencyCalibration::Figure figure;
-        figure.roundTrip = roundTrip / rate;
+        figure.roundTrip = roundTrip / deviceRate;
         figure.date = QDateTime::currentDateTimeUtc();
-        figure.reportedOutput = reportedOutput / rate;
-        figure.reportedInput = reportedInput / rate;
+        figure.reportedOutput = reportedOutput / deviceRate;
+        figure.reportedInput = reportedInput / deviceRate;
         QSettings settings;
         LatencyCalibration::store
-            (settings, LatencyCalibration::currentKey(settings, rate), figure);
+            (settings, LatencyCalibration::currentKey(settings, deviceRate),
+             figure);
+    }
+
+    // The Playback menu's line about the latency, as it reads when the
+    // menu is opened
+    QString latencyLine() {
+        emit m_window->playbackMenu()->aboutToShow();
+        return m_window->latencyLineAction()->text();
     }
 
     static sv::EventVector pitchEvents(sv::Layer *layer) {
@@ -3991,6 +4000,83 @@ private slots:
         QCOMPARE(params->getPlayGain(), level);
         QSettings settings;
         QVERIFY(PlaybackSettings::backgroundMusicMix(settings));
+    }
+
+    // After a relaunch the Playback menu's line shows the figure the
+    // check kept for the devices, as the takes use it, and Forget drops
+    // that one. The device records at 48 kHz, as most desktop devices do,
+    // and the figure is kept at that rate, which nothing says before the
+    // first take: the session's is 44.1 kHz. Nor is the device open
+    // before the first file, and until the first take a desktop's is open
+    // for playback only (svapp's AUDIO_PLAYBACK_NOW_RECORD_LATER), its
+    // input reporting a latency of 0. The test window's fake is duplex
+    // from the start: "no device" is the new window before any file is
+    // opened, and "input not open" the fake reporting a record latency
+    // of 0 against a figure measured while the input reported 4096 frames
+    void measured_latency_shown_after_a_relaunch() {
+        const int reportedOut = 2 * 4096;
+        storeRoundTrip(14400, reportedOut, 4096, otherDeviceRate);
+        FakeAudioIO::Config config;
+        config.sampleRate = otherDeviceRate;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = 0;
+        makeWindow(config);
+
+        QVERIFY(!m_window->fake());
+        QString line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured 300 ms, "),
+                 qPrintable(line + ", before any file is opened"));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->recordTarget()->getSystemRecordLatency(), 0);
+        QVERIFY(m_window->latencyInUse().reportedOutput > 0.0);
+        line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured 300 ms, "),
+                 qPrintable(line + ", with a file open"));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+
+        // The figure the line showed is the one forgotten, and the line
+        // says so: the driver's figure, 8192 frames at 48 kHz, which the
+        // play source has as 7526 at 44.1
+        m_window->forgetLatencyAction()->trigger();
+        {
+            QSettings settings;
+            LatencyCalibration::Figure figure;
+            QVERIFY(!LatencyCalibration::load
+                    (settings,
+                     LatencyCalibration::currentKey(settings, otherDeviceRate),
+                     figure));
+        }
+        QCOMPARE(latencyLine(), QString("Latency: driver's figure, 171 ms"));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+    }
+
+    // Figures kept for the devices at two rates, neither the session's:
+    // before the first take which one the device will record at is not
+    // known, and the line takes neither. It shows the driver's figure,
+    // not known before any file is opened and the reported one after,
+    // and not "out of date", with nothing to forget
+    void latency_line_with_figures_at_two_rates() {
+        const int reportedOut = 2 * 4096;
+        storeRoundTrip(14400, reportedOut, 4096, otherDeviceRate);
+        storeRoundTrip(28800, reportedOut, 4096, 96000);
+        FakeAudioIO::Config config;
+        config.sampleRate = otherDeviceRate;
+        config.playbackLatency = reportedOut;
+        config.recordLatency = 0;
+        makeWindow(config);
+
+        QCOMPARE(latencyLine(),
+                 QString("Latency: driver's figure, not known yet"));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyLine(), QString("Latency: driver's figure, 171 ms"));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
     }
 
     // The take's stored pitch track and notes sit over the same part of

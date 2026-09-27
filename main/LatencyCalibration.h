@@ -90,6 +90,15 @@ namespace LatencyCalibration
     bool onlyRecordDevice(QSettings &settings, const Key &key,
                           QString &recordDevice);
 
+    /**
+     * The rate of the one figure kept for the key's driver and devices,
+     * whatever its rate: for a device that cannot say yet what it will
+     * record at, as a desktop's cannot before its first take.  False if
+     * there is none, or figures at more than one rate.
+     */
+    bool onlyRate(QSettings &settings, const Key &key,
+                  sv::sv_samplerate_t &rate);
+
     struct Figure {
         /// What the check measured
         double roundTrip;
@@ -126,7 +135,10 @@ namespace LatencyCalibration
      * open for playback only) is not compared, and the latencies it
      * reports are not either.  For any other device, if either latency
      * it reports now differs from the one it reported then by more than
-     * kStaleToleranceSeconds.
+     * kStaleToleranceSeconds; a latency reported as zero or less is a
+     * stream that is not open (no device yet, or the input of one open
+     * for playback only), and is not compared.  With neither open, the
+     * figure is not stale: it is judged once the device is open.
      */
     bool isStale(const Figure &figure,
                  double reportedOutput, double reportedInput,

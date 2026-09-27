@@ -135,9 +135,10 @@ public:
     // What the next take will be placed with, as far as it is known
     // before the take starts: the device's rate is known only once it
     // has recorded, so until a take has been recorded on these devices
-    // this assumes the session's rate, the only one a usable check
-    // stores a figure at (a device that reports its route says its rate
-    // once it is open).  The reported pair is 0 until the device is open
+    // this assumes the rate expectedRecordingRate() guesses (a device
+    // that reports its route says its rate once it is open).  The
+    // reported pair is 0 until the device is open, and the input's until
+    // it records; a latency reported as 0 does not make a figure stale
     LatencyCalibration::InUse latencyInUse() const;
 
     // The devices a measured round trip is kept for, at the given rate:
@@ -1157,7 +1158,8 @@ protected:
 
     // The rate the next take is expected to record at: the rate of a
     // device that reports its route; else the last take's, or before
-    // there is one, the session's
+    // there is one, the session's, unless figures are kept for these
+    // devices at one rate only (LatencyCalibration::onlyRate()): that one
     sv::sv_samplerate_t expectedRecordingRate() const;
 
     // The route of the open device, if it is an AudioRouteReporter and

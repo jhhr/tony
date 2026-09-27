@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 using namespace sv;
 
@@ -128,6 +129,26 @@ onlyRecordDevice(QSettings &settings, const Key &key, QString &recordDevice)
     return true;
 }
 
+bool
+onlyRate(QSettings &settings, const Key &key, sv_samplerate_t &rate)
+{
+    // The rate groups within the group of the driver and devices, named
+    // as rateGroup() names them
+    std::vector<qint64> found;
+    settings.beginGroup(settingsGroup);
+    settings.beginGroup(devicesGroup(key));
+    for (const QString &group : settings.childGroups()) {
+        bool ok = false;
+        const qint64 r = group.toLongLong(&ok);
+        if (ok && r > 0) found.push_back(r);
+    }
+    settings.endGroup();
+    settings.endGroup();
+    if (found.size() != 1) return false;
+    rate = sv_samplerate_t(found.front());
+    return true;
+}
+
 void
 store(QSettings &settings, const Key &key, const Figure &figure)
 {
@@ -209,10 +230,17 @@ isStale(const Figure &figure, double reportedOutput, double reportedInput,
         return (outputStreams != "" && outputStreams != figure.outputStreams) ||
             (inputStreams != "" && inputStreams != figure.inputStreams);
     }
-    return std::fabs(figure.reportedOutput - reportedOutput) >
-        kStaleToleranceSeconds ||
-        std::fabs(figure.reportedInput - reportedInput) >
-        kStaleToleranceSeconds;
+    // A latency reported as nothing is a stream that is not open, and
+    // says nothing of the buffers: on a desktop there is no device before
+    // the first file, and it is open for playback only until the first
+    // take, its input reporting 0 until then.  A figure is judged by the
+    // streams that are open, and with neither, not until they are
+    return (reportedOutput > 0.0 &&
+            std::fabs(figure.reportedOutput - reportedOutput) >
+            kStaleToleranceSeconds) ||
+        (reportedInput > 0.0 &&
+         std::fabs(figure.reportedInput - reportedInput) >
+         kStaleToleranceSeconds);
 }
 
 const char *
