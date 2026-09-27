@@ -84,14 +84,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   combine shards with test names on the command line.
 - A sharded run is a whole run of the suites, but the tests that share a process are other
   ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
-  run the one-process run as well. It also loads the machine more: built against Ubuntu's
-  Qt 6.4, `TestUiChecks`' `live_dots_under_the_cursor` failed in both of two runs in eight
-  processes (the tracker itself 313 and 325 ms behind the cursor, over the test's 300 ms)
-  and passed with `-j 4`. Judge a failure of it there by running it alone. So too the dev
-  checks' item 14, whose allowance is one look of the take timer: in eight processes a
-  take once stopped 0.400 s past its selection against 0.385 s allowed, and passed alone;
-  and `stale_pitch_event_ignored`, which once failed at `QVERIFY(model)` in eight
-  processes and passed alone and in the next run.
+  run the one-process run as well. It also loads the machine more: judge a failure of a
+  timed test there by running it alone. Two such were the dev checks' item 14, whose
+  allowance is one look of the take timer (in eight processes a take once stopped 0.400 s
+  past its selection against 0.385 s allowed, and passed alone), and
+  `stale_pitch_event_ignored`, which once failed at `QVERIFY(model)` in eight processes
+  and passed alone and in the next run.
 - **Under that load a stopwatch must start before the call that starts the application's
   clock**, not after it returns. Stop splices the take before it returns, after the idle
   time before a suspend has started: timed from Stop's return, a device suspended on time
@@ -116,7 +114,18 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   the same.
 - CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
   suite at a time; the Android job runs none. When a run fails, its `test-failures` step
-  lists each failed test with the lines QTest indents under it, from meson's full log.
+  lists each failed test with the lines QTest indents under it, from meson's full log. In a
+  cloud session `deploy/linux/ci-local.sh` runs the Linux and Android jobs
+  ([building.md](building.md#the-ci-jobs-in-a-cloud-session)), and on the Windows machine
+  `build.bat test` runs what the Windows job does.
+- **With Ubuntu's Qt 6.4 the live dots trail the cursor by about 200 ms more** than with
+  Qt 6.11: `live_dots_under_the_cursor` measured 333 to 357 ms in a cloud session, alone
+  and unloaded, against its 300 ms, where Qt 6.11 gives 114 to 125 ms in a release build
+  as in `debugoptimized`. On both, the log's once-a-second live-dots line has the tracker
+  and the dots handed over within 10 ms of the frames received; the extra shows between
+  the frames written and the newest dot in the pane's model. The test passes on CI's
+  Linux runner, so in a cloud session it fails in the local Linux job only. Why Qt 6.4
+  adds the time is not known.
 - **CI's macOS runs timers and sleeps late**: a 20 ms `QTimer` fired every 60 to 67 ms and
   a 5.8 ms sleep took about 30. A test that needs something to have happened a number of
   times waits for it (`QTRY_*`), and one that checks what was timed checks it against its
