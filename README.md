@@ -1,44 +1,61 @@
+Tony for singing practice
+=========================
 
-Tony
-====
+A singing practice aid: record yourself over a reference song and see your
+pitch next to the singer's, phrase by phrase, with takes and timed lyrics.
 
-Tony is a program for computer-aided melody annotation. It has a
-graphical interface based on the Sonic Visualiser libraries, and uses
-the pYIN Vamp plugin to extract pitch track and notes from monophonic
-audio.
-
-![Tony small screenshot](https://code.soundsoftware.ac.uk/attachments/download/1069/tony-screeny-20140328-30pc.png)
-
-Home page and downloads: https://code.soundsoftware.ac.uk/projects/tony
-
-
-Features
---------
-
- * robust monophonic pitch track extraction (using pYIN)
- * note track extraction
- * facility to manually adjust pitch track and note track
- * facility to audition pitch and note track
- * note pitch automatically snaps to pitch track
- * import/export of pitch track and note track
+This is a fork of [Tony](https://github.com/sonic-visualiser/tony), the
+melody transcription program from Queen Mary, University of London. It keeps
+Tony's pitch and note analysis (the pYIN plugin) and builds a practice tool
+around it. It is developed separately and is not a release of Tony: the Tony
+home page and its downloads are for the original program, not this one. There
+are no ready-made builds of this fork yet; see [Building](#building) below.
 
 
-Singing practice
-----------------
+How it works
+------------
 
-This fork adds a singing practice mode: a reference recording is loaded and
-analysed as usual, and your own singing is recorded alongside it as a second,
-orange pitch track to compare with it.
+Open a recording of the song with File -> Open. The pitch tracker follows one
+voice, so the reference works best as the vocal on its own, such as a stem
+separated from the mix. Tony analyses it and draws its pitch as a black line.
+
+In the toolbar, turn on the speaker button after "While recording:", which
+plays the reference while you record. Put on headphones (a microphone that
+hears the reference picks up its pitch as well as yours), then press Record
+(Ctrl+Space) and sing along. Your pitch appears as orange dots as you sing.
+When you press Stop, the recording is analysed in full and becomes an orange
+pitch track in the same pane as the reference's, so you can see where you were
+sharp, flat, early or late.
+
+
+Recording
+---------
 
  * record from the playback position, not only from the start of the song, so
    you can practise one phrase without singing everything before it
  * an optional pre-roll: the reference starts a few seconds early and the
    status bar counts you in, and nothing sung during the lead-in is kept
  * an optional "record into the selection only": select the phrase, and the
-   recording starts and stops at the ends of the selection by itself
+   recording starts and stops at the ends of the selection by itself. This
+   and the pre-roll are buttons in the toolbar, after "While recording:"
+ * the microphone and the output are chosen in Playback -> Audio Input Device
+   and Playback -> Audio Output Device
  * on Windows, Playback -> Audio Driver chooses MME, DirectSound or WASAPI, and
    Playback -> Audio Latency how much latency is asked of it (10 to 200 ms);
    each driver keeps its own devices, latency and measured round trip
+ * the latency of the audio devices is taken off the start of each recording,
+   so that it lines up with the reference. Drivers often report that latency
+   wrongly: Playback -> Calibrate Audio... measures it, with one earcup of
+   wired headphones held against the microphone, and "Use this latency" places
+   every take with the measured figure. Playback -> Forget Measured Latency
+   goes back to the figure the driver reports
+ * File -> Load Singing Track... (Ctrl+Shift+R) loads a recording made
+   elsewhere as the singing track instead
+
+
+Takes and editing
+-----------------
+
  * a take is one recording or many. A strip along the bottom of the pane shows
    where there is singing and where there is not; recording over a part of it
    replaces just that part, and only the part that changed is analysed again
@@ -50,16 +67,35 @@ orange pitch track to compare with it.
    the toolbar): each keeps its own audio, pitch track and notes, and switching
    between them needs no re-analysis. The audio of a session's takes is kept in
    a folder named after the session beside it, so the two can be moved together
- * timed lyrics: File -> Import Lyrics... reads a TTML or LRC file, timed by
-   word or by line, and shows the words in boxes along the bottom of the pane,
-   at the time and for as long as each is sung. The word at the playback
-   position is highlighted, while playing, while recording and wherever you
-   click, and the waveform is faded while the words are on show so that they
-   can be read over it. They are saved with the session; View -> Show Lyrics
-   hides them, File -> Remove Lyrics takes them out, and File -> Export
-   Lyrics... writes them, as they are now, to a TTML file. The reference must
-   be the recording the lyrics were timed to (a Moises stem and its original
-   mix share a timeline)
+
+
+Following the reference
+-----------------------
+
+ * an alternate pitch track: a copy of the reference's pitch track moved by
+   one to three octaves, for a song written for a higher or lower voice than
+   yours. Turn it on with the button after "Follow:" in the toolbar and move
+   it with the 8vb and 8va buttons. While it is on, the reference's own track
+   is hidden as you record, so that the one you follow is the one on show
+ * background music: File -> Load Background Music... loads a second audio
+   file, such as the accompaniment or the full mix, that plays along with the
+   reference, while recording as well, but is never analysed. The speaker
+   button after "Background:" in the toolbar turns it on and off. It is not
+   saved with the session
+
+
+Timed lyrics
+------------
+
+ * File -> Import Lyrics... reads a TTML or LRC file, timed by word or by line,
+   and shows the words in boxes along the bottom of the pane, at the time and
+   for as long as each is sung. The word at the playback position is
+   highlighted, while playing, while recording and wherever you click, and the
+   waveform is faded while the words are on show so that they can be read over
+   it. They are saved with the session; View -> Show Lyrics hides them, File ->
+   Remove Lyrics takes them out, and File -> Export Lyrics... writes them, as
+   they are now, to a TTML file. The reference must be the recording the lyrics
+   were timed to (a Moises stem and its original mix share a timeline)
  * the lyrics can be corrected by ear, with the song there to listen to: with
    Edit -> Edit Lyrics on, drag the start or end of a word in its box,
    double-click a word to change its text, or right-click to delete a word or
@@ -76,6 +112,29 @@ orange pitch track to compare with it.
    reviewing the change
 
 
+From Tony
+---------
+
+Everything the original program does is still here, for the reference and the
+singing alike:
+
+ * robust monophonic pitch track extraction (using pYIN)
+ * note track extraction
+ * facility to manually adjust pitch track and note track
+ * facility to audition pitch and note track
+ * note pitch automatically snaps to pitch track
+ * import/export of pitch track and note track
+
+
+Building
+--------
+
+The fork is developed on Windows with MSYS2's MinGW-w64 toolchain, Qt 6,
+meson and ninja; it also builds on Linux and macOS. How to build, and every way
+the build has gone wrong, is in [docs/building.md](docs/building.md). The rest
+of [docs/](docs/) is the developer documentation.
+
+
 Authors, Citation, License and Use
 ----------------------------------
 
@@ -87,6 +146,9 @@ London, and the Tony project authors: Matthias Mauch, George Fazekas,
 Justin Salamon, and Rachel Bittner, except where indicated in the
 individual source files. Thanks also to Simon Dixon and Juan Bello.
 
+The singing practice features were added in this fork, under the same
+license.
+
 If you make use of this software for any public or commercial purpose,
 we ask you to kindly mention the authors and Queen Mary, University of
 London in your user-visible documentation. We're very happy to see
@@ -94,8 +156,7 @@ this sort of use but would much appreciate being credited, separately
 from the requirements of the software license itself (see below).
 
 If you make use of this software for academic purposes, please cite
-one of the publications indicated on the Publications page:
-https://code.soundsoftware.ac.uk/publications?project_id=tony
+the Tony paper given in the [CITATION](CITATION) file.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -104,7 +165,7 @@ your option) any later version.
 
 This program is distributed in the hope that it will be useful, but
 WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A ARTICULAR PURPOSE. See the GNU
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
 General Public License for more details. You should have received a
 copy of the GNU General Public License along with this program. If
 not, see http://www.gnu.org/licenses/.
@@ -113,7 +174,6 @@ not, see http://www.gnu.org/licenses/.
 Automated build reports
 -----------------------
 
- * Linux CI build: [![Build Status](https://github.com/sonic-visualiser/tony/workflows/Linux%20CI/badge.svg)](https://github.com/sonic-visualiser/tony/actions?query=workflow%3A%22Linux+CI%22)
- * macOS CI build: [![Build Status](https://github.com/sonic-visualiser/tony/workflows/macOS%20CI/badge.svg)](https://github.com/sonic-visualiser/tony/actions?query=workflow%3A%22macOS+CI%22)
- * Windows CI build: [![Build Status](https://github.com/sonic-visualiser/tony/workflows/Windows%20CI/badge.svg)](https://github.com/sonic-visualiser/tony/actions?query=workflow%3A%22Windows+CI%22)
-
+ * Linux CI build: [![Build Status](https://github.com/jhhr/tony/actions/workflows/linux.yml/badge.svg)](https://github.com/jhhr/tony/actions/workflows/linux.yml)
+ * macOS CI build: [![Build Status](https://github.com/jhhr/tony/actions/workflows/macos.yml/badge.svg)](https://github.com/jhhr/tony/actions/workflows/macos.yml)
+ * Windows CI build: [![Build Status](https://github.com/jhhr/tony/actions/workflows/windows.yml/badge.svg)](https://github.com/jhhr/tony/actions/workflows/windows.yml)
