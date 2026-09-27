@@ -38,6 +38,8 @@
 #include "TestPlaybackSettings.h"
 #include "TestTakeDiff.h"
 #include "TestLiveDotsFeed.h"
+#include "TestVoiceThreshold.h"
+#include "TestVoiceGate.h"
 #include "TestRunSuite.h"
 
 #include "RunSuite.h"
@@ -224,6 +226,18 @@ int main(int argc, char *argv[])
 
     {
         TestLiveDotsFeed t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestVoiceThreshold t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestVoiceGate t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

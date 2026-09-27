@@ -41,8 +41,8 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
 Android-only code elsewhere is under `#ifdef Q_OS_ANDROID`; neither may change what the
@@ -246,9 +246,10 @@ volume and the background music in `MainWindow`.
 - **Each setter writes its own key, and a load writes nothing.** `Analyser::loadState()`
   reads all of a track's keys, then applies them with the `apply*()` functions, the setters
   without the write. A key never set stays unset: a default is not the user's choice.
-- **The settings win over a session.** Every load (a file, a session, Analyse Now) applies
-  what they hold. A level or pan never set is the layer's own: the fixed one a new layer is
-  given (`addWaveform()`, `configureAnalysisLayers()`), or a session's for its own layers.
+- **The settings win over a session** for the reference's tracks. Every load (a file, a
+  session, Analyse Now) applies what they hold. A level or pan never set is the layer's own:
+  the fixed one a new layer is given (`addWaveform()`, `configureAnalysisLayers()`), or a
+  session's for its own layers. The background music is the exception (below).
 - **Each analyser has its own group** (`getSettingsGroup()`, from the colour scheme), so
   that the singing toggles never change what the reference shows or plays, nor the other
   way round. The analysis options stay in `Analyser`, for both. The singing analyser keeps
@@ -269,9 +270,13 @@ volume and the background music in `MainWindow`.
   again with input for the first take (svapp's `record()`); for a device, driver or
   latency chosen; for a device menu opened. The fader is set from the settings in the
   constructor, where `setValue()` says nothing, so a device need not exist yet.
-- **The background music** is given the kept mix, level and pan as it is loaded; while
-  none is loaded, its toggle and level control show them. A level taken to nothing
-  switches the mix off and keeps the level, as the reference's controls do.
+- **The background music** loaded from the File menu is given the kept mix, level and
+  pan; while none is loaded, its toggle and level control show them. Music a session
+  brings back (`adoptBackgroundMusic()`, below) keeps the mute, gain and pan the session
+  saved with it: a song's backing track, and its balance with the reference, belong to
+  the song, as the alternate track's octaves do. The kept ones are what the user last
+  chose, for music loaded next. A level taken to nothing switches the mix off and keeps
+  the level, as the reference's controls do.
 - **Not remembered, on purpose** (the user's decision): the playback speed, Loop Playback
   and Constrain Playback to Selection, which belong to a song or a moment. The alternate
   pitch track's octaves are the song's: a session saved with the track on keeps them, in
@@ -329,7 +334,7 @@ volume and the background music in `MainWindow`.
   frames exactly and values with a tolerance.
 - Layer **object names carry identity** across a save: `"Alternate Pitch Track -1"` holds
   the octave count, `"Take 2 Pitch"` links a layer to its take, `"Lyrics"` marks the
-  lyrics. They are not translated.
+  lyrics, `"Background Music"` the background music. They are not translated.
 
 ### Miscellaneous
 
@@ -358,13 +363,43 @@ recording stops.
 
 **Background music**: loaded with `openPath(CreateAdditionalModel)` under the
 `m_loadingBackgroundMusic` flag so `modelAdded()` does not take it for a singing track;
-given a hidden waveform layer of Tony's own **before** the extra pane is pruned; not
-saved in the session.
+given a hidden waveform layer of Tony's own **before** the extra pane is pruned. The
+session saves that layer and its model, and with the model its mute, gain and pan; the
+file is looked for as the reference is, and one that is not found leaves the session
+incomplete. On opening, `adoptBackgroundMusic()` finds the layer by its object name
+`"Background Music"`, **before** `dropRestoredSingingTrack()`, which would otherwise take
+its model for a singing track's, and drops the layer of music that could not be read (a
+waveform layer may be without a model). Sessions saved before the layer had its name
+open without their music.
 
 **Load Singing Track** follows the same order: `analyseNewSingingModel()` synchronously
 after `openPath()`, and only then prune the extra pane — the imported waveform in that pane
 is the only reference to the model until `m_analyser2` has a layer of its own. It ends with
 `clearTakeHistory()`, which also disposes of the "Import" command for the pruned pane.
+
+**Voice threshold** (`VoiceThreshold`, `VoiceGate`, `VoiceThresholdMenu`): for singing
+with the music on speakers, which the microphone hears as well. A level in dBFS under
+which what the microphone hears is not taken for singing: no live dots are drawn for it,
+and the take's ranged analysis keeps no pitch or notes there. What is found in the audio
+is gated, never the audio, which is recorded, spliced and played as it is. A noise gate in
+the splice was rejected: it would cut quiet singing out of playback for good, where a
+threshold that proves too high is lowered and the take analysed again. One measure
+throughout, the level of the half window whose frames YIN compares to find a pitch (the
+window's first half, and in pYIN's Unbiased Timing its middle half), the channels'
+average, as the live tracker's floor has it ([recording.md](recording.md#the-live-tracker);
+the gate in [takes.md](takes.md#the-voice-threshold)). pYIN's own `lowampsuppression` is
+not used for it: it only lowers the voicing probability, and `pyin` is upstream. A take
+keeps the threshold it started with; the audio check's takes have none.
+
+Playback > Voice Threshold sits straight after Record, which it is for, and not with the
+Audio Driver and Audio Latency menus after it: the compact layout hides those, while a
+phone on its own speaker needs this as much, so it is not among the compact layout's
+hidden actions and the menu button reaches it. It is greyed out during a take and while an
+audio check runs. The setting is QSettings `MainWindow/voicethreshold` in dBFS (Off is no
+key at all, and anything at or under the tracker's −60 dBFS floor reads as Off): one value
+for every driver and device, and not in the session. A choice only writes it: `record()`
+reads it at every Start, and Analyse Now and a redo that analyses again read it when they
+run.
 
 **Touch** (`TouchGestures`, one per pane: an event filter in `main/`, not a change to
 svgui, so that synthetic touch events test it on the desktop). One finger is left to Qt,

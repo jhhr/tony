@@ -31,8 +31,9 @@
 # (docs/building.md).
 #
 # Safe to run again. Packages already installed, a Qt of the right
-# version and libraries already at their pins are left alone, and a
-# library with local changes or local commits is never moved.
+# version and libraries already at their pins are left alone, a
+# library with local changes or local commits is never moved, and a
+# clone that a kill cut off is made again.
 #
 # Usage, from anywhere:
 #   deploy/linux/container-setup.sh           set up and configure build/
@@ -178,9 +179,33 @@ mirror_commit() {
 
 warnings=0
 
+# Where a clone is made, to be moved into place once it is checked out:
+# a clone cut off by a kill, which lets git clean nothing up, then never
+# looks like a checkout. The cloud environment's snapshot once kept such
+# a clone in place, from a build the session hook had started just
+# before it was taken, and every session's setup stopped on it
+clones=$root/tmp/clones
+
+# A clone cut off before it had a commit: nothing but .git, and no
+# local branch or stash. It holds nothing that could be lost
+cut_off_clone() {
+    local name="$1"
+    [ -e "$name/.git" ] &&
+        ! git -C "$name" rev-parse -q --verify "HEAD^{commit}" > /dev/null &&
+        [ "$(ls -A "$name")" = .git ] &&
+        [ -z "$(git -C "$name" for-each-ref refs/heads refs/stash)" ]
+}
+
 checkout() {
     local name="$1" url="$2" branch="$3" commit="$4"
     local short="${commit:0:12}"
+    if cut_off_clone "$name"; then
+        echo "  $name: a clone that was cut off before its first commit; cloning again"
+        rm -rf "$name"
+    elif [ -e "$name/.git" ] && ! git -C "$name" rev-parse -q --verify "HEAD^{commit}" > /dev/null; then
+        echo "ERROR: $name has no commit checked out, and more in it than a cut-off clone; move it away and run again" 1>&2
+        exit 1
+    fi
     if [ -e "$name/.git" ]; then
         local head
         head=$(git -C "$name" rev-parse HEAD)
@@ -217,13 +242,18 @@ checkout() {
         exit 1
     else
         echo "  $name: cloning $url"
-        git clone -q ${branch:+--branch "$branch"} "$url" "$name"
+        local partial="$clones/$name"
+        rm -rf "$partial"
+        mkdir -p "$(dirname "$partial")"
+        git clone -q ${branch:+--branch "$branch"} "$url" "$partial"
         # As repoint does: the local branch at the pin, where there is one
         if [ -n "$branch" ]; then
-            git -C "$name" checkout -q -B "$branch" "$commit"
+            git -C "$partial" checkout -q -B "$branch" "$commit"
         else
-            git -C "$name" checkout -q --detach "$commit"
+            git -C "$partial" checkout -q --detach "$commit"
         fi
+        # -T: in place of an empty directory, where there is one
+        mv -T "$partial" "$name"
     fi
     echo "  $name: checked out $short"
 }

@@ -35,6 +35,8 @@
 #include "TakeLayers.h"
 #include "TakesFile.h"
 #include "TouchGestures.h"
+#include "VoiceThreshold.h"
+#include "VoiceThresholdMenu.h"
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
@@ -219,6 +221,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takePosition(0),
     m_takePreRoll(0),
     m_takeEnd(-1),
+    m_takeVoiceThreshold(VoiceThreshold::kOff),
     m_takeTimer(nullptr),
     m_backgroundMusicModelId(),
     m_backgroundMusicLayer(nullptr),
@@ -236,6 +239,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioInputDeviceMenu(0),
     m_audioInputDeviceGroup(0),
     m_audioDriverMenus(nullptr),
+    m_voiceThresholdMenu(nullptr),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -2042,6 +2046,11 @@ MainWindow::setupToolbars()
     menu->addAction(selectOneRightAction);
     menu->addSeparator();
     menu->addAction(recordAction);
+
+    // With Record, which it is for, and not with the driver menus below:
+    // the compact layout hides those on a phone, where this is wanted
+    // as much
+    m_voiceThresholdMenu = new VoiceThresholdMenu(menu, this);
     menu->addSeparator();
 
     // The driver and the latency asked of it, before the devices, which
@@ -2763,6 +2772,11 @@ MainWindow::updateMenuStates()
     // Choosing either opens the device afresh
     if (m_audioDriverMenus) {
         m_audioDriverMenus->setEnabled(!inTake && !checking);
+    }
+    // A take keeps the threshold it started with, and the check's takes
+    // have none: a choice made meanwhile would look as if it applied
+    if (m_voiceThresholdMenu) {
+        m_voiceThresholdMenu->setEnabled(!inTake && !checking);
     }
     for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (m) m->menuAction()->setEnabled(!checking);
@@ -4272,6 +4286,9 @@ MainWindow::loadBackgroundMusic(QString path)
             m_backgroundMusicLayer = qobject_cast<WaveformLayer *>(rawLayer);
             if (m_backgroundMusicLayer) {
                 m_document->setModel(m_backgroundMusicLayer, m_backgroundMusicModelId);
+                // The session saves the layer, and its name is what says
+                // which audio is the background music when it is opened
+                m_backgroundMusicLayer->setObjectName(backgroundMusicLayerName());
                 ColourDatabase *cdb = ColourDatabase::getInstance();
                 m_backgroundMusicLayer->setBaseColour(
                     cdb->getColourIndex(tr("Green")));
@@ -4335,6 +4352,53 @@ MainWindow::teardownBackgroundMusic()
         m_backgroundMusicLayer = nullptr;
     }
     m_backgroundMusicModelId = {};
+}
+
+QString
+MainWindow::backgroundMusicLayerName()
+{
+    return "Background Music";
+}
+
+void
+MainWindow::adoptBackgroundMusic()
+{
+    if (m_backgroundMusicLayer || !m_document || !m_paneStack) return;
+
+    Pane *pane = m_paneStack->getPane(0);
+    if (!pane) return;
+
+    // The layer and its model are as loadBackgroundMusic() left them, in
+    // the play source because the layer is in a view.  A session saved
+    // before the layer had its name carries it too, as an audio model
+    // that restoreTakes() cannot tell from a take's, and drops.
+    //
+    // Music the reader could not find (moved, and not located when it
+    // asked) leaves the layer with no model: a waveform layer may be
+    // without one.  Of no use, and it would go into the next save too
+    std::vector<Layer *> orphans;
+
+    for (int i = 0; i < pane->getLayerCount(); ++i) {
+        auto layer = qobject_cast<WaveformLayer *>(pane->getLayer(i));
+        if (!layer || layer->objectName() != backgroundMusicLayerName()) {
+            continue;
+        }
+        ModelId modelId = layer->getModel();
+        if (modelId.isNone()) {
+            orphans.push_back(layer);
+            continue;
+        }
+        if (m_backgroundMusicLayer || modelId == getMainModelId() ||
+            !ModelById::isa<WaveFileModel>(modelId)) {
+            continue;
+        }
+        m_backgroundMusicLayer = layer;
+        m_backgroundMusicModelId = modelId;
+        cerr << "adoptBackgroundMusic: found the background music of the "
+             << "session, model " << modelId << endl;
+    }
+
+    for (Layer *layer : orphans) dropLayerSilently(layer);
 }
 
 void
@@ -5340,6 +5404,10 @@ MainWindow::setupRealtimePitchLayer()
     // before the tracker goes (stopRealtimePitchTracker())
     m_realtimePitchTracker = new RealtimePitchTracker(
         audioSourceId, this);
+    // Its thread reads the floor as a plain value: set before it starts,
+    // and never while it runs
+    m_realtimePitchTracker->setMinLevel
+        (VoiceThreshold::liveFloor(m_takeVoiceThreshold));
     m_realtimePitchTracker->start();
 
     RealtimePitchTracker *tracker = m_realtimePitchTracker;
@@ -5538,6 +5606,18 @@ MainWindow::record()
     m_awaitingReferenceStart = false;
     m_recordingStartGapMeasured = -1;
     m_takeLatency = TakeLatency();
+
+    // The take keeps the voice threshold it starts with, for its live
+    // dots and for its analysis at Stop.  Read here, before the base
+    // call: the tracker is set up from inside it (recordingStarted()).
+    // The audio check's takes have none: they measure the device, and
+    // what reaches the microphone from the speakers is what they listen
+    // for
+    if (m_audioCheckTakes) {
+        m_takeVoiceThreshold = VoiceThreshold::kOff;
+    } else {
+        m_takeVoiceThreshold = currentVoiceThreshold();
+    }
 
     if (haveReference) {
 
@@ -6651,7 +6731,10 @@ MainWindow::rebuildSingingTrackFromTake(const Coverage::Range &placed)
         return false;
     }
 
-    return startTakeAnalysis(analyse.start, analyse.end);
+    // With the threshold the take started with.  A run widened to take in
+    // an earlier take's range, whose analysis the swap has just
+    // abandoned, has this take's threshold over all of it
+    return startTakeAnalysis(analyse.start, analyse.end, m_takeVoiceThreshold);
 }
 
 QString
@@ -6731,8 +6814,16 @@ MainWindow::adoptTakeLayers(ModelId audio)
     return true;
 }
 
+double
+MainWindow::currentVoiceThreshold()
+{
+    QSettings settings;
+    return VoiceThreshold::threshold(settings);
+}
+
 bool
-MainWindow::startTakeAnalysis(sv_frame_t start, sv_frame_t end)
+MainWindow::startTakeAnalysis(sv_frame_t start, sv_frame_t end,
+                              double voiceThreshold)
 {
     if (!m_analyser2 || end <= start) return false;
 
@@ -6746,7 +6837,8 @@ MainWindow::startTakeAnalysis(sv_frame_t start, sv_frame_t end)
     if (coverage.getRangeAt(start, at)) clipStart = at.start;
     if (coverage.getRangeAt(end - 1, at)) clipEnd = at.end;
 
-    QString error = m_analyser2->analyseRange(start, end, clipStart, clipEnd);
+    QString error = m_analyser2->analyseRange(start, end, clipStart, clipEnd,
+                                              voiceThreshold);
 
     if (error != "") {
         QMessageBox::warning
@@ -6790,7 +6882,10 @@ MainWindow::analyseTakeCoverage()
     // the range, and analyses it again if it is ever redone
     closeOpenTakeCommand(false);
 
-    return startTakeAnalysis(ranges.front().start, ranges.back().end);
+    // With the voice threshold as it is now, whatever the takes were
+    // recorded with: this is how a new threshold is had on old singing
+    return startTakeAnalysis(ranges.front().start, ranges.back().end,
+                             currentVoiceThreshold());
 }
 
 void
@@ -7114,6 +7209,10 @@ MainWindow::restoreTakes(QString sessionPath)
     // Opening a session is not a change to it, whatever is done below
     bool wasModified = m_documentModified;
 
+    // The background music first, so that its audio model is not taken
+    // for a singing track's below
+    adoptBackgroundMusic();
+
     // The audio model of the active take, which the document carried
     // because the waveform layer showing it is in pane 0: of no use here,
     // and not to be mistaken for a singing track of its own
@@ -7236,12 +7335,13 @@ MainWindow::dropRestoredSingingTrack(bool withTakeLayers)
 
     if (!m_document) return;
 
-    // The reference is the main model; every other audio model in a
-    // restored document belongs to a singing track
+    // The reference is the main model and the background music has been
+    // adopted by now; every other audio model in a restored document
+    // belongs to a singing track
     ModelId mainId = getMainModelId();
     std::vector<ModelId> audio;
     for (ModelId id : m_document->getModels()) {
-        if (id == mainId) continue;
+        if (id == mainId || id == m_backgroundMusicModelId) continue;
         if (ModelById::isa<WaveFileModel>(id)) audio.push_back(id);
     }
 
@@ -7451,10 +7551,13 @@ MainWindow::applyTakeState(SingingTakeCommand *command, const TakeState &state)
 
     // A range whose analysis never finished: its result is in no event
     // list, so it is analysed again rather than restored, and the command
-    // is open once more until that merge lands
+    // is open once more until that merge lands.  With the voice threshold
+    // as it is now: the command holds no threshold, and the take's own
+    // may be long gone
     if (error == "" && state.analyse.length() > 0) {
         m_openTakeCommand = command;
-        if (!startTakeAnalysis(state.analyse.start, state.analyse.end) &&
+        if (!startTakeAnalysis(state.analyse.start, state.analyse.end,
+                               currentVoiceThreshold()) &&
             m_openTakeCommand == command) {
             m_openTakeCommand = nullptr;
         }

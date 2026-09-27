@@ -32,19 +32,28 @@ and the splice reads from there.
    (`QMicrophonePermission`) and returns; a yes calls `record()` again, from the top, and a
    no gets a box that says where to allow it. Until it is allowed, `createAudioIO()` opens
    the output alone.
-3. **P is read before the base call.** `MainWindowBase::record()` calls
+3. **The take's voice threshold is read before the base call** (`m_takeVoiceThreshold`,
+   from the setting; [The live tracker](#the-live-tracker)). The base call starts what
+   uses it: `recordingStarted()` (step 9) sets the tracker up, whose thread reads its
+   level floor as a plain value, so the floor is given to it from this before `start()`.
+   Like the latency fields it is set only on Start, as the take's analysis at Stop is
+   gated by it too ([takes.md](takes.md#the-voice-threshold)): the dots and the analysis
+   of one take go by the threshold it started with. The menu is greyed out during a take,
+   so the setting does not change under one either. The audio check's takes get Off
+   ([below](#the-audio-checks-takes)).
+4. **P is read before the base call.** `MainWindowBase::record()` calls
    `setGlobalCentreFrame(0)`, and from the moment recording starts
    `ViewManager::getPlaybackFrame()` reports *record start frame + recorded duration*
-   (scaled as step 7 says), not the position.
-4. With Record into Selection on and a selection present, P/E come from
+   (scaled as step 8 says), not the position.
+5. With Record into Selection on and a selection present, P/E come from
    `TakeTiming::chooseRange()` (the range the playhead is in, else the first). No
    overwrite question is asked in this mode: the selection is the consent. Otherwise, if
    P is inside the take's coverage, `confirmRecordingOverTake()` asks (virtual, so tests
    answer it; QSettings `MainWindow/confirmrecordover`).
-5. Leftovers of an unfinished take are cleared (`teardownRealtimePitchLayer()`,
+6. Leftovers of an unfinished take are cleared (`teardownRealtimePitchLayer()`,
    `teardownRecordingLayer()`). The existing singing track is **not** torn down: a
    recording adds to the take.
-6. The take's existing audio is muted for the duration (`muteSingingAudioForTake()`,
+7. The take's existing audio is muted for the duration (`muteSingingAudioForTake()`,
    directly on the play parameters). What the Play Singing Audio button asks for meanwhile
    is kept in `m_singingAudioAfterTake` and applied when the take is over; being the
    user's choice, it is also written to the singing track's settings at once, which the
@@ -56,7 +65,7 @@ and the splice reads from there.
    with `Layer::showLayer()`, not `Analyser::setVisible()`, which would write the state to
    the settings as the user's choice. Only what was on show is hidden, and only what was
    hidden here is shown again.
-7. Record mode is switched to **`RecordCreateUnshownModel`** (svapp fork) around the base
+8. Record mode is switched to **`RecordCreateUnshownModel`** (svapp fork) around the base
    call: the recording becomes a model of the document with no pane, no layer and no
    "Import Recorded Audio" undo entry. `ViewManager::setRecordStartFrame(S)` (svgui fork)
    makes the cursor run with the reference instead of crawling from frame 0. The recorded
@@ -66,13 +75,14 @@ and the splice reads from there.
    device at 48 kHz runs the cursor, and the lyrics' highlight, 8.8 % ahead of the
    reference. It is set back to 1 before every base call: the device's rate is not known
    yet, and a recording that becomes the session is at its own rate.
-8. `recordStatusChanged(true)` → `recordingStarted()` fires *inside* the base call, before
+9. `recordStatusChanged(true)` → `recordingStarted()` fires *inside* the base call, before
    the model is in the document. It defers with `QTimer::singleShot(0)`:
    `setupRealtimePitchLayer()`, and, if Play Reference While Recording is on (or the take
    is the audio check's, below), the latency estimate and `m_playSource->play(S)`.
-9. `modelAdded()` sees `m_recordingAsSingingTrack`, stores `m_currentRecordingModelId` and
-   returns. The recording is raw material, not the singing track; no analyser is made.
-10. After the base call: if `isRecording()` is false (no device, device busy) the take
+10. `modelAdded()` sees `m_recordingAsSingingTrack`, stores `m_currentRecordingModelId`
+    and returns. The recording is raw material, not the singing track; no analyser is
+    made.
+11. After the base call: if `isRecording()` is false (no device, device busy) the take
     flags are cleared and the singing unmuted. Otherwise the playback and centre frames
     are restored to S, `setupRecordingLayer()` gives the recording a hidden, muted
     waveform layer (`attachLayerToView`, `setSavedInSession(false)`) — the document needs
@@ -108,8 +118,9 @@ that handler may wait for it.
 3. Playhead back to P, so Play hears what was sung and Record records the same part again.
 4. `m_takes->spliceRecording(...)` — see [takes.md](takes.md). A recording no longer than
    L + R is dropped quietly; a real failure is a dialog and leaves the track as it was.
-5. The undo command is made, the audio swapped, the ranged analysis started, the command
-   pushed, and `syncCoverageStrip()` called **after** the swap.
+5. The undo command is made, the audio swapped, the ranged analysis started (gated by the
+   take's voice threshold: [takes.md](takes.md#the-voice-threshold)), the command pushed,
+   and `syncCoverageStrip()` called **after** the swap.
 6. `recordingFinishedFull(analysing ? m_analyser2 : nullptr)` clears flags, restores
    audibility, stops reference playback, and suspends the device only where Stop does
    (`suspendAudioOnStop()`, which says no; see [Latency](#latency)). With an
@@ -238,7 +249,7 @@ reference's: the recording is at the device's rate. A desktop device whose defau
 - The splice converts the recording to the reference's rate first, so a take's file is
   always at the reference's rate ([takes.md](takes.md#decisions-and-what-was-rejected)).
 - The round trip goes through seconds, and the start gap's block is converted
-  ([Latency](#latency)); the cursor is scaled by `setRecordFrameRatio()` (Start, step 7).
+  ([Latency](#latency)); the cursor is scaled by `setRecordFrameRatio()` (Start, step 8).
 - The live tracker reads the recording at its own rate; the dot model is at the
   reference's, and a dot goes at P + `liveFrameIntoTake()`.
 - Not compensated: bqaudioio's `ResamplerWrapper`, which brings playback to the device's
@@ -280,6 +291,12 @@ the runner never touches them. It sets an override instead (`m_audioCheckTakes`,
 run's pre-roll and round trip), which `record()`, the deferred lambda and
 `wantedPreRollFrames()` read, and clears it when the take stops.
 
+The same override records them with the **voice threshold Off**, whatever the setting:
+they measure the device, and what reaches the microphone from the speakers or an earcup is
+what they listen for. A threshold over the level that reaches it would take out the dots
+item 3 judges and the pitch and notes other items compare
+([calibrate-audio.md](calibrate-audio.md), §7).
+
 Record's action goes to `recordPressed()`, which ignores a press while a check runs (the
 button is greyed then as well). The guard is not in `record()`: the runner and
 `pollTakeProgress()` start and stop the check's takes through `record()`, and it cannot tell
@@ -308,9 +325,27 @@ is:
   6 dB louder than on one. A microphone on one input of two reads 6 dB below its own
   level.
 
-A microphone whose noise is louder than −60 dBFS still gives such dots; one measured by
-Calibrate Audio could set the floor instead ([calibrate-audio.md](calibrate-audio.md),
-§10).
+A microphone whose noise is louder than −60 dBFS still gives such dots, unless the voice
+threshold below is set over it; Calibrate Audio could measure that noise and suggest one
+([calibrate-audio.md](calibrate-audio.md), §10).
+
+**The voice threshold** (Playback > Voice Threshold; `VoiceThreshold`) raises the floor for
+a singer with the music on speakers, which the microphone hears as well: set over the level
+the music reaches the microphone at, and under the voice, the music draws no dots. The
+tracker's floor is the higher of −60 dBFS and the threshold the take started with (Start,
+step 3); Off is any threshold at or under −60 dBFS. It is the same measure as the floor's,
+the first half's level, and the take's analysis is gated by it too
+([takes.md](takes.md#the-voice-threshold)).
+
+It adds no work per hop and no delay. The level was measured at every hop already, for the
+floor; a window under the threshold only spares YIN. Measured standalone on the cloud
+machine, `level()` of 1024 frames takes 1.3 to 1.4 µs and YIN of one window (difference
+function, normalisation and the search) 32 to 37 µs, where a hop is 5.8 ms. (Inside
+`test-tony-app` the level measured five times slower: [open-points.md](open-points.md).)
+Where every window's first half is over the threshold, the dots are exactly those without
+one, the same frames and the same Hz (`a_threshold_under_the_singing_changes_no_pitch` in
+`TestRealtimePitchTracker`). At the edge of a phrase, a window whose first half holds only
+a few frames of it reads quieter than the phrase and can lose its dot, as meant.
 
 **Octave slips are dropped** (`OctaveSlips`, `tony_core`). YIN takes the first lag whose
 normalised difference is under its threshold; where noise lifts the dip at the period just

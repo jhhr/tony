@@ -57,6 +57,18 @@ Recording
  * the audio device is kept open between takes, so that the latency stays the
    same from one take to the next. The microphone therefore shows as in use
    from the first take until Tony quits
+ * singing with the music on speakers instead of headphones: the microphone
+   then hears the music as well, and its pitch would be drawn as yours.
+   Playback -> Voice Threshold sets a level (Off, or -50 to -15 dBFS) under
+   which what the microphone hears is not taken for singing: it gets no dots
+   while you record, and no pitch or notes when the take is analysed. The
+   audio itself is recorded as it is. To choose it, record the music alone
+   with the threshold Off, then raise it a step at a time until the music
+   alone gives no dots. Your voice has to be well above that: a microphone of
+   low sensitivity, sung into from close by, keeps the music far below it. A
+   new threshold applies from the next take on; Analysis -> Analyse Now!
+   applies it to what the take on show has recorded already, so a threshold
+   set too high is put right by lowering it and analysing again
  * File -> Load Singing Track... (Ctrl+Shift+R) loads a recording made
    elsewhere as the singing track instead
 
@@ -88,8 +100,8 @@ Following the reference
  * background music: File -> Load Background Music... loads a second audio
    file, such as the accompaniment or the full mix, that plays along with the
    reference, while recording as well, but is never analysed. The speaker
-   button after "Background:" in the toolbar turns it on and off. It is not
-   saved with the session
+   button after "Background:" in the toolbar turns it on and off. The session
+   remembers it, with its level and pan and whether it was on
 
 
 Timed lyrics

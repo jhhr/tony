@@ -6,7 +6,7 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestVoiceThreshold`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`, and Tony's icons (`tony.qrc`: without them every toolbar button is as wide as its text, and `TestCompactLayout` needs the real sizes). | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestPlotSize`, `TestRecordWorkflow`, `TestTouchGestures`, `TestUiChecks`, `TestCompactLayout`, `TestTouchMenuStyle`, `TestAudioCheck` | on Linux about 10.5 minutes in one process, under two in eight; on Windows about 12 in one process, measured before the touch and compact-layout suites came. Nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`, then `TestTouchGestures`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`, without the icons; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 7.5 minutes in one process, two in eight (Linux): each test records a dev run's takes, or part of them, in real time |
 
@@ -84,14 +84,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   combine shards with test names on the command line.
 - A sharded run is a whole run of the suites, but the tests that share a process are other
   ones. After a change to object lifetimes, threads or teardown (see "Timing and races"),
-  run the one-process run as well. It also loads the machine more: built against Ubuntu's
-  Qt 6.4, `TestUiChecks`' `live_dots_under_the_cursor` failed in both of two runs in eight
-  processes (the tracker itself 313 and 325 ms behind the cursor, over the test's 300 ms)
-  and passed with `-j 4`. Judge a failure of it there by running it alone. So too the dev
-  checks' item 14, whose allowance is one look of the take timer: in eight processes a
-  take once stopped 0.400 s past its selection against 0.385 s allowed, and passed alone;
-  and `stale_pitch_event_ignored`, which once failed at `QVERIFY(model)` in eight
-  processes and passed alone and in the next run.
+  run the one-process run as well. It also loads the machine more: judge a failure of a
+  timed test there by running it alone. Two such were the dev checks' item 14, whose
+  allowance is one look of the take timer (in eight processes a take once stopped 0.400 s
+  past its selection against 0.385 s allowed, and passed alone), and
+  `stale_pitch_event_ignored`, which once failed at `QVERIFY(model)` in eight processes
+  and passed alone and in the next run.
 - **Under that load a stopwatch must start before the call that starts the application's
   clock**, not after it returns. Stop splices the take before it returns, after the idle
   time before a suspend has started: timed from Stop's return, a device suspended on time
@@ -116,7 +114,18 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   the same.
 - CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
   suite at a time; the Android job runs none. When a run fails, its `test-failures` step
-  lists each failed test with the lines QTest indents under it, from meson's full log.
+  lists each failed test with the lines QTest indents under it, from meson's full log. In a
+  cloud session `deploy/linux/ci-local.sh` runs the Linux and Android jobs
+  ([building.md](building.md#the-ci-jobs-in-a-cloud-session)), and on the Windows machine
+  `build.bat test` runs what the Windows job does.
+- **With Ubuntu's Qt 6.4 the live dots trail the cursor by about 200 ms more** than with
+  Qt 6.11: `live_dots_under_the_cursor` measured 333 to 357 ms in a cloud session, alone
+  and unloaded, against its 300 ms, where Qt 6.11 gives 114 to 125 ms in a release build
+  as in `debugoptimized`. On both, the log's once-a-second live-dots line has the tracker
+  and the dots handed over within 10 ms of the frames received; the extra shows between
+  the frames written and the newest dot in the pane's model. The test passes on CI's
+  Linux runner, so in a cloud session it fails in the local Linux job only. Why Qt 6.4
+  adds the time is not known.
 - **CI's macOS runs timers and sleeps late**: a 20 ms `QTimer` fired every 60 to 67 ms and
   a 5.8 ms sleep took about 30. A test that needs something to have happened a number of
   times waits for it (`QTRY_*`), and one that checks what was timed checks it against its
@@ -172,17 +181,20 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `TestDevChecks` in `test-tony-dev`): subclass of `MainWindow` that exposes protected
   operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
   and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
-  Playback menu's actions). It installs the fake device through `openAudioIO()`, which
-  `MainWindow::createAudioIO()` calls once it has named the driver and applied its
-  latency, or no device at all when made with `installDevice` false, and keeps what the
-  Preferences named for the last device opened (`audioIOOpenedFor()`). Every test window
-  is without the spectrogram, as `--no-spectrogram` makes it; made with
-  `withSonification` false, it is without the sonification too. It hands out the bottom
-  bar's toggles, level controls and fader (`playAudioAction()`, `audioLevelControl()`,
-  `fader()` and the like). The drivers are the ones a test gives with
-  `setAudioImplementations()`, none by default, whatever the platform has. **It suspends
-  the device at Stop and at the end of a take**, as svapp does by default and unlike the
-  application, which keeps the stream running
+  Playback menu's actions). The voice threshold the take started with is
+  `takeVoiceThreshold()`, and Playback > Voice Threshold is `voiceThresholdMenu()`;
+  `setAudioCheckTakes()` sets the check's override by hand, as the runner does before each
+  of its takes, and the test that sets it clears it again, as the runner does. It
+  installs the fake device through `openAudioIO()`, which `MainWindow::createAudioIO()`
+  calls once it has named the driver and applied its latency, or no device at all when
+  made with `installDevice` false, and keeps what the Preferences named for the last
+  device opened (`audioIOOpenedFor()`). Every test window is without the spectrogram, as
+  `--no-spectrogram` makes it; made with `withSonification` false, it is without the
+  sonification too. It hands out the bottom bar's toggles, level controls and fader
+  (`playAudioAction()`, `audioLevelControl()`, `fader()` and the like). The drivers are
+  the ones a test gives with `setAudioImplementations()`, none by default, whatever the
+  platform has. **It suspends the device at Stop and at the end of a take**, as svapp does
+  by default and unlike the application, which keeps the stream running
   ([recording.md](recording.md#latency)): a great many tests rely on each take resuming
   the fake, and so starting its programmed input again. A test that wants the
   application's way calls `keepAudioRunning(true)`; `applicationSuspendsAudioOnStop()`
@@ -211,7 +223,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `paneHasLayer()`, `documentHasLayer()`, `reopenAsSession()` / `reopenSession()`,
   `verifyEventsSurvived()`; for the lyrics `lyricsFixture()`, `writeLrc()`,
   `verifyLyricsUntouched()`; for editing them `lyricsEditFixture()` and the mouse helpers
-  below.
+  below; for the voice threshold `setVoiceThreshold()` (the setting, as the menu writes
+  it), `chooseVoiceThreshold()` (through the menu) and `quietTone()` (music heard from
+  speakers, under the fixture's `voiceThreshold`, which `tone()` is over).
+  `TestRecordWorkflow` sets the voice threshold Off in `init()` and in `cleanup()`: a test
+  of it that sets one relies on that to leave it Off, for the next test and for the other
+  suites of the process, which record too. Another suite that sets it has to do the same.
 - For what is kept between launches (`TestRecordWorkflow`): `relaunch(config)` is a new
   window reading the settings the old one left (the session closed as `cleanup()` closes
   it). `turnWheel()` turns a level control's level or pan with real wheel events, and

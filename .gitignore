@@ -35,6 +35,7 @@ pyin
 glob:.repoint*
 build
 build-android
+build-linux-ci
 build_win32
 build_win64
 build_win64_debug

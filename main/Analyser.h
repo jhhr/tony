@@ -25,6 +25,8 @@
 #include <vector>
 
 #include "TakeEvents.h"
+#include "VoiceGate.h"
+#include "VoiceThreshold.h"
 
 #include "framework/Document.h"
 #include "base/Selection.h"
@@ -239,13 +241,20 @@ public:
      * of its own; what it changed is kept, for the command of the
      * recording that asked for it (getRangedPitchChange()).
      *
+     * With a voice threshold (VoiceThreshold) the run's pitch and notes
+     * are gated by it before they are merged (VoiceGate): what was found
+     * in audio quieter than that is not merged, and the notes are
+     * trimmed to what was not.  The threshold is the run's from here on,
+     * whatever the setting becomes; Off merges the run as it is.
+     *
      * Returns "" if a run was started (or there was nothing to do), or
      * a user-readable error string.  A second call while one is running
      * abandons the first: its material is presumed to have changed.
      */
     QString analyseRange(sv::sv_frame_t start, sv::sv_frame_t end,
                          sv::sv_frame_t clipStart = 0,
-                         sv::sv_frame_t clipEnd = -1);
+                         sv::sv_frame_t clipEnd = -1,
+                         double voiceThreshold = VoiceThreshold::kOff);
 
     /**
      * Make an empty pitch track and empty notes for our audio, where a
@@ -450,6 +459,10 @@ protected:
     // cannot stamp anything before its own first two hops anyway
     bool m_rangedClippedEnd;
 
+    // The voice threshold of the run, with the blocks it was built with:
+    // the merge gates the run's result with it
+    VoiceGate m_rangedGate;
+
     // Set only by a test (setRangedMergeHeld())
     bool m_rangedMergeHeld;
 
@@ -492,6 +505,10 @@ protected:
     // Merge a finished ranged analysis into the pitch and notes models
     // and delete the temporaries
     void mergeRangedAnalysis();
+
+    // The run's pitch events and notes (in frames of the file) less what
+    // m_rangedGate finds under its threshold in our audio
+    void gateRangedEvents(sv::EventVector &pitch, sv::EventVector &notes) const;
 
     // Stop a ranged analysis if one is running and delete its
     // temporary layers and models, merging nothing

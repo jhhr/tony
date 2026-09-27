@@ -24,6 +24,7 @@
 #include "../AudioDriverMenus.h"
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
+#include "../VoiceThresholdMenu.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -172,6 +173,9 @@ public:
     // the last take was placed with
     AudioCheckRunner *audioCheck() { return m_audioCheck; }
     bool audioCheckTakes() { return m_audioCheckTakes; }
+    // Set as the runner sets it before each of its takes, and cleared as
+    // it clears it: the test that sets it clears it
+    void setAudioCheckTakes(bool on) { m_audioCheckTakes = on; }
 
     // The Record button, as the user presses it
     QAction *recordAction() { return m_recordAction; }
@@ -206,6 +210,8 @@ public:
     }
     AudioDriverMenus *audioDriverMenus() { return m_audioDriverMenus; }
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
+    // Playback > Voice Threshold, which is always shown
+    VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as
@@ -244,12 +250,7 @@ public:
     sv::LevelPanToolButton *pitchLevelControl() { return m_pitchLPW; }
     sv::LevelPanToolButton *notesLevelControl() { return m_notesLPW; }
 
-    // The background music's toggle and level control, and the master
-    // volume's fader
-    QAction *backgroundMusicAction() { return m_playBackgroundMusic; }
-    sv::LevelPanToolButton *backgroundMusicLevelControl() {
-        return m_bgMusicLPW;
-    }
+    // The master volume's fader
     sv::Fader *fader() { return m_fader; }
 
     Analyser *analyser() { return m_analyser; }
@@ -270,6 +271,7 @@ public:
     sv::sv_frame_t takePosition() { return m_takePosition; }
     sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
     sv::sv_frame_t takeEnd() { return m_takeEnd; }
+    double takeVoiceThreshold() { return m_takeVoiceThreshold; }
     bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
 
     void seekTo(sv::sv_frame_t frame) {
@@ -298,6 +300,8 @@ public:
     sv::ModelId pendingSingingModelId() { return m_pendingSingingModelId; }
     sv::ModelId backgroundMusicModelId() { return m_backgroundMusicModelId; }
     sv::WaveformLayer *backgroundMusicLayer() { return m_backgroundMusicLayer; }
+    QAction *playBackgroundMusicAction() { return m_playBackgroundMusic; }
+    sv::LevelPanToolButton *backgroundMusicLevelPan() { return m_bgMusicLPW; }
     bool recordingInProgress() { return m_recordingInProgress; }
     bool recordingAsSingingTrack() { return m_recordingAsSingingTrack; }
     sv::sv_frame_t recordingLatencyFrames() { return m_recordingLatencyFrames; }

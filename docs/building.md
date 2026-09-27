@@ -202,6 +202,12 @@ Why each part is as it is:
   `repoint-lock.json` pins them by Mercurial hash, which the mirrors do not carry.
   `container-setup.sh` has a table from pin to mirror commit and stops at a pin it does not
   know.
+- **Each library is cloned into `tmp/clones/`** and moved into place once checked out. A
+  kill lets git clean nothing up, and the environment's snapshot was once taken while the
+  session hook's build was cloning: it kept a library directory holding only a `.git` with
+  no commit, and every session's setup stopped on it. Such a directory (nothing but `.git`,
+  no commit, no local branch) is cloned again; one without a commit that holds more stops
+  the script, naming it.
 - **ccache**, which meson uses by itself when it is installed, with `hash_dir = false`
   (`/etc/ccache.conf`). With `-g` every result's key otherwise holds the build directory,
   and a second build directory or a worktree found 0.4 % of a full cache. The compiler's
@@ -216,6 +222,36 @@ Why each part is as it is:
 - Measured and left alone: `-g1` compiles svcore in 19 % less time than `-g`, but Windows
   builds `debugoptimized`, with full debug information; clang is no faster than GCC; and a
   unity build fails in the libraries, which define the same names in several files.
+
+## The CI jobs in a cloud session
+
+`deploy/linux/ci-local.sh` runs here what the Linux and Android workflows run, so that a
+change can be checked without them. The Windows workflow's build and suites are
+`build.bat test` on the Windows machine; the macOS one has no stand-in.
+
+```sh
+deploy/linux/ci-local.sh linux             # about 12 min, and 4 more for a session's first build
+deploy/linux/ci-local.sh --quick linux     # about 3 min, and the same 4
+deploy/linux/ci-local.sh android           # 2 min once Qt for Android is built; see below
+deploy/linux/ci-local.sh all               # Linux, then Android
+```
+
+- **`linux`** installs Ubuntu's Qt 6.4 if it is missing, builds a release build against
+  it in `build-linux-ci/`, runs every meson test in one process and lists the tests that
+  failed, as the workflow's steps do. `--quick` runs the core and app suites in one
+  process per core instead, half of `run-tests.sh`'s default, to load the machine less:
+  the tests that share a process are then others ([testing.md](testing.md#running)).
+  Expect `live_dots_under_the_cursor` to fail here either way
+  ([testing.md](testing.md#running)).
+- **`android`** runs `deploy/android/`'s five scripts in the workflow's order. The first
+  run in a session builds Qt for Android and the C libraries into `/opt/android`, which
+  the environment's snapshot cannot hold: about 25 minutes more.
+- It waits for the session's background build first, which would load the machine while
+  the app suite records in real time, and writes its logs to `tmp/ci-local/`.
+- **Where it differs from the runner**: the libraries are `container-setup.sh`'s, not
+  repoint's; meson and Rubber Band are Ubuntu's; and `libopusenc` is installed here and not
+  on the runner, so this build can write Opus files (`HAVE_OPUS_READ_ONLY` is not
+  defined).
 
 ## Checking the fork's Windows code
 
