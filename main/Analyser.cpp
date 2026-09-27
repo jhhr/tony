@@ -35,11 +35,17 @@
 #include "layer/Colour3DPlotLayer.h"
 #include "data/model/SparseTimeValueModel.h"
 #include "data/model/NoteModel.h"
+#include "data/fileio/AudioFileReader.h"
+#include "data/fileio/AudioFileReaderFactory.h"
+#include "data/fileio/FileSource.h"
+#include "data/fileio/WavFileReader.h"
 
 #include <QSettings>
 #include <QMutexLocker>
+#include <QElapsedTimer>
 
 #include <algorithm>
+#include <memory>
 
 using std::vector;
 using std::cerr;
@@ -55,6 +61,18 @@ static const QString pyinPitchOutput = "smoothedpitchtrack";
 static const QString pyinNotesOutput = "notes";
 static const int analysisStepSize = 256;
 
+// Where pYIN stamps each block of a run of this transform, from the
+// start of the block (PYinVamp::process()): a quarter of the block in,
+// or half of it where the "precisetime" parameter is 1, which
+// buildAnalysisTransforms() sets from the "precision-analysis" setting
+static int stampOffsetOf(const Transform &t)
+{
+    const Transform::ParameterMap &parameters = t.getParameters();
+    auto i = parameters.find("precisetime");
+    bool precise = (i != parameters.end() && i->second == 1.f);
+    return VoiceGate::stampOffset(precise, t.getBlockSize());
+}
+
 Analyser::Analyser(ColorScheme colorScheme) :
     m_colorScheme(colorScheme),
     m_document(0),
@@ -68,6 +86,7 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedMergeStart(0),
     m_rangedMergeEnd(0),
     m_rangedClippedEnd(false),
+    m_rangedGate(VoiceThreshold::kOff, VoiceGate::stampOffset(false)),
     m_rangedMergeHeld(false),
     m_waveformFaded(false)
 {
@@ -1114,7 +1133,8 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
 
 QString
 Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
-                       sv_frame_t clipStart, sv_frame_t clipEnd)
+                       sv_frame_t clipStart, sv_frame_t clipEnd,
+                       double voiceThreshold)
 {
     auto waveFileModel = ModelById::getAs<WaveFileModel>(m_fileModel);
     if (!waveFileModel) {
@@ -1223,6 +1243,18 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
     m_rangedMergeStart = clippedStart ? from : std::max(from, start - margin/2);
     m_rangedMergeEnd = clippedEnd ? to : std::min(to, end + margin/2);
     m_rangedClippedEnd = clippedEnd;
+
+    // The gate measures the block each result was found in, so it goes
+    // by where this run stamps its blocks, from the transform the run
+    // was built with: the settings may say otherwise by the merge
+    const Transform &built = transforms.front();
+    m_rangedGate = VoiceGate(voiceThreshold, stampOffsetOf(built),
+                             built.getStepSize(), built.getBlockSize() / 2);
+    if (m_rangedGate.isOn()) {
+        cerr << "Analyser::analyseRange: gated at a voice threshold of "
+             << voiceThreshold << " dBFS, blocks stamped "
+             << stampOffsetOf(built) << " frames in" << endl;
+    }
 
     for (ModelId id : { m_rangedPitchModel, m_rangedNotesModel }) {
         auto model = ModelById::get(id);
@@ -1350,6 +1382,16 @@ Analyser::mergeRangedAnalysis()
          << m_rangedStart << " to " << m_rangedEnd << "; merging pitch in "
          << wFrom << " to " << pitchTo << ", notes in " << wFrom << " to "
          << noteTo << endl;
+
+    // The voice threshold: what was found where the singing was not loud
+    // enough goes before anything is merged, so that the notes' edges
+    // below are worked out from what was, and the undo record is of what
+    // was merged.  Not before the window's far end is worked out, above:
+    // that is where the run stamped, loud or not, and a run whose last
+    // hops are quiet still replaces what the models hold out to there
+    if (m_rangedGate.isOn()) {
+        gateRangedEvents(newPitchEvents, newNoteEvents);
+    }
 
     // Every remove and add is noted as it is made: the two changes
     // together are what an undo of the recording this analysis belongs to
@@ -1497,6 +1539,104 @@ Analyser::mergeRangedAnalysis()
 
     emit rangedAnalysisMerged();
     emit initialAnalysisCompleted();
+}
+
+void
+Analyser::gateRangedEvents(EventVector &pitch, EventVector &notes) const
+{
+    QElapsedTimer timer;
+    timer.start();
+
+    // The threshold is a level of what the microphone gave, as the live
+    // tracker measures it on the recording.  Our audio model cannot say
+    // what that was: Tony has every audio file read normalised to its
+    // peak (the "normalise audio" preference), and a take of nothing but
+    // quiet music would read as loud as any.  So the file the model was
+    // opened from is read again here, as it is.  A take's file holds the
+    // samples as they were recorded (TakeAudio), in a WAV file at the
+    // model's rate, which a WavFileReader reads from as it is asked.  Not
+    // through AudioFileReaderFactory, which decodes a file that fits in
+    // memory into memory, all of it, before it gives a frame; but a file
+    // at another rate is left to it, as it resamples
+    auto audio = ModelById::getAs<WaveFileModel>(m_fileModel);
+    std::unique_ptr<AudioFileReader> reader;
+    if (audio) {
+        FileSource source(audio->getLocation());
+        source.waitForData();
+        if (WavFileReader::supports(source)) {
+            reader.reset(new WavFileReader(source));
+        }
+        if (!reader || !reader->isOK() ||
+            reader->getSampleRate() != audio->getSampleRate()) {
+            AudioFileReaderFactory::Parameters parameters;
+            parameters.targetRate = audio->getSampleRate();
+            parameters.normalisation =
+                AudioFileReaderFactory::Normalisation::None;
+            reader.reset(AudioFileReaderFactory::createReader
+                         (source, parameters));
+        }
+    }
+    if (!reader || !reader->isOK() || reader->getChannelCount() < 1) {
+        // Nothing to measure: merged as it is, rather than not at all
+        cerr << "Analyser::gateRangedEvents: the audio cannot be read as it "
+             << "was recorded, so the voice threshold is not applied" << endl;
+        return;
+    }
+
+    // Frames of the model are those of the file from its start frame on
+    const sv_frame_t offset = audio->getStartFrame();
+    const int channels = reader->getChannelCount();
+    AudioFileReader *file = reader.get();
+    VoiceGate::Reader read = [file, offset, channels]
+        (sv_frame_t start, sv_frame_t count) {
+        floatvec_t mixdown;
+        sv_frame_t from = start - offset;
+        if (from < 0) {
+            sv_frame_t before = std::min(count, -from);
+            mixdown.assign(size_t(before), 0.f);
+            from = 0;
+            count -= before;
+        }
+        if (count <= 0) return mixdown;
+        // The channels' sum, as Model::getData(-1, ...) gives it
+        const floatvec_t frames = file->getInterleavedFrames(from, count);
+        const size_t got = frames.size() / size_t(channels);
+        mixdown.reserve(mixdown.size() + got);
+        for (size_t i = 0; i < got; ++i) {
+            float sum = 0.f;
+            for (int c = 0; c < channels; ++c) {
+                sum += frames[i * size_t(channels) + size_t(c)];
+            }
+            mixdown.push_back(sum);
+        }
+        return mixdown;
+    };
+
+    // A block at a time, and only around the stamps there are: a long
+    // take is never in memory all at once
+    VoiceGate::LevelOf levelOf = VoiceGate::lookup
+        (m_rangedGate.measureLevels(m_rangedGate.stampsOf(pitch, notes),
+                                    channels, read));
+
+    EventVector keptPitch = m_rangedGate.gatePitch(pitch, levelOf);
+    EventVector keptNotes = m_rangedGate.gateNotes(notes, levelOf);
+
+    // A note that is kept either is as it was or has been trimmed
+    int trimmed = 0;
+    for (const Event &e : keptNotes) {
+        if (std::find(notes.begin(), notes.end(), e) == notes.end()) {
+            ++trimmed;
+        }
+    }
+
+    cerr << "Analyser::gateRangedEvents: " << (pitch.size() - keptPitch.size())
+         << " of " << pitch.size() << " pitch event(s) dropped, " << trimmed
+         << " of " << notes.size() << " note(s) trimmed and "
+         << (notes.size() - keptNotes.size()) << " dropped, in "
+         << double(timer.nsecsElapsed()) / 1.0e6 << " ms" << endl;
+
+    pitch = keptPitch;
+    notes = keptNotes;
 }
 
 void

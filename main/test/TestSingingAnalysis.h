@@ -128,6 +128,67 @@ class TestSingingAnalysis : public QObject
         return data;
     }
 
+    // For the voice threshold: a phrase sung close to the microphone,
+    // and one as quiet as music from speakers across the room, with a
+    // threshold between the two.  The tone's RMS is its peak over root 3
+    static constexpr float quietGain = 0.05f;          // -30.8 dBFS
+    static constexpr double voiceThreshold = -20.0;    // tone() is -10.8
+
+    static std::vector<float> quietTone(double hz, double seconds) {
+        return TestSignals::sawtooth(hz, rate, int(seconds * rate), quietGain);
+    }
+
+    // The loud phrase at 0.6 to 1.1 s, the quiet one at 1.7 to 2.2 s,
+    // 0.6 s of silence around each
+    static constexpr double loudFrom = 0.6, loudTo = 1.1;
+    static constexpr double quietFrom = 1.7, quietTo = 2.2;
+
+    static std::vector<float> loudThenQuiet() {
+        std::vector<float> data;
+        appendSilence(data, loudFrom);
+        auto loud = tone(singingHz, loudTo - loudFrom);
+        data.insert(data.end(), loud.begin(), loud.end());
+        appendSilence(data, quietFrom - loudTo);
+        auto quiet = quietTone(referenceHz, quietTo - quietFrom);
+        data.insert(data.end(), quiet.begin(), quiet.end());
+        appendSilence(data, 0.6);
+        return data;
+    }
+
+    // The level the voice threshold is compared with for a stamp, worked
+    // out here from the signal rather than by the application's code: the
+    // RMS of the first half of the block pYIN found the stamp in, which
+    // starts offset frames before it
+    static double stampLevel(const std::vector<float> &data,
+                             sv::sv_frame_t stamp, int offset) {
+        const int half = 1024;
+        double sum = 0.0;
+        for (int i = 0; i < half; ++i) {
+            sv::sv_frame_t f = stamp - offset + i;
+            if (f < 0 || f >= sv::sv_frame_t(data.size())) continue;
+            sum += double(data[size_t(f)]) * double(data[size_t(f)]);
+        }
+        double rms = std::sqrt(sum / half);
+        return rms > 0.0 ? 20.0 * std::log10(rms) : -200.0;
+    }
+
+    // Analysis in precise time, "precision-analysis" in the Analyser's
+    // settings, for as long as this lives
+    struct PreciseTime {
+        PreciseTime(bool on) {
+            QSettings settings;
+            settings.beginGroup("Analyser");
+            settings.setValue("precision-analysis", on);
+            settings.endGroup();
+        }
+        ~PreciseTime() {
+            QSettings settings;
+            settings.beginGroup("Analyser");
+            settings.remove("precision-analysis");
+            settings.endGroup();
+        }
+    };
+
     // The third note of fourNotes() is at 2.8 to 3.3 s; this range holds
     // it whole and is nowhere near frame 0. Widened by half a second it
     // runs from 2.25 to 3.85 s, so that both of its edges are in silence
@@ -1450,6 +1511,172 @@ private slots:
         QCOMPARE(int(notesIn(noteEvents(analyser), abandoned0, abandoned1).size()),
                  0);
         QVERIFY(notesIn(noteEvents(analyser), from, to + 2 * hop).size() >= 1);
+    }
+
+    // A run over the whole of data, into empty models, both of its ends at
+    // the edges of the coverage: what is merged is then the run's result
+    // as it comes, less what the voice threshold takes out
+    void analyseWholeAsRange(const std::vector<float> &data, double threshold,
+                             sv::EventVector &pitch, sv::EventVector &notes) {
+        sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
+        Analyser analyser(Analyser::SecondaryColors);
+        setUpEmpty(analyser, addSingingModel(data));
+        if (QTest::currentTestFailed()) return;
+        QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+        QCOMPARE(analyser.analyseRange(0, fileEnd, 0, fileEnd, threshold),
+                 QString());
+        waitForRange(analyser, done);
+        if (QTest::currentTestFailed()) return;
+        pitch = pitchEvents(analyser);
+        notes = noteEvents(analyser);
+        // or the next analyser would claim these layers as its own
+        analyser.removeAllLayers();
+    }
+
+    void ranged_voice_threshold_data() {
+        QTest::addColumn<bool>("precise");
+        QTest::newRow("vague time") << false;
+        QTest::newRow("precise time") << true;
+    }
+
+    // The voice threshold between a loud phrase and a quiet one: nothing
+    // of the quiet one is merged, and of the loud one exactly what was
+    // found where its block was at or over the threshold.  In precise
+    // time as well, where pYIN stamps a block half of it in, not a
+    // quarter: the gate must measure the block the run really stamped
+    void ranged_voice_threshold() {
+        QFETCH(bool, precise);
+        PreciseTime preciseTime(precise);
+        const int offset = precise ? 1024 : 512;
+
+        auto data = loudThenQuiet();
+        sv::sv_frame_t quiet0 = frameAt(quietFrom), quiet1 = frameAt(quietTo);
+        sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
+
+        sv::EventVector offPitch, offNotes, onPitch, onNotes;
+        analyseWholeAsRange(data, VoiceThreshold::kOff, offPitch, offNotes);
+        if (QTest::currentTestFailed()) return;
+        analyseWholeAsRange(data, voiceThreshold, onPitch, onNotes);
+        if (QTest::currentTestFailed()) return;
+
+        // With it Off pYIN finds the quiet phrase: else what follows
+        // would pass whatever the threshold did
+        QVERIFY2(pitchIn(offPitch, quiet0, quiet1).size() > 40,
+                 qPrintable(QString("only %1 pitch events in the quiet phrase "
+                                    "with the threshold Off")
+                            .arg(pitchIn(offPitch, quiet0, quiet1).size())));
+        QVERIFY2(notesIn(offNotes, quiet0 - 4 * hop, fileEnd).size() == 1,
+                 qPrintable("notes with the threshold Off: " +
+                            describeNotes(offNotes)));
+
+        // The threshold on: the Off run's pitch, each event kept or not
+        // by the level of its block as worked out here
+        sv::EventVector expected;
+        for (const auto &e : offPitch) {
+            if (stampLevel(data, e.getFrame(), offset) >= voiceThreshold) {
+                expected.push_back(e);
+            }
+        }
+        QStringList odd;
+        auto a = byFrame(expected), b = byFrame(onPitch);
+        for (const auto &p : a) {
+            if (!b.count(p.first)) odd << QString("-%1").arg(p.first);
+            else if (b[p.first] != p.second) odd << QString("~%1").arg(p.first);
+        }
+        for (const auto &p : b) if (!a.count(p.first)) odd << QString("+%1").arg(p.first);
+        QVERIFY2(odd.isEmpty(),
+                 qPrintable(QString("pitch with the threshold on, against the "
+                                    "Off run gated here: lost (-), gained "
+                                    "(+), changed (~): %1").arg(odd.join(" "))));
+        QCOMPARE(onPitch.size(), expected.size());
+
+        // So none of the quiet phrase, and the loud one as it was but for
+        // its edges
+        QVERIFY(pitchIn(onPitch, quiet0 - 4 * hop, fileEnd).empty());
+        sv::sv_frame_t loud0 = frameAt(loudFrom + 0.1);
+        sv::sv_frame_t loud1 = frameAt(loudTo - 0.1);
+        QVERIFY(pitchIn(offPitch, loud0, loud1).size() > 40);
+        QVERIFY(pitchIn(onPitch, loud0, loud1) == pitchIn(offPitch, loud0, loud1));
+
+        // No note left in the quiet phrase, and the loud one's still there
+        QVERIFY2(notesIn(onNotes, quiet0 - 4 * hop, fileEnd).empty(),
+                 qPrintable("notes with the threshold on: " +
+                            describeNotes(onNotes)));
+        QVERIFY2(notesIn(onNotes, 0, quiet0 - 4 * hop).size() == 1,
+                 qPrintable("notes with the threshold on: " +
+                            describeNotes(onNotes)));
+    }
+
+    // A run that stops at the end of the coverage merges out to what it
+    // stamped past that end.  There the audio has stopped, and the blocks
+    // pYIN stamps there hold less and less of it: the threshold takes the
+    // last of what the run found out.  The old pitch out there must go all
+    // the same, as it does with the threshold Off, and not be left behind
+    // because what was kept ends sooner
+    void ranged_voice_threshold_at_the_edge_of_coverage() {
+        std::vector<float> data;
+        appendSilence(data, 0.15);
+        auto first = tone(singingHz, 0.5);          // 0.15 to 0.65 s
+        data.insert(data.end(), first.begin(), first.end());
+        appendSilence(data, 0.4);
+        auto second = tone(referenceHz, 0.5);       // 1.05 to 1.55 s
+        data.insert(data.end(), second.begin(), second.end());
+        appendSilence(data, 0.45);                  // beyond the coverage
+
+        // Higher than voiceThreshold: the last two blocks the run stamps
+        // hold under half of a block of the tone, and are under it
+        const double threshold = -15.0;
+
+        sv::sv_frame_t fileEnd = sv::sv_frame_t(data.size());
+        sv::sv_frame_t coverEnd = frameAt(1.55);
+        sv::sv_frame_t start = frameAt(1.2);
+        sv::sv_frame_t from, to, wFrom, wTo;
+        widenRange(start, coverEnd, 0, coverEnd, from, to);
+        mergeWindow(start, coverEnd, 0, coverEnd, wFrom, wTo);
+        QVERIFY(wFrom < frameAt(1.05) && wTo == to);
+
+        // The old pitch and notes are those of the whole file with the
+        // threshold Off, as a take recorded before it was set has them
+        Analyser analyser(Analyser::SecondaryColors);
+        analyse(analyser, addSingingModel(data));
+        if (QTest::currentTestFailed()) return;
+        sv::EventVector wasPitch = pitchEvents(analyser);
+
+        // Some of them are at stamps under the threshold at and past the
+        // end of the run, which is what this is about
+        QStringList under;
+        for (const auto &p : pitchIn(wasPitch, to, fileEnd)) {
+            if (stampLevel(data, p.first, 512) < threshold) {
+                under << QString::number(p.first);
+            }
+        }
+        QVERIFY2(!under.isEmpty(),
+                 "no old pitch under the threshold at or past the end of the "
+                 "run to test this with");
+
+        QSignalSpy done(&analyser, SIGNAL(initialAnalysisCompleted()));
+        QCOMPARE(analyser.analyseRange(start, coverEnd, 0, coverEnd,
+                                       threshold), QString());
+        waitForRange(analyser, done);
+        if (QTest::currentTestFailed()) return;
+
+        sv::EventVector isPitch = pitchEvents(analyser);
+
+        // Nothing left in the window, or past it, that is under the
+        // threshold
+        QStringList left;
+        for (const auto &p : pitchIn(isPitch, wFrom, fileEnd)) {
+            if (stampLevel(data, p.first, 512) < threshold) {
+                left << QString::number(p.first);
+            }
+        }
+        QVERIFY2(left.isEmpty(),
+                 qPrintable(QString("pitch under the threshold left at %1 "
+                                    "(the run ends at %2)")
+                            .arg(left.join(" ")).arg(to)));
+
+        // and the tone that was loud enough is still there
+        QVERIFY(pitchIn(isPitch, frameAt(1.1), frameAt(1.5)).size() > 60);
     }
 };
 
