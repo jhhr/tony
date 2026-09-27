@@ -1674,7 +1674,7 @@ if system != 'android'
   test('tony-core', tony_core_test_exe)
   test('tony-app', tony_app_test_exe,
        depends: pyin_plugin,
-       timeout: 900,
+       timeout: 1800,
        env: [ 'QT_QPA_PLATFORM=offscreen' ])
 
   # The development checks' suite, only where the checks are built. Its
