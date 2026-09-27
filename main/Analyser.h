@@ -439,8 +439,8 @@ protected:
     // cannot stamp anything before its own first two hops anyway
     bool m_rangedClippedEnd;
 
-    // The voice threshold of the run, with where pYIN stamps its blocks,
-    // as the run was built: the merge gates the run's result with it
+    // The voice threshold of the run, with the blocks it was built with:
+    // the merge gates the run's result with it
     VoiceGate m_rangedGate;
 
     // Set only by a test (setRangedMergeHeld())

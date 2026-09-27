@@ -22,15 +22,15 @@
 using namespace sv;
 
 int
-VoiceGate::stampOffset(bool preciseTime, int block)
+VoiceGate::windowOffset(int block)
 {
-    return preciseTime ? block / 2 : block / 4;
+    return block / 4;
 }
 
-VoiceGate::VoiceGate(double threshold, int stampOffset,
+VoiceGate::VoiceGate(double threshold, int windowOffset,
                      int hop, int halfWindow) :
     m_threshold(threshold),
-    m_stampOffset(stampOffset),
+    m_windowOffset(windowOffset),
     m_hop(std::max(1, hop)),
     m_halfWindow(std::max(1, halfWindow))
 {
@@ -89,7 +89,7 @@ VoiceGate::measureLevels(const std::vector<sv_frame_t> &stamps,
 
         if (levels.find(stamp) != levels.end()) continue;
 
-        const sv_frame_t from = stamp - m_stampOffset;
+        const sv_frame_t from = stamp - m_windowOffset;
         const sv_frame_t to = from + m_halfWindow;
 
         if (from < blockStart || to > blockEnd || block.empty()) {

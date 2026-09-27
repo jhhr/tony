@@ -142,11 +142,12 @@ class TestVoiceGate : public QObject
     }
 
 private slots:
-    // pYIN stamps a block a quarter of the way in, or half with precise
-    // time (PYinVamp::process()); Tony's block is 2048 frames
-    void pyin_stamp_offsets() {
-        QCOMPARE(VoiceGate::stampOffset(false), 512);
-        QCOMPARE(VoiceGate::stampOffset(true), 1024);
+    // What YIN compared for a stamp begins a quarter of a block before
+    // it, in either of pYIN's timings (VoiceGate::windowOffset()); Tony's
+    // block is 2048 frames
+    void pyin_window_offset() {
+        QCOMPARE(VoiceGate::windowOffset(), 512);
+        QCOMPARE(VoiceGate::windowOffset(4096), 1024);
     }
 
     // A pitch under the threshold goes; one at it or over it stays, as
@@ -291,8 +292,8 @@ private slots:
     // frames (half its half is the tone) and not at 1024 (silence), and a
     // stamp 512 frames after a tone stops the other way round. So the
     // pitch kept starts, and a note is trimmed to start, 512 frames
-    // later in precise time, and they end 512 frames later
-    void the_stamp_offset() {
+    // later with an offset of 1024, and they end 512 frames later
+    void the_window_offset() {
         const frame_t at = 8192, n = 16384;
 
         Audio rising, falling;

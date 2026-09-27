@@ -61,18 +61,6 @@ static const QString pyinPitchOutput = "smoothedpitchtrack";
 static const QString pyinNotesOutput = "notes";
 static const int analysisStepSize = 256;
 
-// Where pYIN stamps each block of a run of this transform, from the
-// start of the block (PYinVamp::process()): a quarter of the block in,
-// or half of it where the "precisetime" parameter is 1, which
-// buildAnalysisTransforms() sets from the "precision-analysis" setting
-static int stampOffsetOf(const Transform &t)
-{
-    const Transform::ParameterMap &parameters = t.getParameters();
-    auto i = parameters.find("precisetime");
-    bool precise = (i != parameters.end() && i->second == 1.f);
-    return VoiceGate::stampOffset(precise, t.getBlockSize());
-}
-
 Analyser::Analyser(ColorScheme colorScheme) :
     m_colorScheme(colorScheme),
     m_document(0),
@@ -86,7 +74,7 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedMergeStart(0),
     m_rangedMergeEnd(0),
     m_rangedClippedEnd(false),
-    m_rangedGate(VoiceThreshold::kOff, VoiceGate::stampOffset(false)),
+    m_rangedGate(VoiceThreshold::kOff, VoiceGate::windowOffset()),
     m_rangedMergeHeld(false),
     m_waveformFaded(false)
 {
@@ -1244,16 +1232,18 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
     m_rangedMergeEnd = clippedEnd ? to : std::min(to, end + margin/2);
     m_rangedClippedEnd = clippedEnd;
 
-    // The gate measures the block each result was found in, so it goes
-    // by where this run stamps its blocks, from the transform the run
-    // was built with: the settings may say otherwise by the merge
+    // The gate measures the frames pYIN compared for each result, which
+    // begin a quarter of a block before its stamp in either timing
+    // (VoiceGate::windowOffset()), in the blocks of the transform the run
+    // was built with
     const Transform &built = transforms.front();
-    m_rangedGate = VoiceGate(voiceThreshold, stampOffsetOf(built),
+    const int windowOffset = VoiceGate::windowOffset(built.getBlockSize());
+    m_rangedGate = VoiceGate(voiceThreshold, windowOffset,
                              built.getStepSize(), built.getBlockSize() / 2);
     if (m_rangedGate.isOn()) {
         cerr << "Analyser::analyseRange: gated at a voice threshold of "
-             << voiceThreshold << " dBFS, blocks stamped "
-             << stampOffsetOf(built) << " frames in" << endl;
+             << voiceThreshold << " dBFS, measured from " << windowOffset
+             << " frames before each stamp" << endl;
     }
 
     for (ModelId id : { m_rangedPitchModel, m_rangedNotesModel }) {

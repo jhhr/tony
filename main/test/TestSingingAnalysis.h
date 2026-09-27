@@ -1541,13 +1541,17 @@ private slots:
 
     // The voice threshold between a loud phrase and a quiet one: nothing
     // of the quiet one is merged, and of the loud one exactly what was
-    // found where its block was at or over the threshold.  In precise
-    // time as well, where pYIN stamps a block half of it in, not a
-    // quarter: the gate must measure the block the run really stamped
+    // found where what YIN compared was at or over the threshold.  In
+    // precise time as well, where pYIN stamps a block half of it in, not
+    // a quarter, but compares its middle half (YinUtil::slowDifference()),
+    // not its first: either way the frames compared begin a quarter of a
+    // block before the stamp, and a gate measuring from half a block
+    // before it would take the first hops of a phrase and leave the
+    // hops after it
     void ranged_voice_threshold() {
         QFETCH(bool, precise);
         PreciseTime preciseTime(precise);
-        const int offset = precise ? 1024 : 512;
+        const int offset = 512;
 
         auto data = loudThenQuiet();
         sv::sv_frame_t quiet0 = frameAt(quietFrom), quiet1 = frameAt(quietTo);

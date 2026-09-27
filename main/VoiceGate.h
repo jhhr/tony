@@ -29,10 +29,11 @@
  * all of it was.  Its value is left as pYIN gave it.
  *
  * pYIN puts each pitch, and each note's onset, on a stamp: a frame a
- * fixed offset into the block it was found in (stampOffset()).  The
- * level compared with the threshold is that of the first half of the
- * block, whose pitch YIN finds, as the live tracker measures it for its
- * own floor: the frames [stamp - offset, stamp - offset + half window).
+ * fixed offset into the block it was found in.  The level compared with
+ * the threshold is that of the half window whose frames YIN compared to
+ * find the pitch, as the live tracker measures its first half for its
+ * own floor: the frames [stamp - offset, stamp - offset + half window),
+ * where the offset is windowOffset().
  * A note covers the stamps from its onset, one hop apart, up to its end.
  * A level at the threshold counts as voice, as it does in the tracker.
  *
@@ -40,7 +41,7 @@
  * gives, one block of the mixdown at a time, so that a take of any
  * length is measured without all of its audio being held at once:
  *
- *     VoiceGate gate(threshold, VoiceGate::stampOffset(precise));
+ *     VoiceGate gate(threshold, VoiceGate::windowOffset());
  *     VoiceGate::LevelOf levelOf = VoiceGate::lookup
  *         (gate.measureLevels(gate.stampsOf(pitch, notes), channels,
  *                             read));
@@ -60,11 +61,11 @@ public:
     /// How many frames of the mixdown measureLevels() reads at once
     static constexpr sv::sv_frame_t kReadFrames = 65536;
 
-    /// The level of the first half of each stamp's block, in dBFS, by
-    /// stamp
+    /// The level of the half window compared for each stamp, in dBFS,
+    /// by stamp
     typedef std::map<sv::sv_frame_t, double> Levels;
 
-    /// The level of the first half of a stamp's block, in dBFS
+    /// The level of the half window compared for a stamp, in dBFS
     typedef std::function<double(sv::sv_frame_t stamp)> LevelOf;
 
     /**
@@ -77,13 +78,19 @@ public:
                                          sv::sv_frame_t count)> Reader;
 
     /**
-     * The offset pYIN stamps a block with (PYinVamp::process()): a
-     * quarter of the block in, or half of it with "precisetime" set,
-     * which Tony sets with its "precision-analysis" setting
+     * How far before its stamp the frames YIN compared for a pitch
+     * begin: a quarter of a block, in either of pYIN's timings
+     * (PYinVamp::process()).  Without "precisetime" pYIN stamps a block
+     * a quarter of it in and compares the block's first half
+     * (YinUtil::fastDifference()), as the live tracker does.  With it
+     * ("precision-analysis" in Tony's settings) pYIN stamps the block
+     * half of it in, but compares its middle half (slowDifference(), a
+     * little wider at longer lags), which begins a quarter of a block
+     * before that stamp too
      */
-    static int stampOffset(bool preciseTime, int block = kBlock);
+    static int windowOffset(int block = kBlock);
 
-    VoiceGate(double threshold, int stampOffset,
+    VoiceGate(double threshold, int windowOffset,
               int hop = kHop, int halfWindow = kBlock / 2);
 
     /// Whether the threshold does anything (VoiceThreshold::isOn())
@@ -129,7 +136,7 @@ public:
 
 private:
     double m_threshold;
-    int m_stampOffset;
+    int m_windowOffset;
     int m_hop;
     int m_halfWindow;
 
