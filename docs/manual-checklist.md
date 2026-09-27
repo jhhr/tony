@@ -217,12 +217,23 @@ Not tried yet.
    Recent Files list, opens, and its takes play.
 7. **Live dots on this machine**: during a take the dots keep up with the cursor and grow
    smoothly, and neither they nor the cursor stutter, in a maximised window. None appear
-   between phrases, and none are lost on soft singing: the tracker ignores what is quieter
-   than −60 dBFS.
+   between phrases, and none are lost on soft singing: with Voice Threshold Off the
+   tracker ignores only what is quieter than −60 dBFS.
 8. **Background music in a session**: load it, turn its level down, save, close and open
    the session: it plays with the reference at that level, and during a take. Move the
    music file and open the session again: Tony asks where it is, and Locate file... finds
    it.
+9. **Music on speakers: Playback > Voice Threshold.** With the reference or the
+   background music on speakers, at the volume you sing with, and the threshold Off:
+   record the music alone, not singing, and see its dots and, after Stop, its pitch.
+   Raise the threshold a step at a time, recording the music alone each time, until the
+   music gives no dots. Then sing, close to the microphone: the dots appear where the
+   voice is and not between phrases, and after Stop the pitch and notes are only where
+   the voice is, not where the music played alone. Is the voice well over the threshold
+   with this microphone, and is soft singing kept? Then lower or raise it and choose
+   Analysis > Analyse Now!: the take's pitch and notes change to match, and Play still
+   plays what was recorded, the music included. The menu cannot be opened during a take.
+   Is choosing blind, without a level meter, workable?
 
 ## 4. Lyrics
 
@@ -400,6 +411,10 @@ The design is in [port-android.md](port-android.md) and
 12. **A take longer than the phone's screen timeout**: nothing keeps the screen on outside
     a check, and a screen that goes off ends the take as Stop does. Does that get in the
     way in use?
+13. **Voice Threshold on the phone's own speaker**: from the compact layout's menu button,
+    Playback > Voice Threshold opens, shows which is ticked, and takes a tap; then
+    section 3, item 9, with the reference on the phone's speaker. Nothing on the phone
+    explains the entries: are "Off" and the dBFS figures clear enough there?
 
 A Windows touch screen has not been tried either: Windows makes its own mouse events from
 touches, and its own right click from a press and hold.

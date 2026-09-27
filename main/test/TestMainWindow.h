@@ -24,6 +24,7 @@
 #include "../AudioDriverMenus.h"
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
+#include "../VoiceThresholdMenu.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -167,6 +168,9 @@ public:
     // the last take was placed with
     AudioCheckRunner *audioCheck() { return m_audioCheck; }
     bool audioCheckTakes() { return m_audioCheckTakes; }
+    // Set as the runner sets it before each of its takes, and cleared as
+    // it clears it: the test that sets it clears it
+    void setAudioCheckTakes(bool on) { m_audioCheckTakes = on; }
 
     // The Record button, as the user presses it
     QAction *recordAction() { return m_recordAction; }
@@ -201,6 +205,8 @@ public:
     }
     AudioDriverMenus *audioDriverMenus() { return m_audioDriverMenus; }
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
+    // Playback > Voice Threshold, which is always shown
+    VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as
@@ -247,6 +253,7 @@ public:
     sv::sv_frame_t takePosition() { return m_takePosition; }
     sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
     sv::sv_frame_t takeEnd() { return m_takeEnd; }
+    double takeVoiceThreshold() { return m_takeVoiceThreshold; }
     bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
 
     void seekTo(sv::sv_frame_t frame) {

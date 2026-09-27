@@ -523,15 +523,21 @@ private slots:
         QVERIFY(haveSwitch);
 
         // Playback > Calibrate Audio among them, on show: the device menus
-        // are hidden, not the check
+        // are hidden, not the check.  Nor Voice Threshold, the music being
+        // as likely on a phone's speaker as on any
         QAction *calibrate = nullptr;
+        QAction *voiceThreshold = nullptr;
         for (QAction *action: menus) {
             for (QAction *item: action->menu()->actions()) {
                 if (item->text() == "&Calibrate Audio...") calibrate = item;
+                if (item->text() == "Voice &Threshold") voiceThreshold = item;
             }
         }
         QVERIFY(calibrate);
         QVERIFY(calibrate->isVisible());
+        QVERIFY(voiceThreshold);
+        QVERIFY(voiceThreshold->menu());
+        QVERIFY(voiceThreshold->isVisible());
 
         // A tap opens it (and a timer closes it again)
         bool checked = false, shown = false;

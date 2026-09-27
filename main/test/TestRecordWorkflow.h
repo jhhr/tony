@@ -35,6 +35,7 @@
 #include "../SingingTakes.h"
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
+#include "../VoiceThreshold.h"
 
 #include "version.h"
 
@@ -71,6 +72,7 @@
 #include <QtTest>
 #include <QAbstractButton>
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QComboBox>
 #include <QElapsedTimer>
@@ -1453,6 +1455,88 @@ class TestRecordWorkflow : public QObject
                  "recordings");
     }
 
+    // The voice threshold, as Playback > Voice Threshold sets it
+    static void setVoiceThreshold(double dbfs) {
+        QSettings settings;
+        VoiceThreshold::setThreshold(settings, dbfs);
+    }
+
+    static double storedVoiceThreshold() {
+        QSettings settings;
+        return VoiceThreshold::threshold(settings);
+    }
+
+    // Playback > Voice Threshold opened, as the user does before choosing
+    void openVoiceThresholdMenu() {
+        emit m_window->voiceThresholdMenu()->menu()->aboutToShow();
+    }
+
+    // Its entry ticked, if any
+    QAction *voiceThresholdTicked() {
+        for (QAction *a : m_window->voiceThresholdMenu()->menu()->actions()) {
+            if (a->isChecked()) return a;
+        }
+        return nullptr;
+    }
+
+    // It opened, and the entry of the threshold chosen, by its text
+    void chooseVoiceThreshold(double dbfs) {
+        openVoiceThresholdMenu();
+        const QString label = VoiceThreshold::label(dbfs);
+        for (QAction *a : m_window->voiceThresholdMenu()->menu()->actions()) {
+            if (a->text() == label) {
+                a->trigger();
+                return;
+            }
+        }
+        QFAIL(qPrintable(label + " not in the menu"));
+    }
+
+    // A tone as quiet as music heard from speakers across the room, and a
+    // threshold over it and under tone(), as a singer close to the
+    // microphone.  A tone's RMS is its peak over root 3
+    static constexpr float quietGain = 0.05f;        // -30.8 dBFS
+    static constexpr double voiceThreshold = -20.0;  // tone() is -10.8
+
+    static std::vector<float> quietTone(double hz, double seconds) {
+        return TestSignals::sawtooth(hz, rate, int(seconds * rate), quietGain);
+    }
+
+    // The live dots of the take being recorded, or -1 if there are none
+    int liveDots() {
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        return model ? model->getEventCount() : -1;
+    }
+
+    // Steps between one live dot and the next that are not one hop: the
+    // dots missing from a sound that goes on
+    int liveDotGaps() {
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        if (!model) return -1;
+        auto events = model->getAllEvents();
+        int gaps = 0;
+        for (size_t i = 1; i < events.size(); ++i) {
+            if (events[i].getFrame() - events[i-1].getFrame() !=
+                RealtimePitchTracker::kHopSize) {
+                ++gaps;
+            }
+        }
+        return gaps;
+    }
+
+    // Of events, those within 50 cents of hz
+    static sv::EventVector eventsAt(const sv::EventVector &events, double hz) {
+        sv::EventVector result;
+        for (const auto &e : events) {
+            if (std::fabs(TestSignals::centsBetween(e.getValue(), hz)) < 50.0) {
+                result.push_back(e);
+            }
+        }
+        return result;
+    }
+
     // Not a slot: QtTest would run it as a test
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -1520,6 +1604,9 @@ private slots:
         settings.remove("prerollseconds");
         settings.endGroup();
 
+        // No voice threshold, whatever a test that set one left behind
+        VoiceThreshold::setThreshold(settings, VoiceThreshold::kOff);
+
         // The audible flags are shared by both analysers; a test that
         // failed half way must not leave the next one's tracks muted
         settings.beginGroup("Analyser");
@@ -1535,6 +1622,8 @@ private slots:
         // A round trip a test stored would place the next test's takes.
         // First, as the waits below return early when they fail
         QSettings().remove("LatencyCalibration");
+        // Nor a voice threshold: the other suites of this process record
+        setVoiceThreshold(VoiceThreshold::kOff);
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -3884,6 +3973,356 @@ private slots:
                  "the second range of the coverage was not analysed again");
         QVERIFY(std::fabs(TestSignals::centsBetween
                           (medianHz(events), highHz)) < 10.0);
+    }
+
+    // The voice threshold over what the microphone hears: no live dots,
+    // and no pitch or notes from the take's analysis.  The same take with
+    // it Off has both, or this would pass whatever the threshold did.
+    // The take keeps the threshold it started with: set Off before its
+    // Stop, it is still analysed with it
+    void voice_threshold_gates_a_take_under_it() {
+        FakeAudioIO::Config config;
+        config.input = quietTone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        setVoiceThreshold(voiceThreshold);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeVoiceThreshold(), voiceThreshold);
+        waitForSomethingRecorded();
+        QTest::qWait(300);
+        QVERIFY(m_window->realtimeTracker());
+        QVERIFY2(liveDots() == 0,
+                 qPrintable(QString("%1 live dots of a take under the voice "
+                                    "threshold").arg(liveDots())));
+        QCOMPARE(m_window->realtimeTracker()->getMinLevel(), voiceThreshold);
+
+        setVoiceThreshold(VoiceThreshold::kOff);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(pitchEvents(m_window->analyser2()).empty(),
+                 qPrintable(QString("%1 pitch events from a take under the "
+                                    "voice threshold")
+                            .arg(pitchEvents(m_window->analyser2()).size())));
+        QVERIFY(noteEvents(m_window->analyser2()->getLayer(Analyser::Notes))
+                .empty());
+
+        // The same, with it Off, somewhere else in the take
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeVoiceThreshold(), VoiceThreshold::kOff);
+        waitForSomethingRecorded();
+        QTest::qWait(300);
+        QVERIFY(m_window->realtimeTracker());
+        QCOMPARE(m_window->realtimeTracker()->getMinLevel(),
+                 RealtimePitchTracker::kMinLevel);
+        QVERIFY2(liveDots() > 20,
+                 qPrintable(QString("only %1 live dots of the take with the "
+                                    "threshold Off").arg(liveDots())));
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+        auto pitch = pitchEvents(m_window->analyser2());
+        QVERIFY(eventsBetween(pitch, 0, ranges[1].start).empty());
+        auto second = eventsBetween(pitch, ranges[1].start, ranges[1].end);
+        QVERIFY2(second.size() > 20,
+                 qPrintable(QString("only %1 pitch events from the take with "
+                                    "the threshold Off").arg(second.size())));
+        QVERIFY(std::fabs(TestSignals::centsBetween
+                          (medianHz(second), highHz)) < 10.0);
+        QVERIFY(!noteEvents(m_window->analyser2()->getLayer(Analyser::Notes))
+                .empty());
+    }
+
+    // The voice threshold under what is sung changes no dot.  The core
+    // suite has it exact, frame by frame; here the takes are in real time
+    // and never the same length, so the dots are compared by their being
+    // there at every hop, and by their pitch.  A window at the edge of a
+    // sound can lose its dot to the threshold, as meant, but these takes
+    // have none: the tone is on before the recording starts, and the dots
+    // are looked at while it goes on
+    void voice_threshold_under_the_singing_changes_no_dot() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        std::vector<double> medians;
+        int step = 0;
+        for (double threshold : { VoiceThreshold::kOff, -40.0 }) {
+            setVoiceThreshold(threshold);
+            m_window->seekTo(sv::sv_frame_t(2.0 * rate * step++));
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            waitForSomethingRecorded();
+            QTest::qWait(300);
+            QCOMPARE(m_window->realtimeTracker()->getMinLevel(),
+                     VoiceThreshold::liveFloor(threshold));
+            int dots = liveDots();
+            int gaps = liveDotGaps();
+            auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+                (m_window->realtimeModelId());
+            QVERIFY(model);
+            medians.push_back(medianHz(model->getAllEvents()));
+            QVERIFY2(dots > 20 && gaps == 0,
+                     qPrintable(QString("%1 live dots with %2 gaps, the "
+                                        "threshold at %3")
+                                .arg(dots).arg(gaps).arg(threshold)));
+            stopTake();
+            if (QTest::currentTestFailed()) return;
+        }
+        // Each take's recording starts at its own point in the input, so
+        // its windows meet the waveform at other points: near, not equal
+        QVERIFY(std::fabs(TestSignals::centsBetween(medians[0], highHz)) < 10.0);
+        QVERIFY(std::fabs(TestSignals::centsBetween(medians[1], medians[0])) < 1.0);
+    }
+
+    // The audio check's takes measure the device: the loopback of the
+    // speakers is what they listen for, so they are recorded with no
+    // voice threshold, whatever the setting.  The runner's override, as
+    // it sets it for each of its takes (AudioCheckRunner)
+    void voice_threshold_off_for_the_audio_checks_takes() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        setVoiceThreshold(voiceThreshold);
+        m_window->setAudioCheckTakes(true);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeVoiceThreshold(), VoiceThreshold::kOff);
+        QTRY_VERIFY(m_window->realtimeTracker());
+        QCOMPARE(m_window->realtimeTracker()->getMinLevel(),
+                 RealtimePitchTracker::kMinLevel);
+        waitForSomethingRecorded();
+        stopTake();
+        // As the runner clears it, once the take is over
+        m_window->setAudioCheckTakes(false);
+        if (QTest::currentTestFailed()) return;
+
+        // The singer's own next take has it
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeVoiceThreshold(), voiceThreshold);
+        QTRY_VERIFY(m_window->realtimeTracker());
+        QCOMPARE(m_window->realtimeTracker()->getMinLevel(), voiceThreshold);
+        waitForSomethingRecorded();
+        stopTake();
+    }
+
+    // Analyse Now goes by the voice threshold as it is now, not by the one
+    // the take was recorded with: a threshold set after the takes is had
+    // on them by analysing again.  A take of singing close by and then of
+    // the reference heard from the speakers alone, told apart by pitch
+    void voice_threshold_analyse_now_uses_it_as_it_is_now() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 0.8);
+        auto speakers = quietTone(lowHz, 2.0);
+        config.input.insert(config.input.end(), speakers.begin(), speakers.end());
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(1600);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeVoiceThreshold(), VoiceThreshold::kOff);
+        auto pitch = pitchEvents(m_window->analyser2());
+        QVERIFY2(eventsAt(pitch, highHz).size() > 20 &&
+                 eventsAt(pitch, lowHz).size() > 20,
+                 qPrintable(QString("with no threshold: %1 pitch events of "
+                                    "the singing and %2 of the speakers")
+                            .arg(eventsAt(pitch, highHz).size())
+                            .arg(eventsAt(pitch, lowHz).size())));
+        size_t sung = eventsAt(pitch, highHz).size();
+
+        setVoiceThreshold(voiceThreshold);
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        pitch = pitchEvents(m_window->analyser2());
+        QVERIFY2(eventsAt(pitch, lowHz).empty(),
+                 qPrintable(QString("%1 pitch events of the speakers left "
+                                    "after Analyse Now with the threshold")
+                            .arg(eventsAt(pitch, lowHz).size())));
+        // The singing's edge, where its window reaches into what follows,
+        // may lose a hop or two
+        QVERIFY2(eventsAt(pitch, highHz).size() + 4 >= sung,
+                 qPrintable(QString("%1 pitch events of the singing, %2 before")
+                            .arg(eventsAt(pitch, highHz).size()).arg(sung)));
+        auto notes = noteEvents(m_window->analyser2()->getLayer(Analyser::Notes));
+        QVERIFY(eventsAt(notes, lowHz).empty());
+        QCOMPARE(int(eventsAt(notes, highHz).size()), 1);
+    }
+
+    // A redo that analyses a recording again goes by the voice threshold
+    // as it is then: the command keeps no threshold of its own
+    void voice_threshold_redo_uses_it_as_it_is_now() {
+        FakeAudioIO::Config config;
+        config.input = quietTone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // With no threshold the take has the pitch of what it heard
+        take(1000);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(pitchEvents(m_window->analyser2()).size() > 20);
+
+        // A second recording, undone while its analysis runs, as in
+        // undo_during_analysis_then_redo
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(700);
+        m_window->holdRangedMerges(true);
+        m_window->doRecord();
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY2(m_window->analysingRange(),
+                 "the race was not set up: no analysis was running after Stop");
+        QCOMPARE(undoOnce(), QString("Record Singing"));
+        QVERIFY(!m_window->analysingRange());
+
+        setVoiceThreshold(voiceThreshold);
+        QCOMPARE(redoOnce(), QString("Record Singing"));
+        QVERIFY(m_window->analysingRange());
+        m_window->holdRangedMerges(false);
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 2);
+        auto pitch = pitchEvents(m_window->analyser2());
+        QVERIFY(eventsBetween(pitch, ranges[0].start, ranges[0].end).size() > 20);
+        QVERIFY2(eventsBetween(pitch, ranges[1].start,
+                               ranges[1].end + 4 * hop).empty(),
+                 "the redone recording was analysed without the threshold");
+    }
+
+    // Playback > Voice Threshold, straight after Record, which it is for:
+    // Off and then the thresholds, quietest first, by VoiceThreshold's
+    // labels, one to be ticked at a time.  With none set, Off is
+    void voice_threshold_menu_offers_the_choices() {
+        makeWindow(FakeAudioIO::Config());
+        QMenu *menu = m_window->voiceThresholdMenu()->menu();
+        QCOMPARE(menu->title(), QString("Voice &Threshold"));
+        QVERIFY(menu->menuAction()->isVisible());
+        QVERIFY(menu->menuAction()->isEnabled());
+        QVERIFY2(menu->menuAction()->statusTip().contains("speakers"),
+                 qPrintable(menu->menuAction()->statusTip()));
+
+        const QList<QAction *> playback = m_window->playbackMenu()->actions();
+        const qsizetype recordAt = playback.indexOf(m_window->recordAction());
+        QVERIFY(recordAt >= 0);
+        QCOMPARE(playback.indexOf(menu->menuAction()), recordAt + 1);
+
+        const std::vector<double> choices = VoiceThreshold::choices();
+        const QList<QAction *> entries = menu->actions();
+        QCOMPARE(int(entries.size()), int(choices.size()));
+        for (int i = 0; i < int(choices.size()); ++i) {
+            QAction *a = entries[i];
+            QCOMPARE(a->text(), VoiceThreshold::label(choices[i]));
+            QCOMPARE(a->data().toDouble(), choices[i]);
+            QVERIFY(a->isCheckable());
+            QVERIFY(a->actionGroup() && a->actionGroup()->isExclusive());
+        }
+        QCOMPARE(entries[0]->text(), QString("Off"));
+
+        openVoiceThresholdMenu();
+        QCOMPARE(voiceThresholdTicked(), entries[0]);
+    }
+
+    // The tick follows the settings, which are what the takes read, each
+    // time the menu opens.  A threshold kept that is none of the choices
+    // ticks none; one at or below the tracker's own floor is Off
+    void voice_threshold_menu_ticks_the_stored_value() {
+        setVoiceThreshold(-40.0);
+        makeWindow(FakeAudioIO::Config());
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->data().toDouble(), -40.0);
+
+        setVoiceThreshold(-25.0);
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->data().toDouble(), -25.0);
+        QCOMPARE(voiceThresholdTicked()->text(), VoiceThreshold::label(-25.0));
+
+        setVoiceThreshold(-42.0);
+        openVoiceThresholdMenu();
+        QAction *ticked = voiceThresholdTicked();
+        QVERIFY2(!ticked, qPrintable((ticked ? ticked->text() : QString()) +
+                                     " ticked for -42 dBFS"));
+
+        setVoiceThreshold(VoiceThreshold::kOff);
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), QString("Off"));
+
+        setVoiceThreshold(-35.0);
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->data().toDouble(), -35.0);
+        QSettings().setValue("MainWindow/voicethreshold", "-70");
+        openVoiceThresholdMenu();
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), QString("Off"));
+    }
+
+    // A choice is written to the settings, where the next take and the
+    // next analysis read it; Off as no setting at all
+    void voice_threshold_menu_writes_the_setting() {
+        makeWindow(FakeAudioIO::Config());
+
+        chooseVoiceThreshold(-25.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(storedVoiceThreshold(), -25.0);
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), VoiceThreshold::label(-25.0));
+
+        chooseVoiceThreshold(-45.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(storedVoiceThreshold(), -45.0);
+
+        chooseVoiceThreshold(VoiceThreshold::kOff);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(storedVoiceThreshold(), VoiceThreshold::kOff);
+        QVERIFY(!QSettings().contains("MainWindow/voicethreshold"));
+        QVERIFY(voiceThresholdTicked());
+        QCOMPARE(voiceThresholdTicked()->text(), QString("Off"));
+    }
+
+    // Greyed out while a take is being recorded, which keeps the
+    // threshold it started with, and back after Stop.  The one chosen
+    // before the take is the one it has
+    void voice_threshold_menu_greyed_out_during_a_take() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+        QAction *menu = m_window->voiceThresholdMenu()->menu()->menuAction();
+        QVERIFY(menu->isEnabled());
+
+        chooseVoiceThreshold(-40.0);
+        if (QTest::currentTestFailed()) return;
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeVoiceThreshold(), -40.0);
+        QVERIFY(!menu->isEnabled());
+        waitForSomethingRecorded();
+        QVERIFY(!menu->isEnabled());
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(menu->isEnabled(), 10000);
     }
 
     void load_singing_track() {

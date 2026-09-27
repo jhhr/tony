@@ -1215,6 +1215,8 @@ tony_core_files = [
   'main/TakesFile.cpp',
   'main/TakeTiming.cpp',
   'main/VerticalZoom.cpp',
+  'main/VoiceGate.cpp',
+  'main/VoiceThreshold.cpp',
 ]
 
 # Android's decoders for the audio its libraries cannot read (M4A, FLAC,
@@ -1247,6 +1249,7 @@ tony_app_files = [
   'main/TakeLayers.cpp',
   'main/TouchGestures.cpp',
   'main/TouchMenuStyle.cpp',
+  'main/VoiceThresholdMenu.cpp',
 ]
 
 if system == 'android'
@@ -1280,6 +1283,7 @@ tony_app_moc_headers = [
   'main/SongScrollBar.h',
   'main/TouchGestures.h',
   'main/TouchMenuStyle.h',
+  'main/VoiceThresholdMenu.h',
 ]
 
 if dev_checks
@@ -1589,6 +1593,8 @@ if system != 'android'
     'main/test/TestAudioDriverSettings.h',
     'main/test/TestTakeDiff.h',
     'main/test/TestLiveDotsFeed.h',
+    'main/test/TestVoiceThreshold.h',
+    'main/test/TestVoiceGate.h',
     'main/test/TestRunSuite.h',
   ])
 

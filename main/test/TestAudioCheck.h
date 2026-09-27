@@ -341,6 +341,13 @@ class TestAudioCheck : public QObject
             !menus->latencyMenu()->menuAction()->isEnabled();
     }
 
+    // Playback > Voice Threshold, greyed out with them: its takes are
+    // recorded with none
+    bool voiceThresholdMenuEnabled() {
+        return m_window->voiceThresholdMenu()->menu()->menuAction()
+            ->isEnabled();
+    }
+
     // Shown, as they are where there is more than one driver: a hidden
     // action is disabled as well, whatever it was set to
     void showDriverMenus(QStringList implementations) {
@@ -1805,7 +1812,8 @@ private slots:
 
     // Playback > Calibrate Audio: a dialog, not modal, that names the
     // devices and the latency in use and starts a check. While the check
-    // runs, neither it nor the device menus can be chosen. Other devices
+    // runs, neither it nor the device menus nor the voice threshold can
+    // be chosen. Other devices
     // are named in the Preferences meanwhile; Use this latency keeps the
     // round trip measured for the devices the check started on, and the
     // menu's line says what the devices named now are placed with
@@ -1861,6 +1869,7 @@ private slots:
         QVERIFY(!m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(!m_window->audioInputMenu()->menuAction()->isEnabled());
         QVERIFY(driverMenusDisabled());
+        QVERIFY(!voiceThresholdMenuEnabled());
         QVERIFY2(dialog->pageText().contains("Recording punch-in 1 of 2"),
                  qPrintable(dialog->pageText()));
         // The step, the punch-in and the time left, on one line
@@ -1880,6 +1889,7 @@ private slots:
         QVERIFY(m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(m_window->audioInputMenu()->menuAction()->isEnabled());
         QVERIFY(driverMenusEnabled());
+        QVERIFY(voiceThresholdMenuEnabled());
 
         // 12411 frames measured, 12288 reported, at 44.1 kHz
         QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());

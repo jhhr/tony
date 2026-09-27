@@ -54,6 +54,7 @@ class LyricsSize;
 class AudioCheckRunner;
 struct AudioCheckResult;
 class AudioDriverMenus;
+class VoiceThresholdMenu;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -763,6 +764,13 @@ protected:
     sv::sv_frame_t m_takePreRoll;
     sv::sv_frame_t m_takeEnd;
 
+    // The voice threshold (VoiceThreshold) of the take being recorded, or
+    // of the one most recently recorded: the setting as it was when the
+    // take started, and Off for the audio check's takes, which measure
+    // the device and not the singer.  The live tracker's floor and the
+    // analysis of the take at Stop both go by it
+    double m_takeVoiceThreshold;
+
     // Polls the record target while a take that has an end to reach
     // runs, and stops the take once the singing for that end has
     // arrived.  Not running for a take that goes on until Stop.
@@ -813,8 +821,14 @@ protected:
 
     // Analyse [start, end) of the take's audio and merge the result into
     // its pitch and notes, with the context limited to the coverage
-    // range the material sits in.  True if a run was started
-    bool startTakeAnalysis(sv::sv_frame_t start, sv::sv_frame_t end);
+    // range the material sits in, gated by the voice threshold given.
+    // True if a run was started
+    bool startTakeAnalysis(sv::sv_frame_t start, sv::sv_frame_t end,
+                           double voiceThreshold);
+
+    // The voice threshold as the setting has it now: for an analysis
+    // that is not a take's own at its Stop
+    static double currentVoiceThreshold();
 
     // Analyse all of the take's coverage again (Analyse Now, spec 7)
     bool analyseTakeCoverage();
@@ -853,6 +867,9 @@ protected:
 
     // Playback > Audio Driver and Audio Latency, before the device menus
     AudioDriverMenus *m_audioDriverMenus;
+
+    // Playback > Voice Threshold, after Record
+    VoiceThresholdMenu *m_voiceThresholdMenu;
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;

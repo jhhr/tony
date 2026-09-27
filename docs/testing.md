@@ -181,15 +181,19 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `TestDevChecks` in `test-tony-dev`): subclass of `MainWindow` that exposes protected
   operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
   and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
-  Playback menu's actions). It installs the fake device through `openAudioIO()`, which
-  `MainWindow::createAudioIO()` calls once it has named the driver and applied its
-  latency, or no device at all when made with `installDevice` false, and keeps what the
-  Preferences named for the last device opened (`audioIOOpenedFor()`). The drivers are
-  the ones a test gives with `setAudioImplementations()`, none by default, whatever the
-  platform has. **It suspends the device at Stop and at the end of a take**, as svapp does
-  by default and unlike the application, which keeps the stream running
-  ([recording.md](recording.md#latency)): a great many tests rely on each take resuming
-  the fake, and so starting its programmed input again. A test that wants the
+  Playback menu's actions). The voice threshold the take started with is
+  `takeVoiceThreshold()`, and Playback > Voice Threshold is `voiceThresholdMenu()`;
+  `setAudioCheckTakes()` sets the check's override by hand, as the runner does before each
+  of its takes, and the test that sets it clears it again, as the runner does. It
+  installs the fake device through `openAudioIO()`, which `MainWindow::createAudioIO()`
+  calls once it has named the driver and applied its latency, or no device at all when
+  made with `installDevice` false, and keeps what the Preferences named for the last
+  device opened (`audioIOOpenedFor()`). The drivers are the ones a test gives with
+  `setAudioImplementations()`, none by default, whatever the platform has. **It suspends
+  the device at Stop and at the end of a take**, as svapp does by default and unlike the
+  application, which keeps the stream running ([recording.md](recording.md#latency)): a
+  great many tests rely on each take resuming the fake, and so starting its programmed
+  input again. A test that wants the
   application's way calls `keepAudioRunning(true)`; `applicationSuspendsAudioOnStop()`
   gives what `MainWindow` itself chooses. Nor does it suspend a device that idles, unless
   a test sets an idle time (`setAudioIdleSuspendMillis()`;
@@ -216,7 +220,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `paneHasLayer()`, `documentHasLayer()`, `reopenAsSession()` / `reopenSession()`,
   `verifyEventsSurvived()`; for the lyrics `lyricsFixture()`, `writeLrc()`,
   `verifyLyricsUntouched()`; for editing them `lyricsEditFixture()` and the mouse helpers
-  below.
+  below; for the voice threshold `setVoiceThreshold()` (the setting, as the menu writes
+  it), `chooseVoiceThreshold()` (through the menu) and `quietTone()` (music heard from
+  speakers, under the fixture's `voiceThreshold`, which `tone()` is over).
+  `TestRecordWorkflow` sets the voice threshold Off in `init()` and in `cleanup()`: a test
+  of it that sets one relies on that to leave it Off, for the next test and for the other
+  suites of the process, which record too. Another suite that sets it has to do the same.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
   dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
