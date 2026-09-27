@@ -128,6 +128,15 @@ private slots:
         QCOMPARE(drawn(), std::vector<int>({ 1, 1, 1 }));
     }
 
+    // A new plot size (View > Plot Size) has every layer drawn again,
+    // at once, at the new size
+    void a_plot_scale_change_draws_the_cache_again() {
+        settle();
+        m_viewManager->setPlotScale(1.5);
+        m_pane->repaint();
+        QCOMPARE(drawn(), std::vector<int>({ 1, 1, 1 }));
+    }
+
     // Kept out of the cache, a layer is drawn every time the pane is
     // painted, and so is every layer in front of it; a change to its
     // model leaves the layers behind it in the cache

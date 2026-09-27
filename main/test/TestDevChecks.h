@@ -23,7 +23,8 @@
 // reference, one over the end of the second, one near the start of the
 // song, two that meet inside a held tone, then saves the session and
 // opens it again: about 50 s of real time. The runs that look at other
-// things leave the long song out.
+// things leave the long song out. One runs in the shape of the user's
+// phone, calibrated from the dialog first, as there.
 //
 // The fixture is TestAudioCheck's, copied rather than shared. The
 // application's data directory, where the check writes its references,
@@ -69,11 +70,20 @@ class TestDevChecks : public QObject
 
     static constexpr double rate = 44100.0;
 
+    // The rate the user's phone records and plays at
+    static constexpr double phoneRate = 48000.0;
+    // A device at another rate, as WASAPI's mixer often runs
+    static constexpr double otherRate = 48000.0;
+
     // What the device reports, and what the round trip really is: as
     // TestAudioCheck's, 123 frames (2.8 ms) more than reported
     static constexpr int reportedOut = 2 * 4096;
     static constexpr int reportedIn = 4096;
     static constexpr int roundTrip = 3 * 4096 + 123;
+
+    // How far the fake's input moves against its output each time its
+    // stream starts again: 10 ms, as TestAudioCheck's
+    static constexpr int restartShift = 441;
 
     // The long song of the passing run: a quarter of the real one, long
     // enough that its analysis takes well over twice a punch-in's
@@ -91,8 +101,10 @@ class TestDevChecks : public QObject
     QStringList m_stages;
     std::vector<AudioCheckResult> m_checks;
 
-    // How often a test's fault was put in
+    // How often a test's fault was put in, and how many event loops of
+    // a dialog's were run (dev_checks_see_a_dialog_qt_does_not_draw())
     int m_faults = 0;
+    int m_loops = 0;
 
     // A stall of the GUI thread during the re-recording's lead-in
     // (stallTheReRecording()): watched for from the runner's first
@@ -114,6 +126,7 @@ class TestDevChecks : public QObject
         m_stages.clear();
         m_checks.clear();
         m_faults = 0;
+        m_loops = 0;
         m_stallWatch.stop();
         m_stallAt = -1.0;
         m_stallMs = 0;
@@ -148,10 +161,40 @@ class TestDevChecks : public QObject
     // takes then hold something where the reference is silent, as they
     // do on a real device, so that a take played back out shows in the
     // output there. Too quiet for the sweep finder, and no pitch for the
-    // live tracker or pYIN
+    // live tracker or pYIN. And all along, the fans the user's room had:
+    // a steady 306 Hz at -66 dBFS, in which YIN alone finds a pitch, and
+    // the live tracker's level floor none
     static FakeAudioIO::Config loopbackInARoom() {
         FakeAudioIO::Config config = loopback();
         config.input = TestSignals::whiteNoise(int(10 * rate), 1, 0.001);
+        config.humHz = 306.0;
+        config.humGain = float(std::pow(10.0, -66.0 / 20.0) * std::sqrt(2.0));
+        return config;
+    }
+
+    // The same in the shape of the user's phone as OboeAudioIO opens it:
+    // at 48 kHz, the reference being at 44.1; one input channel, the
+    // phone's microphone, and two output channels; and the route, as
+    // TestAudioCheck's phoneRoute() has it. The latencies and the delay
+    // count the device's frames
+    static FakeAudioIO::Config phoneInARoom() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.sampleRate = int(phoneRate);
+        config.inputChannels = 1;
+        AudioRoute::Route &route = config.route;
+        route.driver = "oboe";
+        route.output.id = 3;
+        route.output.type = 2;
+        route.output.productName = "Pixel 7";
+        route.hasInput = true;
+        route.input.id = 7;
+        route.input.type = 15;
+        route.input.productName = "Pixel 7";
+        route.rate = phoneRate;
+        route.outputStreams =
+            "AAudio (MMAP), 48000 Hz, Exclusive, burst 96, buffer 192 of 1920";
+        route.inputStreams = "AAudio (MMAP), 48000 Hz, Exclusive, burst 96, "
+            "buffer 11424 of 11520, preset VoicePerformance";
         return config;
     }
 
@@ -220,8 +263,8 @@ class TestDevChecks : public QObject
         return ok ? ms : std::nan("");
     }
 
-    // Item 3's "279: 274 on the tones, 5 on the sweeps, 0 elsewhere" as
-    // 279; -1 for anything else
+    // Item 3's "279: 262 on the tones, 12 at edges, 5 on the sweeps, 0
+    // elsewhere" as 279; -1 for anything else
     static int dotCount(QString text) {
         bool ok = false;
         int n = text.section(':', 0, 0).toInt(&ok);
@@ -515,7 +558,8 @@ private slots:
     }
 
     // The loopback fake in a room, placed with its true round trip: every
-    // sweep of every punch-in lands within 2 ms, the session saved and
+    // sweep of every punch-in lands within item 1's 6 ms (the fake within
+    // a frame or two), the session saved and
     // opened again holds the same take, and each punch-in measured its own
     // start gap. The re-recording changed nothing outside its range and
     // nothing before it, and nothing of the take was heard during its
@@ -588,8 +632,11 @@ private slots:
                  describe());
         QVERIFY2(mic->message.startsWith("Not applicable here"), describe());
 
-        // What the device says of itself, at the head of the report
-        for (QString words : { QString("Audio drivers built in: "),
+        // What the device says of itself, at the head of the report, and
+        // the driver it was opened through with the latency asked of it
+        for (QString words : { QString("Audio driver: (auto)\n"),
+                               QString("Latency asked for: 200.0 ms\n"),
+                               QString("Audio drivers built in: "),
                                QString("Playback latency reported: 8192 "
                                        "frames (185.8 ms)"),
                                QString("Record latency reported: 4096 "
@@ -743,6 +790,15 @@ private slots:
         QCOMPARE(lastReportLine(),
                  QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
 
+        // The take had pitch wherever a check compares it: every part was
+        // judged (dev_checks_without_pitch() has the other way).  Not
+        // item 3, which leaves the dots at a sound's onset unjudged
+        // whatever the take holds
+        for (const CheckResult &c : m_report.checks) {
+            if (c.item == 3) continue;
+            QVERIFY2(!c.message.contains("not judged"), describe(c.item));
+        }
+
         QVERIFY(m_report.sessionPath != "");
         QCOMPARE(m_window->sessionFile(), m_report.sessionPath);
         QVERIFY2(TakesFile::isInFolder(scratchDirectory(), m_report.sessionPath),
@@ -754,6 +810,54 @@ private slots:
         QVERIFY(!m_window->isDocumentModified());
         QVERIFY(!m_window->audioCheckTakes());
         QVERIFY(m_window->recordAction()->isEnabled());
+    }
+
+    // A whole run on a device at 48 kHz against references at 44.1, as
+    // WASAPI's runs were: the takes are recorded at the device's rate
+    // and converted as they are spliced, and each check counts every
+    // figure at its own rate. The fake's delay counts its own frames, so
+    // the true round trip is roundTrip frames at 48 kHz; bqaudioio's
+    // ResamplerWrapper holds the output back about 1.1 ms more, which
+    // nothing reports, and the sweeps land that late, within item 1's
+    // 6 ms. Every item passes. Item 14 finds each take stopping about as
+    // far past its selection as at 44.1 kHz, where it reads 0.25 to 0.35
+    // s: with the round trip in the device's frames added to the lead-in
+    // and the selection in the reference's, it read 0.34 s more, and
+    // failed, as it did on the user's runs
+    void dev_checks_pass_at_48000() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.sampleRate = int(otherRate);
+        makeWindow(config);
+
+        runDevChecks(roundTrip / otherRate);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_checks.size()), 5);
+        for (const AudioCheckResult &r : m_checks) {
+            QCOMPARE(r.recordingRate, otherRate);
+            QCOMPARE(r.referenceRate, rate);
+        }
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            // Item 5 is measured only: the loopback is on both inputs
+            const CheckResult::Verdict expected = (c.item == 5 ?
+                CheckResult::Verdict::Measured : CheckResult::Verdict::Pass);
+            QVERIFY2(c.verdict == expected, describe(c.item));
+        }
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+
+        const CheckResult *stops = check(14);
+        QVERIFY(stops);
+        for (QString range : { QString("19.20 to 21.20 s"),
+                               QString("1.00 to 4.20 s") }) {
+            const QString words = number(*stops, "stopped, " + range);
+            bool ok = false;
+            const double past = words.section(' ', 0, 0).toDouble(&ok);
+            QVERIFY2(ok && past >= 0.2 && past <= 0.45,
+                     qPrintable(range + ": " + words));
+        }
     }
 
     // The same with a round trip 20 ms too long: every take is spliced
@@ -839,6 +943,117 @@ private slots:
         QCOMPARE(lastReportLine(),
                  QString("Totals: %1 passed, %2 failed, 1 measured, 1 skipped")
                  .arg(dotsPass ? 5 : 4).arg(dotsPass ? 4 : 5));
+    }
+
+    // A room as loud as the reference (white noise at -19 dBFS RMS on the
+    // input, a take long): the finder still finds every sweep where it
+    // is, but neither pYIN nor the live tracker finds any pitch, as on
+    // the phone whose speaker played none of the tones. The parts of
+    // items 1, 7, 9, 10 and 12 that compare pitch have nothing to judge
+    // and say so, and the verdict is the rest's, which pass; item 3,
+    // whose whole point is the dots, fails
+    void dev_checks_without_pitch() {
+        FakeAudioIO::Config config = loopback();
+        config.input = TestSignals::whiteNoise(int(12 * rate), 1, 0.2);
+        makeWindow(config);
+
+        runDevChecks(roundTrip / rate);
+        if (QTest::currentTestFailed()) return;
+
+        for (const QString &line : reportText().split('\n')) {
+            qDebug().noquote() << "report:" << line;
+        }
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (int item : { 1, 7, 9, 10, 12 }) {
+            const CheckResult *c = check(item);
+            QVERIFY2(c && c->verdict == CheckResult::Verdict::Pass &&
+                     c->message.contains("not judged"), describe(item));
+        }
+        QVERIFY2(check(1)->message.contains("gives the same offsets. Its "
+                                            "pitch and notes after reopening "
+                                            "were not judged: "), describe(1));
+        QVERIFY2(check(9)->message.contains("The take's pitch outside the "
+                                            "punch-ins was not judged: "),
+                 describe(9));
+        for (QString part : { QString("pitch: not judged, "),
+                              QString("note: not judged, "),
+                              QString("outside: the take's pitch and notes "
+                                      "not judged, ") }) {
+            QVERIFY2(check(10)->message.contains(part), describe(10));
+        }
+        QVERIFY2(check(10)->message.startsWith("Two punch-ins meeting at "
+                                               "28.70 s, in the middle of a "
+                                               "held tone, left no step in "
+                                               "the samples there, and passed "
+                                               "every part that could be "
+                                               "judged."), describe(10));
+        for (int item : { 7, 12 }) {
+            QVERIFY2(check(item)->message.contains
+                     ("audio is the same bit for bit") &&
+                     check(item)->message.contains
+                     ("Its pitch and notes ") &&
+                     check(item)->message.contains
+                     (" were not judged: the take had no pitch there to "
+                      "compare."), describe(item));
+        }
+        // What the lead-in played was judged, and the pitch was not
+        QVERIFY2(check(12)->message.contains("Tony played nothing where the "
+                                             "reference is silent. Its pitch "
+                                             "and notes before the punch-in "
+                                             "were not judged"), describe(12));
+
+        // Nothing to judge elsewhere either, and nothing wrong
+        for (int item : { 2, 4, 13, 14 }) {
+            const CheckResult *c = check(item);
+            QVERIFY2(c && c->verdict == CheckResult::Verdict::Pass &&
+                     !c->message.contains("not judged"), describe(item));
+        }
+        QVERIFY2(check(3) && check(3)->verdict == CheckResult::Verdict::Fail,
+                 describe(3));
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 9 passed, 1 failed, 1 measured, 0 skipped"));
+    }
+
+    // A device whose input moves 10 ms against its output each time its
+    // stream starts, with the stream kept running between takes, as the
+    // application keeps it: started once, at the run's first take, so
+    // that every take shares one alignment, and every item passes.
+    // Suspended at each Stop, as svapp does unless told
+    // otherwise, the takes land 10 ms apart in turn, and items 1, 2, 7
+    // and 13 fail. The round trip is 4 ms more than the true one, as a
+    // calibration leaves it when a stream on two sound cards has drifted
+    // since: every take lands 4 ms early, within those items' 6 ms (with
+    // the 2 ms they had, they fail)
+    void dev_checks_pass_with_the_stream_kept_running() {
+        FakeAudioIO::Config config = loopbackInARoom();
+        config.restartShift = restartShift;
+        makeWindow(config);
+        m_window->keepAudioRunning(true);
+
+        runDevChecks(roundTrip / rate + 0.004);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_checks.size()), 5);
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            // Item 5 is measured only: the loopback is on both inputs
+            const CheckResult::Verdict expected = (c.item == 5 ?
+                CheckResult::Verdict::Measured : CheckResult::Verdict::Pass);
+            QVERIFY2(c.verdict == expected, describe(c.item));
+        }
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+        QVERIFY(check(1));
+        const double largest =
+            milliseconds(number(*check(1), "largest offset"));
+        QVERIFY2(largest > -5.0 && largest < -3.0, describe(1));
+        QVERIFY(check(10));
+        QCOMPARE(number(*check(10), "second punch-in against the first"),
+                 QString("0.0 ms"));
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+        QVERIFY(!m_window->fake()->isSuspended());
     }
 
     // The loopback heard a second time, 50 ms later at half the level, as
@@ -1122,6 +1337,8 @@ private slots:
                                  30000);
         dialog->cancelCheck();
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isCollapsed());
         QVERIFY2(dialog->pageText().contains("The dev checks did not run"),
                  qPrintable(dialog->pageText()));
         QVERIFY(!m_window->devChecks()->isRunning());
@@ -1135,6 +1352,14 @@ private slots:
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
         QTRY_VERIFY_WITH_TIMEOUT
             (dialog->pageText().contains("Dev checks, stage 1 of 6"), 10000);
+        // Still small, carrying on from the calibration, the indicator
+        // following the stages
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(!dialog->isVisible());
+        QVERIFY2(dialog->indicator()->text()
+                 .startsWith("Dev checks, stage 1 of 6: "),
+                 qPrintable(dialog->indicator()->text()));
+        QCOMPARE(dialog->indicator()->progress(), -1);
         QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
                                  30000);
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
@@ -1145,6 +1370,8 @@ private slots:
         QVERIFY(!m_window->devChecks()->isRunning());
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->indicator()->isHidden());
 
         const QString words = dialog->pageText();
         for (QString w : { QString("came back steadily"),
@@ -1163,6 +1390,134 @@ private slots:
                  (QString("Round trip for the run: %1 ms")
                   .arg(calibration.calibratedRoundTrip * 1000.0, 0, 'f', 1)),
                  qPrintable(reportText()));
+    }
+
+    // The dev run as on the user's phone: calibrated from the dialog, on
+    // a device in the phone's shape (phoneInARoom()), and carried on into
+    // the dev checks with the round trip measured. Every check passes as
+    // on the desktop's loopback, at the device's 48 kHz, but item 5,
+    // which has no second input to find the mic on. The report's head
+    // names the driver and how its streams opened. The result page's
+    // report, which Copy takes and on a phone Save Report... saves, holds
+    // the calibration and the report file whole, since a phone keeps that
+    // file where only Tony can read it
+    void dev_checks_on_a_phone() {
+        makeWindow(phoneInARoom());
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        QVERIFY(dialog->devChecksWanted());
+        dialog->setPlan(shortPlan());
+        dialog->setDevOptions(options(-1.0));
+
+        m_window->discardModifications();
+        dialog->startCheck();
+        QTRY_VERIFY_WITH_TIMEOUT(m_finished > 0, 180000);
+        QCOMPARE(m_finished, 1);
+        QVERIFY(!m_window->devChecks()->isRunning());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(dialog->isVisible());
+        for (const QString &line : reportText().split('\n')) {
+            qDebug().noquote() << "report:" << line;
+        }
+
+        QVERIFY(!m_checks.empty());
+        const AudioCheckResult calibration = m_checks.front();
+        QVERIFY2(calibration.calibrationUsable(),
+                 qPrintable(calibration.failure));
+        QCOMPARE(calibration.recordingRate, phoneRate);
+        QCOMPARE(calibration.referenceRate, rate);
+        QCOMPARE(calibration.route.driver, QString("oboe"));
+
+        QVERIFY2(m_report.failure == "", describe());
+        QCOMPARE(int(m_report.checks.size()), 11);
+        for (const CheckResult &c : m_report.checks) {
+            if (c.item == 5) continue;
+            QVERIFY2(c.verdict == CheckResult::Verdict::Pass,
+                     describe(c.item));
+        }
+        const CheckResult *mic = check(5);
+        QVERIFY(mic);
+        QVERIFY2(mic->verdict == CheckResult::Verdict::Measured, describe(5));
+        QCOMPARE(mic->message, QString("Not applicable here: the device "
+                                       "records one input channel."));
+        QVERIFY2(number(*mic, "input peaks, punch-in 1").startsWith("input 1 -")
+                 && !number(*mic, "input peaks, punch-in 1")
+                 .contains("input 2"), describe(5));
+        QCOMPARE(lastReportLine(),
+                 QString("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+
+        const QString file = reportText();
+        for (QString words : { QString("\nAudio driver in use: oboe\n"),
+                               "\nOutput streams: " +
+                               phoneInARoom().route.outputStreams + "\n",
+                               "\nInput streams: " +
+                               phoneInARoom().route.inputStreams + "\n" }) {
+            QVERIFY2(file.contains(words), qPrintable(words + " not in:\n" +
+                                                      file));
+        }
+
+        const QString report = dialog->reportText();
+        for (QString words : { QString("came back steadily"),
+                               QString("Item 5, mic_on_input_2: Measured"),
+                               "The dev checks' report, " +
+                               m_report.reportPath + ":\n\n" + file }) {
+            QVERIFY2(report.contains(words),
+                     qPrintable(words + " not in:\n" + report));
+        }
+        QVERIFY(report.trimmed().endsWith
+                ("Totals: 10 passed, 0 failed, 1 measured, 0 skipped"));
+    }
+
+    // A dialog Android draws itself, as it draws a message box or the file
+    // picker, is never a modal widget of Qt's: what shows it is the event
+    // loop its exec() runs. One such loop during the re-recording's take,
+    // with nothing on screen, is a dialog to item 14, which fails on it
+    // and on nothing else. Cancelled as the stage after begins
+    void dev_checks_see_a_dialog_qt_does_not_draw() {
+        makeWindow(loopback());
+        connect(m_window->audioCheck(), &AudioCheckRunner::progress,
+                this, [this](const AudioCheckRunner::Progress &state) {
+                    // Reported again as the seconds left go down
+                    if (state.step != AudioCheckRunner::Step::Recording ||
+                        m_faults > 0 || m_stages.isEmpty() ||
+                        !m_stages.last().endsWith(": Re-record")) {
+                        return;
+                    }
+                    ++m_faults;
+                    // Outside the runner's poll, as a box shown by
+                    // something else would be
+                    QTimer::singleShot(200, this, [this]() {
+                        QEventLoop loop;
+                        QTimer::singleShot(300, &loop, &QEventLoop::quit);
+                        loop.exec();
+                        ++m_loops;
+                    });
+                });
+        connect(m_window->devChecks(), &DevChecks::progress,
+                this, [this](QString stage, int, int) {
+                    if (stage == "Pre-roll near the start") {
+                        m_window->devChecks()->cancel();
+                    }
+                });
+
+        runDevChecks(roundTrip / rate, 0.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_faults, 1);
+        QCOMPARE(m_loops, 1);
+        QCOMPARE(m_report.failure, QString("The dev checks were cancelled."));
+
+        const CheckResult *stops = check(14);
+        QVERIFY(stops);
+        QVERIFY2(stops->verdict == CheckResult::Verdict::Fail, describe(14));
+        QVERIFY2(stops->message.startsWith("a dialog was up ") &&
+                 stops->message.endsWith(" into the take at 19.20 to 21.20 "
+                                         "s.") &&
+                 !stops->message.contains(";"), describe(14));
+        QVERIFY2(number(*stops, "dialogs, 19.20 to 21.20 s")
+                 .startsWith("one up "), describe(14));
+        QVERIFY2(check(7) && check(7)->verdict == CheckResult::Verdict::Pass,
+                 describe(7));
     }
 };
 

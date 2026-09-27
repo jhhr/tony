@@ -46,11 +46,19 @@
 #include <QtTest>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QClipboard>
 #include <QElapsedTimer>
+#include <QGuiApplication>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPointingDevice>
+#include <QPushButton>
+#include <QRegularExpression>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -64,15 +72,28 @@ class TestAudioCheck : public QObject
 
     static constexpr double rate = 44100.0;
 
+    // What Windows' mixer and phones run at. The reference is made at
+    // rate whatever the device runs at, and a take recorded at this one
+    // is converted to it as it is spliced
+    static constexpr double otherRate = 48000.0;
+
     // What the device reports, and what the round trip really is
     static constexpr int reportedOut = 2 * 4096;
     static constexpr int reportedIn = 4096;
     static constexpr int roundTrip = 3 * 4096 + 123;
 
+    // How far the fake's input moves against its output each time its
+    // stream starts again: 10 ms, as a real driver's did by up to 8 ms
+    // either way (FakeAudioIO::Config::restartShift)
+    static constexpr int restartShift = 441;
+
     QTemporaryDir m_dir;
     TestMainWindow *m_window = nullptr;
     QTimer m_watchdog;
     QStringList m_dialogs;
+
+    // The application's font, which a test may make a phone's
+    QFont m_font;
 
     // What the runner said when the run ended, and how often it said it;
     // and every progress it reported
@@ -222,12 +243,145 @@ class TestAudioCheck : public QObject
         settings.endGroup();
     }
 
-    static LatencyCalibration::Key key(QString output, QString input) {
+    // The devices chosen under a driver, as its device menus write them
+    static void setDevices(QString output, QString input, QString driver) {
+        QSettings settings;
+        settings.beginGroup("Preferences");
+        settings.setValue("audio-playback-device-" + driver, output);
+        settings.setValue("audio-record-device-" + driver, input);
+        settings.endGroup();
+    }
+
+    // The implementations bqaudioio has on Windows, whatever it has here
+    static QStringList windowsImplementations() {
+        return { "port", "mme", "directsound", "wasapi" };
+    }
+
+    // A Preference, as the driver and device menus write it
+    static void setPreference(QString name, QString value) {
+        QSettings settings;
+        settings.setValue("Preferences/" + name, value);
+    }
+
+    static QString preference(QString name) {
+        QSettings settings;
+        return settings.value("Preferences/" + name).toString();
+    }
+
+    // The driver, the devices kept for each driver and the latency asked
+    // of each, as a test may have left them
+    static void forgetDriverPreferences() {
+        QSettings settings;
+        settings.beginGroup("Preferences");
+        for (const QString &name : settings.childKeys()) {
+            if (name == "audio-target" ||
+                name.startsWith("audio-latency-") ||
+                name.startsWith("audio-playback-device-") ||
+                name.startsWith("audio-record-device-")) {
+                settings.remove(name);
+            }
+        }
+        settings.endGroup();
+    }
+
+    // A menu's entries, the one ticked, and one by its text
+    static QStringList entries(QMenu *menu) {
+        QStringList texts;
+        for (QAction *a : menu->actions()) {
+            if (!a->isSeparator()) texts << a->text();
+        }
+        return texts;
+    }
+
+    static QString ticked(QMenu *menu) {
+        for (QAction *a : menu->actions()) {
+            if (a->isChecked()) return a->text();
+        }
+        return {};
+    }
+
+    static QAction *entry(QMenu *menu, QString text) {
+        for (QAction *a : menu->actions()) {
+            if (a->text() == text) return a;
+        }
+        return nullptr;
+    }
+
+    // Playback > Audio Driver or Audio Latency opened, and an entry of it
+    // chosen
+    void chooseDriver(QString text) {
+        QMenu *menu = m_window->audioDriverMenus()->driverMenu();
+        emit menu->aboutToShow();
+        QAction *action = entry(menu, text);
+        QVERIFY2(action, qPrintable(text + " not in: " +
+                                    entries(menu).join(", ")));
+        action->trigger();
+    }
+
+    void chooseLatency(QString text) {
+        QMenu *menu = m_window->audioDriverMenus()->latencyMenu();
+        emit menu->aboutToShow();
+        QAction *action = entry(menu, text);
+        QVERIFY2(action, qPrintable(text + " not in: " +
+                                    entries(menu).join(", ")));
+        action->trigger();
+    }
+
+    // Audio Driver and Audio Latency, which are greyed out together:
+    // both enabled, or both not
+    bool driverMenusEnabled() {
+        AudioDriverMenus *menus = m_window->audioDriverMenus();
+        return menus->driverMenu()->menuAction()->isEnabled() &&
+            menus->latencyMenu()->menuAction()->isEnabled();
+    }
+
+    bool driverMenusDisabled() {
+        AudioDriverMenus *menus = m_window->audioDriverMenus();
+        return !menus->driverMenu()->menuAction()->isEnabled() &&
+            !menus->latencyMenu()->menuAction()->isEnabled();
+    }
+
+    // Shown, as they are where there is more than one driver: a hidden
+    // action is disabled as well, whatever it was set to
+    void showDriverMenus(QStringList implementations) {
+        m_window->setAudioImplementations(implementations);
+        m_window->doRebuildAudioDriverMenus();
+    }
+
+    double latencyApplied() {
+        return m_window->audioDriverMenus()->appliedLatency();
+    }
+
+    static LatencyCalibration::Key key(QString output, QString input,
+                                       QString driver = QString()) {
         LatencyCalibration::Key key;
+        key.implementation = driver;
         key.playbackDevice = output;
         key.recordDevice = input;
         key.rate = rate;
         return key;
+    }
+
+    // A phone's route as OboeAudioIO reports it: the speaker and the
+    // phone's own microphone, or a Bluetooth headset's output and the
+    // same microphone, each opened as AAudio opens such a device
+    static AudioRoute::Route phoneRoute(bool bluetooth = false) {
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output.id = bluetooth ? 41 : 3;
+        route.output.type = bluetooth ? 8 : 2;
+        route.output.productName = bluetooth ? "Headset X" : "Pixel 7";
+        route.hasInput = true;
+        route.input.id = 7;
+        route.input.type = 15;
+        route.input.productName = "Pixel 7";
+        route.rate = rate;
+        route.outputStreams = bluetooth ?
+            "AAudio, 44100 Hz, Shared, burst 240, buffer 480 of 3840" :
+            "AAudio (MMAP), 44100 Hz, Exclusive, burst 96, buffer 192 of 1920";
+        route.inputStreams = "AAudio (MMAP), 44100 Hz, Exclusive, burst 96, "
+            "buffer 11424 of 11520, preset VoicePerformance";
+        return route;
     }
 
     // The Playback menu's line about the latency, as it reads when the
@@ -459,6 +613,88 @@ class TestAudioCheck : public QObject
         return "";
     }
 
+    // The window as a phone shows it: the compact layout, in the part of
+    // the phone's window clear of its bars (817 by 387 of 923 by 411, as
+    // the log of the user's phone has it; this platform has no bars)
+    void showAsAPhone() {
+        m_window->setCompactLayout(true);
+        m_window->resize(817, 387);
+        m_window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(m_window));
+        settle();
+    }
+
+    // Let the windows lay themselves out again
+    void settle() {
+        QCoreApplication::sendPostedEvents();
+        QTest::qWait(20);
+    }
+
+    static QString describe(QRect r) {
+        return QString("%1x%2 at %3,%4").arg(r.width()).arg(r.height())
+            .arg(r.x()).arg(r.y());
+    }
+
+    static QRect onScreen(QWidget *widget) {
+        return QRect(widget->mapToGlobal(QPoint(0, 0)), widget->size());
+    }
+
+    // The dialog inside the window, with every button it shows inside
+    // both, and its text, if it has more than there is room for,
+    // scrolling to its end; scrolls says whether it had to
+    void verifyFits(CalibrateAudioDialog *dialog, QString page,
+                    bool *scrolls = nullptr) {
+        settle();
+        const QRect window = onScreen(m_window);
+        QVERIFY2(dialog->isVisible(), qPrintable(page));
+        QVERIFY2(window.contains(dialog->frameGeometry()),
+                 qPrintable(QString("%1 page %2 is not inside the window, %3")
+                            .arg(page).arg(describe(dialog->frameGeometry()))
+                            .arg(describe(window))));
+        int buttons = 0;
+        for (QPushButton *button : dialog->findChildren<QPushButton *>()) {
+            if (!button->isVisible()) continue;
+            ++buttons;
+            const QRect r = onScreen(button);
+            QVERIFY2(window.contains(r) && onScreen(dialog).contains(r),
+                     qPrintable(QString("%1 page: %2 at %3 is off the dialog, "
+                                        "%4, or the window")
+                                .arg(page).arg(button->text()).arg(describe(r))
+                                .arg(describe(onScreen(dialog)))));
+        }
+        QVERIFY2(buttons > 0, qPrintable(page));
+
+        if (scrolls) *scrolls = false;
+        for (QScrollArea *area : dialog->findChildren<QScrollArea *>()) {
+            if (!area->isVisible()) continue;
+            QWidget *text = area->widget();
+            const int beyond =
+                std::max(0, text->heightForWidth(text->width()) -
+                         area->viewport()->height());
+            QVERIFY2(text->height() >= text->heightForWidth(text->width()),
+                     qPrintable(page + ": the text is cut short"));
+            QCOMPARE(area->verticalScrollBar()->maximum(), beyond);
+            if (beyond > 0 && scrolls) *scrolls = true;
+        }
+    }
+
+    // A finger's tap, which Qt makes into a mouse press and release when
+    // the widget under it takes no touch, as on a phone
+    void tap(QWidget *widget) {
+        QPointingDevice *finger = QTest::createTouchDevice();
+        const QPoint centre = widget->rect().center();
+        QTest::touchEvent(widget->window(), finger).press(0, centre, widget);
+        QTest::touchEvent(widget->window(), finger).release(0, centre, widget);
+        settle();
+    }
+
+    static QPushButton *button(QWidget *dialog, QString text) {
+        for (QPushButton *b : dialog->findChildren<QPushButton *>()) {
+            if (b->text() == text) return b;
+        }
+        return nullptr;
+    }
+
     // Not a slot: QtTest would run it as a test. As TestRecordWorkflow's
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -485,6 +721,7 @@ class TestAudioCheck : public QObject
 private slots:
     void initTestCase() {
         QVERIFY(m_dir.isValid());
+        m_font = QApplication::font();
 
         QSettings().clear();
 
@@ -527,9 +764,11 @@ private slots:
     }
 
     void cleanup() {
-        // A round trip a test stored would place the next test's takes.
-        // First, as the waits below return early when they fail
+        // A round trip a test stored would place the next test's takes,
+        // and a driver it named open the next test's device.  First, as
+        // the waits below return early when they fail
         QSettings().remove("LatencyCalibration");
+        forgetDriverPreferences();
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -542,6 +781,7 @@ private slots:
             delete m_window;
             m_window = nullptr;
         }
+        QApplication::setFont(m_font);
         QVERIFY2(m_dialogs.isEmpty(),
                  qPrintable("unexpected dialog: " + m_dialogs.join(" | ")));
     }
@@ -593,7 +833,6 @@ private slots:
         QCOMPARE(r.reportedInputLatency, reportedIn / rate);
         QCOMPARE(r.recordingRate, rate);
         QCOMPARE(r.referenceRate, rate);
-        QVERIFY(!r.rateMismatch);
         QVERIFY(r.calibrationUsable());
         QVERIFY2(std::fabs(r.calibratedRoundTrip * rate - roundTrip) <= 4.0,
                  describe(r).constData());
@@ -650,29 +889,317 @@ private slots:
         QCOMPARE(inUse.roundTrip, (reportedOut + reportedIn) / rate);
     }
 
-    // A device at 48 kHz: the takes are recorded at a rate other than the
-    // reference's, which is reported with both rates, whatever the sweeps
-    // say. What Tony does with such takes is a known bug of its own, so
-    // only what the check reports is asserted, and that it ends
-    void check_flags_a_rate_mismatch() {
+    // A device at 48 kHz against the reference at 44.1: the takes are
+    // recorded at the device's rate and converted as they are spliced, so
+    // the check is judged, and its figure kept, like any other. The fake's
+    // delay and the latencies it reports count its own frames: the round
+    // trip it really has is roundTrip frames at 48 kHz, worked out here in
+    // seconds. The figure is kept under the device's rate, not the
+    // reference's, and the Playback menu's line then shows it
+    void check_measures_the_round_trip_at_48000() {
         FakeAudioIO::Config config = loopback();
-        config.sampleRate = 48000;
+        config.sampleRate = int(otherRate);
         makeWindow(config);
 
         runCheck();
         if (QTest::currentTestFailed()) return;
 
-        qDebug() << "48 kHz:" << describe(m_result).constData();
-        QVERIFY2(m_result.rateMismatch, describe(m_result).constData());
-        QCOMPARE(m_result.recordingRate, 48000.0);
-        QCOMPARE(m_result.referenceRate, rate);
-        QVERIFY(!m_result.calibrationUsable());
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(r.summary.judged, 4);
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(r.recordingRate, otherRate);
+        QCOMPARE(r.referenceRate, rate);
+        QCOMPARE(r.key.rate, otherRate);
+
+        // Placed with the reported pair, in frames of the recording
+        QCOMPARE(int(r.takes.size()), 2);
+        for (const TakeLatency &t : r.takes) {
+            QCOMPARE(t.recordingRate, otherRate);
+            QCOMPARE(t.roundTrip, sv::sv_frame_t(reportedOut + reportedIn));
+        }
+        QCOMPARE(r.usedRoundTrip, (reportedOut + reportedIn) / otherRate);
+        QCOMPARE(r.reportedInputLatency, reportedIn / otherRate);
+        // The play source has it at the reference's rate, to a frame
+        QVERIFY(std::fabs(r.reportedOutputLatency - reportedOut / otherRate)
+                < 1.0 / rate);
+
+        // bqaudioio's ResamplerWrapper, which brings the reference to the
+        // device's rate, holds it back by about a millisecond that nothing
+        // reports (TestRecordWorkflow's latency_with_a_device_at_48000):
+        // part of the round trip the takes need, as on a real device at
+        // another rate, and never early. Counted at the wrong rate, the
+        // figure would be 8 % off, some 20 ms
+        QVERIFY(r.calibrationUsable());
+        const double late = r.calibratedRoundTrip - roundTrip / otherRate;
+        QVERIFY2(late >= -0.0001 && late <= 0.0015,
+                 qPrintable(QString("measured %1 ms, the fake's delay is "
+                                    "%2 ms: %3")
+                            .arg(r.calibratedRoundTrip * 1000.0)
+                            .arg(roundTrip / otherRate * 1000.0)
+                            .arg(describe(r).constData())));
         QVERIFY(!m_window->audioCheckTakes());
 
-        // and such a figure is not kept
-        QVERIFY(!m_window->storeMeasuredLatency(m_result));
+        QVERIFY(m_window->storeMeasuredLatency(r));
+        LatencyCalibration::Key at48 = key("", "");
+        at48.rate = otherRate;
+        LatencyCalibration::Figure figure;
+        {
+            QSettings settings;
+            QVERIFY(LatencyCalibration::load(settings, at48, figure));
+            QCOMPARE(figure.roundTrip, r.calibratedRoundTrip);
+            QVERIFY(!LatencyCalibration::load(settings, key("", ""), figure));
+        }
+        const LatencyCalibration::InUse inUse = m_window->latencyInUse();
+        QVERIFY(inUse.source == LatencyCalibration::Source::Measured);
+        QCOMPARE(inUse.roundTrip, r.calibratedRoundTrip);
+        const QString line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured"), qPrintable(line));
+    }
+
+    // The round trip measured at 48 kHz, kept: a second check places its
+    // takes with it, turned into frames at the device's rate, and finds
+    // every one where it belongs. The first check is one punch-in, which
+    // is enough to measure with and keeps this short
+    void check_stored_round_trip_is_used_at_48000() {
+        FakeAudioIO::Config config = loopback();
+        config.sampleRate = int(otherRate);
+        makeWindow(config);
+
+        runCheck(onePunchIn());
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());
+        QVERIFY(m_window->storeMeasuredLatency(m_result));
+        const double measured = m_result.calibratedRoundTrip;
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+
+        // Near 0: the wrapper's hold-back moves by a frame or two from one
+        // stream start to the next, so not to 4 frames as at 44.1 kHz. A
+        // figure turned into frames at the wrong rate lands some 20 ms off,
+        // and one without the hold-back 1 ms
+        const double allowed = 0.0002;
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        for (const LatencyCheck::PunchInResult &p : r.summary.punchIns) {
+            QVERIFY2(std::fabs(p.medianOffset) <= allowed,
+                     describe(r).constData());
+        }
+        QCOMPARE(int(r.takes.size()), 2);
+        for (const TakeLatency &t : r.takes) {
+            QVERIFY(t.measured);
+            QCOMPARE(t.roundTrip,
+                     sv::sv_frame_t(std::llround(measured * otherRate)));
+        }
+        QVERIFY2(std::fabs(r.calibratedRoundTrip - measured) <= allowed,
+                 describe(r).constData());
+    }
+
+    // A device whose reported latencies move from one start to the next,
+    // as Oboe's do on a phone: the second punch-in is placed with 10 ms
+    // more than the first, and lands 10 ms earlier, while the path's
+    // round trip has not moved. The check measures that round trip, and
+    // finds it steady
+    void check_measures_the_round_trip_when_reports_move() {
+        FakeAudioIO::Config config = loopback();
+        config.recordLatencyStep = 441;
+        makeWindow(config);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(int(r.takes.size()), 2);
+        QVERIFY2(r.takes[1].roundTrip - r.takes[0].roundTrip >= 441,
+                 qPrintable(QString("placed with %1 and %2 frames")
+                            .arg(r.takes[0].roundTrip)
+                            .arg(r.takes[1].roundTrip)));
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        QVERIFY2(r.summary.punchIns[0].medianOffset -
+                 r.summary.punchIns[1].medianOffset > 0.009,
+                 describe(r).constData());
+
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QVERIFY(r.calibrationUsable());
+        QVERIFY2(std::fabs(r.calibratedRoundTrip * rate - roundTrip) <= 4.0,
+                 describe(r).constData());
+    }
+
+    // A phone: the device reports the route it opened. The figure is
+    // kept for that route, whatever the Preferences name, with how its
+    // streams were opened; its takes are placed with it although the
+    // latencies the device reports move by more than a millisecond from
+    // take to take. Another route, a Bluetooth headset, has a figure of
+    // its own or none, and the menu's line follows the device as it is
+    // opened again for each; the same route opened otherwise has its
+    // figure out of date
+    void check_keeps_the_figure_for_the_route() {
+        setDevices("Speakers A", "Microphone A");
+        FakeAudioIO::Config config = loopback();
+        config.route = phoneRoute();
+        config.recordLatencyStep = 441;
+        makeWindow(config);
+
+        runCheck(onePunchIn());
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());
+
+        const LatencyCalibration::Key speaker =
+            LatencyCalibration::routeKey(phoneRoute(), rate);
+        QCOMPARE(m_result.key.implementation, QString("oboe"));
+        QCOMPARE(m_result.key.playbackDevice,
+                 QString("Built-in speaker (Pixel 7)"));
+        QCOMPARE(m_result.key.recordDevice,
+                 QString("Built-in microphone (Pixel 7)"));
+        QCOMPARE(m_result.key.rate, rate);
+        QCOMPARE(m_result.route.outputStreams, phoneRoute().outputStreams);
+        QCOMPARE(m_result.route.inputStreams, phoneRoute().inputStreams);
+
+        QVERIFY(m_window->storeMeasuredLatency(m_result));
+        {
+            QSettings settings;
+            LatencyCalibration::Figure figure;
+            QVERIFY(!LatencyCalibration::load
+                    (settings, key("Speakers A", "Microphone A"), figure));
+            QVERIFY(LatencyCalibration::load(settings, speaker, figure));
+            QCOMPARE(figure.roundTrip, m_result.calibratedRoundTrip);
+            QCOMPARE(figure.outputStreams, phoneRoute().outputStreams);
+            QCOMPARE(figure.inputStreams, phoneRoute().inputStreams);
+        }
+        QString line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured"), qPrintable(line));
+
+        // The next check's takes are placed with it, the reported input
+        // latency having moved by 10 ms since
+        const int reportedBefore =
+            int(m_window->recordTarget()->getSystemRecordLatency());
+        runCheck(onePunchIn());
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_window->recordTarget()->getSystemRecordLatency() -
+                 reportedBefore >= 441,
+                 qPrintable(QString("reported %1 frames, then %2")
+                            .arg(reportedBefore)
+                            .arg(m_window->recordTarget()
+                                 ->getSystemRecordLatency())));
+        QCOMPARE(int(m_result.takes.size()), 1);
+        QVERIFY(m_result.takes[0].measured);
+        QVERIFY2(std::fabs(m_result.summary.medianOffset * rate) <= 4.0,
+                 describe(m_result).constData());
+
+        // The headset: nothing kept for it
+        m_window->setFakeRoute(phoneRoute(true));
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->audioRoute().output.productName,
+                 QString("Headset X"));
+        line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: driver's figure"), qPrintable(line));
+        QVERIFY2(!line.contains("out of date"), qPrintable(line));
+        QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
+
+        // The speaker again
+        m_window->setFakeRoute(phoneRoute());
+        m_window->doRecreateAudioIO();
+        line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured"), qPrintable(line));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+
+        // Opened for playback only, as a phone's device is until its first
+        // take: the input calibrated with the speaker is taken for it
+        AudioRoute::Route playbackOnly = phoneRoute();
+        playbackOnly.hasInput = false;
+        playbackOnly.input = AudioRoute::Device();
+        playbackOnly.inputStreams = "";
+        m_window->setFakeRoute(playbackOnly);
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->latencyKey(rate).recordDevice,
+                 QString("Built-in microphone (Pixel 7)"));
+        line = latencyLine();
+        QVERIFY2(line.startsWith("Latency: measured"), qPrintable(line));
+
+        // The speaker, shared rather than exclusive: out of date
+        AudioRoute::Route shared = phoneRoute();
+        shared.outputStreams = "AAudio, 44100 Hz, Shared, burst 96";
+        m_window->setFakeRoute(shared);
+        m_window->doRecreateAudioIO();
+        line = latencyLine();
+        QVERIFY2(line.contains("(the measured one is out of date)"),
+                 qPrintable(line));
+        QVERIFY(m_window->forgetLatencyAction()->isEnabled());
+
+        // Forgotten for the route it is kept for
+        m_window->forgetLatencyAction()->trigger();
         QSettings settings;
-        QVERIFY(!settings.childGroups().contains("LatencyCalibration"));
+        LatencyCalibration::Figure figure;
+        QVERIFY(!LatencyCalibration::load(settings, speaker, figure));
+    }
+
+    // A device whose input moves 10 ms against its output each time its
+    // stream starts, and a window that suspends it at Stop, as svapp
+    // does unless told otherwise: each take starts the stream again, and
+    // the second punch-in lands 10 ms from the first, which is Unsteady.
+    // The negative of the next test, and the proof that the fake's shift
+    // works
+    void check_takes_move_apart_when_the_stream_restarts() {
+        FakeAudioIO::Config config = loopback();
+        config.restartShift = restartShift;
+        makeWindow(config);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(m_window->fake()->getResumeCount(), 2);
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        const double apart = r.summary.punchIns[0].medianOffset -
+            r.summary.punchIns[1].medianOffset;
+        QVERIFY2(std::fabs(apart * rate - restartShift) <= 4.0,
+                 qPrintable(QString("the second punch-in %1 frames before "
+                                    "the first: %2")
+                            .arg(apart * rate).arg(describe(r).constData())));
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Unsteady,
+                 describe(r).constData());
+    }
+
+    // The same device with the stream kept running between takes, as
+    // the application keeps it: started once, at the first
+    // take, and suspended neither by Stop nor by the end of a take, so
+    // that both punch-ins land alike and the check is Ok
+    void check_takes_agree_with_the_stream_kept_running() {
+        FakeAudioIO::Config config = loopback();
+        config.restartShift = restartShift;
+        makeWindow(config);
+        QVERIFY(!m_window->applicationSuspendsAudioOnStop());
+        m_window->keepAudioRunning(true);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+
+        const AudioCheckResult &r = m_result;
+        QVERIFY2(r.failure == "", describe(r).constData());
+        QCOMPARE(r.summary.found, 4);
+        QCOMPARE(int(r.summary.punchIns.size()), 2);
+        const double apart = r.summary.punchIns[0].medianOffset -
+            r.summary.punchIns[1].medianOffset;
+        QVERIFY2(std::fabs(apart) <= 0.0002,
+                 qPrintable(QString("the second punch-in %1 ms before the "
+                                    "first: %2")
+                            .arg(apart * 1000.0).arg(describe(r).constData())));
+        QVERIFY2(r.summary.verdict == LatencyCheck::Verdict::Ok,
+                 describe(r).constData());
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+        QVERIFY(!m_window->fake()->isSuspended());
     }
 
     // Cancel during a take stops it through the Stop path, clears the
@@ -1283,8 +1810,11 @@ private slots:
     // round trip measured for the devices the check started on, and the
     // menu's line says what the devices named now are placed with
     void calibrate_audio_from_the_menu() {
-        setDevices("Speakers A", "Microphone A");
+        // As on Windows: a driver named, and the devices chosen under it
+        setPreference("audio-target", "wasapi");
+        setDevices("Speakers A", "Microphone A", "wasapi");
         makeWindow(loopback());
+        showDriverMenus(windowsImplementations());
 
         m_window->calibrateAudioAction()->trigger();
         CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
@@ -1314,22 +1844,42 @@ private slots:
         dialog->startCheck();
         QVERIFY(m_window->audioCheck()->isRunning());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
-        setDevices("Speakers B", "Microphone B");
+        setDevices("Speakers B", "Microphone B", "wasapi");
+
+        // Small while the check runs: the dialog hidden, and its
+        // indicator, which the window's status bar holds, on show there
+        AudioCheckIndicator *indicator = dialog->indicator();
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(!dialog->isVisible());
+        QCOMPARE(indicator->parentWidget(),
+                 static_cast<QWidget *>(m_window->statusBar()));
+        QVERIFY(!indicator->isHidden());
 
         QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
                                  30000);
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(!m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(!m_window->audioInputMenu()->menuAction()->isEnabled());
+        QVERIFY(driverMenusDisabled());
         QVERIFY2(dialog->pageText().contains("Recording punch-in 1 of 2"),
                  qPrintable(dialog->pageText()));
+        // The step, the punch-in and the time left, on one line
+        QVERIFY2(QRegularExpression("^Recording punch-in 1 of 2, \\d+ s "
+                                    "left$").match(indicator->text())
+                 .hasMatch(), qPrintable(indicator->text()));
+        QVERIFY(indicator->progress() >= 0);
 
+        // Back by itself at the end, with the result
         QTRY_VERIFY_WITH_TIMEOUT
             (dialog->page() == CalibrateAudioDialog::Page::Result, 60000);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isCollapsed());
+        QVERIFY(indicator->isHidden());
         QCOMPARE(m_finished, 1);
         QVERIFY(m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(m_window->audioInputMenu()->menuAction()->isEnabled());
+        QVERIFY(driverMenusEnabled());
 
         // 12411 frames measured, 12288 reported, at 44.1 kHz
         QVERIFY2(m_result.calibrationUsable(), describe(m_result).constData());
@@ -1350,16 +1900,16 @@ private slots:
         LatencyCalibration::Figure figure;
         QSettings settings;
         QVERIFY(!LatencyCalibration::load
-                (settings, key("Speakers B", "Microphone B"), figure));
+                (settings, key("Speakers B", "Microphone B", "wasapi"), figure));
         QVERIFY(LatencyCalibration::load
-                (settings, key("Speakers A", "Microphone A"), figure));
+                (settings, key("Speakers A", "Microphone A", "wasapi"), figure));
         QVERIFY2(std::fabs(figure.roundTrip * rate - roundTrip) <= 4.0,
                  qPrintable(QString("kept %1 frames")
                             .arg(figure.roundTrip * rate)));
 
         QCOMPARE(latencyLine(), QString("Latency: driver's figure, 279 ms"));
         QVERIFY(!m_window->forgetLatencyAction()->isEnabled());
-        setDevices("Speakers A", "Microphone A");
+        setDevices("Speakers A", "Microphone A", "wasapi");
         const QString line = latencyLine();
         QVERIFY2(line.startsWith("Latency: measured 281 ms, "),
                  qPrintable(line));
@@ -1436,16 +1986,18 @@ private slots:
                { "Use this latency" });
         if (QTest::currentTestFailed()) return;
 
-        // A device at 48 kHz: what the sweeps say is not the point
-        AudioCheckResult fast = judgedResult(LatencyCheck::Verdict::Scattered);
-        fast.recordingRate = 48000;
-        fast.rateMismatch = true;
-        fast.summary.spread = 0.6;
-        verify(fast, false,
-               { "The recording device runs at 48000 Hz; takes cannot line "
-                 "up until that is fixed.",
-                 "recorded at 48000 Hz, reference at 44100 Hz" },
-               { "varies from take to take" });
+        // A device at 48 kHz is judged like any other: its rate is in the
+        // figures, as a fact
+        AudioCheckResult fast = judgedResult(LatencyCheck::Verdict::Ok);
+        fast.recordingRate = otherRate;
+        fast.key.rate = otherRate;
+        verify(fast, true,
+               { "The test sounds came back steadily",
+                 "Press Use this latency",
+                 "282 ms measured; the driver reports",
+                 "recorded at 48000 Hz, converted to the reference's "
+                 "44100 Hz" },
+               { "cannot line up", "reference at 44100 Hz" });
         if (QTest::currentTestFailed()) return;
 
         // Unsteady, but usable; and the microphone monitored
@@ -1459,27 +2011,101 @@ private slots:
                { "The driver's timing varies from take to take by 8 ms.",
                  "Your microphone is being played back somewhere",
                  "Listen to this device", "45 ms later",
-                 "45 ms after the sound, 12 dB quieter" },
+                 "45 ms after the sound, 12 dB quieter",
+                 "recorded at 44100 Hz, reference at 44100 Hz" },
                { "Kept." });
+        if (QTest::currentTestFailed()) return;
+
+        // Copy puts all of it on the clipboard, under when it was made
+        dialog->copyReport();
+        const QString copied = QGuiApplication::clipboard()->text();
+        QCOMPARE(copied, dialog->reportText());
+        for (QString w : { "Calibrate Audio, ",
+                           "The driver's timing varies from take to take",
+                           "45 ms after the sound, 12 dB quieter",
+                           "output (System Default); input (System Default)" }) {
+            QVERIFY2(copied.contains(w), qPrintable(w + " not in: " + copied));
+        }
+    }
+
+    // On a phone the instructions name the route the device has open and
+    // the phone's loopback, and the result's advice is a phone's, with
+    // the streams the figure is checked against
+    void calibrate_audio_on_a_phone() {
+        FakeAudioIO::Config config = loopback();
+        config.route = phoneRoute();
+        makeWindow(config);
+        // The device opens with the first file
+        QCOMPARE(m_window->audioRoute().driver, QString());
+        openSong();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioRoute().driver, QString("oboe"));
+
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Instructions);
+        QString words = dialog->pageText();
+        for (QString w : { "Built-in speaker (Pixel 7)",
+                           "Built-in microphone (Pixel 7)",
+                           "phone's microphone", "off your ears",
+                           "speaker and microphone make the loop",
+                           "microphone of its own", "calibrated on its own",
+                           "driver's figure" }) {
+            QVERIFY2(words.contains(w), qPrintable(w + " not in: " + words));
+        }
+        QVERIFY2(!words.contains("System Default"), qPrintable(words));
+
+        AudioCheckResult silent = judgedResult(LatencyCheck::Verdict::NoSignal);
+        silent.summary.found = 1;
+        silent.route = phoneRoute();
+        silent.key = LatencyCalibration::routeKey(phoneRoute(), rate);
+        dialog->showResult(silent);
+        words = dialog->pageText();
+        for (QString w : { "could not hear the test sounds",
+                           "Settings, Apps", "cancelling echo",
+                           "output Built-in speaker (Pixel 7); input "
+                           "Built-in microphone (Pixel 7)",
+                           "Streams:", "Exclusive, burst 96, buffer 192",
+                           "Oboe" }) {
+            QVERIFY2(words.contains(w), qPrintable(w + " not in: " + words));
+        }
+        for (QString w : { "Windows", "Hands-Free", "(unknown)" }) {
+            QVERIFY2(!words.contains(w), qPrintable(w + " in: " + words));
+        }
+
+        AudioCheckResult fading = judgedResult(LatencyCheck::Verdict::Fading);
+        fading.summary.fadingDb = 12.0;
+        fading.route = phoneRoute();
+        dialog->showResult(fading);
+        words = dialog->pageText();
+        QVERIFY2(words.contains("echo cancellation or noise suppression"),
+                 qPrintable(words));
+        QVERIFY2(!words.contains("Windows"), qPrintable(words));
     }
 
     // Not while an ordinary take is being recorded: the check records
-    // takes of its own
+    // takes of its own. Nor can the driver or its latency be chosen,
+    // which would open the device again under the take
     void calibrate_audio_not_during_a_take() {
         makeWindow(FakeAudioIO::Config());
+        showDriverMenus(windowsImplementations());
         openSong();
         if (QTest::currentTestFailed()) return;
         QVERIFY(m_window->calibrateAudioAction()->isEnabled());
+        QVERIFY(driverMenusEnabled());
 
         m_window->doRecord();
         QVERIFY(m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
+        QVERIFY(driverMenusDisabled());
         QTest::qWait(300);
 
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QTRY_VERIFY_WITH_TIMEOUT
             (m_window->calibrateAudioAction()->isEnabled(), 10000);
+        QVERIFY(driverMenusEnabled());
     }
 
     // Closing the dialog while its check runs cancels the check; opened
@@ -1492,8 +2118,15 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
                                  30000);
 
+        // Small, it has nothing to close: brought back as a tap on its
+        // indicator brings it, then closed
+        QVERIFY(!dialog->isVisible());
+        emit dialog->indicator()->clicked();
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
         QVERIFY(dialog->close());
         QVERIFY(!dialog->isVisible());
+        QVERIFY(dialog->indicator()->isHidden());
         QVERIFY(!m_window->audioCheck()->isRunning());
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->audioCheckTakes());
@@ -1504,6 +2137,371 @@ private slots:
         m_window->calibrateAudioAction()->trigger();
         QVERIFY(dialog->isVisible());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Instructions);
+    }
+
+    // Every page fits a phone held in landscape, all its buttons on
+    // screen and its text scrolling where it is longer: at this desktop's
+    // font and at a phone's size of font, which scrolls
+    void calibrate_audio_fits_a_phone() {
+        for (int pixels : { 0, 17 }) {
+            if (pixels > 0) {
+                QFont font = m_font;
+                font.setPixelSize(pixels);
+                QApplication::setFont(font);
+            }
+            const QString size = (pixels > 0 ? QString("%1 px").arg(pixels) :
+                                  QString("the desktop's font"));
+            if (m_window) {
+                QTRY_VERIFY_WITH_TIMEOUT
+                    (!sv::ModelTransformerFactory::getInstance()
+                     ->haveRunningTransformers(), 30000);
+                m_window->doCloseSession();
+            }
+            // A phone's route, and its instructions, once a file is open
+            FakeAudioIO::Config config = loopback();
+            config.route = phoneRoute();
+            makeWindow(config);
+            showAsAPhone();
+            if (QTest::currentTestFailed()) return;
+            openSong();
+            if (QTest::currentTestFailed()) return;
+
+            m_window->calibrateAudioAction()->trigger();
+            CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+            QVERIFY(dialog);
+            verifyFits(dialog, "instructions, " + size);
+            if (QTest::currentTestFailed()) return;
+
+            // Started, and brought back from small
+            dialog->setPlan(shortPlan());
+            m_window->discardModifications();
+            dialog->startCheck();
+            QVERIFY(dialog->isCollapsed());
+            emit dialog->indicator()->clicked();
+            QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
+            verifyFits(dialog, "progress, " + size);
+            if (QTest::currentTestFailed()) return;
+            dialog->cancelCheck();
+            QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+            verifyFits(dialog, "result of a cancelled check, " + size);
+            if (QTest::currentTestFailed()) return;
+
+            // As long as a result gets: a phone's, every paragraph there is
+            AudioCheckResult result =
+                judgedResult(LatencyCheck::Verdict::Unsteady);
+            result.summary.spread = 0.008;
+            result.summary.echo.heard = true;
+            result.summary.echo.delaySeconds = 0.045;
+            result.summary.echo.levelDb = -12.0;
+            result.route = phoneRoute();
+            result.key = LatencyCalibration::routeKey(phoneRoute(), rate);
+            dialog->showResult(result);
+            dialog->useLatency();
+            bool scrolls = false;
+            verifyFits(dialog, "result, " + size, &scrolls);
+            if (QTest::currentTestFailed()) return;
+            if (pixels > 0) {
+                QVERIFY2(scrolls, "the result fitted without scrolling: the "
+                         "test shows nothing");
+            }
+
+            m_window->discardModifications();
+        }
+    }
+
+    // While the check runs the dialog is a bar and a line of text at the
+    // right end of the status bar, clear of the pane its takes are drawn
+    // in. A tap brings the dialog back on the progress page, with Cancel
+    // and Make Small; Make Small hides it again, the check going on; and
+    // after Cancel it shows the result, the indicator gone
+    void calibrate_audio_small_during_a_check() {
+        makeWindow(loopback());
+        showAsAPhone();
+        if (QTest::currentTestFailed()) return;
+        CalibrateAudioDialog *dialog = startCheckFromMenu();
+        QVERIFY(dialog);
+        QVERIFY(m_window->audioCheck()->isRunning());
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(!dialog->isVisible());
+
+        AudioCheckIndicator *indicator = dialog->indicator();
+        settle();
+        QVERIFY(indicator->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->recordTarget()->isRecording(),
+                                 30000);
+        QVERIFY2(indicator->text().startsWith("Recording punch-in 1 of 2"),
+                 qPrintable(indicator->text()));
+
+        // In the window's bottom right corner, in its status bar, clear
+        // of the pane; and not so wide as to leave the status line no room
+        const QRect window = onScreen(m_window);
+        const QRect corner = onScreen(indicator);
+        QVERIFY2(onScreen(m_window->statusBar()).contains(corner),
+                 qPrintable(describe(corner)));
+        QVERIFY2(!corner.intersects(onScreen(m_window->paneStack())),
+                 qPrintable(describe(corner) + " and " +
+                            describe(onScreen(m_window->paneStack()))));
+        QVERIFY2(corner.left() > window.center().x() &&
+                 corner.bottom() >= onScreen(m_window->paneStack()).bottom(),
+                 qPrintable(describe(corner) + " in " + describe(window)));
+
+        tap(indicator);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isCollapsed());
+        QVERIFY(indicator->isHidden());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
+        QPushButton *cancel = button(dialog, "Cancel");
+        QPushButton *small = button(dialog, "Make Small");
+        QVERIFY(cancel && cancel->isVisible());
+        QVERIFY(small && small->isVisible());
+
+        QTest::mouseClick(small, Qt::LeftButton);
+        settle();
+        QVERIFY(!dialog->isVisible());
+        QVERIFY(dialog->isCollapsed());
+        QVERIFY(indicator->isVisible());
+        QVERIFY(m_window->audioCheck()->isRunning());
+        QCOMPARE(m_finished, 0);
+
+        tap(indicator);
+        QVERIFY(dialog->isVisible());
+        QTest::mouseClick(cancel, Qt::LeftButton);
+        QCOMPARE(m_finished, 1);
+        QVERIFY(!m_window->audioCheck()->isRunning());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Result);
+        QVERIFY(indicator->isHidden());
+    }
+
+    // Playback > Audio Driver: the drivers among the implementations
+    // bqaudioio has, by the names the user knows, in their order, with
+    // the one named ticked, and Audio Latency with it, both before the
+    // device menus. One driver is no choice, and neither is shown
+    void driver_menu_lists_the_drivers() {
+        setPreference("audio-target", "wasapi");
+        makeWindow(FakeAudioIO::Config());
+        showDriverMenus({ "port", "wasapi", "directsound", "mme" });
+
+        QMenu *drivers = m_window->audioDriverMenus()->driverMenu();
+        QMenu *latencies = m_window->audioDriverMenus()->latencyMenu();
+        QVERIFY(drivers->menuAction()->isVisible());
+        QVERIFY(latencies->menuAction()->isVisible());
+        QCOMPARE(drivers->title(), QString("Audio Dri&ver"));
+        QCOMPARE(latencies->title(), QString("Audio &Latency"));
+        QCOMPARE(entries(drivers),
+                 QStringList({ "MME", "DirectSound", "WASAPI" }));
+        QCOMPARE(ticked(drivers), QString("WASAPI"));
+        QCOMPARE(entries(latencies),
+                 QStringList({ "10 ms", "20 ms", "50 ms", "100 ms",
+                               "200 ms" }));
+        // WASAPI's own, none having been chosen
+        QCOMPARE(ticked(latencies), QString("20 ms"));
+
+        const QList<QAction *> playback = m_window->playbackMenu()->actions();
+        const qsizetype driverAt = playback.indexOf(drivers->menuAction());
+        const qsizetype latencyAt = playback.indexOf(latencies->menuAction());
+        QVERIFY(driverAt >= 0);
+        QCOMPARE(latencyAt, driverAt + 1);
+        QVERIFY(latencyAt <
+                playback.indexOf(m_window->audioOutputMenu()->menuAction()));
+
+        // Ticked afresh as the menu opens
+        setPreference("audio-target", "directsound");
+        setPreference("audio-latency-directsound", "0.05");
+        emit drivers->aboutToShow();
+        QCOMPARE(ticked(drivers), QString("DirectSound"));
+        QCOMPARE(ticked(latencies), QString("50 ms"));
+
+        m_window->setAudioImplementations({ "port", "mme" });
+        m_window->doRebuildAudioDriverMenus();
+        QVERIFY(!drivers->menuAction()->isVisible());
+        QVERIFY(!latencies->menuAction()->isVisible());
+    }
+
+    // Choosing WASAPI names it and opens the device again, WASAPI's
+    // devices this time; the device menus then write WASAPI's keys, and
+    // MME's are left as they were
+    void driver_chosen_from_the_menu() {
+        setPreference("audio-target", "mme");
+        setPreference("audio-playback-device-mme", "Speakers (MME)");
+        setPreference("audio-record-device-mme", "Mic (MME)");
+        setPreference("audio-playback-device-wasapi", "Speakers (WASAPI)");
+        setPreference("audio-record-device-wasapi", "Mic (WASAPI)");
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations(windowsImplementations());
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), 1);
+        QCOMPARE(m_window->audioIOOpenedFor().implementation, QString("mme"));
+        QCOMPARE(m_window->audioIOOpenedFor().playbackDevice,
+                 QString("Speakers (MME)"));
+
+        chooseDriver("WASAPI");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(preference("audio-target"), QString("wasapi"));
+        QCOMPARE(m_window->audioIOOpened(), 2);
+        QVERIFY(m_window->fake());
+        const LatencyCalibration::Key opened = m_window->audioIOOpenedFor();
+        QCOMPARE(opened.implementation, QString("wasapi"));
+        QCOMPARE(opened.playbackDevice, QString("Speakers (WASAPI)"));
+        QCOMPARE(opened.recordDevice, QString("Mic (WASAPI)"));
+        QCOMPARE(ticked(m_window->audioDriverMenus()->driverMenu()),
+                 QString("WASAPI"));
+
+        // The driver in use chosen again: nothing to open afresh
+        chooseDriver("WASAPI");
+        QCOMPARE(m_window->audioIOOpened(), 2);
+
+        // (System Default), from a menu that lists WASAPI's devices (none
+        // here, where there is no WASAPI)
+        m_window->doRescanAudioDevices();
+        QAction *systemDefault =
+            m_window->audioOutputMenu()->actions().value(0);
+        QVERIFY(systemDefault);
+        QCOMPARE(systemDefault->text(), QString("(System Default)"));
+        systemDefault->trigger();
+        QCOMPARE(preference("audio-playback-device-wasapi"), QString());
+        QCOMPARE(preference("audio-playback-device-mme"),
+                 QString("Speakers (MME)"));
+        QCOMPARE(m_window->audioIOOpenedFor().playbackDevice, QString());
+        QCOMPARE(m_window->audioIOOpenedFor().recordDevice,
+                 QString("Mic (WASAPI)"));
+    }
+
+    // With no driver named, WASAPI is named before the first device is
+    // opened, and the devices chosen before are WASAPI's; or before the
+    // Playback menu shows its device menus; MME where there is no WASAPI.
+    // A driver named already is left alone
+    void driver_named_by_default() {
+        setDevices("Speakers", "Microphone");
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations(windowsImplementations());
+        QVERIFY(!m_window->fake());
+        QCOMPARE(preference("audio-target"), QString());
+
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), 1);
+        LatencyCalibration::Key opened = m_window->audioIOOpenedFor();
+        QCOMPARE(opened.implementation, QString("wasapi"));
+        QCOMPARE(opened.playbackDevice, QString("Speakers"));
+        QCOMPARE(opened.recordDevice, QString("Microphone"));
+        QCOMPARE(preference("audio-target"), QString("wasapi"));
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Speakers"));
+        QCOMPARE(preference("audio-record-device-wasapi"),
+                 QString("Microphone"));
+        QCOMPARE(latencyApplied(), 0.02);
+
+        forgetDriverPreferences();
+        setPreference("audio-target", "auto");
+        emit m_window->playbackMenu()->aboutToShow();
+        QCOMPARE(preference("audio-target"), QString("wasapi"));
+
+        forgetDriverPreferences();
+        m_window->setAudioImplementations({ "port", "mme", "directsound" });
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpenedFor().implementation, QString("mme"));
+        QCOMPARE(preference("audio-target"), QString("mme"));
+        QCOMPARE(latencyApplied(), 0.2);
+        m_window->setAudioImplementations(windowsImplementations());
+
+        setPreference("audio-target", "directsound");
+        m_window->recreateAudioIO();
+        emit m_window->playbackMenu()->aboutToShow();
+        QCOMPARE(m_window->audioIOOpenedFor().implementation,
+                 QString("directsound"));
+        QCOMPARE(preference("audio-target"), QString("directsound"));
+
+        // Nor is anything named where there is neither
+        forgetDriverPreferences();
+        m_window->setAudioImplementations({ "pulse", "port", "jack" });
+        m_window->recreateAudioIO();
+        emit m_window->playbackMenu()->aboutToShow();
+        QCOMPARE(m_window->audioIOOpenedFor().implementation, QString());
+        QCOMPARE(preference("audio-target"), QString());
+    }
+
+    // The latency is chosen per driver, handed to bqaudioio as the device
+    // is opened, and choosing one opens it again; where none has been
+    // chosen, 20 ms on WASAPI and 200 ms on the others
+    void latency_kept_per_driver() {
+        setPreference("audio-target", "mme");
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations(windowsImplementations());
+        m_window->recreateAudioIO();
+        QCOMPARE(latencyApplied(), 0.2);
+
+        chooseLatency("50 ms");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(preference("audio-latency-mme").toDouble(), 0.05);
+        QCOMPARE(m_window->audioIOOpened(), 2);
+        QCOMPARE(latencyApplied(), 0.05);
+
+        chooseDriver("WASAPI");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyApplied(), 0.02);
+        emit m_window->audioDriverMenus()->latencyMenu()->aboutToShow();
+        QCOMPARE(ticked(m_window->audioDriverMenus()->latencyMenu()),
+                 QString("20 ms"));
+
+        chooseLatency("10 ms");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyApplied(), 0.01);
+        QCOMPARE(preference("audio-latency-mme").toDouble(), 0.05);
+
+        chooseDriver("MME");
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(latencyApplied(), 0.05);
+        emit m_window->audioDriverMenus()->latencyMenu()->aboutToShow();
+        QCOMPARE(ticked(m_window->audioDriverMenus()->latencyMenu()),
+                 QString("50 ms"));
+        QCOMPARE(m_window->audioIOOpened(), 5);
+    }
+
+    // A round trip measured under one driver is not the one takes are
+    // placed with under another, and is again under the first. The
+    // check's instructions name the driver
+    void measured_latency_kept_per_driver() {
+        setPreference("audio-target", "mme");
+        makeWindow(loopback());
+        m_window->setAudioImplementations(windowsImplementations());
+        m_window->recreateAudioIO();
+        const LatencyCalibration::InUse reported = m_window->latencyInUse();
+        QVERIFY(reported.source == LatencyCalibration::Source::Reported);
+
+        LatencyCalibration::Figure figure;
+        figure.roundTrip = 0.3;
+        figure.date = QDateTime::currentDateTimeUtc();
+        figure.reportedOutput = reported.reportedOutput;
+        figure.reportedInput = reported.reportedInput;
+        LatencyCalibration::Key mme = key("", "");
+        mme.implementation = "mme";
+        QSettings settings;
+        LatencyCalibration::store(settings, mme, figure);
+        QVERIFY(m_window->latencyInUse().source ==
+                LatencyCalibration::Source::Measured);
+
+        chooseDriver("WASAPI");
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->latencyInUse().source ==
+                LatencyCalibration::Source::Reported);
+        QVERIFY2(latencyLine().startsWith("Latency: driver's figure"),
+                 qPrintable(latencyLine()));
+
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        for (QString words : { "Driver:", "WASAPI" }) {
+            QVERIFY2(dialog->pageText().contains(words),
+                     qPrintable(words + " not in: " + dialog->pageText()));
+        }
+        dialog->close();
+
+        chooseDriver("MME");
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->latencyInUse().source ==
+                LatencyCalibration::Source::Measured);
+        QCOMPARE(m_window->latencyInUse().roundTrip, 0.3);
     }
 };
 

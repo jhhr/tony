@@ -1,21 +1,25 @@
 # Dependency forks
 
 Tony's libraries are separate repositories checked out into the top-level directories by
-[repoint](../repoint-project.json) and **gitignored in this repository**. Four of them are
+[repoint](../repoint-project.json) and **gitignored in this repository**. Five of them are
 forks under `github.com/jhhr` that exist only for this Tony fork:
 
 | Directory | Fork branch | Why it is forked |
 | --- | --- | --- |
-| `svcore/` | `jhhr/svcore` `tony-customizations` | Qt 6.11 build fixes only. No behaviour change. |
+| `svcore/` | `jhhr/svcore` `tony-customizations` | Qt 6.11 build fixes, and one of its own tests made to pass on macOS. No behaviour change. |
 | `svgui/` | `jhhr/svgui` `tony-customizations` | See below. |
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
+| `bqaudioio/` | `jhhr/bqaudioio` `tony-customizations` | See below. Upstream is Mercurial on sourcehut; the fork started from its GitHub mirror. |
 
-`pyin/` and the rest are upstream and must stay untouched. `bqaudioio/` too, for now: a
-fork of it, `jhhr/bqaudioio`, was created on 2026-09-26 for the lower-latency driver work
-([open-points.md](open-points.md)), and the checkout has it as the remote `jhhr`, but
-`repoint-project.json` still takes bqaudioio from sourcehut and nothing is pinned to the
-fork. It joins the table when that work first pins it.
+`pyin/` and the rest are upstream and must stay untouched.
+
+Every fork's branch for Tony is `tony-customizations` (bqaudiostream, which has no such
+branch, stays on `master`), and `repoint-lock.json` pins their heads. The fork branches
+made for Tony's feature branches are merged there: svgui's `feat/tonyandroid` (the plot
+scale, the record frame ratio, the lyrics' text scale) and svapp's and bqaudioio's
+`feat/wasapi` (the stream kept running, the drivers). A checkout left on one of those is
+not what the lock file names: move it to `tony-customizations`.
 
 ## Changing a fork
 
@@ -29,15 +33,17 @@ library over a workaround in `main/`.
    which reaches the fork branch when the Tony branch is merged. Commit messages there
    follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
-   upstream sonic-visualiser — do not push there. In a cloud session the checkouts are
+   upstream sonic-visualiser, and in a `bqaudioio` cloned from its mirror it is
+   breakfastquay's — do not push there. In a cloud session the checkouts are
    `container-setup.sh`'s, whose `origin` is the fork, and two checks stand in the way:
    - The session's git proxy refuses a push to a repository not attached to the session,
      a new branch included (HTTP 403). The session's add-repository tool attaches it, with
      push access.
    - Auto mode trusts only the repository the session started in and its remotes, and so
      blocks committing in a fork's checkout, attaching the fork and pushing to it. The
-     environment's setup script names the four forks as trusted as well, which the user
-     chose ([building.md](building.md#building-on-linux)); `claude auto-mode config`
+     environment's setup script names four of the forks, all but `bqaudioio`, as trusted
+     as well, which the user chose ([building.md](building.md#building-on-linux));
+     `claude auto-mode config`
      shows whether a session has that entry. Without it, the user's own message has to
      ask for the action, naming the fork and the branch. After a denial, stop and tell the
      user what is blocked: trying again another way counts as getting round the check, and
@@ -57,7 +63,9 @@ another branch builds something the lock file does not say.
 **repoint does not run on the development machine** (it needs an SML compiler and none is
 installed). The checkouts are managed with plain git, and `repoint-project.json` /
 `repoint-lock.json` are edited by hand. Keep the lock file's pins equal to what is checked
-out: CI and anyone else's checkout get exactly what the lock file says.
+out: CI and anyone else's checkout get exactly what the lock file says. Keep its final
+newline too: `repoint install` writes the file afresh, with one, and without it CI's tree
+counts as changed (the APK's version then says `+`).
 
 **Searching**: ripgrep-based search tools skip these directories because they are
 gitignored. Pass the directory as the search path explicitly, or use `grep -rn` in Bash.
@@ -88,6 +96,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `AudioGenerator::removeModel()`/`clearModels()` also delete the continuous synth.
 - `SVFileReader` restores the `start` attribute of wave file models (upstream wrote it and
   never read it). Only older `.ton` files need it now.
+- `MainWindowBase::suspendAudioOnStop()`, a virtual that `stop()` asks before it suspends
+  the device, true by default as upstream behaves: Tony's is false on every platform, so
+  the stream runs on between takes, and Tony suspends it itself once it has idled (on
+  Android) or when Android sends it to the background
+  ([recording.md](recording.md#latency)).
 
 ### svgui
 
@@ -96,7 +109,10 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `ViewManager::setRecordStartFrame()` / `getRecordStartFrame()`: while recording, the
   playback frame is this plus the recorded duration, not the duration alone. Without it a
   take recorded at P > 0 showed the cursor crawling from frame 0 and the pane scrolling
-  away from the dots.
+  away from the dots. `setRecordFrameRatio()` scales the duration, which the record
+  target counts in the device's frames, to the timeline's: a phone at 48 kHz against a
+  reference at 44.1 kHz. svcore's record target has no rate, so the application gives the
+  ratio once the recording has started; the default of 1 changes nothing.
 - `RegionLayer::PlotStrip` plot style: the coverage strip. Saved through the existing
   `plotStyle` attribute.
 - `RegionLayer::PlotLyrics` plot style, after `PlotStrip` so saved numbers keep their
@@ -114,9 +130,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   line (where the value changes) is bold. The font (`getLyricsFontPixelSize()`) is twice
   the view's at the least, up to four times, and never more than an eighth of the view's
   height; it grows with the **square root** of the zoom, so that zooming in gives the
-  words room (their boxes grow with the zoom itself). No vertical scale, no feature
-  description, and not editable by the pane's tools: Tony's `LyricsEditor` edits the
-  model itself.
+  words room (their boxes grow with the zoom itself). `setLyricsTextScale()` draws the
+  words at a share of that: View > Lyrics Size (`LyricsSize`, 50 % by default on Android,
+  where the desktop's size left room for only a few words); each new size is written to
+  the log. No vertical scale, no feature description, and not editable by the pane's
+  tools: Tony's `LyricsEditor` edits the model itself.
   `setHighlightFrame()` draws the region at that frame in amber (the latest to start, where
   regions overlap) and emits `layerParametersChanged()` only when that region changes: the
   highlight is painted into the view's cache, so each new word repaints the view, a few
@@ -161,6 +179,49 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `View::paintEvent()` on a cache hit no longer has the cached layers draw into its buffer,
   where the cache then covered them. Upstream has done that since 2018, so the cache saved
   nothing and every paint, down to the play pointer's few pixels, drew every layer.
+- Plot elements keep their size in logical pixels (for the Android port). `View` draws its
+  layers at the whole pixel ratio (3 on a phone at 2.75), but `TimeValueLayer`'s points
+  (2 px high) and `FlexiNoteLayer`'s notes (`NOTE_HEIGHT`) were sized in those physical
+  pixels and pens scaled by only the square root of the ratio, so on a phone pitch and
+  notes were a third of their size. Now `LayerGeometryProvider::scalePlotSize()` (logical
+  px x ratio x plot scale, no font factor: unchanged at ratio 1 and scale 1) sizes them,
+  the notes' hit areas use it too, and `ViewProxy::scalePenWidth()` scales by the whole
+  ratio and the plot scale. `ViewManager::setPlotScale()` / `plotScaleChanged()` is Tony's
+  View > Plot Size; each view drops its cache on a change. At ratio 1 and scale 1 a pane
+  drew exactly as before. On a hi-DPI desktop (ratio 2) this doubles points and notes, and
+  thickens the pens of every layer drawn through a `ViewProxy`. Not sized by it: the
+  coverage strip and the lyrics (`scalePixelSize()`, which follows the font; the lyrics
+  have a size of their own), and the waveform, spectrogram and time ruler, whose lines
+  stay one physical pixel. A pen wider than a pixel leaves Qt's fast path: at ratio 1,
+  150 % and 200 % double the pitch track's paint time.
+
+### bqaudioio
+
+The driver project ([audio-drivers.md](audio-drivers.md)), on the fork branch
+`tony-customizations`, which upstream's `master` does not have:
+
+- **An implementation per Windows host API.** `mme`, `directsound` and `wasapi` are
+  PortAudio restricted to that host API: their device lists hold its devices only, and
+  with no device named its own default devices are used. `port` is as upstream has it:
+  every host API's devices, the first whose name matches, and PortAudio's default
+  devices. The three are reported only on Windows and only where PortAudio has the host
+  API; asking for them elsewhere would initialise PortAudio for nothing.
+- **WASAPI converts rates.** A WASAPI device opens with `paWinWasapiAutoConvert`: in shared
+  mode each side runs at its own mixer's rate, and the stream opens at the output's. The
+  header comes from PortAudio (`pa_win_wasapi.h`, found with `__has_include`).
+- **A settable latency.** `AudioFactory::setSuggestedLatency()` sets what both sides ask
+  for, for the streams opened after; 0.2 s, upstream's fixed figure, when unset.
+
+Only the Windows cross-compile (MinGW-w64 against PortAudio 19.7.0's headers) and the
+user's PC see the Windows part; Linux builds none of it. The Android build has no
+bqaudioio backend at all: its device is Tony's own `OboeAudioIO`, a `SystemAudioIO` as
+bqaudioio's are, installed by `MainWindow::createAudioIO()`, so the port needed no change
+here.
+
+A `bqaudioio/` cloned from the mirror before the fork was pinned does not have the pin:
+`git remote add jhhr https://github.com/jhhr/bqaudioio`, `git fetch jhhr`, then
+`git checkout -B tony-customizations jhhr/tony-customizations`. `container-setup.sh`
+does the equivalent by itself in a cloud session.
 
 ## Known defects in the forks, not fixed
 
@@ -179,8 +240,18 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   crash of `test-tony-app` in the fill thread, in a sharded run whose processes shared
   their settings; not seen otherwise.
 
-## Changes that would tidy Tony up but were not made
+## Changes considered but not made
 
+- svgui's `SpectrogramLayer` keeps its display range in whole Hz (`int`, rounded in
+  `setDisplayExtents()`), and Tony's vertical zoom is that range: near its narrowest it
+  moves in steps, up to about 12 px at a major third about 110 Hz in a 300 px pane.
+  `double` bounds, no rounding there, and `toDouble()` in `setProperties()` would smooth
+  it.
+- svgui's `TimeValueLayer::paint()` works out for every point what could be worked out
+  once a paint (`getModelsEndFrame()`, font metrics, a pen and a brush): about 10 µs a
+  dot on the cloud machine. On a core four or five times slower, the play pointer's
+  strip paints during a take would take half of it or more, by that machine's figures;
+  they coalesce, so that means fewer frames, not a lag.
 - `Document::setModelSource()` (or any way to set or clear a derivation record) would
   replace `MainWindow::adoptTakeLayers()` setting source models by hand.
 - A hook in `MainWindowBase::toXml()` would save `MainWindow::toXml()` buffering the whole

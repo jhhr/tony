@@ -17,13 +17,13 @@ area are what to ask the user to try. Launch with `.\build.bat run`.
 
 ## 1. The device check: Calibrate Audio with the dev checks
 
-Once per machine, and again for each output device sung with (Bluetooth headphones have a
-latency of their own). It covers: latency on this machine; several recordings in one take,
-each in time; nothing of the take coming back out of the speakers; how long Stop takes on a
-four-minute song; live dots from whichever input the microphone is on; and a device that
-records nothing. Besides those: recording over part of a take, the lead-in, the pre-roll
-near the start, two takes meeting inside a note, and Record into Selection stopping by
-itself.
+Once per machine and driver, and again for each output device sung with (Bluetooth
+headphones have a latency of their own). It covers: latency on this machine; several
+recordings in one take, each in time; nothing of the take coming back out of the speakers;
+how long Stop takes on a four-minute song; live dots from whichever input the microphone
+is on; and a device that records nothing. Besides those: recording over part of a take,
+the lead-in, the pre-roll near the start, two takes meeting inside a note, and Record into
+Selection stopping by itself.
 
 It calibrates, then records test references of sweeps and tones through the air, placing
 the takes with the round trip it has just measured, for the run only: a four-minute song
@@ -33,27 +33,48 @@ file, and compares the take before and after each punch-in.
 
 1. A development build: any build type but `release` (`build.bat` builds
    `debugoptimized`).
-2. Choose the devices under **Playback > Audio Output Device** and **Audio Input Device**
-   (or leave the system default): the run records with them, as any take does.
+2. On Windows, choose the driver and the latency under **Playback > Audio Driver** and
+   **Audio Latency** (section 2). Then the devices under **Playback > Audio Output
+   Device** and **Audio Input Device**, which list that driver's (or leave the system
+   default): the run records with them, as any take does.
 3. With wired headphones, hold one earcup against the microphone, off your ears; with
    speakers, a moderate volume and the microphone where it hears them. A quiet room.
 4. **Playback > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
    is by default), then **Start**. A few minutes; leave the window alone meanwhile (Cancel
    stops the run). The dev checks run only after a calibration that can be used (verdict
-   Ok or Unsteady, recorded at the reference's rate, 44.1 kHz). No signal, or a fading one,
+   Ok or Unsteady, whatever the device's rate). No signal, or a fading one,
    means the microphone did not hear the sweeps, or Windows' audio enhancements took them
    out. The stored latency changes only through **Use this latency**.
 5. The report is on the dialog's result page and in `DevChecks.txt` in Tony's application
    data folder (`%APPDATA%\sonic-visualiser\Tony` on Windows). The test session is saved
    beside it in a `dev-checks-<n>` folder and left open, to be looked at and played.
 
-The report's header names the devices, the audio drivers built in, the playback and record
-latencies the device reports, and the round trip used. Then, item by item:
+**On the phone** (every APK is a development build), the same with these differences:
+
+- There are no device menus: Tony uses whatever route the phone has, and Calibrate Audio
+  keeps a figure for each. Plug in what you will sing with first; the first page names
+  the route once a file is open.
+- The loop: wired headphones with one earcup held to the phone's microphone (usually at
+  its bottom edge), off your ears; with Bluetooth earphones, an earbud held there; with
+  nothing plugged in, the phone's own speaker and microphone, lying in a quiet room. A
+  headset with a microphone of its own records from that microphone: hold the earcup to
+  it.
+- Allow the microphone when asked. The screen stays on while the run lasts; do not leave
+  Tony meanwhile (the power key, a call, another app), which ends the run wrongly.
+- While it runs the dialog shrinks to a bar in the status bar; a tap on it opens the
+  progress page again, with Cancel.
+- `DevChecks.txt` cannot be reached on a phone: **Save Report...** on the result page saves
+  the result and the dev checks' report through the file picker (**Copy** takes them too),
+  and **Help > Save Log...** saves the log. Send both.
+
+The report's header names the devices, the driver and the latency asked of it, the audio
+drivers built in, the playback and record latencies the device reports, and the round trip
+used. Then, item by item:
 
 - **1** `latency_on_this_machine`: where each sweep of each punch-in landed against the
-  reference, in ms (+ is late), within ±2 ms; the same after saving and reopening.
+  reference, in ms (+ is late), within ±6 ms; the same after saving and reopening.
 - **2** `several_phrases_in_one_take`: each punch-in's median offset and measured start
-  gap; every punch-in of one take within ±2 ms.
+  gap; every punch-in of one take within ±6 ms.
 - **3** `live_dots`: the dots drawn in each punch-in (more than 10, lying on the reference's
   tones), and how far they trail the cursor, median and spread.
 - **4** `nothing_of_the_take_in_the_speakers`: a second arrival of the sweeps (the input
@@ -77,14 +98,51 @@ latencies the device reports, and the round trip used. Then, item by item:
 - **14** `record_into_selection_stops_by_itself`: how far past its selection each take
   recorded before it stopped itself, the coverage it added, and no dialog during it.
 
-**What fails on MME today, and why.** Every take restarts the audio stream, and on MME the
-offset between input and output moves by about 13 ms from one restart to the next, while
-the sweeps within one take agree to 0.3 ms; the start gap does not see it. No one round
-trip then places every take within ±2 ms: expect items 1 and 2 to fail, and items 7 and 13
-whenever their punch-in lands more than 2 ms off. Item 10 shows two punch-ins that landed
-apart only in its number "second punch-in against the first": the join is a 10 ms dip, which
-hides a jump. That is the true reading, not a fault of the check: the remedy is a
-lower-latency driver, the next project ([calibrate-audio.md](calibrate-audio.md), §10).
+**What failed before the stream was kept running, and why.** Every take restarted the
+audio stream, and each start moved the offset between input and output by up to about 8 ms
+either way (13 ms on MME at first), on MME and WASAPI alike, while the sweeps within one
+take agreed to 0.3 ms; the start gap does not see it. No one round trip then placed every
+take within ±2 ms: items 1, 2, 7 and 13 failed. Item 10 shows two punch-ins that landed
+apart only in its number "second punch-in against the first": the join is a 10 ms dip,
+which hides a jump. The stream now runs on between takes, from the first take until the
+device is opened again, so a calibration and the dev run after it share one alignment.
+With the microphone and the headphones on two sound cards that alignment still drifts, and
+slips back by a period, which the headphones hear as a period of silence: takes lie within
+10 ms of each other, and items 1, 2, 7 and 13 allow ±6 ms
+([audio-drivers.md](audio-drivers.md), §7). A run that fails them by a few
+ms more was likely calibrated near a slip: calibrate again.
+
+**The alignment moves when the device is opened again**: choosing a driver, a latency or a
+device, opening either device menu (which opens the device again to list what is connected
+now), and starting Tony again. A figure kept from an earlier session is therefore up to
+about 8 ms off: calibrate at the start of a session, with **Use this latency**, for the
+best placement, and do not open the device menus between the calibration and the run or
+the singing. Windows shows the microphone in use from the first take until Tony quits.
+
+**On each driver (Windows).** Runs 1 to 3 were made on 2026-09-26; their results, and the
+default they decided, are in [audio-drivers.md](audio-drivers.md), §7. The same setup each time, wired
+headphones with one earcup against the microphone:
+
+1. **MME at 200 ms**: what Tony has always asked for.
+2. **WASAPI at 20 ms.**
+3. **WASAPI at 10 ms.**
+4. **WASAPI at 20 ms again**, with a build that keeps the stream running between takes:
+   Calibrate Audio carrying on into a whole dev run, as the others. Made twice
+   (2026-09-26 and 2026-09-27): items 1, 2, 7 and 13 pass at ±6 ms.
+
+Each is steps 2 to 5 above, with that driver and latency and the devices chosen under it:
+Calibrate Audio carrying on into the dev checks. After each, select and copy the result
+page's text, and copy `DevChecks.txt` to a name that says which run it was
+(`DevChecks-wasapi-20.txt`, say): the next run writes over it. Send back each pair,
+and whether anything crackled or dropped out during a run. Press **Use this latency** on
+the driver and latency you will sing with: the figure is kept for that driver only.
+Runs 1 to 3 were before the stream was kept running between takes, run 4 after, three
+times. Its second time failed item 3 on four dots from the room's noise, which the live
+tracker's level floor (−60 dBFS) now keeps out; its third passed item 3, and failed items
+1 and 2, calibrated near a slip. The user took that as good enough (2026-09-27). Not
+tried: a run with the microphone and the headphones on one sound card, which should
+neither drift nor slip; and, on two cards, whether the playback's gap at a slip (about
+every 100 s once a take has been made) is heard.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and
@@ -101,7 +159,39 @@ no device at all Record does no harm and the next file is analysed (the "Couldn'
 audio device" warning comes back once per file opened); with a device that opens but
 delivers nothing the take is dropped quietly, no harm.
 
-## 2. Still by hand
+## 2. The audio driver and latency menus (Windows)
+
+Only on Windows, where the menus are shown. The design is in
+[audio-drivers.md](audio-drivers.md).
+
+1. **The first start** with a build that has them: **Playback > Audio Driver** lists MME,
+   DirectSound and WASAPI with WASAPI ticked, and **Audio Latency** lists 10 to 200 ms with
+   20 ms ticked. (A driver chosen before, in an earlier build, stays ticked instead.)
+   **Audio Output Device** and **Audio Input Device** tick the devices chosen before. One
+   shown as "(not connected)" is a name the driver does not have: its default device is
+   used instead, until the device is chosen again from the list. The line under Calibrate Audio reads "Latency: driver's
+   figure, …": a round trip measured before is not carried over, so calibrate again.
+2. **WASAPI lists its own devices.** Choose WASAPI while the reference plays: playback
+   stops. The device menus now list WASAPI's names, whole, with (System Default) ticked.
+   Choose the headphones and the microphone, play and record a short take: sound comes
+   out, and the take sits in time by ear. Back to MME: MME's choices are ticked again.
+3. **A latency change opens the device again.** On WASAPI choose 20 ms, then 10 ms: each
+   time what was playing stops, and the next play and take work. Note the figure in
+   "Latency: driver's figure, …" at each latency, and whether 10 ms crackles.
+4. **Greyed out during a take**: while recording, and while Calibrate Audio runs, Audio
+   Driver and Audio Latency cannot be opened.
+5. **The reports name the driver.** Calibrate Audio's first page and its result page
+   show "Driver: WASAPI"; `DevChecks.txt` has "Audio driver: WASAPI" and "Latency asked
+   for: 20.0 ms" under the devices at its head.
+6. **After Use this latency on WASAPI** the latency line gives the measured figure. Once
+   Tony is started again, or the driver chosen again, it may read "driver's figure" until
+   the first take: the device's rate, often 48 kHz there, is not known before. Takes use
+   the kept figure from the first; a known limit ([audio-drivers.md](audio-drivers.md),
+   §8).
+
+Not tried yet.
+
+## 3. Still by hand
 
 1. **A device in use**: another program holding the microphone exclusively. Record does
    nothing harmful, and the next file opened is analysed as usual.
@@ -126,9 +216,11 @@ delivers nothing the take is dropped quietly, no harm.
    `commitData()` writes into the real profile. Afterwards `~/.sv1/tmp-*.ton` is on the
    Recent Files list, opens, and its takes play.
 7. **Live dots on this machine**: during a take the dots keep up with the cursor and grow
-   smoothly, and neither they nor the cursor stutter, in a maximised window.
+   smoothly, and neither they nor the cursor stutter, in a maximised window. None appear
+   between phrases, and none are lost on soft singing: the tracker ignores what is quieter
+   than −60 dBFS.
 
-## 3. Lyrics
+## 4. Lyrics
 
 1.  **Legibility**: the words, dark on light boxes along the bottom of the pane, are
     readable over the waveform, the pitch tracks, the alternate pitch track and the live
@@ -188,7 +280,7 @@ delivers nothing the take is dropped quietly, no harm.
     through the take from its position; after Stop it is back on the word at the take's
     position. The same with Play Reference While Recording off.
 
-## 4. Lyrics: import and export dialogs, editing
+## 5. Lyrics: import and export dialogs, editing
 
 1.  **The file dialogs on Windows.** Import Lyrics opens beside the reference and offers
     "Lyrics (*.ttml *.lrc)" first, then TTML, LRC and all files. Export Lyrics offers
@@ -232,6 +324,81 @@ delivers nothing the take is dropped quietly, no harm.
     export made with the exporter's default offset, -0.2 the other way): the words move
     by that much, the status bar says how far and which way, and an Export writes the
     shifted times. Is the dialog's wording clear about which sign is earlier?
+
+## 6. On the phone (Android)
+
+The APK is installed as the top-level README's "On Android" says. **Help > Save Log...**
+saves Tony's log, to send with anything that went wrong: its first line names the build.
+The design is in [port-android.md](port-android.md) and
+[mobile-port.md](mobile-port.md).
+
+**Tried** on the user's Pixel 9a, 2026-09-26 and 2026-09-27, with the APK of the day:
+
+- Opening, analysis and playback: a WAV, an M4A, and a desktop session in a folder a sync
+  app keeps on the phone, which found its reference beside it; pitch track and notes
+  drawn; playback stops when Tony goes into the background.
+- The All files access prompt, and Save Session As with a suggested name.
+- Menus scrolled by a finger; pinch zoom and two-finger scrolling in time, and the zoom of
+  the pitch range.
+- Live dots in real time and in their place during a take, with the reference in time;
+  the cursor keeping to the take on the phone's 48 kHz device.
+- Plot Size at 150 %: pitch and notes easier to see.
+- Help > Save Log... and the result page's Save Report..., to Google Drive and the phone's
+  Music folder: whole files (the report's log line "wrote the report, 9809 bytes ... its
+  provider says the document holds 9809 bytes").
+- Calibrate Audio and dev runs through Bluetooth (earphones on A2DP out, the phone's
+  microphone in, an earbud held to it): the calibration steady at 276 ms. With the stream
+  kept running between takes, the calibration's punch-ins lay within 0.5 ms and every
+  placement check passed; item 3 failed on dots an octave under the tones, which the live
+  tracker now drops. Across that run the takes drifted by about 1 ms a minute.
+- The song scroll bar: the user judged its size right.
+
+**Not tried yet**:
+
+1. **A dev run with the octave slips dropped**: item 3 through Bluetooth, and the rest as
+   before.
+2. **A take of ten minutes or more through Bluetooth**, placed against the reference at
+   its start and at its end: does the drift of about 1 ms a minute go on growing, or
+   correct itself?
+3. **Other routes**: wired or USB headphones with the phone's microphone, and the phone's
+   own speaker and microphone in a quiet room. Calibrate Audio keeps a figure for each
+   route: the Playback menu's latency line changes with the route, and each figure places
+   its takes.
+4. **Headphones plugged in or out** during playback and during a take: the take is kept as
+   Stop keeps it, and the next Play or Record works on the new route.
+5. **The background and the idle suspend**: go to the home screen during a take (the take
+   is kept), with a changed session that has a file (it is saved: the log says
+   "saveWhenSuspended: saving"), and with a session that loaded incomplete (not saved);
+   come back, and Play and Record work. After a take and then two minutes of neither
+   playing nor recording, the phone's microphone indicator goes off, and the next Play or
+   Record starts again.
+6. **Files from other places**: audio from Google Drive (copied in), a session from Drive
+   (refused, with a message naming the app it came from), a file from Downloads and from
+   the picker's Recent and Audio, a name with parentheses, and Open Recent after a file
+   has moved.
+7. **Lyrics Size at 50 %**, the default on Android: the words over the take, at least a
+   verse on screen and still readable. The first smaller size (65 %) was not small
+   enough.
+8. **An M4A reference of a desktop session**: the log's "decoded N frames" for it against
+   the length the desktop gives it (the user's session with an M4A reference has 9352192
+   frames from Windows, a whole number of AAC frames). If they differ, the session's pitch
+   is out of line with the reference on one of them.
+9. **The Calibrate Audio dialog** on the phone's screen: every page fits with its buttons
+   on screen, the texts scroll by a finger, the indicator in the status bar expands on a
+   tap, and Make Small collapses it again. Used in the dev runs, but not reported on.
+10. **The other dialogs**: the take name, message boxes, Edit Display Extents and the
+    lyrics' dialogs should fit; What's New and About (at a large font) do not, and the Key
+    and Mouse Reference is placed by Qt. Which of these matter on a phone?
+11. **By finger**: the take box in the toolbar, the long-press menu (it waits for a tap),
+    a selection dragged in the ruler strip, and the song scroll bar's thumb when it is at
+    its narrowest (16 dp: a press just beside it centres the panes there instead of
+    grabbing it).
+12. **A take longer than the phone's screen timeout**: nothing keeps the screen on outside
+    a check, and a screen that goes off ends the take as Stop does. Does that get in the
+    way in use?
+
+A Windows touch screen has not been tried either: Windows makes its own mouse events from
+touches, and its own right click from a press and hold.
 
 The questions the automated checks raised, and the facts they established for the
 decisions above, are in [open-points.md](open-points.md).

@@ -27,9 +27,9 @@
  * These functions make the next such file from the last: nothing is
  * ever changed in place, so the file before is there to go back to.
  *
- * Both work through the files a block at a time, and both return an
- * empty string on success and a message for the user otherwise. If
- * they fail, there is no file at outPath.
+ * All of them work through the files a block at a time, and all
+ * return an empty string on success and a message for the user
+ * otherwise. If they fail, there is no file at outPath.
  */
 namespace TakeAudio
 {
@@ -78,6 +78,21 @@ namespace TakeAudio
                   const Coverage::Ranges &ranges,
                   QString outPath,
                   sv::sv_frame_t fadeFrames = -1);
+
+    /**
+     * Write to outPath the audio in inPath at another sample rate: as
+     * long as it was in seconds, with the same channels, and what was
+     * at a time in the one at the same time in the other. For a
+     * recording from a device that does not run at the reference's
+     * rate, whose frames have to be the reference's before it can go
+     * into a take.
+     */
+    QString resample(QString inPath,
+                     sv::sv_samplerate_t rate,
+                     QString outPath);
+
+    /// The sample rate of the audio file at path, or 0 if it cannot be read
+    sv::sv_samplerate_t sampleRate(QString path);
 }
 
 #endif

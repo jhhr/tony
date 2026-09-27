@@ -19,8 +19,10 @@ code.
 | [docs/recording.md](docs/recording.md) | touching `record()`, the Stop path, latency, pre-roll, the live tracker |
 | [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore |
 | [docs/calibrate-audio.md](docs/calibrate-audio.md) | touching Calibrate Audio (`AudioCheckRunner`, `CalibrateAudioDialog`), the dev checks (`main/dev/`) or the measured latency (`LatencyCheck`, `LatencyCalibration`) |
-| [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/` |
+| [docs/audio-drivers.md](docs/audio-drivers.md) | touching the Audio Driver or Audio Latency menus (`AudioDriverSettings`, `AudioDriverMenus`), how the device is opened (`MainWindow::createAudioIO()`), or the bqaudioio fork |
+| [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/`, `bqaudioio/` |
 | [docs/open-points.md](docs/open-points.md), [docs/manual-checklist.md](docs/manual-checklist.md) | choosing what to do next, or saying what the user should try by hand |
+| [docs/mobile-port.md](docs/mobile-port.md), then [docs/port-android.md](docs/port-android.md) or [docs/port-sailfish.md](docs/port-sailfish.md) | starting or working on a phone port |
 
 ## Build and test
 
@@ -54,7 +56,7 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   that lack it fail, so the exit status is only meaningful for a run with no names.
 - Run named tests while working; run **both whole suites** before calling anything done.
 - `test-tony-dev.exe` (development builds only) holds the development checks' suite,
-  about four minutes of real-time takes. Run it as well, whole, when a change touches
+  about seven minutes of real-time takes. Run it as well, whole, when a change touches
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
@@ -72,11 +74,11 @@ first). The rest is in [docs/building.md](docs/building.md#building-on-linux).
 - Build what was asked. Where the request is silent, take the simpler option and say so.
   No drive-by refactors. If the plan turns out wrong or impossible, do not improvise
   another design: finish what can be finished, leave the tree building and green, report.
-- `main/MainWindow.cpp` is over 6000 lines and `main/test/TestRecordWorkflow.h` over 2000.
+- `main/MainWindow.cpp` and `main/test/TestRecordWorkflow.h` are each over 9000 lines.
   Never read them whole: search, then read a range.
 - `svcore/`, `svgui/`, `svapp/`, `pyin/` and the other top-level library directories are
   **separate git repositories, gitignored here**, so ripgrep-based search tools skip them
-  unless given the directory explicitly. Four are forks that may be changed
+  unless given the directory explicitly. Five are forks that may be changed
   ([docs/forks.md](docs/forks.md)); the rest are upstream and stay untouched. A sub-agent
   does not edit a fork: it reports the change it needs.
 

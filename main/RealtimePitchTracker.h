@@ -17,6 +17,8 @@
 
 #include <QThread>
 
+#include <atomic>
+#include <mutex>
 #include <vector>
 
 #include "base/BaseTypes.h"
@@ -35,16 +37,21 @@ class FFT;
  * continuously polls a WritableWaveFileModel for new audio samples,
  * estimating pitch in real time using FFT-accelerated YIN.
  *
- * pitch estimates are reported via pitchDetected() signals; the
- * connection to the GUI thread is automatically a QueuedConnection so
- * the slot (which writes to the model and updates the status bar) runs
- * safely on the GUI thread without blocking audio or rendering.
+ * An estimate an octave from the ones either side of it is taken for
+ * YIN's octave slip and dropped (OctaveSlips): a run an octave off is
+ * held back until the hops after it say which it was.
+ *
+ * The estimates are kept until the GUI thread takes them, all at once
+ * (takeEstimates()): there is one for each hop, about 170 a second, and
+ * a signal for each would queue a call on the GUI thread that a slow
+ * GUI thread falls behind with for good (LiveDotsFeed).
  *
  * Usage:
  *   1. Create a RealtimePitchTracker with the ModelId of the
  *      WritableWaveFileModel being recorded into.
  *   2. Call start() — the background thread starts immediately.
- *   3. Call stop() when recording ends — blocks until the thread exits.
+ *   3. Take what it has found with takeEstimates(), from any thread.
+ *   4. Call stop() when recording ends — blocks until the thread exits.
  */
 class RealtimePitchTracker : public QThread
 {
@@ -91,16 +98,52 @@ public:
     void setThreshold(double t) { m_threshold = t; }
     double getThreshold() const { return m_threshold; }
 
-signals:
     /**
-     * Emitted from the background thread each time a new voiced pitch
-     * estimate is available. Via Qt::AutoConnection this arrives in the
-     * GUI thread's event loop (QueuedConnection cross-thread).
+     * The level a window must reach to be given a pitch, in dBFS: the
+     * level() of its first half, which YIN's difference function compares
+     * with the window further on, so that the pitch it finds is the first
+     * half's. The whole window's would let a window through whose second
+     * half reaches into a sound, with the pitch of the quiet before it.
      *
-     * @param frame  Centre frame of the analysis window.
-     * @param hz     Pitch in Hz (always > 0 when emitted).
+     * YIN is blind to level: it finds a pitch now and then in a quiet
+     * steady sound, as it did in the fans a user's microphone heard at
+     * -66.5 dBFS between the sounds, 25 dB below the quietest window of
+     * a tone it heard (docs/audio-drivers.md, §7). pYIN, as Tony runs
+     * it, penalises such soft pitches too.
      */
-    void pitchDetected(sv::sv_frame_t frame, double hz);
+    static constexpr double kMinLevel = -60.0;
+
+    /** The level floor in dBFS. Default: kMinLevel. */
+    void setMinLevel(double dbfs) { m_minLevel = dbfs; }
+    double getMinLevel() const { return m_minLevel; }
+
+    /**
+     * The level of \a count frames of the mixdown of \a channels
+     * channels, in dBFS: the RMS of their average. The mixdown is their
+     * sum, so a microphone on two inputs would read 6 dB louder than on
+     * one; the average reads what each input has (and a microphone on
+     * one input of two 6 dB below it). Silence reads -200.
+     */
+    static double level(const float *mixdown, int count, int channels);
+
+    /** A voiced pitch estimate. */
+    struct Estimate {
+        sv::sv_frame_t frame;   ///< centre frame of the analysis window
+        double hz;              ///< always > 0
+    };
+    typedef std::vector<Estimate> Estimates;
+
+    /**
+     * The estimates found since the last call, oldest first; they are
+     * not kept any longer. Any thread.
+     */
+    Estimates takeEstimates();
+
+    /**
+     * The frame of the recording the tracker has analysed up to: the
+     * end of its latest window, voiced or not. Any thread.
+     */
+    sv::sv_frame_t getFramesAnalysed() const { return m_framesAnalysed; }
 
 protected:
     /** The background polling loop — do not call directly. */
@@ -114,6 +157,11 @@ private:
     double          m_minFreq;
     double          m_maxFreq;
     double          m_threshold;
+    double          m_minLevel;
+
+    std::mutex      m_estimatesMutex;
+    Estimates       m_estimates;
+    std::atomic<sv::sv_frame_t> m_framesAnalysed;
 
     // --- YIN helpers (all called only from run()) ---
 

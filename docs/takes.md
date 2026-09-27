@@ -28,7 +28,8 @@ of the SV libraries this leans on are in [architecture.md](architecture.md).
 | Analysis after a partial recording | Only the recorded range is analysed and merged in. |
 | Inactive takes | Their pitch, notes and coverage stay in pane 0 as hidden, dormant layers. **Only the active take has an audio model and an analyser** (an audio model costs a file handle, a peak cache and a place in the play source). Rejected: an analysis file per take. |
 | Showing two takes at once | Not supported. |
-| Where audio lives | `<session>.takes/` beside the `.ton`, relative paths in the file. |
+| Where audio lives | `<session>.takes/` beside the `.ton`, relative paths in the file. So a session is opened and saved only by a path, never through a `content://` URI on Android, where it needs All files access ([port-android.md](port-android.md)). |
+| A device at another rate than the reference's (a phone at 48 kHz) | The recording is converted to the reference's rate before the splice (`SingingTakes::spliceRecording()`, `TakeAudio::resample()`, at the quality svcore loads files with), in a temporary folder beside the take's files: a take's file is always at the reference's rate, and the splice, the coverage and the events count the reference's frames. The raw recordings stay at the device's rate. Rejected: opening the device at 44.1 kHz ([recording.md](recording.md#a-device-at-another-rate)). |
 | Sessions from before takes | No migration: they open without their singing track, silently. |
 | Editing | One operation, Erase Singing in Selection, covers remove, trim and split. No hand-editing of singing pitch or notes exists, so replacing a range loses nothing the user made. |
 | Undo | Recordings and erases are undoable to any depth. Take operations (new, duplicate, delete, switch, Load Singing Track) are not, and **clear the undo history** without a prompt; Rename does not. |
@@ -36,10 +37,10 @@ of the SV libraries this leans on are in [architecture.md](architecture.md).
 ## The pieces
 
 `tony_core` (no window, unit-tested): `Coverage`, `TakeAudio` (`splice()` / `erase()`,
-streaming, ~5 ms edge fades, refuse to overwrite a file, refuse mismatched sample rates),
-`TakeEvents` (what an erase does to pitch and note events), `SingingTakes` (the list:
-name, audio path, coverage, active index; and the bookkeeping of files), `TakesFile` (the
-`<takes>` element and the folder), `TakeTiming`.
+streaming, ~5 ms edge fades, refuse to overwrite a file, refuse mismatched sample rates;
+`resample()`), `TakeEvents` (what an erase does to pitch and note events), `SingingTakes`
+(the list: name, audio path, coverage, active index; and the bookkeeping of files),
+`TakesFile` (the `<takes>` element and the folder), `TakeTiming`.
 
 App side: `TakeLayers` (layers by name, `raise()`), `CoverageStrip`, `TakeCommands`
 (`SingingTakeCommand`), and the wiring in `MainWindow`.
@@ -105,7 +106,10 @@ but in **no view**, so nothing shows, selects or claims them.
 
 When both are complete the result is merged into the claimed models directly (no command,
 as a transform's output never was) and `rangedAnalysisMerged()` then
-`initialAnalysisCompleted()` are emitted.
+`initialAnalysisCompleted()` are emitted. Completion is looked at from the event loop,
+**never within `analyseRange()`**, even when a short run is done before the call returns
+(it can be, on a quiet machine): the caller always finds the range being analysed when the
+call returns, and waits for the merge the same way whatever pYIN took.
 
 - **Only the middle of the run is merged.** W = the range asked for ± 0.25 s. The ends of
   a run are where pYIN has least context (it cannot stamp its first two hops at all), so
@@ -253,6 +257,25 @@ base call so the queued `analyseRestoredSingingModel()` stands aside):
 A file the user loads with Load Singing Track becomes a take covering the whole file
 (`setWholeFileTake()`) and is analysed in full.
 
+**A session that loaded incomplete is never saved unasked.** When audio a session names
+cannot be read (svapp's "Incomplete session loaded"), its file would lose the reference to
+that audio. svapp then gives the session no file, so Save is Save As; Save, Save As (before
+the picker, which on Android makes the file) and Save Session to Audio File Path all ask
+first (`confirmSaveOfIncompleteSession()`). The flag is the document's (`isIncomplete()`,
+set by `SVFileReader`); a save clears it, as the file is then what the session is.
+
+**Saved when Android sends Tony to the background** (`applicationStateChanged()`, on
+`Qt::ApplicationSuspended`): a take being recorded is stopped as Stop does, playback is
+stopped, the device suspended, and the session saved if it may be without asking
+(`maySaveUnasked()`: it has a file, is modified and did not load incomplete). A session
+never saved stays unsaved: there is no one to ask where it should go. Qt posts that state
+and then holds the GUI thread's event loop until Tony is back, so nothing there may wait:
+a save that has to wait for a take's ranged analysis to merge is tried again every 250 ms,
+which in effect is once Tony is back. Nothing is saved while a dialog or the picker is open
+(a nested event loop): the picker and the settings page send Tony to the background too,
+and what is open may be about to save, or to decide not to. The desktop saves only when
+asked.
+
 ## Known limitations
 
 Things to know, none of which stops the feature being used. See also
@@ -277,11 +300,12 @@ Things to know, none of which stops the feature being used. See also
   user gets a dialog naming the file.
 - Playing a wave model with a **positive** start frame plays up to a block early and
   without an edge fade. This design avoids it: a take's file always starts at frame 0.
-- A recording device whose sample rate differs from the reference's: a take's first
-  recording is written at the device's rate and placed frame for frame, so at 48 kHz it
-  lands early by 8 % of its position; a later recording at another rate than the take
-  file's is refused. Calibrate Audio names the mismatch; the fix is planned
-  ([calibrate-audio.md](calibrate-audio.md), §10).
 - Two recordings that meet at a frame J each fade over 5 ms against what the take held
   there, not into each other: where that was silence, the join is a 10 ms dip. The dev
   checks' join check reads it as no step, and a pitch gap of about one hop.
+- A file loaded with Load Singing Track at another rate than the reference's becomes a
+  take whose file is at its own rate (only the model in memory is at 44.1 kHz): the next
+  recording's splice refuses it, the rates differing, and an erase silences the wrong
+  frames, since coverage counts the reference's.
+- A session that loaded without its reference cannot be saved as it is: Save As waits for
+  the reference's analysis (`waitForInitialAnalysis()`), which never comes, until Cancel.

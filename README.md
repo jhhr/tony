@@ -8,8 +8,12 @@ This is a fork of [Tony](https://github.com/sonic-visualiser/tony), the
 melody transcription program from Queen Mary, University of London. It keeps
 Tony's pitch and note analysis (the pYIN plugin) and builds a practice tool
 around it. It is developed separately and is not a release of Tony: the Tony
-home page and its downloads are for the original program, not this one. There
-are no ready-made builds of this fork yet; see [Building](#building) below.
+home page and its downloads are for the original program, not this one.
+
+It runs on Windows, Linux and macOS, and on Android phones. There are no
+releases of this fork yet: the desktop version is built from source (see
+[Building](#building) below), and the Android one comes as a test build (see
+[On Android](#on-android)).
 
 
 How it works
@@ -40,12 +44,19 @@ Recording
    and the pre-roll are buttons in the toolbar, after "While recording:"
  * the microphone and the output are chosen in Playback -> Audio Input Device
    and Playback -> Audio Output Device
+ * on Windows, Playback -> Audio Driver chooses MME, DirectSound or WASAPI, and
+   Playback -> Audio Latency how much latency is asked of it (10 to 200 ms);
+   each driver keeps its own devices, latency and measured round trip. WASAPI
+   at 20 ms is the default
  * the latency of the audio devices is taken off the start of each recording,
    so that it lines up with the reference. Drivers often report that latency
    wrongly: Playback -> Calibrate Audio... measures it, with one earcup of
    wired headphones held against the microphone, and "Use this latency" places
    every take with the measured figure. Playback -> Forget Measured Latency
    goes back to the figure the driver reports
+ * the audio device is kept open between takes, so that the latency stays the
+   same from one take to the next. The microphone therefore shows as in use
+   from the first take until Tony quits
  * File -> Load Singing Track... (Ctrl+Shift+R) loads a recording made
    elsewhere as the singing track instead
 
@@ -109,6 +120,61 @@ Timed lyrics
    reviewing the change
 
 
+Sizes and layout
+----------------
+
+ * View -> Plot Size draws the pitch tracks, the live dots and the notes at
+   100, 150 or 200 % of their normal size, and View -> Lyrics Size the words of
+   the lyrics at 35 to 100 %
+ * View -> Compact Layout puts one toolbar of large buttons in place of the
+   menu bar and the other toolbars, as on a phone (see below). Tony starts
+   with it when given --compact on the command line
+
+
+On Android
+----------
+
+Tony also runs on Android phones (Android 9 or later, 64-bit ARM), laid out
+for a phone held in landscape. On the phone it is for practising: open a
+session, choose a take, select a phrase, record, listen, erase and undo.
+Editing notes and the reference is left to the desktop, and their tools are
+hidden.
+
+ * there is no release yet. Each run of the Android CI workflow (under
+   Actions) builds a test version and keeps it as its Tony-debug-apk
+   artifact, which GitHub lets you download once signed in. Unzip it and open
+   Tony-debug.apk on the phone, allowing the app you open it with to install
+   unknown apps
+ * one toolbar of large buttons replaces the menus and the other toolbars: a
+   menu button that holds every menu, Play, Record and Record into Selection,
+   the take box, Undo and Redo, Erase, Zoom In and Zoom Out, and a button
+   that shows and hides the Show and Play controls. A thin strip above the
+   pane shows the whole song, with a faint line of the reference's pitch:
+   drag it, or tap it, to move the view along the song
+ * one finger works as the mouse does: a tap moves the playhead, and a drag
+   in the ruler strip below the pane selects. Pinch to zoom, across the pane
+   for time and up and down it for the pitch range; drag with two fingers to
+   scroll; press and hold for the pane's menu
+ * with All files access (Android 11 and later; Tony asks the first time it
+   needs it) Tony opens and saves files where they are, as on the desktop.
+   Keep sessions, with their audio and takes folder beside them, in a folder
+   of the phone's storage, such as one a sync app (Syncthing, FolderSync)
+   keeps in step with a computer. Without it, Tony copies audio into its own
+   storage and cannot open a session kept elsewhere. Nor can a session be
+   opened from a cloud app such as Drive, which hands Tony the one file only
+ * M4A (AAC), FLAC and Ogg files are read through Android's own decoders
+ * Tony plays and records through whatever the phone is using: its speaker and
+   microphone, a wired or USB headset, or Bluetooth. Calibrate Audio keeps a
+   figure for each, since a Bluetooth route is 100 to 200 ms longer than the
+   speaker's. The screen stays on while the check runs
+ * when Tony goes into the background, a take being recorded is stopped and
+   kept, as Stop does, and a session that already has a file is saved. The
+   audio device is let go then, and after a while idle
+ * pitch tracks and notes are drawn at 150 % and lyrics at 50 % by default
+ * Help -> Save Log... saves a copy of Tony's log, to send when something has
+   gone wrong
+
+
 From Tony
 ---------
 
@@ -130,6 +196,11 @@ The fork is developed on Windows with MSYS2's MinGW-w64 toolchain, Qt 6,
 meson and ninja; it also builds on Linux and macOS. How to build, and every way
 the build has gone wrong, is in [docs/building.md](docs/building.md). The rest
 of [docs/](docs/) is the developer documentation.
+
+The Android app is cross-compiled on Linux by the scripts in
+[deploy/android/](deploy/android/): `setup-toolchain.sh`, `build-qt.sh`,
+`build-deps.sh`, `build-tony.sh` and `build-apk.sh`, in that order, as the
+Android CI workflow runs them.
 
 
 Authors, Citation, License and Use
@@ -174,3 +245,4 @@ Automated build reports
  * Linux CI build: [![Build Status](https://github.com/jhhr/tony/actions/workflows/linux.yml/badge.svg)](https://github.com/jhhr/tony/actions/workflows/linux.yml)
  * macOS CI build: [![Build Status](https://github.com/jhhr/tony/actions/workflows/macos.yml/badge.svg)](https://github.com/jhhr/tony/actions/workflows/macos.yml)
  * Windows CI build: [![Build Status](https://github.com/jhhr/tony/actions/workflows/windows.yml/badge.svg)](https://github.com/jhhr/tony/actions/workflows/windows.yml)
+ * Android CI build: [![Build Status](https://github.com/jhhr/tony/actions/workflows/android.yml/badge.svg)](https://github.com/jhhr/tony/actions/workflows/android.yml)

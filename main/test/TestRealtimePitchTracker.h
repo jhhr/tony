@@ -28,16 +28,15 @@
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 
+#include <cmath>
 #include <memory>
 #include <vector>
 
-// Collects pitchDetected() on the test (GUI) thread through a queued
-// connection, which is how MainWindow receives it. QSignalSpy would
-// connect directly and be written to from the tracker thread.
-class PitchCollector : public QObject
+// Takes the tracker's estimates on the test (GUI) thread, which is how
+// MainWindow gets them (LiveDotsFeed): whatever has been found since the
+// last look, whenever the count is asked for
+class PitchCollector
 {
-    Q_OBJECT
-
 public:
     struct Event {
         sv::sv_frame_t frame;
@@ -46,17 +45,17 @@ public:
 
     std::vector<Event> events;
 
-    PitchCollector(RealtimePitchTracker *tracker) {
-        connect(tracker, &RealtimePitchTracker::pitchDetected,
-                this, &PitchCollector::pitchDetected);
+    PitchCollector(RealtimePitchTracker *tracker) : m_tracker(tracker) { }
+
+    int count() {
+        for (const auto &e : m_tracker->takeEstimates()) {
+            events.push_back({ e.frame, e.hz });
+        }
+        return int(events.size());
     }
 
-    int count() const { return int(events.size()); }
-
-public slots:
-    void pitchDetected(sv::sv_frame_t frame, double hz) {
-        events.push_back({ frame, hz });
-    }
+private:
+    RealtimePitchTracker *m_tracker;
 };
 
 class TestRealtimePitchTracker : public QObject
@@ -132,6 +131,11 @@ class TestRealtimePitchTracker : public QObject
                 last = int(spy.count());
             }
         }
+    }
+
+    // The peak of a sine whose RMS is the given level
+    static double peakAt(double dbfs) {
+        return std::pow(10.0, dbfs / 20.0) * std::sqrt(2.0);
     }
 
     static int expectedHops(sv::sv_frame_t frames) {
@@ -227,6 +231,81 @@ private slots:
         }
         QVERIFY(before);
         QVERIFY(after);
+    }
+
+    // A steady tone below the level floor, as a room's fans are between
+    // the sounds, gives no pitch, though YIN alone finds one in it; the
+    // same tone above the floor does
+    void quiet_tone_gives_no_pitch() {
+        auto rec = makeRecording();
+        RealtimePitchTracker tracker(rec->id);
+        PitchCollector spy(&tracker);
+        tracker.start();
+
+        const int n = int(kRate / 2);
+        rec->appendMono(TestSignals::sine(306.0, kRate, n, peakAt(-66.0)));
+        rec->appendMono(TestSignals::sine(306.0, kRate, n, peakAt(-50.0),
+                                          0.0, n));
+        settle(spy);
+        tracker.stop();
+
+        int loud = 0;
+        for (const auto &event : spy.events) {
+            QVERIFY2(event.frame + kWindow / 2 > n,
+                     qPrintable(QString("a pitch at frame %1, of the quiet "
+                                        "tone alone").arg(event.frame)));
+            if (event.frame - kWindow / 2 >= n) ++loud;
+        }
+        QVERIFY2(loud > (expectedHops(n) * 3) / 4,
+                 qPrintable(QString("%1 pitches of the loud tone").arg(loud)));
+    }
+
+    // A loud sound with no pitch, starting after the quiet tone, gives no
+    // pitch either: not in the windows whose second half reaches into
+    // it, where YIN still hears the tone in their first half
+    void quiet_tone_before_a_sound_gives_no_pitch() {
+        auto rec = makeRecording();
+        RealtimePitchTracker tracker(rec->id);
+        PitchCollector spy(&tracker);
+        tracker.start();
+
+        const int n = int(kRate / 2);
+        std::vector<float> after =
+            TestSignals::sine(306.0, kRate, n, peakAt(-66.0), 0.0, n);
+        const std::vector<float> noise = TestSignals::whiteNoise(n, 3, 0.1);
+        for (int i = 0; i < n; ++i) after[i] += noise[i];
+        rec->appendMono(TestSignals::sine(306.0, kRate, n, peakAt(-66.0)));
+        rec->appendMono(after);
+        settle(spy);
+        tracker.stop();
+
+        QVERIFY2(spy.count() == 0,
+                 qPrintable(QString("%1 pitches, the first at frame %2 "
+                                    "(the sound starts at %3)")
+                            .arg(spy.count())
+                            .arg(spy.events.empty() ? -1 :
+                                 spy.events[0].frame)
+                            .arg(n)));
+    }
+
+    // The floor is each input's level: a quiet tone on both inputs, whose
+    // mixdown, their sum, reads 6 dB louder and above the floor, gives no
+    // pitch
+    void quiet_tone_on_both_inputs_gives_no_pitch() {
+        auto rec = makeRecording(2);
+        RealtimePitchTracker tracker(rec->id);
+        PitchCollector spy(&tracker);
+        tracker.start();
+
+        const int n = int(kRate / 2);
+        std::vector<float> tone =
+            TestSignals::sine(306.0, kRate, n, peakAt(-63.0));
+        rec->append({ tone, tone });
+        settle(spy);
+        tracker.stop();
+
+        QVERIFY2(spy.count() == 0,
+                 qPrintable(QString("%1 pitches").arg(spy.count())));
     }
 
     void stop_is_prompt() {
@@ -333,6 +412,68 @@ private slots:
             QVERIFY2(std::abs(TestSignals::centsBetween(hz, 330.0)) < 20.0,
                      qPrintable(QString("%1 Hz").arg(hz)));
         }
+    }
+
+    // A tone of 220.5 Hz with its harmonics to 4 kHz (as the audio
+    // check's, without the vibrato), and 30 ms of its subharmonic under
+    // it, faded in and out. In the windows that hold the burst the dip
+    // at the period rises over YIN's threshold (to 0.25 or more) while
+    // the one at twice the period stays under (0.08 or less): 4 hops
+    // slip an octave low, and the hops either side are on the tone
+    // (0.11 or less), at every alignment of the burst with the hops.
+    // The slips are dropped, and every other hop's dot is there
+    void an_octave_slip_is_dropped() {
+        const double hz = 220.5;
+        const int n = int(kRate);
+        const int harmonics = int(4000.0 / hz);
+        std::vector<float> signal(n);
+        double peak = 0.0;
+        std::vector<double> x(n, 0.0);
+        for (int i = 0; i < n; ++i) {
+            double t = i / kRate;
+            for (int k = 1; k <= harmonics; ++k) {
+                x[i] += std::sin(2.0 * M_PI * hz * k * t +
+                                 M_PI * k * k / harmonics) / k;
+            }
+            peak = std::max(peak, std::fabs(x[i]));
+        }
+        const int burstStart = 22082, burstLength = 1323;
+        for (int i = 0; i < n; ++i) {
+            double v = 0.25 * x[i] / peak;
+            int b = i - burstStart;
+            if (b >= 0 && b < burstLength) {
+                double hann = 0.5 - 0.5 * std::cos
+                    (2.0 * M_PI * b / (burstLength - 1));
+                v += 0.1 * hann * std::sin(2.0 * M_PI * (hz / 2.0) *
+                                           b / kRate);
+            }
+            signal[i] = float(v);
+        }
+
+        auto rec = makeRecording();
+        RealtimePitchTracker tracker(rec->id);
+        PitchCollector spy(&tracker);
+        tracker.start();
+        rec->appendMono(signal);
+        const int slipped = 4;
+        settle(spy, expectedHops(rec->written) - slipped);
+        tracker.stop();
+
+        sv::sv_frame_t widestGap = 0;
+        for (int i = 0; i < int(spy.events.size()); ++i) {
+            double cents = TestSignals::centsBetween(spy.events[i].hz, hz);
+            QVERIFY2(std::abs(cents) < 20.0,
+                     qPrintable(QString("a dot at %1 Hz, frame %2")
+                                .arg(spy.events[i].hz)
+                                .arg(spy.events[i].frame)));
+            if (i > 0) {
+                widestGap = std::max(widestGap, spy.events[i].frame -
+                                     spy.events[i-1].frame);
+            }
+        }
+        QCOMPARE(int(spy.events.size()),
+                 expectedHops(rec->written) - slipped);
+        QCOMPARE(widestGap, sv::sv_frame_t((slipped + 1) * kHop));
     }
 };
 

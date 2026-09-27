@@ -14,6 +14,8 @@
 #ifndef TONY_LATENCY_UTILS_H
 #define TONY_LATENCY_UTILS_H
 
+#include "AudioRoute.h"
+
 #include "base/BaseTypes.h"
 
 /**
@@ -56,6 +58,11 @@ computeRecordingLatency(sv::sv_frame_t outputLatency,
  * started, and measured once the audio callback has handed the device
  * its first block; startGapMeasured says whether that happened, as it
  * does for every take that plays the reference.
+ *
+ * The route is the one the device reported when the take started, for
+ * a device that knows its route (AudioRouteReporter): what a figure
+ * measured on the take is kept under, with its streams as the figure's
+ * fingerprint.  Its driver is "" for any other device.
  */
 struct TakeLatency
 {
@@ -66,6 +73,7 @@ struct TakeLatency
     sv::sv_samplerate_t recordingRate;
     sv::sv_frame_t startGap;
     bool startGapMeasured;
+    AudioRoute::Route route;
 
     TakeLatency() : roundTrip(0), measured(false), reportedOutput(0),
                     reportedInput(0), recordingRate(0), startGap(0),

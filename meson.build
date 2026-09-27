@@ -490,6 +490,82 @@ elif system == 'windows'
     ]
   endif
 
+elif system == 'android'
+
+  # Cross-compiled with the NDK: see deploy/android/build-tony.sh. The
+  # libraries are static builds from deploy/android/build-deps.sh, found
+  # through pkg-config; static: true, because only then does pkg-config
+  # name their private libraries (ogg, opus, zix, serd) as well. As on
+  # Linux, less what a phone has no use for: JACK, PulseAudio, ALSA and
+  # PortAudio (with RtMidi's ALSA defines), and oggz and fishsound (Ogg
+  # Vorbis). Opus is read-only: there is no libopusenc.
+
+  if architecture == 'aarch64'
+    android_abi = 'arm64-v8a'
+  else
+    error('Build for architecture ' + architecture + ' is not supported on this platform')
+  endif # architecture
+
+  rc = []
+
+  bzip2_dep = dependency('bzip2', static: true)
+  fftw3_dep = dependency('fftw3', version: '>= 3.0.0', static: true)
+  sndfile_dep = dependency('sndfile', version: '>= 1.0.16', static: true)
+  samplerate_dep = dependency('samplerate', version: '>= 0.1.2', static: true)
+  rubberband_dep = dependency('rubberband', version: '>= 3.0.0', static: true)
+  sord_dep = dependency('sord-0', version: '>= 0.5', static: true)
+  serd_dep = dependency('serd-0', version: '>= 0.5', static: true)
+  mad_dep = dependency('mad', version: '>= 0.15.0', static: true)
+  id3tag_dep = dependency('id3tag', version: '>= 0.15.0', static: true)
+  opus_dep = dependency('opusfile', static: true)
+  # The audio device: bqaudioio has no Android backend (main/OboeAudioIO)
+  oboe_dep = dependency('oboe', static: true)
+
+  feature_dependencies = [
+    vamphostsdk_dep,
+    bzip2_dep,
+    fftw3_dep,
+    sndfile_dep,
+    samplerate_dep,
+    rubberband_dep,
+    sord_dep,
+    serd_dep,
+    mad_dep,
+    id3tag_dep,
+    opus_dep,
+    oboe_dep,
+  ]
+
+  feature_defines = [
+    '-DHAVE_BZ2',
+    '-DHAVE_FFTW3',
+    '-DFFTW_DOUBLE_ONLY',
+    '-DHAVE_SNDFILE',
+    '-DHAVE_LIBSAMPLERATE',
+    '-DHAVE_RUBBERBAND',
+    '-DHAVE_SORD', '-DUSE_SORD',
+    '-DHAVE_SERD',
+    '-DHAVE_MAD',
+    '-DHAVE_ID3TAG',
+    '-DHAVE_OPUS',
+    '-DHAVE_OPUS_READ_ONLY',
+  ]
+
+  svcore_moc_args = [
+    '-DHAVE_MAD'
+  ]
+
+  vamp_symbol_args += [
+    '-Wl,--version-script=' + meson.current_source_dir() / 'vamp-plugin-sdk/vamp-plugin.map'
+  ]
+
+  # Android's system log, which main.cpp passes stdout and stderr on to;
+  # and its media extractors and decoders (main/AndroidMediaReadStream)
+  feature_additional_libs = [
+    '-llog',
+    '-lmediandk',
+  ]
+
 else
     error('This operating system ("' + system + '") is not supported by this build file')
 endif # system
@@ -1114,36 +1190,72 @@ tony_entry_files = [
 
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
+  'main/AndroidFiles.cpp',
+  'main/AudioRoute.cpp',
+  'main/AudioDriverSettings.cpp',
   'main/Coverage.cpp',
+  'main/DecodedPcm.cpp',
+  'main/LogFile.cpp',
   'main/LatencyCalibration.cpp',
   'main/LatencyCheck.cpp',
+  'main/LiveDotsFeed.cpp',
   'main/Lyrics.cpp',
   'main/LyricsEdit.cpp',
   'main/LyricsTtml.cpp',
-  'main/ModelChangeThrottle.cpp',
+  'main/OctaveSlips.cpp',
+  'main/PinchZoom.cpp',
+  'main/PopupArea.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/SingingTakes.cpp',
+  'main/SongScroll.cpp',
+  'main/StreamLatency.cpp',
   'main/TakeAudio.cpp',
   'main/TakeDiff.cpp',
   'main/TakeEvents.cpp',
   'main/TakesFile.cpp',
   'main/TakeTiming.cpp',
+  'main/VerticalZoom.cpp',
 ]
+
+# Android's decoders for the audio its libraries cannot read (M4A, FLAC,
+# Ogg): a bqaudiostream reader that registers itself, which only link_whole
+# keeps in the application, nothing referring to it
+if system == 'android'
+  tony_core_files += [
+    'main/AndroidMediaReadStream.cpp',
+  ]
+endif
 
 tony_app_files = [
   'main/AlternatePitchTrack.cpp',
+  'main/AudioCheckIndicator.cpp',
   'main/AudioCheckRunner.cpp',
+  'main/AudioDriverMenus.cpp',
   'main/CalibrateAudioDialog.cpp',
+  'main/CompactLayout.cpp',
   'main/CoverageStrip.cpp',
   'main/LyricsTrack.cpp',
   'main/LyricsEditor.cpp',
+  'main/LyricsSize.cpp',
   'main/Analyser.cpp',
   'main/MainWindow.cpp',
   'main/NetworkPermissionTester.cpp',
   'main/PaneUtils.cpp',
+  'main/PlotSize.cpp',
+  'main/SongScrollBar.cpp',
   'main/TakeCommands.cpp',
   'main/TakeLayers.cpp',
+  'main/TouchGestures.cpp',
+  'main/TouchMenuStyle.cpp',
 ]
+
+if system == 'android'
+  tony_app_files += [
+    'main/AndroidScreen.cpp',
+    'main/AndroidStorage.cpp',
+    'main/OboeAudioIO.cpp',
+  ]
+endif
 
 tony_core_moc_files = qt.preprocess(
   moc_headers: [
@@ -1155,11 +1267,19 @@ tony_app_moc_headers = [
   'main/MainWindow.h',
   'main/Analyser.h',
   'main/AlternatePitchTrack.h',
+  'main/AudioCheckIndicator.h',
   'main/AudioCheckRunner.h',
+  'main/AudioDriverMenus.h',
   'main/CalibrateAudioDialog.h',
+  'main/CompactLayout.h',
   'main/CoverageStrip.h',
   'main/LyricsTrack.h',
   'main/LyricsEditor.h',
+  'main/LyricsSize.h',
+  'main/PlotSize.h',
+  'main/SongScrollBar.h',
+  'main/TouchGestures.h',
+  'main/TouchMenuStyle.h',
 ]
 
 if dev_checks
@@ -1216,6 +1336,10 @@ endif
 
 if system == 'linux'
   tony_main_name = 'tony'
+elif system == 'android'
+  # androiddeployqt looks for lib<application-binary>_<abi>.so, and the
+  # deployment settings name the application-binary Tony
+  tony_main_name = 'Tony_' + android_abi
 else
   tony_main_name = 'Tony'
 endif # system
@@ -1278,240 +1402,253 @@ tony_app_dep = declare_dependency(
 
 # link_whole so that the application contains exactly the objects it did
 # when these sources were compiled straight into it.
-executable(
-  tony_main_name,
-  qt_resource_files,
-  tony_entry_files,
-  rc,
-  link_whole: [
-    tony_app_lib,
-    tony_core_lib,
-  ],
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    os_dep,
-    dl_dep
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-    tony_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'windows',
-  install: true,
-)
-
-svcore_base_test_exe = executable(
-  'test-svcore-base',
-  svcore_base_test_moc_files,
-  'svcore/base/test/svcore-base-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
-svcore_system_test_exe = executable(
-  'test-svcore-system',
-  svcore_system_test_moc_files,
-  'svcore/system/test/svcore-system-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
-svcore_data_model_test_exe = executable(
-  'test-svcore-data-model',
-  svcore_data_model_test_moc_files,
-  'svcore/data/model/test/MockWaveModel.cpp',
-  'svcore/data/model/test/svcore-data-model-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
-svcore_data_fileio_test_exe = executable(
-  'test-svcore-data-fileio',
-  svcore_data_fileio_test_moc_files,
-  'svcore/data/model/test/MockWaveModel.cpp',
-  'svcore/data/fileio/test/UnsupportedFormat.cpp',
-  'svcore/data/fileio/test/svcore-data-fileio-test.cpp',
-  dependencies: [
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
-# Tony's own tests. Two executables, because they differ in cost and in
-# what they link: test-tony-core needs no GUI and no audio device;
-# test-tony-app creates widgets (offscreen) and links svgui and svapp.
-
-tony_core_test_moc_files = qt.preprocess(
-  moc_headers: [
-  'main/test/TestRealtimeYin.h',
-  'main/test/TestRealtimePitchTracker.h',
-  'main/test/TestLatencyShift.h',
-  'main/test/TestCoverage.h',
-  'main/test/TestTakeAudio.h',
-  'main/test/TestTakeEvents.h',
-  'main/test/TestSingingTakes.h',
-  'main/test/TestTakesFile.h',
-  'main/test/TestTakeTiming.h',
-  'main/test/TestLyrics.h',
-  'main/test/TestLyricsTtml.h',
-  'main/test/TestLyricsEdit.h',
-  'main/test/TestLatencyCheck.h',
-  'main/test/TestLatencyCalibration.h',
-  'main/test/TestTakeDiff.h',
-  'main/test/TestModelChangeThrottle.h',
-  'main/test/TestRunSuite.h',
-])
-
-# Where the suites find the files in testdata/. Forward slashes: a
-# backslash of a Windows path would start an escape in the C string.
-tony_test_data_dir = import('fs').as_posix(meson.current_source_dir() / 'testdata')
-
-tony_core_test_exe = executable(
-  'test-tony-core',
-  tony_core_test_moc_files,
-  'main/test/PyinReference.cpp',
-  'pyin/YinUtil.cpp',
-  'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
-  'main/test/tony-core-test.cpp',
-  dependencies: [
-    tony_core_dep,
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-    tony_defines,
-    '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
-tony_app_test_moc_headers = [
-  'main/test/TestSingingDocument.h',
-  'main/test/TestViewCache.h',
-  'main/test/TestSingingAnalysis.h',
-  'main/test/TestRecordWorkflow.h',
-  'main/test/TestLyricsLayer.h',
-  'main/test/TestUiChecks.h',
-  'main/test/TestAudioCheck.h',
-]
-
-tony_app_test_moc_files = qt.preprocess(
-  moc_headers: tony_app_test_moc_headers,
-  moc_extra_arguments: dev_moc_args,
-)
-
-tony_app_test_exe = executable(
-  'test-tony-app',
-  tony_app_test_moc_files,
-  'main/test/tony-app-test.cpp',
-  dependencies: [
-    tony_app_dep,
-    tony_core_dep,
-    svcore_dep,
-    qt_dep,
-    feature_dependencies,
-    os_dep,
-    dl_dep,
-  ],
-  cpp_args: [
-    feature_defines,
-    general_defines,
-    tony_defines,
-    '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
-  ],
-  link_args: [
-    feature_additional_libs,
-    general_link_args,
-  ],
-  win_subsystem: 'console'
-)
-
-test('tony-core', tony_core_test_exe)
-test('tony-app', tony_app_test_exe,
-     depends: pyin_plugin,
-     timeout: 900,
-     env: [ 'QT_QPA_PLATFORM=offscreen' ])
-
-# The development checks' suite, only where the checks are built. Its
-# own executable: every test records takes in real time, and it is run
-# when a change touches what the checks drive (AGENTS.md)
-if dev_checks
-  tony_dev_test_moc_files = qt.preprocess(
-    moc_headers: [
-    'main/test/TestDevChecks.h',
+if system == 'android'
+  # Qt for Android's Java launcher loads the application as a shared
+  # library and calls its main(), the one symbol it has to export.
+  # --exclude-libs keeps whatever comes from a static library (Tony's
+  # own, svcore, the C libraries) out of its dynamic symbol table.
+  shared_library(
+    tony_main_name,
+    qt_resource_files,
+    tony_entry_files,
+    link_whole: [
+      tony_app_lib,
+      tony_core_lib,
     ],
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      os_dep,
+      dl_dep
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+      tony_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+      '-Wl,--exclude-libs,ALL',
+    ],
+    install: true,
+  )
+else
+  executable(
+    tony_main_name,
+    qt_resource_files,
+    tony_entry_files,
+    rc,
+    link_whole: [
+      tony_app_lib,
+      tony_core_lib,
+    ],
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      os_dep,
+      dl_dep
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+      tony_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'windows',
+    install: true,
+  )
+endif # system
+
+# The tests run on the desktop only: the Android build is the
+# application and its plugins.
+if system != 'android'
+
+  svcore_base_test_exe = executable(
+    'test-svcore-base',
+    svcore_base_test_moc_files,
+    'svcore/base/test/svcore-base-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
+
+  svcore_system_test_exe = executable(
+    'test-svcore-system',
+    svcore_system_test_moc_files,
+    'svcore/system/test/svcore-system-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
+
+  svcore_data_model_test_exe = executable(
+    'test-svcore-data-model',
+    svcore_data_model_test_moc_files,
+    'svcore/data/model/test/MockWaveModel.cpp',
+    'svcore/data/model/test/svcore-data-model-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
+
+  svcore_data_fileio_test_exe = executable(
+    'test-svcore-data-fileio',
+    svcore_data_fileio_test_moc_files,
+    'svcore/data/model/test/MockWaveModel.cpp',
+    'svcore/data/fileio/test/UnsupportedFormat.cpp',
+    'svcore/data/fileio/test/svcore-data-fileio-test.cpp',
+    dependencies: [
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
+
+  # Tony's own tests. Two executables here, because they differ in cost
+  # and in what they link: test-tony-core needs no GUI and no audio
+  # device; test-tony-app creates widgets (offscreen) and links svgui and
+  # svapp. The dev checks' test-tony-dev is a third, below.
+
+  tony_core_test_moc_files = qt.preprocess(
+    moc_headers: [
+    'main/test/TestAndroidFiles.h',
+    'main/test/TestRealtimeYin.h',
+    'main/test/TestRealtimePitchTracker.h',
+    'main/test/TestOctaveSlips.h',
+    'main/test/TestLatencyShift.h',
+    'main/test/TestCoverage.h',
+    'main/test/TestDecodedPcm.h',
+    'main/test/TestLogFile.h',
+    'main/test/TestPinchZoom.h',
+    'main/test/TestPopupArea.h',
+    'main/test/TestStreamLatency.h',
+    'main/test/TestTakeAudio.h',
+    'main/test/TestTakeEvents.h',
+    'main/test/TestSingingTakes.h',
+    'main/test/TestTakesFile.h',
+    'main/test/TestTakeTiming.h',
+    'main/test/TestVerticalZoom.h',
+    'main/test/TestSongScroll.h',
+    'main/test/TestLyrics.h',
+    'main/test/TestLyricsTtml.h',
+    'main/test/TestLyricsEdit.h',
+    'main/test/TestLatencyCheck.h',
+    'main/test/TestLatencyCalibration.h',
+    'main/test/TestAudioDriverSettings.h',
+    'main/test/TestTakeDiff.h',
+    'main/test/TestLiveDotsFeed.h',
+    'main/test/TestRunSuite.h',
+  ])
+
+  # Where the suites find the files in testdata/. Forward slashes: a
+  # backslash of a Windows path would start an escape in the C string.
+  tony_test_data_dir = import('fs').as_posix(meson.current_source_dir() / 'testdata')
+
+  tony_core_test_exe = executable(
+    'test-tony-core',
+    tony_core_test_moc_files,
+    'main/test/PyinReference.cpp',
+    'pyin/YinUtil.cpp',
+    'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
+    'main/test/tony-core-test.cpp',
+    dependencies: [
+      tony_core_dep,
+      svcore_dep,
+      qt_dep,
+      feature_dependencies,
+      dl_dep,
+    ],
+    cpp_args: [
+      feature_defines,
+      general_defines,
+      tony_defines,
+      '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
+    ],
+    link_args: [
+      feature_additional_libs,
+      general_link_args,
+    ],
+    win_subsystem: 'console'
+  )
+
+  tony_app_test_moc_headers = [
+    'main/test/TestSingingDocument.h',
+    'main/test/TestViewCache.h',
+    'main/test/TestSingingAnalysis.h',
+    'main/test/TestRecordWorkflow.h',
+    'main/test/TestLyricsLayer.h',
+    'main/test/TestPlotSize.h',
+    'main/test/TestUiChecks.h',
+    'main/test/TestAudioCheck.h',
+    'main/test/TestTouchGestures.h',
+    'main/test/TestCompactLayout.h',
+    'main/test/TestTouchMenuStyle.h',
+  ]
+
+  tony_app_test_moc_files = qt.preprocess(
+    moc_headers: tony_app_test_moc_headers,
     moc_extra_arguments: dev_moc_args,
   )
 
-  tony_dev_test_exe = executable(
-    'test-tony-dev',
-    tony_dev_test_moc_files,
-    'main/test/tony-dev-test.cpp',
+  tony_app_test_exe = executable(
+    'test-tony-app',
+    tony_app_test_moc_files,
+    'main/test/tony-app-test.cpp',
+    # The icons: without them every toolbar button shows its text, and
+    # is as wide as that (TestCompactLayout needs the buttons' real size)
+    qt_resource_files,
     dependencies: [
       tony_app_dep,
       tony_core_dep,
@@ -1525,6 +1662,7 @@ if dev_checks
       feature_defines,
       general_defines,
       tony_defines,
+      '-DTONY_TEST_DATA_DIR="' + tony_test_data_dir + '"',
     ],
     link_args: [
       feature_additional_libs,
@@ -1533,19 +1671,63 @@ if dev_checks
     win_subsystem: 'console'
   )
 
-  test('tony-dev', tony_dev_test_exe,
+  test('tony-core', tony_core_test_exe)
+  test('tony-app', tony_app_test_exe,
        depends: pyin_plugin,
-       timeout: 900,
+       timeout: 1800,
        env: [ 'QT_QPA_PLATFORM=offscreen' ])
-endif
 
-test('svcore-base', svcore_base_test_exe)
-test('svcore-system', svcore_system_test_exe)
-test('svcore-data-model', svcore_data_model_test_exe)
-test('svcore-data-fileio', svcore_data_fileio_test_exe,
-     args: [
-       '--testdir', meson.current_source_dir() / 'svcore/data/fileio/test'
-     ])
+  # The development checks' suite, only where the checks are built. Its
+  # own executable: every test records takes in real time, and it is run
+  # when a change touches what the checks drive (AGENTS.md)
+  if dev_checks
+    tony_dev_test_moc_files = qt.preprocess(
+      moc_headers: [
+      'main/test/TestDevChecks.h',
+      ],
+      moc_extra_arguments: dev_moc_args,
+    )
+
+    tony_dev_test_exe = executable(
+      'test-tony-dev',
+      tony_dev_test_moc_files,
+      'main/test/tony-dev-test.cpp',
+      dependencies: [
+        tony_app_dep,
+        tony_core_dep,
+        svcore_dep,
+        qt_dep,
+        feature_dependencies,
+        os_dep,
+        dl_dep,
+      ],
+      cpp_args: [
+        feature_defines,
+        general_defines,
+        tony_defines,
+      ],
+      link_args: [
+        feature_additional_libs,
+        general_link_args,
+      ],
+      win_subsystem: 'console'
+    )
+
+    test('tony-dev', tony_dev_test_exe,
+         depends: pyin_plugin,
+         timeout: 900,
+         env: [ 'QT_QPA_PLATFORM=offscreen' ])
+  endif
+
+  test('svcore-base', svcore_base_test_exe)
+  test('svcore-system', svcore_system_test_exe)
+  test('svcore-data-model', svcore_data_model_test_exe)
+  test('svcore-data-fileio', svcore_data_fileio_test_exe,
+       args: [
+         '--testdir', meson.current_source_dir() / 'svcore/data/fileio/test'
+       ])
+
+endif # system
 
 summary({'prefix': get_option('prefix'),
          'bindir': get_option('bindir'),

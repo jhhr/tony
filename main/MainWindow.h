@@ -28,20 +28,32 @@
 #include "TakeTiming.h"
 #include "LatencyUtils.h"
 #include "LatencyCalibration.h"
-#include "ModelChangeThrottle.h"
+#include "LiveDotsFeed.h"
 
 #include <vector>
 #include <string>
 #include <atomic>
+#include <functional>
 
 #include "data/model/SparseTimeValueModel.h"
+
+#ifdef Q_OS_ANDROID
+#include <QElapsedTimer>
+class AndroidStorage;
+#endif
 
 class QTimer;
 class QComboBox;
 class QActionGroup;
+class QToolBar;
+class CompactLayout;
+class SongScrollBar;
+class PlotSize;
+class LyricsSize;
 
 class AudioCheckRunner;
 struct AudioCheckResult;
+class AudioDriverMenus;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -106,6 +118,10 @@ public:
     void toXml(QTextStream &out, bool asTemplate) override;
     FileOpenStatus openSession(sv::FileSource source) override;
 
+    // Switch the layout for a phone on or off (CompactLayout), as View >
+    // Compact Layout does: main() switches it on at start on Android and
+    // with --compact
+    void setCompactLayout(bool on);
     // The round trip takes are placed with (see LatencyCalibration).
     // Keep the one an audio check measured, for the devices it started
     // on and the rate it recorded at (AudioCheckResult::key); false, with
@@ -120,9 +136,37 @@ public:
     // before the take starts: the device's rate is known only once it
     // has recorded, so until a take has been recorded on these devices
     // this assumes the session's rate, the only one a usable check
-    // stores a figure at.  The reported pair is 0 until the device is
-    // open
+    // stores a figure at (a device that reports its route says its rate
+    // once it is open).  The reported pair is 0 until the device is open
     LatencyCalibration::InUse latencyInUse() const;
+
+    // The devices a measured round trip is kept for, at the given rate:
+    // the route the open device reports, if it reports one (OboeAudioIO
+    // on a phone), else the devices the Preferences name.  A device open
+    // for playback only names the input a figure is kept with for its
+    // output, if only one is (LatencyCalibration::onlyRecordDevice())
+    LatencyCalibration::Key latencyKey(sv::sv_samplerate_t rate) const;
+
+    // The route the open device reports; its driver is "" if it reports
+    // none, or there is no device open
+    AudioRoute::Route audioRoute() const;
+
+#ifdef Q_OS_ANDROID
+    // The microphone is asked for when it is first needed: Record starts
+    // the take once it is given, Calibrate Audio the check.  granted is
+    // called then, and not if it is refused, which is said in a box
+    bool microphoneAllowed() const;
+    void askForMicrophone(std::function<void()> granted);
+
+    // Text saved through the save picker, as Help > Save Log... and
+    // Calibrate Audio's Save Report... do: a new document the picker
+    // makes, written and closed through its provider, with what went
+    // wrong, and what the provider says it holds, said over parent.
+    // what names the text in the messages ("log")
+    void saveTextThroughPicker(QWidget *parent, const QByteArray &text,
+                               QString title, QString suggestedName,
+                               QString what);
+#endif
 
 signals:
     void canExportPitchTrack(bool);
@@ -226,6 +270,7 @@ protected slots:
     virtual void alternatePitchUp();
     virtual void alternatePitchDown();
     virtual void syncAlternatePitchTrack();
+    void syncSongScrollBar();
 
     virtual void importLyrics();
     virtual void exportLyrics();
@@ -311,6 +356,11 @@ protected slots:
     virtual void rescanAudioDevices();
     virtual void audioDeviceSelected(QAction *);
 
+    // Playback > Audio Driver or Audio Latency chosen, and written to the
+    // Preferences: the device is opened again, with it
+    void audioDriverChosen(QString implementation);
+    void audioLatencyChosen(double seconds);
+
     // Playback > Calibrate Audio: the audio check's dialog, not modal
     virtual void calibrateAudio();
 
@@ -335,7 +385,6 @@ protected slots:
 
     // --- Real-time pitch tracking during microphone recording ---
     virtual void recordingStarted();
-    virtual void onRealtimePitchDetected(sv::sv_frame_t frame, double hz);
     virtual void recordingFinishedFull(Analyser *analysing = nullptr);
     virtual void finishSingingTake();
 
@@ -369,11 +418,37 @@ protected:
     // Model backing the realtime layer (owned by the document).
     sv::ModelId           m_realtimePitchModelId;
 
-    // Tells the pane of the dots added to that model, which tells nobody
-    // itself (see setupRealtimePitchLayer())
-    ModelChangeThrottle   m_realtimeDotsNotifier;
+    // Brings the tracker's estimates to onRealtimePitchDetected() in
+    // batches, and reports once a second what they cost
+    LiveDotsFeed          m_liveDotsFeed;
 
     sv::Overview  *m_overview;
+
+    // The overview's thin stand-in in the compact layout, which shows it
+    // in the overview's place; hidden otherwise
+    SongScrollBar *m_songScroll;
+
+    // The layout for a phone: one toolbar of touch-sized buttons in place
+    // of the menu bar and the other toolbars.  MainWindow only hands it
+    // the parts (setupCompactLayout()): the actions below, which are made
+    // with the menus and toolbars, and others that have members already
+    CompactLayout *m_compactLayout;
+
+    // View > Plot Size: how large the panes draw pitch and notes
+    PlotSize      *m_plotSize;
+
+    // View > Lyrics Size: how large the lyrics' words are drawn
+    LyricsSize    *m_lyricsSize;
+
+    QAction       *m_playAction;
+    QAction       *m_recordAction;
+    QAction       *m_zoomInAction;
+    QAction       *m_zoomOutAction;
+    QAction       *m_navigateToolAction;
+    QAction       *m_noteEditToolAction;
+    QToolBar      *m_playbackControlsToolBar;
+    QToolBar      *m_showAndPlayToolBar;
+    void setupCompactLayout();
 
     // Actions/toolbar items for the singing track
     QAction       *m_showSingingPitch;
@@ -776,6 +851,9 @@ protected:
     QMenu         *m_audioInputDeviceMenu;
     QActionGroup  *m_audioInputDeviceGroup;
 
+    // Playback > Audio Driver and Audio Latency, before the device menus
+    AudioDriverMenus *m_audioDriverMenus;
+
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;
     QAction       *m_rwdAction;
@@ -830,6 +908,16 @@ protected:
                                       const std::vector<std::string> &names,
                                       QString settingKey);
 
+    // The implementations bqaudioio has, of which the drivers are offered
+    // in Playback > Audio Driver.  Virtual so that the tests can give
+    // drivers the platform they run on does not have
+    virtual QStringList audioImplementationNames() const;
+
+    // Where no driver is named and MME is built in, name it (and carry
+    // the devices chosen before over to it): before a device is opened,
+    // and before the Playback menu shows the device menus
+    void nameDefaultAudioDriver();
+
     // Helpers for the singing / second-track workflow.
     // deferAnalysis=true skips pYIN: swapSingingAudio() uses it, as the
     // pitch and notes layers it hands the new analyser are analysed
@@ -840,6 +928,16 @@ protected:
     virtual void setupRealtimePitchLayer();
     virtual void teardownRealtimePitchLayer();
     virtual void stopRealtimePitchTracker();
+
+    // A batch of the live tracker's estimates, everything it has found
+    // since the last: dots for them, the pane told of them, the status
+    // bar set from the newest.  From m_liveDotsFeed
+    virtual void onRealtimePitchDetected
+        (const RealtimePitchTracker::Estimates &estimates);
+
+    // The once-a-second log line of a take: how far the recording, the
+    // tracker and the dots have got, and what the dots cost
+    void logLiveDots(const LiveDotsFeed::Report &report);
 
     // The raw recording of a take needs a layer of its own to hold it in
     // the document: the singing analyser is busy with the take's audio,
@@ -967,11 +1065,13 @@ protected:
 
     // Round-trip hardware latency (the figure the audio check measured,
     // or else output + input as the device reports them, in frames of the
-    // recording; see roundTripAt()) stored when a singing-track recording
-    // is made with the "play reference while recording" toggle on.  The recording is read
-    // from this frame on when it is spliced into the take's audio, so that
-    // what the singer sang in answer to the reference at m_takePosition
-    // lands there; and the live dots are placed with it during the take.
+    // recording, at the device's rate; see roundTripAt()) stored when a
+    // singing-track recording is made with the "play reference while
+    // recording" toggle on.  The recording is read from this frame on when
+    // it is spliced into the take's audio, so that what the singer sang in
+    // answer to the reference at m_takePosition lands there; and the live
+    // dots are placed with it during the take.  TakeTiming converts it to
+    // the reference's frames.
     // Reset to 0 in record() at the start of every take, standalone ones
     // included, but not by a Stop: the splice needs it after that.
     //
@@ -988,6 +1088,11 @@ protected:
     std::atomic<sv::sv_frame_t> m_recordingStartGapMeasured;
     std::atomic<bool> m_awaitingReferenceStart;
 
+    // The play source counts at the reference's rate, and the device may
+    // run at another: frames of the recording per frame of the play
+    // source, set before the reference is started, for the audio
+    // callback that measures the start gap
+    std::atomic<double> m_recordFramesPerPlayFrame;
     // What the take being recorded, or the last one, was placed with:
     // cleared when a take starts, the round trip and the latencies the
     // device reported (in seconds, as roundTripAt() has them) filled in
@@ -1024,8 +1129,8 @@ protected:
     // path and the devices are theirs until they end
     bool audioCheckRunning() const;
 
-    // The Record button, shut while audioCheckRunning()
-    QAction *m_recordAction;
+    // The Record button (m_recordAction, with the compact layout's parts
+    // above) is shut while audioCheckRunning()
 
     // Playback > Calibrate Audio, made the first time it is chosen, and
     // the lines under it: the latency takes are placed with, and Forget
@@ -1050,15 +1155,21 @@ protected:
     // file is read at before there is one
     sv::sv_samplerate_t sessionRate() const;
 
-    // The rate the next take is expected to record at: the last one's,
-    // or before there is one, the session's
+    // The rate the next take is expected to record at: the rate of a
+    // device that reports its route; else the last take's, or before
+    // there is one, the session's
     sv::sv_samplerate_t expectedRecordingRate() const;
 
+    // The route of the open device, if it is an AudioRouteReporter and
+    // reports one; false, with route cleared, if not
+    bool deviceRoute(AudioRoute::Route &route) const;
+
     // The round trip for a take recorded at the given rate, in seconds,
-    // and where it came from: a stored figure for these devices and this
-    // rate, unless the latencies the device reports have changed since
-    // it was measured; otherwise the reported pair, each converted from
-    // the frames it counts
+    // and where it came from: a stored figure for these devices (or this
+    // route: latencyKey()) and this rate, unless the latencies the device
+    // reports, or for a route how it opened its streams, have changed
+    // since it was measured; otherwise the reported pair, each converted
+    // from the frames it counts
     LatencyCalibration::InUse roundTripAt(sv::sv_samplerate_t recordingRate) const;
 
     void refineRecordingLatency();
@@ -1090,6 +1201,103 @@ protected:
     virtual void closeEvent(QCloseEvent *e);
     bool checkSaveModified();
     bool waitForInitialAnalysis();
+
+    // A session that loaded without some of the audio it names (svapp's
+    // "Incomplete session loaded") is saved without any mention of that
+    // audio, so the file it came from, saved over, would lose it. It is
+    // saved only when the user asks and then says yes: Save, Save As and
+    // Save Session in Audio Path ask first, and a save no one asked for
+    // (Android's on suspend) passes it by. Once saved it is what its new
+    // file says, and is not asked about again
+    bool sessionIsIncomplete() const;
+    bool confirmSaveOfIncompleteSession();
+    // The question, which the tests answer: they cannot answer a dialog
+    virtual bool askToSaveIncompleteSession();
+
+    // Whether the session may be saved with no one asked: it has a file
+    // of its own, has been changed, and is not incomplete
+    bool maySaveUnasked() const;
+
+    // Whether Stop, and the end of a take, suspend the audio device. No:
+    // each start of a stream can move its input against its output by
+    // several ms, which no one measured figure can place every take with,
+    // so the stream is kept running from the first take on
+    bool suspendAudioOnStop() const override;
+
+    // How long the device kept running may sit idle, neither playing nor
+    // recording, before it is suspended anyway, in ms; 0 for never. On
+    // Android, where the microphone stays open and the battery drains
+    // while it runs, a couple of minutes; on desktop never
+    virtual int audioIdleSuspendMillis() const;
+    void audioActivityChanged();
+    void suspendIdleAudio();
+    QTimer *m_audioIdleTimer;
+
+#ifdef Q_OS_ANDROID
+    // Android's file picker gives content:// URIs, which svcore's readers
+    // cannot open. A file in the phone's own storage is opened where it
+    // is, by its path, once Tony has All files access (AndroidStorage),
+    // so that a session finds its audio and takes beside it. Other audio
+    // is copied into the app's own storage and the copy's path returned;
+    // other sessions are refused. Tony's own picker, not svgui's dialog:
+    // that asks Qt whether the URI's file exists, and Qt's content file
+    // engine says no for a name with parentheses (AndroidFiles::
+    // grantedUri()); and it offers only the types Qt names for its
+    // filters, which are not always Android's
+    QString getOpenFileName(sv::FileFinder::FileType type) override;
+
+    // What to tell the user of a picked file that could not be opened or
+    // saved, to pass on: its provider, the path looked for, and why
+    QString pickDetails(QString uri, QString path, QString why) const;
+
+    // Help > Save Log...: Tony's log (main.cpp) through the save picker,
+    // for a user who cannot read the system log to send
+    void saveLog();
+
+    // Save Session As: Tony's own picker, which suggests a name (svgui's
+    // suggests none), and then the path of the file picked in the phone's
+    // own storage, or nothing. The picker has made an empty document by
+    // then, which is removed if it is not to be the session. Other files
+    // are saved as before
+    QString getSaveFileName(sv::FileFinder::FileType type) override;
+    AndroidStorage *m_storage;
+
+    // A recent file that has been moved or deleted is said to be so, and
+    // is no longer offered (RecentFiles keeps it, having no way to drop
+    // one)
+    bool recentFileIsThere(QString path);
+
+    // Android sends Tony to the background: playback stops, a take being
+    // recorded is finished as Stop finishes it, the audio device is
+    // suspended, and the session is saved as Save saves it, if it has a
+    // file of its own. Android holds Tony's event loop from the moment
+    // this returns until Tony is back, so
+    // nothing here may wait on it: a save that has to wait for the
+    // analysis of a take is made when that is done
+    void applicationStateChanged(Qt::ApplicationState state);
+    void saveWhenSuspended();
+    QTimer *m_suspendSaveTimer;
+    QString m_suspendSavePath;
+
+    // The audio device is Oboe's (OboeAudioIO): bqaudioio has no
+    // Android backend. Its input only once the microphone may be used
+    void createAudioIO() override;
+
+
+    // A device that goes away (headphones in or out) leaves the device
+    // failed: looked for on a timer, and the device opened afresh
+    void checkAudioDevice();
+    QTimer *m_audioDeviceCheck;
+    QElapsedTimer m_audioDeviceReopened;
+    int m_audioDeviceReopens;
+#else
+    // Before each device is opened: a driver named where none is, and
+    // the latency chosen for it handed to bqaudioio. Then openAudioIO()
+    void createAudioIO() override;
+
+    // Opens the device the Preferences name, as MainWindowBase does
+    virtual void openAudioIO();
+#endif
 
     // A session must not be saved in the middle of the analysis of a
     // recorded range: the take's pitch and notes still hold the state

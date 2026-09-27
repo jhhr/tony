@@ -53,44 +53,47 @@ struct AudioCheckResult
     double reportedInputLatency;
 
     /// The rate the device recorded at, and the session's, which the
-    /// reference was made at
+    /// reference was made at.  They may differ: a recording is converted
+    /// to the reference's rate before it is spliced, and the round trip
+    /// is counted in seconds, so a check at another rate is judged, and
+    /// its figure kept, like any other
     sv::sv_samplerate_t recordingRate;
     sv::sv_samplerate_t referenceRate;
-
-    /// The two rates differ.  Set from the rates, whatever the sweeps
-    /// say: a take recorded at another rate is placed frame for frame
-    /// (a known bug), so it lands further off the further into the
-    /// reference it is, soon further than the finder looks
-    bool rateMismatch;
 
     /// The round trip that would have placed the takes right
     /// (LatencyCheck::calibratedRoundTrip()); see calibrationUsable()
     double calibratedRoundTrip;
 
     /// What the figure is kept under (MainWindow::storeMeasuredLatency()):
-    /// the devices as the Preferences named them when the run started,
-    /// and the rate the takes were recorded at.  Not the devices named
+    /// the devices as the Preferences named them when the run started
+    /// (MainWindow::latencyKey()), or the route the first take was
+    /// recorded through, and the rate the takes were recorded at.  Not the devices named
     /// when the figure is kept: the result is on show for as long as the
     /// user likes, and another device may have been chosen by then
     LatencyCalibration::Key key;
 
+    /// The route the first punch-in was recorded through, for a device
+    /// that reports one (TakeLatency::route): the key names it, and its
+    /// streams are the figure's fingerprint.  Its driver is "" otherwise
+    AudioRoute::Route route;
+
     /// Whether calibratedRoundTrip means anything: the run was judged
-    /// Ok or Unsteady, at the reference's rate
+    /// Ok or Unsteady
     bool calibrationUsable() const;
 
     AudioCheckResult() : usedRoundTrip(0), reportedOutputLatency(0),
                          reportedInputLatency(0), recordingRate(0),
-                         referenceRate(0), rateMismatch(false),
-                         calibratedRoundTrip(0) { }
+                         referenceRate(0), calibratedRoundTrip(0) { }
 };
 
 /**
  * The audio check: a test reference, written out and opened as a
  * session of its own, then punch-ins recorded against it through the
  * ordinary take path, and the take that comes out of them judged by
- * LatencyCheck::judgeTake().  Every punch-in restarts the stream, as a
- * real take does, and is placed with the latency the window uses for
- * any take, which is what is being measured.
+ * LatencyCheck::judgeTake().  Every punch-in is a take as the user's
+ * are (the stream kept running between them), and is placed with the
+ * latency the window uses for any take, which is what is being
+ * measured.
  *
  * The takes are recorded with Record into Selection, Play Reference
  * While Recording and the plan's pre-roll (kPreRollSeconds unless it
@@ -134,11 +137,26 @@ public:
     /// How often the runner looks at how a step is going
     static constexpr int kPollMs = 50;
 
+    /// How many times a desktop's the analyses a run waits for may take
+    /// here.  pYIN analysed the dev checks' long song, 240 s, in about
+    /// 10 s on the machine the limits below were set on, and the
+    /// calibration's reference in about 1.3 s.  A phone's core is 3 to 6
+    /// times slower, slower still when it is hot or the work lands on a
+    /// small core, and no phone has been timed yet: its log says how long
+    /// each analysis took ("was analysed in").  Four times leaves the
+    /// long song as long to be analysed as it plays
+#ifdef Q_OS_ANDROID
+    static constexpr int kAnalysisTimeFactor = 4;
+#else
+    static constexpr int kAnalysisTimeFactor = 1;
+#endif
+
     /// How long a step may take before the run gives up on it: the
     /// first analysis of the reference, a take's analysis, and a take
-    /// beyond its own length (lead-in and range) to stop itself
-    static constexpr int kReferenceTimeoutMs = 60000;
-    static constexpr int kTakeAnalysisTimeoutMs = 30000;
+    /// beyond its own length (lead-in and range) to stop itself.  The
+    /// last is in real time, whatever the machine
+    static constexpr int kReferenceTimeoutMs = 60000 * kAnalysisTimeFactor;
+    static constexpr int kTakeAnalysisTimeoutMs = 30000 * kAnalysisTimeFactor;
     static constexpr int kTakeStopTimeoutMs = 10000;
 
     /// How long past its own length (lead-in and range) a take may go
@@ -286,8 +304,9 @@ public:
     static bool analysing(Analyser *analyser);
 
     /**
-     * A take's audio file, mixed to one channel, at the rate it was
-     * recorded at.  The file, and not the take's model: the model is
+     * A take's audio file, mixed to one channel, at the file's rate
+     * (the reference's: a recording at another rate is converted before
+     * it is spliced).  The file, and not the take's model: the model is
      * normalised to full scale as it is read (the "normalise audio"
      * preference), which would have every take clipped, and resampled
      * to the session's rate.  "" on success, else what went wrong.

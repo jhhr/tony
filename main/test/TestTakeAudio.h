@@ -20,6 +20,8 @@
 
 #include "../TakeAudio.h"
 
+#include "TestSignals.h"
+
 #include "data/fileio/FileSource.h"
 #include "data/fileio/WavFileReader.h"
 #include "data/fileio/WavFileWriter.h"
@@ -451,6 +453,122 @@ private slots:
         QVERIFY(!QFile::exists(out));
         QVERIFY(TakeAudio::erase(old, ranges, old) != "");
         QVERIFY(allNearly(read(old), 0, 3000, 0.5f));
+    }
+
+    // Converting a recording from a device that does not run at the
+    // reference's rate. As long as it was in seconds, to the frame, in
+    // as many channels, kept apart
+    void resample_keeps_the_length_and_the_channels() {
+        const frame_t n = 12345;
+        Signal stereo;
+        for (frame_t i = 0; i < n; ++i) {
+            stereo.push_back(0.25f);
+            stereo.push_back(-0.25f);
+        }
+        QString in = writeWav(stereo, 2, 48000.0);
+        QString out = newPath();
+        QCOMPARE(TakeAudio::resample(in, 44100.0, out), QString());
+        QCOMPARE(TakeAudio::sampleRate(out), 44100.0);
+        Audio a = read(out);
+        QVERIFY(a.ok);
+        QCOMPARE(a.channels, 2);
+        QCOMPARE(a.frames, frame_t(std::llround(n * 44100.0 / 48000.0)));
+        QVERIFY(allNearly(a, 1000, a.frames - 1000, 0.25f, 0));
+        QVERIFY(allNearly(a, 1000, a.frames - 1000, -0.25f, 1));
+
+        // Upwards, and longer than the blocks the work is done in
+        const frame_t m = 100000;
+        in = writeWav(ramp(m), 1, 44100.0);
+        out = newPath();
+        QCOMPARE(TakeAudio::resample(in, 48000.0, out), QString());
+        QCOMPARE(TakeAudio::sampleRate(out), 48000.0);
+        a = read(out);
+        QCOMPARE(a.frames, frame_t(std::llround(m * 48000.0 / 44100.0)));
+
+        // The original is as it was
+        QCOMPARE(TakeAudio::sampleRate(in), 44100.0);
+        QCOMPARE(read(in).frames, m);
+    }
+
+    // A click is where it was in time, to within a frame: near the
+    // start, across the boundary of two of the blocks the work is done
+    // in, and near the end, which the resampler holds back until
+    // something follows it
+    void resample_keeps_clicks_where_they_were() {
+        const frame_t n = 50000;
+        const std::vector<frame_t> clicks { 1000, 16390, 33000, n - 200 };
+        for (double from : { 48000.0, 44100.0 }) {
+            double to = (from == 48000.0 ? 44100.0 : 48000.0);
+            Signal s(n, 0.f);
+            for (frame_t c : clicks) s[c] = 0.9f;
+            QString in = writeWav(s, 1, from);
+            QString out = newPath();
+            QCOMPARE(TakeAudio::resample(in, to, out), QString());
+            Audio a = read(out);
+            QVERIFY(a.ok);
+            for (frame_t c : clicks) {
+                double want = double(c) * to / from;
+                frame_t peak = -1;
+                float loudest = 0.f;
+                for (frame_t i = frame_t(want) - 50; i <= frame_t(want) + 50;
+                     ++i) {
+                    if (i < 0 || i >= a.frames) continue;
+                    if (std::fabs(a.at(i)) > loudest) {
+                        loudest = std::fabs(a.at(i));
+                        peak = i;
+                    }
+                }
+                QVERIFY2(loudest > 0.3f && std::fabs(double(peak) - want) <= 1.0,
+                         qPrintable(QString("a click at frame %1 at %2 Hz "
+                                            "belongs at %3 at %4 Hz; the "
+                                            "loudest frame near it is %5, "
+                                            "at %6")
+                                    .arg(c).arg(from).arg(want).arg(to)
+                                    .arg(peak).arg(loudest)));
+            }
+        }
+    }
+
+    // A tone keeps its pitch, its phase and its level: frame for frame,
+    // the same sine at the new rate
+    void resample_keeps_a_tone() {
+        const double hz = 1000.0, from = 48000.0, to = 44100.0;
+        QString in = writeWav(TestSignals::sine(hz, from, int(from)), 1, from);
+        QString out = newPath();
+        QCOMPARE(TakeAudio::resample(in, to, out), QString());
+        Audio a = read(out);
+        QCOMPARE(a.frames, frame_t(to));
+        // Away from the ends, where the tone starts and stops abruptly
+        for (frame_t i = 1000; i < a.frames - 1000; ++i) {
+            float want = float(0.5 * std::sin(2.0 * TestSignals::kPi * hz *
+                                              double(i) / to));
+            QVERIFY2(std::fabs(a.at(i) - want) < 0.005f,
+                     qPrintable(QString("frame %1 is %2; a %3 Hz sine at "
+                                        "%4 Hz is %5 there")
+                                .arg(i).arg(a.at(i)).arg(hz).arg(to)
+                                .arg(want)));
+        }
+    }
+
+    void resample_errors() {
+        QString in = writeWav(constant(1000, 0.5f), 1, 48000.0);
+        QString other = writeWav(constant(1000, 0.25f));
+
+        QString out = newPath();
+        QVERIFY(TakeAudio::resample(m_dir.filePath("absent.wav"), 44100.0,
+                                    out) != "");
+        QVERIFY(TakeAudio::resample(in, 0.0, out) != "");
+        QVERIFY(TakeAudio::resample(in, 44100.0, "") != "");
+        QVERIFY(!QFile::exists(out));
+
+        // never over a file that is there, the one read from least of all
+        QVERIFY(TakeAudio::resample(in, 44100.0, in) != "");
+        QVERIFY(TakeAudio::resample(in, 44100.0, other) != "");
+        QVERIFY(allNearly(read(in), 0, 1000, 0.5f));
+        QVERIFY(allNearly(read(other), 0, 1000, 0.25f));
+
+        QCOMPARE(TakeAudio::sampleRate(in), 48000.0);
+        QCOMPARE(TakeAudio::sampleRate(m_dir.filePath("absent.wav")), 0.0);
     }
 };
 

@@ -21,6 +21,7 @@
 
 #include "../MainWindow.h"
 #include "../Analyser.h"
+#include "../AudioDriverMenus.h"
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
 
@@ -34,8 +35,10 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QMenu>
+#include <QSettings>
 #include <QTimer>
 
 #include <functional>
@@ -53,6 +56,13 @@ public:
         m_installDevice(installDevice) { }
 
     FakeAudioIO *fake() { return dynamic_cast<FakeAudioIO *>(m_audioIO); }
+
+    // The route the fake reports from the next time it is opened, and the
+    // device opened again, as a phone's is when its route changes
+    void setFakeRoute(const AudioRoute::Route &route) {
+        m_fakeConfig.route = route;
+    }
+    void doRecreateAudioIO() { recreateAudioIO(); }
 
     void doRecord() { record(); }
     void doPlay() { play(); } // and again to stop
@@ -115,6 +125,23 @@ public:
     bool doSaveSessionAs(QString path) { return saveSessionToPath(path); }
     QString sessionFile() { return m_sessionFile; }
 
+    // Save and Save As, as the File menu does them. Save As is given the
+    // file here, not by a dialog, if the test has named one
+    void doSaveSession() { saveSession(); }
+    void doSaveSessionAsAsked() { saveSessionAs(); }
+    void setSaveFileNameAnswer(QString path) { m_saveFileNameAnswer = path; }
+    int saveFileNameQuestions() const { return m_saveFileNameQuestions; }
+
+    // A session that loaded without some of its audio, and the question
+    // asked before it is saved, answered from here
+    bool isSessionIncomplete() const { return sessionIsIncomplete(); }
+    bool doMaySaveUnasked() const { return maySaveUnasked(); }
+    void setSaveIncompleteAnswer(bool yes) { m_saveIncompleteAnswer = yes; }
+    int saveIncompleteQuestions() const { return m_saveIncompleteQuestions; }
+
+    // The session's own file, as svapp's session reader would set it
+    void setSessionFile(QString path) { m_sessionFile = path; }
+
     // As answering "No" to "do you want to save?"
     void discardModifications() { m_documentModified = false; }
     bool isDocumentModified() { return m_documentModified; }
@@ -165,6 +192,40 @@ public:
     QMenu *playbackMenu() { return m_playbackMenu; }
     QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
     QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
+
+    // Playback > Audio Driver and Audio Latency, from the implementations
+    // given here: none unless a test gives some, whatever the platform
+    // has. Rebuilt as the app rebuilds them when they open
+    void setAudioImplementations(QStringList names) {
+        m_implementations = names;
+    }
+    AudioDriverMenus *audioDriverMenus() { return m_audioDriverMenus; }
+    void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
+    void doRescanAudioDevices() { rescanAudioDevices(); }
+
+    // Whether Stop, and the end of a take, leave the device running, as
+    // the application has them do. Not unless a test asks:
+    // the fake starts its programmed input again at every resume, and
+    // many tests rely on each take resuming it once
+    void keepAudioRunning(bool on) { m_keepAudioRunning = on; }
+    // What the application itself chooses, whatever this window does
+    bool applicationSuspendsAudioOnStop() const {
+        return MainWindow::suspendAudioOnStop();
+    }
+
+    // How long the device kept running may idle before it is suspended,
+    // in ms: never, unless a test asks, whatever the platform has
+    void setAudioIdleSuspendMillis(int ms) { m_audioIdleSuspendMillis = ms; }
+    int applicationAudioIdleSuspendMillis() const {
+        return MainWindow::audioIdleSuspendMillis();
+    }
+
+    // How often a device has been opened, and the driver and devices the
+    // Preferences named for the last one
+    int audioIOOpened() const { return m_audioIOOpened; }
+    LatencyCalibration::Key audioIOOpenedFor() const {
+        return m_audioIOOpenedFor;
+    }
     TakeLatency takeLatency() { return m_takeLatency; }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
 
@@ -274,16 +335,39 @@ public:
     int lyricsShiftQuestions() const { return m_shiftQuestions; }
     void whileAskingLyricsShift(std::function<void()> f) { m_whileAskingShift = f; }
 
+    // An estimate of the live tracker's, handed to the window as the
+    // live dots feed does, in a batch of its own
     void doRealtimePitchDetected(sv::sv_frame_t frame, double hz) {
-        onRealtimePitchDetected(frame, hz);
+        onRealtimePitchDetected({ { frame, hz } });
     }
+
+    // A GUI thread that takes this long, on top of the real work, each
+    // time the live dots are handed to it: a phone, several times slower
+    // than the machine the tests run on
+    void setLiveDotsDelay(int ms) { m_liveDotsDelayMs = ms; }
     QString statusText() { return getStatusLabel()->text(); }
     void setStatusText(QString text) { getStatusLabel()->setText(text); }
 
 protected:
-    void createAudioIO() override {
+    void onRealtimePitchDetected
+    (const RealtimePitchTracker::Estimates &estimates) override {
+        if (m_liveDotsDelayMs > 0) {
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < m_liveDotsDelayMs) { }
+        }
+        MainWindow::onRealtimePitchDetected(estimates);
+    }
+
+    // MainWindow::createAudioIO() has named the driver and applied its
+    // latency by now; the fake is opened in place of the device svapp
+    // would open, and what that would have been asked for is kept
+    void openAudioIO() override {
         if (m_audioIO || m_playTarget) return;
         if (!m_installDevice) return;
+        ++m_audioIOOpened;
+        QSettings settings;
+        m_audioIOOpenedFor = LatencyCalibration::currentKey(settings, 0);
         m_fakeConfig.inputIsKept = [this]() {
             return m_recordTarget->isRecording();
         };
@@ -291,6 +375,18 @@ protected:
             (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
              m_fakeConfig);
         m_playSource->setSystemPlaybackTarget(m_audioIO);
+    }
+
+    QStringList audioImplementationNames() const override {
+        return m_implementations;
+    }
+
+    bool suspendAudioOnStop() const override {
+        return !m_keepAudioRunning;
+    }
+
+    int audioIdleSuspendMillis() const override {
+        return m_audioIdleSuspendMillis;
     }
 
     bool confirmRecordingOverTake() override {
@@ -308,6 +404,17 @@ protected:
 
     QString askForTakeName(QString current) override {
         return m_takeNameAnswer == "" ? current : m_takeNameAnswer;
+    }
+
+    bool askToSaveIncompleteSession() override {
+        ++m_saveIncompleteQuestions;
+        return m_saveIncompleteAnswer;
+    }
+
+    QString getSaveFileName(sv::FileFinder::FileType type) override {
+        if (m_saveFileNameAnswer == "") return MainWindow::getSaveFileName(type);
+        ++m_saveFileNameQuestions;
+        return m_saveFileNameAnswer;
     }
 
     // Every take analyser is made here, for a take's first recording and
@@ -367,12 +474,22 @@ protected:
 private:
     FakeAudioIO::Config m_fakeConfig;
     bool m_installDevice;
+    QStringList m_implementations;
+    bool m_keepAudioRunning = false;
+    int m_audioIdleSuspendMillis = 0;
+    int m_audioIOOpened = 0;
+    LatencyCalibration::Key m_audioIOOpenedFor;
+    int m_liveDotsDelayMs = 0;
     bool m_recordOverAnswer = true;
     bool m_recordOverInDialog = false;
     int m_recordOverQuestions = 0;
     bool m_deleteTakeAnswer = true;
     int m_deleteTakeQuestions = 0;
     QString m_takeNameAnswer;
+    bool m_saveIncompleteAnswer = false;
+    int m_saveIncompleteQuestions = 0;
+    QString m_saveFileNameAnswer;
+    int m_saveFileNameQuestions = 0;
     bool m_holdRangedMerges = false;
     QString m_lyricsFileAnswer;
     int m_lyricsFileQuestions = 0;

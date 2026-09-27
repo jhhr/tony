@@ -16,6 +16,7 @@
 
 // Tier 1: the pitch maths of RealtimePitchTracker, without the thread.
 
+#include "../LatencyCheck.h"
 #include "../RealtimePitchTracker.h"
 
 #include "TestSignals.h"
@@ -128,6 +129,88 @@ private slots:
                             .arg(detected).arg(cents)));
     }
 
+    // Calibrate Audio's tones, as the reference has them and with their
+    // fundamental taken out, as a phone's speaker or an earbud held to
+    // the microphone loses it: the pitch all the same, from the window
+    // in the middle of each tone, at the reference's rate and a phone's
+    void reference_tones_with_and_without_their_fundamental_data() {
+        QTest::addColumn<double>("sampleRate");
+        QTest::addColumn<int>("event");
+        QTest::addColumn<bool>("withoutFundamental");
+        for (double sr : { 44100.0, 48000.0 }) {
+            for (int event = 0; event < 4; ++event) {
+                for (bool without : { false, true }) {
+                    QTest::newRow(qPrintable
+                                  (QString("event %1 at %2%3").arg(event)
+                                   .arg(sr)
+                                   .arg(without ? ", no fundamental" : "")))
+                        << sr << event << without;
+                }
+            }
+        }
+    }
+
+    void reference_tones_with_and_without_their_fundamental() {
+        QFETCH(double, sampleRate);
+        QFETCH(int, event);
+        QFETCH(bool, withoutFundamental);
+
+        const LatencyCheck::Layout layout =
+            LatencyCheck::calibrationLayout(sampleRate);
+        const LatencyCheck::Event &e = layout.events[event];
+        std::vector<float> x = LatencyCheck::generate(layout);
+        if (withoutFundamental) {
+            x = TestSignals::withoutFundamental(x, sampleRate, e.toneHz);
+        }
+
+        const sv::sv_frame_t middle = e.toneStart + e.toneLength / 2;
+        std::vector<float> window(x.begin() + (middle - kWindow / 2),
+                                  x.begin() + (middle + kWindow / 2));
+        auto rms = [](const std::vector<float> &v) {
+            double sum = 0.0;
+            for (float s : v) sum += double(s) * s;
+            return std::sqrt(sum / double(v.size()));
+        };
+        if (withoutFundamental) {
+            // What is left is the harmonics, at more than half the
+            // tone's level: something a speaker without bass still plays
+            const std::vector<float> generated = LatencyCheck::generate(layout);
+            const std::vector<float> whole
+                (generated.begin() + (middle - kWindow / 2),
+                 generated.begin() + (middle + kWindow / 2));
+            QVERIFY2(rms(window) > 0.5 * rms(whole),
+                     qPrintable(QString("%1 of %2").arg(rms(window))
+                                .arg(rms(whole))));
+
+            // Nothing of the fundamental is left: a pure tone at it, or
+            // as far off as the vibrato swings, taken out the same way,
+            // is 60 dB down by the time the window begins
+            for (double cents : { -LatencyCheck::kVibratoCents, 0.0,
+                                  LatencyCheck::kVibratoCents }) {
+                const std::vector<float> pure = TestSignals::sine
+                    (e.toneHz * std::pow(2.0, cents / 1200.0), sampleRate,
+                     int(middle - e.toneStart));
+                const std::vector<float> left = TestSignals::withoutFundamental
+                    (pure, sampleRate, e.toneHz);
+                double peak = 0.0;
+                for (size_t i = left.size() - kWindow / 2; i < left.size();
+                     ++i) {
+                    peak = std::max(peak, double(std::fabs(left[i])));
+                }
+                QVERIFY2(peak < 0.5e-3,
+                         qPrintable(QString("%1 cents off: %2")
+                                    .arg(cents).arg(peak)));
+            }
+        }
+
+        double detected = detect(window, sampleRate);
+        QVERIFY2(detected > 0.0, "no pitch detected");
+        double cents = TestSignals::centsBetween(detected, e.toneHz);
+        QVERIFY2(std::abs(cents) < 10.0,
+                 qPrintable(QString("detected %1 Hz, %2 cents from %3")
+                            .arg(detected).arg(cents).arg(e.toneHz)));
+    }
+
     void silence() {
         std::vector<float> zeros(kWindow, 0.f);
         QVERIFY(detect(zeros, 44100.0) < 0.0);
@@ -165,6 +248,28 @@ private slots:
             (TestSignals::sine(220.0, 44100.0, kWindow, amplitude), 44100.0);
         QVERIFY2(detected > 0.0, "no pitch detected");
         QVERIFY(std::abs(TestSignals::centsBetween(detected, 220.0)) < 10.0);
+    }
+
+    void window_level() {
+        // A sine's RMS is its peak less 3 dB
+        const double peak = std::pow(10.0, -40.0 / 20.0);
+        const double rms = -40.0 - 10.0 * std::log10(2.0);
+        std::vector<float> one = TestSignals::sine(220.0, 44100.0, kWindow, peak);
+        double level = RealtimePitchTracker::level(one.data(), kWindow, 1);
+        QVERIFY2(std::abs(level - rms) < 0.1,
+                 qPrintable(QString("%1 dBFS").arg(level)));
+
+        // Two inputs carrying it mix down to their sum, twice as large:
+        // the level is still each input's
+        std::vector<float> both(one);
+        for (float &v : both) v *= 2.f;
+        level = RealtimePitchTracker::level(both.data(), kWindow, 2);
+        QVERIFY2(std::abs(level - rms) < 0.1,
+                 qPrintable(QString("%1 dBFS").arg(level)));
+
+        const std::vector<float> zeros(kWindow, 0.f);
+        QCOMPARE(RealtimePitchTracker::level(zeros.data(), kWindow, 1),
+                 -200.0);
     }
 
     void diff_matches_pyin_data() {

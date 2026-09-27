@@ -22,6 +22,7 @@ class Document;
 class PaneStack;
 class Pane;
 class Overview;
+class View;
 }
 
 /**
@@ -44,5 +45,16 @@ void pruneExtraPane(sv::Document *document,
                     sv::Pane *extra,
                     sv::ModelId ownedModelId,
                     sv::Overview *overview = nullptr);
+
+/**
+ * Have the view draw again only the part of itself over frames [from,
+ * to), for a layer that draws there alone what changed there, and
+ * that is out of the view's cache, such as the live dots. A model's
+ * own change notice has the view draw all of itself: at a pixel ratio
+ * of 3 that is nine times the pixels, of every layer, the cached ones
+ * copied from the cache.
+ */
+void updateViewFrames(sv::View *view,
+                      sv::sv_frame_t from, sv::sv_frame_t to);
 
 #endif

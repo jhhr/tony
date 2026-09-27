@@ -14,8 +14,8 @@
 # shard of every suite (TONY_TEST_SHARD, main/test/RunSuite.h), and adds
 # up what they report. The app suite spends nearly all of its time
 # waiting on FakeAudioIO, which plays in real time: on the cloud
-# container's 4 cores, 8 processes run it in a minute and a half instead
-# of eight, and the load stays under 2.
+# container's 4 cores, 8 processes run it in under two minutes instead
+# of about ten, and the load stays under 2.
 #
 # Each process has a log directory of its own, and runs under an
 # application name of its own (shardApplicationName(),

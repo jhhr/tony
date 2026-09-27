@@ -28,6 +28,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QLabel>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -39,6 +40,7 @@ TakeObserver::TakeObserver(MainWindow *window, QObject *parent) :
     m_window(window),
     m_timer(new QTimer(this)),
     m_playbackFrame(0),
+    m_loopLevel(0),
     m_inputSince(false),
     m_inputLeftSince(0.f),
     m_inputRightSince(0.f),
@@ -70,6 +72,9 @@ TakeObserver::start()
     m_inputLeftSince = m_inputRightSince = 0.f;
     m_inputLeft = m_inputRight = 0.f;
     m_playbackFrame = 0;
+
+    // Started from a poll of the runner's, in the window's own loop
+    m_loopLevel = QThread::currentThread()->loopLevel();
 
     // This take's dots come in a model made once the take is under way
     m_earlierDots = m_window->m_realtimePitchModelId;
@@ -161,7 +166,8 @@ TakeObserver::poll()
     }
 
     s.status = m_window->getStatusLabel()->text();
-    s.modal = (QApplication::activeModalWidget() != nullptr);
+    s.modal = (QApplication::activeModalWidget() != nullptr ||
+               QThread::currentThread()->loopLevel() > m_loopLevel);
 
     if (s.recording && m_observation.recordingPath == "") {
         if (auto recording = ModelById::getAs<WritableWaveFileModel>

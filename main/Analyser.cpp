@@ -334,6 +334,35 @@ Analyser::setDisplayFrequencyExtents(double min, double max)
     return true;
 }
 
+void
+Analyser::getPitchOnShow(sv_frame_t start, sv_frame_t end,
+                         std::vector<double> &values) const
+{
+    if (end <= start) return;
+
+    if (isVisible(PitchTrack)) {
+        auto model = ModelById::getAs<SparseTimeValueModel>
+            (m_layers[PitchTrack]->getModel());
+        if (model) {
+            for (const Event &e : model->getEventsSpanning(start, end - start)) {
+                values.push_back(e.getValue());
+            }
+        }
+    }
+
+    // A note that starts before the pane and ends in it is on show too:
+    // spanning, not within
+    if (isVisible(Notes)) {
+        auto model = ModelById::getAs<NoteModel>
+            (m_layers[Notes]->getModel());
+        if (model) {
+            for (const Event &e : model->getEventsSpanning(start, end - start)) {
+                values.push_back(e.getValue());
+            }
+        }
+    }
+}
+
 int
 Analyser::getInitialAnalysisCompletion()
 {
@@ -786,8 +815,8 @@ Analyser::addEmptyAnalyses()
         QString transformName =
             tf->getTransformFriendlyName(pyinBase + w.output);
         if (sourceName != "" && transformName != "") {
-            model->setObjectName(tr("%1: %2").arg(sourceName)
-                                 .arg(transformName));
+            model->setObjectName(tr("%1: %2").arg(sourceName,
+                                                  transformName));
         } else if (transformName != "") {
             model->setObjectName(transformName);
         }
@@ -1207,8 +1236,15 @@ Analyser::analyseRange(sv_frame_t start, sv_frame_t end,
 
     // createDerivedLayers() returns only once the transform has set both
     // outputs' completion to 0, so no signal can have been missed above.
-    // A very short range could have finished by now all the same
-    rangedAnalysisCompletionChanged({});
+    // A very short range could have finished by now all the same.  It is
+    // looked at from the event loop, not here: then the caller always
+    // finds the range being analysed when this returns, whether pYIN took
+    // a second or was done within the call, and waits for the merge the
+    // same way.  (It was done within the call often enough, on a quiet
+    // machine, to make tests of what happens during an analysis fail.)
+    QMetaObject::invokeMethod(this, [this]() {
+        rangedAnalysisCompletionChanged({});
+    }, Qt::QueuedConnection);
 
     return "";
 }

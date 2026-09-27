@@ -13,6 +13,7 @@
 */
 
 #include "RealtimePitchTracker.h"
+#include "OctaveSlips.h"
 
 #include "data/model/WritableWaveFileModel.h"
 #include "data/model/Model.h"
@@ -35,7 +36,9 @@ RealtimePitchTracker::RealtimePitchTracker(ModelId audioSourceId,
       m_audioSourceId(audioSourceId),
       m_minFreq(60.0),
       m_maxFreq(1000.0),
-      m_threshold(0.15)
+      m_threshold(0.15),
+      m_minLevel(kMinLevel),
+      m_framesAnalysed(0)
 {
 }
 
@@ -57,11 +60,22 @@ RealtimePitchTracker::stop()
     wait();
 }
 
+RealtimePitchTracker::Estimates
+RealtimePitchTracker::takeEstimates()
+{
+    Estimates taken;
+    std::lock_guard<std::mutex> guard(m_estimatesMutex);
+    taken.swap(m_estimates);
+    return taken;
+}
+
 void
 RealtimePitchTracker::run()
 {
     FFT *fft = nullptr;
     sv_frame_t nextFrameToProcess = 0;
+    OctaveSlips slips;
+    vector<OctaveSlips::Dot> passed;
 
     cerr << "RealtimePitchTracker: background thread started" << endl;
 
@@ -80,6 +94,7 @@ RealtimePitchTracker::run()
         }
 
         double sr = audioModel->getSampleRate();
+        int channels = audioModel->getChannelCount();
 
         if (!fft) {
             fft = new FFT(kWindowSize);
@@ -101,20 +116,34 @@ RealtimePitchTracker::run()
 
             vector<float> raw(rawFv.begin(), rawFv.end());
 
-            vector<double> diff;
-            yinDifferenceFFT(raw, diff, fft);
-            yinCMND(diff);
-            double lagSamples = yinFindPitch(diff, minLag, maxLag, m_threshold);
-
-            if (lagSamples > 0.0) {
-                double hz = sr / lagSamples;
-                if (hz >= m_minFreq && hz <= m_maxFreq) {
-                    sv_frame_t centreFrame = nextFrameToProcess + kWindowSize / 2;
-                    emit pitchDetected(centreFrame, hz);
-                    processedAny = true;
-                }
+            double lagSamples = -1.0;
+            if (level(raw.data(), kWindowSize / 2, channels) >= m_minLevel) {
+                vector<double> diff;
+                yinDifferenceFFT(raw, diff, fft);
+                yinCMND(diff);
+                lagSamples = yinFindPitch(diff, minLag, maxLag, m_threshold);
             }
 
+            double hz = 0.0;
+            if (lagSamples > 0.0) {
+                hz = sr / lagSamples;
+                if (hz < m_minFreq || hz > m_maxFreq) hz = 0.0;
+            }
+
+            // Every hop, voiced or not: a run an octave off is held back
+            // until what follows it says whether it slipped
+            sv_frame_t centreFrame = nextFrameToProcess + kWindowSize / 2;
+            passed.clear();
+            slips.push(centreFrame, hz, passed);
+            if (!passed.empty()) {
+                std::lock_guard<std::mutex> guard(m_estimatesMutex);
+                for (const OctaveSlips::Dot &dot : passed) {
+                    m_estimates.push_back({ dot.frame, dot.hz });
+                }
+                processedAny = true;
+            }
+
+            m_framesAnalysed = nextFrameToProcess + kWindowSize;
             nextFrameToProcess += kHopSize;
         }
 
@@ -127,6 +156,20 @@ RealtimePitchTracker::run()
 
     delete fft;
     cerr << "RealtimePitchTracker: background thread stopped" << endl;
+}
+
+double
+RealtimePitchTracker::level(const float *mixdown, int count, int channels)
+{
+    if (!mixdown || count < 1 || channels < 1) return -200.0;
+    double sum = 0.0;
+    for (int i = 0; i < count; ++i) {
+        double x = double(mixdown[i]) / channels;
+        sum += x * x;
+    }
+    double rms = std::sqrt(sum / double(count));
+    if (rms <= 0.0) return -200.0;
+    return std::max(-200.0, 20.0 * std::log10(rms));
 }
 
 // ---------------------------------------------------------------------------

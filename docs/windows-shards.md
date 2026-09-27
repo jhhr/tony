@@ -8,9 +8,11 @@ this file and its row in [README.md](README.md) are deleted.
 
 On Linux the test executables already run as shards in parallel processes
 (`TONY_TEST_SHARD`, `main/test/RunSuite.h`, `deploy/linux/run-tests.sh`): the app suite
-takes a minute and a half instead of eight. On the Windows machine the same runs are still
-one process each, about 13.5 minutes for core, app and dev together. Make the runner work
-from Git Bash on Windows, with one way of keeping shards apart that serves both platforms.
+takes under two minutes instead of about ten and a half. On the Windows machine the same
+runs are still one process each: about 13.5 minutes for core, app and dev together when
+measured below, and more since, as the dev suite gained the phone's tests and the app suite
+the touch and compact-layout suites. Make the runner work from Git Bash on Windows, with
+one way of keeping shards apart that serves both platforms.
 
 ## Measured on Windows (2026-09-26, one process)
 

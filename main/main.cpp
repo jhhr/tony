@@ -14,6 +14,7 @@
 */
 
 #include "MainWindow.h"
+#include "CompactLayout.h"
 
 #include "system/System.h"
 #include "system/Init.h"
@@ -41,6 +42,23 @@
 #include <iostream>
 #include <signal.h>
 #include <cstdlib>
+
+#ifdef Q_OS_ANDROID
+#include "AndroidFiles.h"
+#include "AndroidStorage.h"
+#include "LogFile.h"
+#include "PopupArea.h"
+#include "TouchMenuStyle.h"
+#include <QStandardPaths>
+#include <QtCore/qcoreapplication_platform.h>
+#include <android/log.h>
+#include <cerrno>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+#endif
 
 #include "../version.h"
 
@@ -131,6 +149,85 @@ protected:
     }
 };
 
+#ifdef Q_OS_ANDROID
+// Each line that goes to the system log goes to a file in the app's own
+// storage as well, from when keepSystemLogInFile() is called (it needs
+// the application): the user, who has no adb to read the system log
+// with, can save a copy of it with Help > Save Log... and send it. The
+// lines before that are held until then
+static std::mutex logFileMutex;
+static LogFile *logFile = nullptr;
+static std::vector<std::string> linesBeforeLogFile;
+
+static void
+writeToLogFile(const std::string &line)
+{
+    std::lock_guard<std::mutex> lock(logFileMutex);
+    if (logFile) {
+        logFile->write(QByteArray::fromStdString(line));
+    } else if (linesBeforeLogFile.size() < 1000) {
+        linesBeforeLogFile.push_back(line);
+    }
+}
+
+static void
+keepSystemLogInFile(QString path)
+{
+    std::lock_guard<std::mutex> lock(logFileMutex);
+    LogFile *file = new LogFile(path, 512 * 1024);
+    if (!file->open()) {
+        delete file;
+        linesBeforeLogFile.clear();
+        __android_log_write(ANDROID_LOG_WARN, "Tony",
+                            "Cannot write the log file");
+        return;
+    }
+    for (const std::string &line : linesBeforeLogFile) {
+        file->write(QByteArray::fromStdString(line));
+    }
+    linesBeforeLogFile.clear();
+    logFile = file;
+}
+
+// An Android app's stdout and stderr lead nowhere, and Tony and svcore
+// report through cerr. Send both into a pipe, and have a thread pass what
+// comes out of it on to the system log (logcat), a line at a time, under
+// the tag "Tony", and to the log file. Qt's own messages go to the system
+// log only.
+static void
+sendOutputToSystemLog()
+{
+    int fds[2];
+    if (pipe(fds) != 0) return;
+
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    dup2(fds[1], STDOUT_FILENO);
+    dup2(fds[1], STDERR_FILENO);
+    close(fds[1]);
+
+    int readEnd = fds[0];
+    std::thread([readEnd]() {
+        char buffer[1024];
+        std::string line;
+        while (true) {
+            ssize_t n = read(readEnd, buffer, sizeof(buffer));
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            for (ssize_t i = 0; i < n; ++i) {
+                // The system log cuts longer lines short
+                if (buffer[i] == '\n' || line.size() >= 1000) {
+                    __android_log_write(ANDROID_LOG_INFO, "Tony", line.c_str());
+                    writeToLogFile(line);
+                    line.clear();
+                }
+                if (buffer[i] != '\n') line += buffer[i];
+            }
+        }
+    }).detach();
+}
+#endif
+
 static QString
 getEnvQStr(QString variable)
 {
@@ -156,9 +253,13 @@ putEnvQStr(QString assignment)
 #endif
 }
 
-static void
+// Returns what went wrong in setting up the plugins, for the user to be
+// told; only on Android can anything go wrong here
+static QStringList
 setupTonyVampPath()
 {
+    QStringList problems;
+
     QString myVampPath = getEnvQStr("TONY_VAMP_PATH");
 
 #ifdef Q_OS_WIN32
@@ -183,6 +284,21 @@ setupTonyVampPath()
 #ifdef Q_OS_MAC
         myVampPath = myDir + "/../Resources";
         (void)sep; // unused
+#elif defined(Q_OS_ANDROID)
+        // myDir is the folder Android installed the application's own
+        // library in, and the plugins beside it as libpyin.so and
+        // libchp.so. Vamp looks in a folder of links to those two
+        // under their own names instead (see AndroidFiles)
+        QString linkDir = QStandardPaths::writableLocation
+            (QStandardPaths::AppDataLocation) + "/vamp";
+        QStringList links = AndroidFiles::linkVampPlugins
+            (myDir, linkDir, { "pyin", "chp" }, problems);
+        for (QString link : links) {
+            QString problem = AndroidFiles::checkVampPlugin(link);
+            if (problem != "") problems << problem;
+        }
+        myVampPath = linkDir;
+        (void)sep; // unused
 #else
         if (binaryName != "") {
             myVampPath =
@@ -202,11 +318,17 @@ setupTonyVampPath()
 
     // Windows lacks setenv, must use putenv (different arg convention)
     putEnvQStr(env);
+
+    return problems;
 }
         
 int
 main(int argc, char **argv)
 {
+#ifdef Q_OS_ANDROID
+    sendOutputToSystemLog();
+#endif
+
     if (argc == 2 && (QString(argv[1]) == "--version" ||
                       QString(argv[1]) == "-v")) {
         cerr << TONY_VERSION << endl;
@@ -225,11 +347,30 @@ main(int argc, char **argv)
     QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
 #endif
 
+#ifdef Q_OS_ANDROID
+    // Menus that scroll, by a finger dragged over them, rather than run
+    // off the screen. Before any widget is made, so that every menu has it
+    QApplication::setStyle(new TouchMenuStyle);
+#endif
+
     QApplication::setOrganizationName("sonic-visualiser");
     QApplication::setOrganizationDomain("sonicvisualiser.org");
     QApplication::setApplicationName("Tony");
 
-    setupTonyVampPath();
+#ifdef Q_OS_ANDROID
+    keepSystemLogInFile(AndroidStorage::logPath());
+    {
+        // The package's version name carries the commit (build-apk.sh)
+        QString installed = AndroidStorage::versionName();
+        cerr << "Tony " << (installed != "" ? installed.toStdString() :
+                            std::string(TONY_VERSION))
+             << " on Android API "
+             << QNativeInterface::QAndroidApplication::sdkVersion()
+             << ", Qt " << qVersion() << endl;
+    }
+#endif
+
+    QStringList pluginProblems = setupTonyVampPath();
 
     QStringList args = application.arguments();
 
@@ -247,7 +388,7 @@ main(int argc, char **argv)
 
     if (args.contains("--help") || args.contains("-h") || args.contains("-?")) {
         std::cerr << QApplication::tr(
-            "\nTony is a program for interactive note and pitch analysis and annotation.\n\nUsage:\n\n  %1 [--no-audio] [--no-sonification] [--no-spectrogram] [<file> ...]\n\n  --no-audio: Do not attempt to open an audio output device\n  --no-sonification: Disable sonification of pitch tracks and notes and hide their toggles.\n  --no-spectrogram: Disable spectrogram.\n  <file>: One or more Tony (.ton) and audio files may be provided.").arg(argv[0]).toStdString() << std::endl;
+            "\nTony is a program for interactive note and pitch analysis and annotation.\n\nUsage:\n\n  %1 [--no-audio] [--no-sonification] [--no-spectrogram] [--compact] [<file> ...]\n\n  --no-audio: Do not attempt to open an audio output device\n  --no-sonification: Disable sonification of pitch tracks and notes and hide their toggles.\n  --no-spectrogram: Disable spectrogram.\n  --compact: Start with the layout for a phone: one toolbar of large buttons in place of the menus and toolbars.\n  <file>: One or more Tony (.ton) and audio files may be provided.").arg(argv[0]).toStdString() << std::endl;
         exit(2);
     }
 
@@ -311,8 +452,26 @@ main(int argc, char **argv)
         QObject::connect(gui, SIGNAL(hideSplash()), splash, SLOT(hide()));
     }
 
+    // Before the window is shown, so that a phone never shows the
+    // desktop layout
+    gui->setCompactLayout(CompactLayout::isWantedAtStart(args));
+
     QScreen *screen = QApplication::primaryScreen();
     QRect available = screen->availableGeometry();
+
+#ifdef Q_OS_ANDROID
+    // Menus clear of the system bars, which the main window's safe area
+    // margins give, and a finger's width from the screen's top and bottom
+    if (TouchMenuStyle *style =
+        qobject_cast<TouchMenuStyle *>(QApplication::style())) {
+        int margin = PopupArea::fingerWidth(screen->physicalDotsPerInchY());
+        style->setSafeAreaWindow(gui);
+        style->setEdgeMargin(margin);
+        cerr << "Menus keep " << margin << " px from the screen's top and "
+             << "bottom (" << screen->physicalDotsPerInchY() << " px per "
+             << "inch)" << endl;
+    }
+#endif
 
     int width = (available.width() * 2) / 3;
     int height = available.height() / 2;
@@ -332,6 +491,23 @@ main(int argc, char **argv)
     settings.endGroup();
     
     gui->show();
+
+#ifdef Q_OS_ANDROID
+    if (!pluginProblems.empty()) {
+        // Without the plugins no audio file can be analysed, and on a
+        // phone the log that says why is out of the user's sight
+        QStringList lines;
+        for (QString problem : pluginProblems) {
+            lines << problem.toHtmlEscaped();
+        }
+        QMessageBox::warning
+            (gui, QMessageBox::tr("Plugins not found"),
+             QMessageBox::tr("<b>The pitch analysis plugins could not be set up</b><p>%1</p>")
+             .arg(lines.join("<br>")));
+    }
+#else
+    (void)pluginProblems; // none but Android's
+#endif
 
     application.readyForFiles();
     

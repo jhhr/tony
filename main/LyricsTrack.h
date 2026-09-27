@@ -110,6 +110,16 @@ public:
      */
     static QString layerName();
 
+    /**
+     * The share of svgui's size the words are drawn at (View > Lyrics
+     * Size, LyricsSize), now and in any layer taken on later.  1 until
+     * set.
+     */
+    double getTextScale() const { return m_textScale; }
+
+public slots:
+    void setTextScale(double scale);
+
 private slots:
     void layerAboutToBeDeleted(sv::Layer *);
 
@@ -117,6 +127,7 @@ private:
     sv::Document *m_document;
     sv::Pane *m_pane;
     sv::RegionLayer *m_layer;
+    double m_textScale;
 
     void takeLayer(sv::Document *, sv::Pane *, sv::RegionLayer *);
     void configureLayer();

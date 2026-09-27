@@ -18,7 +18,13 @@
 #include "MainWindow.h"
 #include "NetworkPermissionTester.h"
 #include "Analyser.h"
+#include "CompactLayout.h"
+#include "SongScrollBar.h"
+#include "PlotSize.h"
+#include "LyricsSize.h"
 #include "AudioCheckRunner.h"
+#include "AudioDriverMenus.h"
+#include "AudioDriverSettings.h"
 #include "CalibrateAudioDialog.h"
 #include "LatencyUtils.h"
 #include "Lyrics.h"
@@ -27,6 +33,22 @@
 #include "TakeEvents.h"
 #include "TakeLayers.h"
 #include "TakesFile.h"
+#include "TouchGestures.h"
+
+#ifdef Q_OS_ANDROID
+#include "AndroidFiles.h"
+#include "AndroidStorage.h"
+#include "LogFile.h"
+#include "OboeAudioIO.h"
+#include "data/fileio/AudioFileReaderFactory.h"
+#include <QDateTime>
+#include <QElapsedTimer>
+#include <QFileDialog>
+#include <QGuiApplication>
+#include <QPermissions>
+#include <QStandardPaths>
+#include <QThread>
+#endif
 
 #ifdef TONY_DEV_CHECKS
 #include "dev/DevChecks.h"
@@ -144,8 +166,20 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_analyser2(nullptr),
     m_realtimePitchTracker(nullptr),
     m_realtimePitchLayer(nullptr),
-    m_realtimeDotsNotifier(40),
+    m_liveDotsFeed(40),
     m_overview(0),
+    m_songScroll(nullptr),
+    m_compactLayout(nullptr),
+    m_plotSize(nullptr),
+    m_lyricsSize(nullptr),
+    m_playAction(nullptr),
+    m_recordAction(nullptr),
+    m_zoomInAction(nullptr),
+    m_zoomOutAction(nullptr),
+    m_navigateToolAction(nullptr),
+    m_noteEditToolAction(nullptr),
+    m_playbackControlsToolBar(nullptr),
+    m_showAndPlayToolBar(nullptr),
     m_showSingingPitch(nullptr),
     m_showSingingNotes(nullptr),
     m_playSingingAudio(nullptr),
@@ -200,6 +234,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioDeviceGroup(0),
     m_audioInputDeviceMenu(0),
     m_audioInputDeviceGroup(0),
+    m_audioDriverMenus(nullptr),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -222,6 +257,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_recordingStartGapEstimate(0),
     m_recordingStartGapMeasured(-1),
     m_awaitingReferenceStart(false),
+    m_recordFramesPerPlayFrame(1.0),
     m_takeLatency(),
     m_audioCheck(nullptr),
     m_audioCheckTakes(false),
@@ -230,7 +266,6 @@ MainWindow::MainWindow(AudioMode audioMode,
 #ifdef TONY_DEV_CHECKS
     m_devChecks(nullptr),
 #endif
-    m_recordAction(nullptr),
     m_calibrateAudioDialog(nullptr),
     m_calibrateAudioAction(nullptr),
     m_latencyLineAction(nullptr),
@@ -246,11 +281,33 @@ MainWindow::MainWindow(AudioMode audioMode,
             if (!m_recordTarget || !m_recordTarget->isRecording()) return;
             // The device drivers deliver the input of a block before they
             // ask for its output (PortAudioIO, JACKAudioIO), so the count
-            // already includes the input that goes with this first block
-            sv_frame_t gap = m_recordTarget->getFramesReceived() - blockFrames;
+            // already includes the input that goes with this first block.
+            // The block is counted at the play source's rate, the
+            // reference's, and the frames received at the device's
+            sv_frame_t block = sv_frame_t(std::llround
+                                          (blockFrames *
+                                           m_recordFramesPerPlayFrame.load()));
+            sv_frame_t gap = m_recordTarget->getFramesReceived() - block;
             m_recordingStartGapMeasured = (gap > 0 ? gap : 0);
         });
     }
+
+#ifdef Q_OS_ANDROID
+    m_audioDeviceReopens = 0;
+    m_audioDeviceCheck = new QTimer(this);
+    connect(m_audioDeviceCheck, &QTimer::timeout,
+            this, &MainWindow::checkAudioDevice);
+    m_audioDeviceCheck->start(250);
+
+    m_storage = new AndroidStorage(this);
+
+    m_suspendSaveTimer = new QTimer(this);
+    m_suspendSaveTimer->setInterval(250);
+    connect(m_suspendSaveTimer, &QTimer::timeout,
+            this, &MainWindow::saveWhenSuspended);
+    connect(qApp, &QGuiApplication::applicationStateChanged,
+            this, &MainWindow::applicationStateChanged);
+#endif
 
 #ifdef Q_OS_MAC
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 2, 0))
@@ -363,6 +420,11 @@ MainWindow::MainWindow(AudioMode audioMode,
             (ColourDatabase::getInstance()->getColourIndex(tr("Blue")));
     }        
 
+    // The overview takes too much of a phone's height: the compact layout
+    // shows this in its place instead (setupCompactLayout())
+    m_songScroll = new SongScrollBar(m_viewManager, m_paneStack, frame);
+    m_songScroll->hide();
+
     m_fader = new Fader(frame, false);
     connect(m_fader, SIGNAL(mouseEntered()), this, SLOT(mouseEnteredWidget()));
     connect(m_fader, SIGNAL(mouseLeft()), this, SLOT(mouseLeftWidget()));
@@ -414,6 +476,7 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     layout->setSpacing(4);
     layout->addWidget(m_overview, 0, 1);
+    layout->addWidget(m_songScroll, 0, 1); // never both on show
     layout->addWidget(scroll, 1, 1);
 
     layout->setColumnStretch(1, 10);
@@ -429,6 +492,15 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_alternatePitch = new AlternatePitchTrack(this);
     connect(m_analyser, SIGNAL(layersChanged()),
             this, SLOT(syncAlternatePitchTrack()));
+
+    // The song scroll bar draws the reference's pitch, whose layer and
+    // model are replaced when the reference is analysed again
+    connect(m_analyser, &Analyser::layersChanged,
+            this, &MainWindow::syncSongScrollBar);
+    connect(m_analyser, &Analyser::initialAnalysisCompleted,
+            this, &MainWindow::syncSongScrollBar);
+    connect(m_analyser, &Analyser::rangedAnalysisMerged,
+            this, &MainWindow::syncSongScrollBar);
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
@@ -465,6 +537,14 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takeTimer->setInterval(100);
     connect(m_takeTimer, SIGNAL(timeout()), this, SLOT(pollTakeProgress()));
 
+    // Before the menus: their switches are in the View menu
+    m_compactLayout = new CompactLayout(this);
+    m_plotSize = new PlotSize(m_viewManager, this);
+    m_lyricsSize = new LyricsSize(this);
+    m_lyrics->setTextScale(m_lyricsSize->getTextScale());
+    connect(m_lyricsSize, &LyricsSize::textScaleChanged,
+            m_lyrics, &LyricsTrack::setTextScale);
+
     setupMenus();
     setupToolbars();
     setupHelpMenu();
@@ -472,6 +552,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     statusBar();
 
     finaliseMenus();
+
+    setupCompactLayout();
 
     connect(m_viewManager, SIGNAL(activity(QString)),
             m_activityLog, SLOT(activityHappened(QString)));
@@ -489,6 +571,19 @@ MainWindow::MainWindow(AudioMode audioMode,
     if (m_recordTarget) {
         connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
                 this, SLOT(recordingStarted()));
+    }
+
+    // The device is kept running between takes (suspendAudioOnStop()),
+    // and suspended once it has idled for audioIdleSuspendMillis()
+    m_audioIdleTimer = new QTimer(this);
+    m_audioIdleTimer->setSingleShot(true);
+    connect(m_audioIdleTimer, &QTimer::timeout,
+            this, &MainWindow::suspendIdleAudio);
+    connect(m_playSource, &AudioCallbackPlaySource::playStatusChanged,
+            this, &MainWindow::audioActivityChanged);
+    if (m_recordTarget) {
+        connect(m_recordTarget, &AudioCallbackRecordTarget::recordStatusChanged,
+                this, &MainWindow::audioActivityChanged);
     }
     m_activityLog->hide();
 
@@ -541,6 +636,7 @@ MainWindow::~MainWindow()
     // Clean up secondary state that may not have been torn down if the
     // window was closed without going through closeSession() (e.g. on
     // application exit via the window close button).
+    m_liveDotsFeed.stop();
     if (m_realtimePitchTracker) {
         m_realtimePitchTracker->stop();
         delete m_realtimePitchTracker;
@@ -571,6 +667,9 @@ MainWindow::~MainWindow()
     m_lyrics = nullptr;
     delete m_analyser;
     delete m_keyReference;
+#ifdef Q_OS_ANDROID
+    delete m_storage;
+#endif
     Profiles::getInstance()->dump();
 }
 
@@ -586,6 +685,11 @@ MainWindow::setupMenus()
         // workaround, to remove the appmenu-qt5 package, but that is
         // awkward and the problem is so severe that it merits disabling
         // the system menubar integration altogether. Like this:
+        //
+        // Android defines Q_OS_LINUX as well, and there too the bar stays
+        // in the window: a native one would be an options menu in an
+        // action bar that Android adds above the window, taller than the
+        // bar it replaces.
 	menuBar()->setNativeMenuBar(false);
 #endif
 
@@ -614,6 +718,9 @@ MainWindow::setupFileMenu()
     QMenu *menu = menuBar()->addMenu(tr("&File"));
     menu->setTearOffEnabled(true);
     QToolBar *toolbar = addToolBar(tr("File Toolbar"));
+    // The toolbars are named for QMainWindow::saveState(), which tells
+    // them apart by name (CompactLayout's tests compare what it saves)
+    toolbar->setObjectName("File Toolbar");
 
     m_keyReference->setCategory(tr("File and Session Management"));
 
@@ -766,6 +873,7 @@ MainWindow::setupEditMenu()
          tr("Double-click left button to select the region of time corresponding to a note"));
 
     QToolBar *toolbar = addToolBar(tr("Tools Toolbar"));
+    toolbar->setObjectName("Tools Toolbar");
     
     CommandHistory::getInstance()->registerToolbar(toolbar);
 
@@ -785,6 +893,7 @@ MainWindow::setupEditMenu()
     group->addAction(action);
     menu->addAction(action);
     m_keyReference->registerShortcut(action);
+    m_navigateToolAction = action;
 
     m_keyReference->setCategory
         (tr("Navigate Tool Mouse Actions"));
@@ -808,6 +917,7 @@ MainWindow::setupEditMenu()
     group->addAction(action);
     menu->addAction(action);
     m_keyReference->registerShortcut(action);
+    m_noteEditToolAction = action;
 
     m_keyReference->setCategory
         (tr("Note Edit Tool Mouse Actions"));
@@ -977,6 +1087,9 @@ MainWindow::setupEditMenu()
     // Ctrl+Backspace, the obvious partner to the Backspace of Delete
     // Notes, is upstream Tony's Remove Pitches
     m_eraseSingingAction->setShortcut(tr("Ctrl+D"));
+    // What a toolbar button shows when there is no icon: only the compact
+    // toolbar has one for it
+    m_eraseSingingAction->setIconText(tr("Erase"));
     m_eraseSingingAction->setStatusTip
         (tr("Remove the recorded singing within the selected region, leaving silence"));
     m_keyReference->registerShortcut(m_eraseSingingAction);
@@ -1052,6 +1165,7 @@ MainWindow::setupViewMenu()
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
     m_keyReference->registerShortcut(action);
     menu->addAction(action);
+    m_zoomInAction = action;
     
     action = new QAction(il.load("zoom-out"),
                          tr("Zoom &Out"), this);
@@ -1061,6 +1175,7 @@ MainWindow::setupViewMenu()
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
     m_keyReference->registerShortcut(action);
     menu->addAction(action);
+    m_zoomOutAction = action;
     
     action = new QAction(tr("Restore &Default Zoom"), this);
     action->setStatusTip(tr("Restore the zoom level to the default"));
@@ -1086,6 +1201,11 @@ MainWindow::setupViewMenu()
 
     menu->addSeparator();
 
+    menu->addAction(m_compactLayout->getAction());
+    QMenu *plotSizeMenu = menu->addMenu(tr("Plot &Size"));
+    plotSizeMenu->addActions(m_plotSize->getActions());
+    QMenu *lyricsSizeMenu = menu->addMenu(tr("Lyrics Si&ze"));
+    lyricsSizeMenu->addActions(m_lyricsSize->getActions());
     // Enabled and checked in updateLayerStatuses().  Not "Show &Lyrics":
     // Peek Left has the L
     m_showLyrics = new QAction(tr("Show L&yrics"), this);
@@ -1387,10 +1507,20 @@ MainWindow::setupHelpMenu()
     connect(action, SIGNAL(triggered()), this, SLOT(whatsNew()));
     menu->addAction(action);
     
-    action = new QAction(tr("&About %1").arg(name), this); 
-    action->setStatusTip(tr("Show information about %1").arg(name)); 
+    action = new QAction(tr("&About %1").arg(name), this);
+    action->setStatusTip(tr("Show information about %1").arg(name));
     connect(action, SIGNAL(triggered()), this, SLOT(about()));
     menu->addAction(action);
+
+#ifdef Q_OS_ANDROID
+    // The phone's system log needs a computer to read; this copy of what
+    // Tony wrote to it can be sent instead
+    menu->addSeparator();
+    action = new QAction(tr("Save &Log..."), this);
+    action->setStatusTip(tr("Save a copy of %1's log, to send when something went wrong").arg(name));
+    connect(action, &QAction::triggered, this, [this]() { saveLog(); });
+    menu->addAction(action);
+#endif
 }
 
 void
@@ -1398,6 +1528,13 @@ MainWindow::setupRecentFilesMenu()
 {
     m_recentFilesMenu->clear();
     vector<QString> files = m_recentFiles.getRecent();
+#ifdef Q_OS_ANDROID
+    // Only the files that are still where they were: nothing else could
+    // be opened from here, a content:// URI whose grant has gone included
+    QStringList usable = AndroidFiles::usableRecentFiles
+        (QStringList(files.begin(), files.end()));
+    files = vector<QString>(usable.begin(), usable.end());
+#endif
     for (size_t i = 0; i < files.size(); ++i) {
         QString path = files[i];
         QAction *action = m_recentFilesMenu->addAction(path);
@@ -1586,6 +1723,129 @@ MainWindow::audioDeviceSelected(QAction *action)
     recreateAudioIO();
 }
 
+QStringList
+MainWindow::audioImplementationNames() const
+{
+    QStringList names;
+    for (const std::string &name :
+             breakfastquay::AudioFactory::getImplementationNames()) {
+        names << QString::fromStdString(name);
+    }
+    return names;
+}
+
+void
+MainWindow::nameDefaultAudioDriver()
+{
+    QSettings settings;
+    if (AudioDriverSettings::nameDefaultDriver
+        (settings, audioImplementationNames())) {
+        cerr << "MainWindow::nameDefaultAudioDriver: no audio driver was "
+             << "named; naming "
+             << AudioDriverSettings::currentImplementation(settings)
+             << endl;
+    }
+}
+
+void
+MainWindow::audioDriverChosen(QString)
+{
+    // As for another device: the driver opens the devices it names,
+    // which may record at another rate.  The latency chosen for it is
+    // applied as the device is opened
+    if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+    m_lastRecordingRate = 0;
+    recreateAudioIO();
+}
+
+void
+MainWindow::audioLatencyChosen(double)
+{
+    if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+    recreateAudioIO();
+}
+
+bool
+MainWindow::suspendAudioOnStop() const
+{
+    // On the user's PC each take landed up to about 8 ms either way from
+    // the last, on MME and WASAPI alike, while one take's sweeps agreed
+    // within 0.3 ms: every start of the stream moved its input against
+    // its output. On the user's phone, through Bluetooth, takes landed
+    // up to 8.5 ms apart so. Kept running, every take of a session
+    // shares one alignment. Opening the device again (a driver, a
+    // latency or a device chosen, the device menus rescanning), or
+    // resuming it after it idled (audioIdleSuspendMillis()), still
+    // moves it
+    return false;
+}
+
+int
+MainWindow::audioIdleSuspendMillis() const
+{
+#ifdef Q_OS_ANDROID
+    return 2 * 60 * 1000;
+#else
+    return 0;
+#endif
+}
+
+void
+MainWindow::audioActivityChanged()
+{
+    bool busy = (m_playSource && m_playSource->isPlaying()) ||
+        (m_recordTarget && m_recordTarget->isRecording());
+    int idle = audioIdleSuspendMillis();
+    if (busy || idle <= 0) {
+        m_audioIdleTimer->stop();
+    } else {
+        m_audioIdleTimer->start(idle);
+    }
+}
+
+void
+MainWindow::suspendIdleAudio()
+{
+    m_audioIdleTimer->stop();
+    if ((m_playSource && m_playSource->isPlaying()) ||
+        (m_recordTarget && m_recordTarget->isRecording())) {
+        return;
+    }
+    if (!m_audioIO && !m_playTarget) return;
+
+    // The next Play or Record resumes it, as the first did
+    cerr << "MainWindow::suspendIdleAudio: suspending the audio device"
+         << endl;
+    if (m_audioIO) m_audioIO->suspend();
+    else m_playTarget->suspend();
+}
+
+#ifndef Q_OS_ANDROID
+void
+MainWindow::createAudioIO()
+{
+    if (m_playTarget || m_audioIO) return;
+
+    // The first device is opened lazily, with the first file or the
+    // first take, and svapp opens it for the driver the Preferences
+    // name, so a driver has to be named by then
+    nameDefaultAudioDriver();
+    if (m_audioDriverMenus) m_audioDriverMenus->applyLatency();
+
+    openAudioIO();
+}
+
+void
+MainWindow::openAudioIO()
+{
+    MainWindowBase::createAudioIO();
+}
+#endif
+
 void
 MainWindow::setupToolbars()
 {
@@ -1599,6 +1859,7 @@ MainWindow::setupToolbars()
     m_rightButtonPlaybackMenu = m_rightButtonMenu->addMenu(tr("Playback"));
 
     QToolBar *toolbar = addToolBar(tr("Playback Toolbar"));
+    toolbar->setObjectName("Playback Toolbar");
 
     QAction *rwdStartAction = toolbar->addAction(il.load("rewind-start"),
                                                  tr("Rewind to Start"));
@@ -1625,6 +1886,7 @@ MainWindow::setupToolbars()
     connect(m_playSource, SIGNAL(playStatusChanged(bool)),
         playAction, SLOT(setChecked(bool)));
     connect(this, SIGNAL(canPlay(bool)), playAction, SLOT(setEnabled(bool)));
+    m_playAction = playAction;
 
     m_ffwdAction = toolbar->addAction(il.load("ffwd"),
                                               tr("Fast Forward"));
@@ -1647,13 +1909,13 @@ MainWindow::setupToolbars()
     recordAction->setStatusTip(tr("Record a new audio file. If a reference track is already loaded, the recording is added as the singing track alongside it."));
     connect(recordAction, &QAction::triggered,
             this, &MainWindow::recordPressed);
-    m_recordAction = recordAction;
     connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
 	    recordAction, SLOT(setChecked(bool)));
     connect(m_recordTarget, SIGNAL(recordCompleted()),
 	    this, SLOT(analyseNow()));
     connect(this, SIGNAL(canRecord(bool)),
             recordAction, SLOT(setEnabled(bool)));
+    m_recordAction = recordAction;
 
     // The takes of the session, beside the recording controls: choosing
     // one shows it, with its audio, pitch track and notes (spec 5.3).
@@ -1681,6 +1943,7 @@ MainWindow::setupToolbars()
     toolbar->addWidget(m_takeCombo);
 
     toolbar = addToolBar(tr("Play Mode Toolbar"));
+    toolbar->setObjectName("Play Mode Toolbar");
 
     QAction *psAction = toolbar->addAction(il.load("playselection"),
                                            tr("Constrain Playback to Selection"));
@@ -1759,6 +2022,20 @@ MainWindow::setupToolbars()
     menu->addSeparator();
     menu->addAction(recordAction);
     menu->addSeparator();
+
+    // The driver and the latency asked of it, before the devices, which
+    // are the driver's own
+    m_audioDriverMenus = new AudioDriverMenus
+        (menu, [this]() { return audioImplementationNames(); }, this);
+    connect(m_audioDriverMenus, &AudioDriverMenus::driverChosen,
+            this, &MainWindow::audioDriverChosen);
+    connect(m_audioDriverMenus, &AudioDriverMenus::latencyChosen,
+            this, &MainWindow::audioLatencyChosen);
+
+    // Before anything in this menu reads the driver: the device menus
+    // list its devices, and the latency line looks its figure up
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::nameDefaultAudioDriver);
 
     m_audioDeviceMenu = menu->addMenu(tr("Audio Output &Device"));
     m_audioDeviceMenu->setStatusTip(tr("Choose which device Tony plays through"));
@@ -1852,13 +2129,17 @@ MainWindow::setupToolbars()
     m_rightButtonPlaybackMenu->addAction(normalAction);
 
     toolbar = new QToolBar(tr("Playback Controls"));
+    toolbar->setObjectName("Playback Controls");
     addToolBar(Qt::BottomToolBarArea, toolbar);
+    m_playbackControlsToolBar = toolbar;
 
     toolbar->addWidget(m_playSpeed);
     toolbar->addWidget(m_fader);
 
     toolbar = addToolBar(tr("Show and Play"));
+    toolbar->setObjectName("Show and Play");
     addToolBar(Qt::BottomToolBarArea, toolbar);
+    m_showAndPlayToolBar = toolbar;
 
     // "Reference:" label before the reference-track button group
     {
@@ -2171,6 +2452,49 @@ MainWindow::setupToolbars()
 //    QTimer::singleShot(500, this, SLOT(betaReleaseWarning()));
 }
 
+void
+MainWindow::setupCompactLayout()
+{
+    CompactLayout::Parts parts;
+
+    parts.play = m_playAction;
+    parts.record = m_recordAction;
+    parts.recordIntoSelection = m_recordIntoSelection;
+    parts.takeBox = m_takeCombo;
+    parts.erase = m_eraseSingingAction;
+    parts.zoomIn = m_zoomInAction;
+    parts.zoomOut = m_zoomOutAction;
+
+    parts.navigateTool = m_navigateToolAction;
+
+    parts.panel = { m_playbackControlsToolBar, m_showAndPlayToolBar };
+
+    // Notes are edited on the desktop; a phone has no device to choose
+    parts.hiddenActions = { m_navigateToolAction, m_noteEditToolAction };
+    for (QMenu *menu: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        if (menu) parts.hiddenActions.push_back(menu->menuAction());
+    }
+    if (m_audioDriverMenus) {
+        for (QMenu *menu: { m_audioDriverMenus->driverMenu(),
+                            m_audioDriverMenus->latencyMenu() }) {
+            parts.hiddenActions.push_back(menu->menuAction());
+        }
+    }
+
+    // For room: the panes are what a phone's height is wanted for.  The
+    // song scroll bar, a thin strip, navigates the song in its place
+    parts.hiddenWidgets = { m_overview };
+    parts.shownWidgets = { m_songScroll };
+
+    m_compactLayout->setParts(parts);
+}
+
+void
+MainWindow::setCompactLayout(bool on)
+{
+    m_compactLayout->setOn(on);
+}
+
 
 void
 MainWindow::moveOneNoteRight()
@@ -2409,6 +2733,10 @@ MainWindow::updateMenuStates()
     if (checking) emit canRecord(false);
     if (m_calibrateAudioAction) {
         m_calibrateAudioAction->setEnabled(!inTake && !checking);
+    }
+    // Choosing either opens the device afresh
+    if (m_audioDriverMenus) {
+        m_audioDriverMenus->setEnabled(!inTake && !checking);
     }
     for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (m) m->menuAction()->setEnabled(!checking);
@@ -2860,12 +3188,622 @@ MainWindow::closeSession()
     m_viewManager->clearSelections();
     m_timeRulerLayer = 0; // document owned this
 
+    // No song and no pitch: nothing of this one left drawn
+    syncSongScrollBar();
+
     m_sessionFile = "";
 
     CommandHistory::getInstance()->clear();
     CommandHistory::getInstance()->documentSaved();
     documentRestored();
 }
+
+#ifdef Q_OS_ANDROID
+QString
+MainWindow::getOpenFileName(FileFinder::FileType type)
+{
+    // Layers and other data go through svgui's dialog as before
+    if (type != FileFinder::AudioFile &&
+        type != FileFinder::SessionOrAudioFile &&
+        type != FileFinder::SessionFile) {
+        return MainWindowBase::getOpenFileName(type);
+    }
+
+    QString app = QApplication::applicationName();
+
+    // Every file is offered: a provider disables the files whose type is
+    // not among those asked for, and Android knows no type for .ton, nor
+    // Qt one Drive gives every audio file. What was picked is checked
+    // below instead
+    QFileDialog dialog(this, (type == FileFinder::AudioFile ?
+                              tr("Select an audio file") :
+                              tr("Select a session or audio file")));
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+
+    if (!dialog.exec()) return "";
+    QList<QUrl> urls = dialog.selectedUrls();
+    if (urls.empty() || urls[0].isEmpty()) return "";
+    if (urls[0].isLocalFile()) return urls[0].toLocalFile();
+
+    QString uri = AndroidFiles::grantedUri(urls[0]);
+
+    // The name the user knows the file by, which the file's provider
+    // gives: the URI need not contain it
+    QString name = AndroidStorage::displayName(uri);
+    if (name == "") name = urls[0].fileName();
+    cerr << "MainWindow::getOpenFileName: picked " << uri << ", \""
+         << name << "\"" << endl;
+
+    bool session = (QFileInfo(name).suffix().toLower() == "ton");
+    bool audio = AndroidFiles::hasExtensionIn
+        (name, AudioFileReaderFactory::getKnownExtensions());
+    if (!audio && (!session || type == FileFinder::AudioFile)) {
+        QMessageBox::warning
+            (this, tr("Cannot open the file"),
+             (type == FileFinder::AudioFile ?
+              tr("<b>\"%1\" is not an audio file %2 can open</b><p>%2 opens audio files such as WAV and MP3.</p>") :
+              tr("<b>\"%1\" is not a file %2 can open</b><p>%2 opens sessions (.ton) and audio files such as WAV and MP3.</p>"))
+             .arg(name.toHtmlEscaped(), app) + pickDetails(uri, "", ""));
+        return "";
+    }
+
+    // A file in the phone's own storage has a path, and with All files
+    // access that is what is opened, as on the desktop: a session finds
+    // its audio and takes folder beside it, and a session saved beside
+    // audio opened so finds the audio. Asked for with a session, which
+    // cannot do without it, and the first time with audio, which can
+    bool hasPath =
+        (AndroidFiles::pathLookupFor(uri) != AndroidFiles::PathLookup::None);
+    if (hasPath && !AndroidStorage::hasAllFilesAccess() &&
+        (session || !m_storage->hasAsked())) {
+        m_storage->ask
+            (session ?
+             tr("A session keeps its audio and its takes folder beside "
+                "it, and %1 opens and saves it there, where it is.")
+             .arg(app) :
+             tr("Audio opened where it is can have its session saved "
+                "beside it. Otherwise %1 copies the audio into its own "
+                "storage.").arg(app));
+    }
+
+    QString local, why;
+    if (!hasPath) {
+        why = tr("its provider gives no path for it");
+    } else if (!AndroidStorage::hasAllFilesAccess()) {
+        why = tr("%1 has no All files access").arg(app);
+    } else {
+        local = AndroidStorage::pathFor(uri, why);
+        if (local != "" && QFileInfo(local).isFile()) {
+            cerr << "MainWindow::getOpenFileName: opening " << uri
+                 << " where it is, " << local << endl;
+            return local;
+        }
+        if (local != "") why = tr("there is no file at that path");
+    }
+    cerr << "MainWindow::getOpenFileName: no path for " << uri << ": "
+         << why << endl;
+
+    // A session read through the picker comes without the audio and
+    // takes beside it: the picker lets Tony read the one file only
+    if (session) {
+        if (!hasPath) {
+            QMessageBox::warning
+                (this, tr("Cannot open the session"),
+                 tr("<b>The session cannot be opened from here</b><p>A session needs its audio and its takes folder beside it, and from here (a cloud app such as Drive) %1 is given the one file only.</p><p>Keep sessions in a folder of the phone's own storage, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer, and open them by browsing to that folder in the picker.</p>")
+                 .arg(app) + pickDetails(uri, local, why));
+        } else if (!AndroidStorage::hasAllFilesAccess()) {
+            QMessageBox::warning
+                (this, tr("Cannot open the session"),
+                 tr("<b>%1 may not open the session where it is</b><p>A session needs its audio and its takes folder beside it, and %1 can read those only with All files access. Allow it when %1 asks, or in the phone's Settings, Apps, %1.</p>")
+                 .arg(app) + pickDetails(uri, local, why));
+        } else {
+            QMessageBox::warning
+                (this, tr("Cannot open the session"),
+                 tr("<b>The session was not found where it should be</b>")
+                 + pickDetails(uri, local, why));
+        }
+        return "";
+    }
+
+    // Audio without a path is read through the picker's grant, from a
+    // file descriptor the provider opens: Qt's own content file engine
+    // rebuilds the URI, differently for a name with parentheses, and is
+    // then refused
+    QString dir = QStandardPaths::writableLocation
+        (QStandardPaths::AppDataLocation) + "/imported";
+    QString error;
+    QString copy;
+    AndroidStorage::Document document;
+    if (document.open(uri, "r", error)) {
+        QFile in;
+        if (in.open(document.fd(), QIODevice::ReadOnly,
+                    QFileDevice::DontCloseHandle)) {
+            copy = AndroidFiles::copyIn(in, uri, name, dir, error);
+            in.close();
+        } else {
+            error = in.errorString();
+        }
+        // A provider that streams the file through a pipe says at the
+        // close whether all of it came: a copy of part of it is no copy
+        QString closeError;
+        if (!document.close(closeError)) {
+            cerr << "MainWindow::getOpenFileName: closing " << uri << ": "
+                 << closeError << endl;
+            if (copy != "") {
+                QFile::remove(copy);
+                copy = "";
+                error = closeError;
+            }
+        }
+    }
+    if (copy == "") {
+        QMessageBox::critical
+            (this, tr("Failed to open file"),
+             tr("<b>File open failed</b><p>\"%1\" could not be copied into %2's own storage: %3</p>")
+             .arg(name.toHtmlEscaped(), app, error.toHtmlEscaped())
+             + pickDetails(uri, local, why));
+    }
+    return copy;
+}
+
+QString
+MainWindow::pickDetails(QString uri, QString path, QString why) const
+{
+    // Small print for the user to pass on: which app's provider the file
+    // came from, where Tony looked for it, and why that did not do
+    QString provider = AndroidFiles::providerOf(uri);
+    QString details = "<p><small>";
+    details += tr("From: %1").arg((provider != "" ? provider : uri)
+                                  .toHtmlEscaped());
+    if (path != "") {
+        details += "<br>" + tr("Looked for at: %1").arg(path.toHtmlEscaped());
+    }
+    if (why != "") {
+        details += "<br>" + tr("Because: %1").arg(why.toHtmlEscaped());
+    }
+    details += "</small></p>";
+    return details;
+}
+
+void
+MainWindow::saveLog()
+{
+    QString app = QApplication::applicationName();
+
+    QByteArray log = LogFile::contents(AndroidStorage::logPath());
+    if (log.isEmpty()) {
+        QMessageBox::information
+            (this, tr("No log"),
+             tr("<b>There is no log to save</b><p>%1 could not keep one on this phone.</p>").arg(app));
+        return;
+    }
+
+    saveTextThroughPicker(this, log, tr("Save the log"),
+                          QString("tony-log-%1.txt")
+                          .arg(QDateTime::currentDateTime()
+                               .toString("yyyyMMdd-HHmmss")),
+                          tr("log"));
+}
+
+void
+MainWindow::saveTextThroughPicker(QWidget *parent, const QByteArray &text,
+                                  QString title, QString suggestedName,
+                                  QString what)
+{
+    QFileDialog dialog(parent, title);
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+    dialog.setMimeTypeFilters({ "text/plain" });
+    dialog.selectFile(suggestedName);
+    if (!dialog.exec()) return;
+    QList<QUrl> urls = dialog.selectedUrls();
+    if (urls.empty() || urls[0].isEmpty()) return;
+
+    // A new document the picker has made, through its grant: one file,
+    // which any provider can take, a cloud app's included
+    QString target = (urls[0].isLocalFile() ? urls[0].toLocalFile() :
+                      AndroidFiles::grantedUri(urls[0]));
+    QString error;
+    QFile out;
+    bool opened = false;
+    AndroidStorage::Document document;
+    if (urls[0].isLocalFile()) {
+        out.setFileName(target);
+        opened = out.open(QIODevice::WriteOnly | QIODevice::Truncate);
+        if (!opened) error = out.errorString();
+    } else {
+        // "wt", so that a document written over holds only what is
+        // written now; "w" if the provider will not take that, which for
+        // the new, empty document the picker made comes to the same
+        if (!document.open(target, "wt", error)) {
+            cerr << "MainWindow::saveTextThroughPicker: " << target
+                 << " could not be opened with \"wt\": " << error
+                 << "; trying \"w\"" << endl;
+            QString again;
+            if (!document.open(target, "w", again)) error = again;
+        }
+        if (document.isOpen()) {
+            opened = out.open(document.fd(), QIODevice::WriteOnly,
+                              QFileDevice::DontCloseHandle);
+            if (!opened) error = out.errorString();
+        }
+    }
+
+    bool written = opened && out.write(text) == text.size() && out.flush();
+    if (opened && !written) error = out.errorString();
+    if (opened) out.close();
+
+    // What the file behind the descriptor holds before it goes back to
+    // the provider (-1 if the provider gave a pipe), and then the close,
+    // through the provider, which is when it takes what was written
+    qint64 inFile = document.fileSize();
+    QString closeError;
+    if (!document.close(closeError) && written) {
+        written = false;
+        error = closeError;
+    }
+
+    if (!written) {
+        cerr << "MainWindow::saveTextThroughPicker: could not write the "
+             << what << " to " << target << ": " << error << endl;
+        QMessageBox::critical
+            (parent, tr("Failed to save the %1").arg(what),
+             tr("<b>The %1 was not saved</b><p>%2</p>")
+             .arg(what, error.toHtmlEscaped()) + pickDetails(target, "", ""));
+        return;
+    }
+
+    if (urls[0].isLocalFile()) {
+        cerr << "MainWindow::saveTextThroughPicker: saved the " << what
+             << ", " << text.size() << " bytes, to " << target << endl;
+        return;
+    }
+
+    // What the document holds now, as its provider tells anyone who asks.
+    // A provider hears of the close on a thread of its own and may say so
+    // a little later: asked again, for up to a second, while it gives
+    // another size than was written
+    QElapsedTimer waited;
+    waited.start();
+    AndroidFiles::SavedSize saved;
+    QString sizeError;
+    for (int attempt = 1; ; ++attempt) {
+        sizeError = "";
+        saved = AndroidFiles::savedSize
+            (text.size(), AndroidStorage::sizeOf(target, sizeError));
+        if (!saved.differs() || attempt == 10) break;
+        QThread::msleep(100);
+    }
+
+    cerr << "MainWindow::saveTextThroughPicker: wrote the " << what << ", "
+         << saved.written << " bytes, to " << target
+         << "; the file behind the descriptor held " << inFile
+         << " before the close; ";
+    if (saved.known()) {
+        cerr << "its provider says the document holds " << saved.held
+             << " bytes";
+    } else {
+        cerr << "its provider gives no size for the document";
+        if (sizeError != "") cerr << " (" << sizeError << ")";
+    }
+    cerr << ", " << waited.elapsed() << " ms after the close" << endl;
+
+    if (saved.differs()) {
+        QMessageBox::warning
+            (parent, tr("The %1 may be incomplete").arg(what),
+             tr("<b>The %1 may not have been saved whole</b><p>%2 bytes were written to it, and the app that keeps it says it holds %3.</p>")
+             .arg(what).arg(saved.written).arg(saved.held)
+             + pickDetails(target, "", ""));
+    }
+}
+
+bool
+MainWindow::recentFileIsThere(QString path)
+{
+    if (!AndroidFiles::usableRecentFiles({ path }).empty()) return true;
+
+    QString app = QApplication::applicationName();
+    QString own = QStandardPaths::writableLocation
+        (QStandardPaths::AppDataLocation);
+    if (!path.startsWith(own) && !AndroidStorage::hasAllFilesAccess()) {
+        QMessageBox::warning
+            (this, tr("Cannot open the file"),
+             tr("<b>%1 may not open \"%2\" where it is</b><p>That needs All files access, which %1 no longer has. Allow it in the phone's Settings, Apps, %1, or open the file with File, Open.</p>")
+             .arg(app, path.toHtmlEscaped()));
+    } else {
+        QMessageBox::warning
+            (this, tr("File not found"),
+             tr("<b>\"%1\" is no longer there</b><p>It has been moved or deleted since it was last opened. Open it with File, Open from where it is now.</p>")
+             .arg(path.toHtmlEscaped()));
+    }
+    return false;
+}
+
+QString
+MainWindow::getSaveFileName(FileFinder::FileType type)
+{
+    // Exported layers, audio and images go through svgui's dialog as
+    // before
+    if (type != FileFinder::SessionFile) {
+        return MainWindowBase::getSaveFileName(type);
+    }
+
+    QString app = QApplication::applicationName();
+
+    // Asked before the picker: without it there is nowhere a session can
+    // be saved, and the picker makes the document it is asked for
+    if (!AndroidStorage::hasAllFilesAccess() &&
+        !m_storage->ask(tr("A session keeps its audio and its takes folder "
+                           "beside it, and %1 saves it there, where it is.")
+                        .arg(app))) {
+        return "";
+    }
+
+    QFileDialog dialog(this, tr("Select a session file"));
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+
+    // The type of document the picker makes: Android knows nothing of
+    // .ton, and "*.ton" would come to this anyway
+    dialog.setMimeTypeFilters({ "application/octet-stream" });
+
+    // What the picker's name field starts with (EXTRA_TITLE). There is no
+    // default suffix: Qt adds that to the path of the URI, where it names
+    // another document
+    QString suggested =
+        AndroidFiles::suggestedSessionName(m_sessionFile, m_audioFile);
+    if (suggested != "") dialog.selectFile(suggested);
+
+    if (!dialog.exec()) return "";
+    QList<QUrl> urls = dialog.selectedUrls();
+    if (urls.empty() || urls[0].isEmpty()) return "";
+    QString picked = (urls[0].isLocalFile() ? urls[0].toLocalFile() :
+                      AndroidFiles::grantedUri(urls[0]));
+
+    // The picker has made an empty document of that name by now
+    QString local = picked, why;
+    if (!urls[0].isLocalFile()) {
+        local = AndroidStorage::pathFor(picked, why);
+        if (local != "" && !QFileInfo(local).exists()) {
+            why = tr("there is no file at that path");
+            local = "";
+        }
+    }
+    if (local == "") {
+        cerr << "MainWindow::getSaveFileName: no path for " << picked
+             << ": " << why << endl;
+        AndroidStorage::removeIfEmpty(picked);
+        QMessageBox::warning
+            (this, tr("Cannot save the session there"),
+             tr("<b>The session cannot be saved there</b><p>A session keeps its audio and its takes folder beside it, which %1 can write only in a folder of the phone's own storage, not through a cloud app.</p><p>Browse to a folder of the phone's own storage in the picker, such as one a sync app (Syncthing, FolderSync) keeps in step with your computer.</p>")
+             .arg(app) + pickDetails(picked, "", why));
+        return "";
+    }
+
+    QString name = AndroidFiles::sessionFileName(QFileInfo(local).fileName());
+    if (name == "") {
+        AndroidFiles::removeIfEmpty(local);
+        QMessageBox::warning
+            (this, tr("No file name"),
+             tr("<b>The session was not saved</b><p>It needs a name: type one in the picker's name field.</p>"));
+        return "";
+    }
+
+    // Named without the extension, the document the picker made is not
+    // the one saved: the extension is added, as the desktop's dialog adds
+    // it
+    QString path = QFileInfo(local).dir().filePath(name);
+    if (path != local) AndroidFiles::removeIfEmpty(local);
+
+    // The picker makes an empty document, so one with something in it
+    // was there already, and the picker may not have asked
+    QFileInfo target(path);
+    if (target.exists() && target.size() > 0 &&
+        QMessageBox::question
+        (this, tr("File exists"),
+         tr("<b>File exists</b><p>The file \"%1\" already exists.\nDo you want to overwrite it?").arg(path),
+         QMessageBox::Ok, QMessageBox::Cancel) != QMessageBox::Ok) {
+        return "";
+    }
+
+    cerr << "MainWindow::getSaveFileName: the session goes to " << path
+         << " (picked as " << picked << ")" << endl;
+    return path;
+}
+
+void
+MainWindow::applicationStateChanged(Qt::ApplicationState state)
+{
+    if (state != Qt::ApplicationSuspended) return;
+
+    cerr << "MainWindow::applicationStateChanged: going into the "
+         << "background" << endl;
+
+    // A take keeps what was sung, through the Stop path of the Record
+    // button, as when the audio device fails (checkAudioDevice())
+    if (m_recordTarget && m_recordTarget->isRecording()) {
+        record();
+    } else if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+
+    // Kept running between takes, the device would keep the microphone
+    // open, and Android silences a microphone in the background anyway
+    suspendIdleAudio();
+
+    // Only a session that has a file of its own: one never saved stays as
+    // it is, as there is no one to ask where it should go. Nor one that
+    // loaded without some of its audio, which its file would lose
+    if (!maySaveUnasked()) {
+        if (m_documentModified && sessionIsIncomplete()) {
+            cerr << "MainWindow::applicationStateChanged: the session "
+                 << "loaded incomplete; it is not saved" << endl;
+        }
+        return;
+    }
+
+    m_suspendSavePath = m_sessionFile;
+    saveWhenSuspended();
+}
+
+void
+MainWindow::saveWhenSuspended()
+{
+    m_suspendSaveTimer->stop();
+
+    // Another session since, or saved since
+    if (m_suspendSavePath == "" || m_suspendSavePath != m_sessionFile ||
+        !maySaveUnasked()) {
+        m_suspendSavePath = "";
+        return;
+    }
+
+    // Not in the middle of something that shows a box or the picker (the
+    // picker and the settings page send Tony into the background too),
+    // which may be about to save, or to decide not to
+    if (QThread::currentThread()->loopLevel() > 1) {
+        cerr << "MainWindow::saveWhenSuspended: a dialog is open; the "
+             << "session is not saved" << endl;
+        m_suspendSavePath = "";
+        return;
+    }
+
+    // Saving waits for the analysis of a take to be merged, which needs
+    // the event loop that Android is about to hold: the save is made
+    // once it is done, which is when Tony is back
+    if (m_analyser2 && m_analyser2->isAnalysingRange()) {
+        cerr << "MainWindow::saveWhenSuspended: the session is saved when "
+             << "the analysis of the take is done" << endl;
+        m_suspendSaveTimer->start();
+        return;
+    }
+
+    cerr << "MainWindow::saveWhenSuspended: saving " << m_sessionFile << endl;
+    m_suspendSavePath = "";
+    saveSession();
+}
+
+void
+MainWindow::createAudioIO()
+{
+    if (m_playTarget || m_audioIO) return;
+    if (m_audioMode == AUDIO_NONE) return;
+
+    breakfastquay::ApplicationPlaybackSource *source =
+        m_playSource->getApplicationPlaybackSource();
+    std::string error;
+
+    // As MainWindowBase's: input and output once recording has been
+    // asked for, else the output alone, and the output alone too if
+    // there is no input to be had. Nor is there before the microphone
+    // may be used, which record() asks for first
+    if (m_audioMode == AUDIO_PLAYBACK_AND_RECORD && m_recordTarget &&
+        microphoneAllowed()) {
+        OboeAudioIO *io = new OboeAudioIO(m_recordTarget, source);
+        if (io->isOK()) {
+            m_audioIO = io;
+        } else {
+            error = io->getStartupError();
+            delete io;
+        }
+    }
+
+    if (!m_audioIO) {
+        OboeAudioIO *io = new OboeAudioIO(nullptr, source);
+        if (io->isOK()) {
+            m_playTarget = io;
+        } else {
+            error = io->getStartupError();
+            delete io;
+        }
+    }
+
+    if (m_audioIO) {
+        m_audioIO->suspend();
+        m_playSource->setSystemPlaybackTarget(m_audioIO);
+    } else if (m_playTarget) {
+        m_playTarget->suspend();
+        m_playSource->setSystemPlaybackTarget(m_playTarget);
+    } else {
+        emit hideSplash();
+        QMessageBox::warning
+            (this, tr("Couldn't open audio device"),
+             tr("<b>No audio available</b><p>%1</p><p>Audio playback and recording will not be available.</p>")
+             .arg(QString::fromStdString(error).toHtmlEscaped()));
+    }
+}
+
+bool
+MainWindow::microphoneAllowed() const
+{
+    return qApp->checkPermission(QMicrophonePermission()) ==
+        Qt::PermissionStatus::Granted;
+}
+
+void
+MainWindow::askForMicrophone(std::function<void()> granted)
+{
+    qApp->requestPermission
+        (QMicrophonePermission(), this,
+         [this, granted](const QPermission &permission) {
+             if (permission.status() == Qt::PermissionStatus::Granted) {
+                 // What asked, answered at last
+                 if (microphoneAllowed() && granted) granted();
+                 return;
+             }
+             QMessageBox::information
+                 (this, tr("Microphone not allowed"),
+                  tr("<b>Recording needs the microphone</b><p>%1 may not use the microphone, so it can play but not record.</p><p>To allow it, open the phone's Settings, then Apps, %1, Permissions, Microphone.</p>")
+                  .arg(QApplication::applicationName()));
+         });
+}
+
+void
+MainWindow::checkAudioDevice()
+{
+    breakfastquay::SystemPlaybackTarget *device = m_audioIO;
+    if (!device) device = m_playTarget;
+    OboeAudioIO *io = dynamic_cast<OboeAudioIO *>(device);
+    if (!io || !io->hasFailed()) return;
+
+    // Whatever was going on stops. A take keeps what was sung, through
+    // the Stop path of the Record button
+    if (m_recordTarget && m_recordTarget->isRecording()) {
+        record();
+    } else if (m_playSource && m_playSource->isPlaying()) {
+        stop();
+    }
+
+    // Reopened up to three times in ten seconds, as a headset can move
+    // the output and then the input. More is a device that fails as
+    // soon as it is open: it is left closed rather than opened over and
+    // over, and the next Record or file opened tries again
+    if (!m_audioDeviceReopened.isValid() ||
+        m_audioDeviceReopened.elapsed() > 10000) {
+        m_audioDeviceReopened.start();
+        m_audioDeviceReopens = 0;
+    }
+    if (++m_audioDeviceReopens > 3) {
+        cerr << "MainWindow::checkAudioDevice: the audio device keeps "
+             << "failing; closing it" << endl;
+        m_audioDeviceReopened.invalidate();
+        deleteAudioIO();
+        updateMenuStates();
+        QMessageBox::warning
+            (this, tr("Audio device failed"),
+             tr("<b>The audio device stopped working</b><p>It failed again each time it was opened. Recording, or opening a file, will try to open it again.</p>"));
+        return;
+    }
+
+    cerr << "MainWindow::checkAudioDevice: the audio device failed or "
+         << "went away; opening it again" << endl;
+    recreateAudioIO();
+    updateMenuStates();
+    // Another route, perhaps, with a figure of its own or none
+    updateLatencyMenuLine();
+}
+#endif
 
 void
 MainWindow::openFile()
@@ -3414,6 +4352,16 @@ MainWindow::syncAlternatePitchTrack()
     Layer *reference = m_analyser->getLayer(Analyser::PitchTrack);
     m_alternatePitch->setSource(reference ? reference->getModel() : ModelId());
     updateAlternatePitchForTake();
+}
+
+void
+MainWindow::syncSongScrollBar()
+{
+    if (!m_songScroll) return;
+    Layer *reference = m_analyser ?
+        m_analyser->getLayer(Analyser::PitchTrack) : nullptr;
+    m_songScroll->setSongModel(getMainModelId());
+    m_songScroll->setPitchModel(reference ? reference->getModel() : ModelId());
 }
 
 void
@@ -4222,12 +5170,16 @@ MainWindow::setupRealtimePitchLayer()
         return;
     }
 
-    // Determine sample rate from the audio source model.
+    // The dots go on the main model's timeline, so their model is at its
+    // rate.  The device may record at another (a phone runs at 48 kHz):
+    // the tracker works in the recording's own frames and rate, and
+    // onRealtimePitchDetected() converts where the dot goes
     sv_samplerate_t sr = 44100;
-    if (auto audioModel = ModelById::getAs<WritableWaveFileModel>(audioSourceId)) {
-        sr = audioModel->getSampleRate();
-    } else if (auto wfm = getMainModel()) {
+    if (auto wfm = getMainModel()) {
         sr = wfm->getSampleRate();
+    } else if (auto audioModel =
+               ModelById::getAs<WritableWaveFileModel>(audioSourceId)) {
+        sr = audioModel->getSampleRate();
     }
 
     // Create a SparseTimeValueModel to receive pitch estimates.
@@ -4236,9 +5188,10 @@ MainWindow::setupRealtimePitchLayer()
     // the pane's log-frequency coordinate system (same as the pYIN pitch track).
     //
     // notifyOnAdd false: a notice for each of the ~170 dots a second
-    // would be a redraw for each. The model then tells nobody of a dot,
-    // though, so m_realtimeDotsNotifier tells the pane of what was added,
-    // 25 times a second
+    // would be a redraw for each, and a notice has the pane draw all of
+    // itself. The model then tells nobody of a dot, though, so
+    // onRealtimePitchDetected() has the pane draw the part of it where
+    // each batch of dots goes, 25 times a second
     auto pitchModel = std::make_shared<SparseTimeValueModel>
         (sr, RealtimePitchTracker::kHopSize, false);
     pitchModel->setObjectName(tr("Realtime Pitch (Live)"));
@@ -4265,13 +5218,13 @@ MainWindow::setupRealtimePitchLayer()
     // Associate our pre-filled SparseTimeValueModel with the layer.
     // The model was already registered via addNonDerivedModel above.
     m_document->setModel(m_realtimePitchLayer, m_realtimePitchModelId);
-    m_realtimeDotsNotifier.setModel(m_realtimePitchModelId);
     m_realtimePitchLayer->setVerticalScale(TimeValueLayer::AutoAlignScale);
     m_realtimePitchLayer->setPlotStyle(TimeValueLayer::PlotPoints);
 
     // Out of the pane's cache: told of a change to the model of a layer
     // in it, the pane draws every layer in it again -- the reference's
-    // pitch track, notes and waveform, 25 times a second
+    // pitch track, notes and waveform, 25 times a second.  Out of it, a
+    // part of the pane can be drawn with the dots new there
     m_realtimePitchLayer->setCachedInView(false);
 
     // Singing/recording track uses the "Orange" colour so it is visually
@@ -4282,14 +5235,25 @@ MainWindow::setupRealtimePitchLayer()
     m_document->attachLayerToView(pane, m_realtimePitchLayer);
 
     // Create and start the pitch tracker.  Its thread reads new frames
-    // from audioSourceId (the WritableWaveFileModel) and emits
-    // pitchDetected(); onRealtimePitchDetected() writes the estimates into
-    // m_realtimePitchModelId on this thread.
+    // from audioSourceId (the WritableWaveFileModel) and keeps what it
+    // finds; m_liveDotsFeed takes it from there to
+    // onRealtimePitchDetected() in batches, which writes the estimates
+    // into m_realtimePitchModelId on this thread.  The feed is stopped
+    // before the tracker goes (stopRealtimePitchTracker())
     m_realtimePitchTracker = new RealtimePitchTracker(
         audioSourceId, this);
-    connect(m_realtimePitchTracker, &RealtimePitchTracker::pitchDetected,
-            this, &MainWindow::onRealtimePitchDetected);
     m_realtimePitchTracker->start();
+
+    RealtimePitchTracker *tracker = m_realtimePitchTracker;
+    m_liveDotsFeed.setReporter([this](const LiveDotsFeed::Report &report) {
+        logLiveDots(report);
+    });
+    m_liveDotsFeed.start
+        ([tracker]() { return tracker->takeEstimates(); },
+         [this](const RealtimePitchTracker::Estimates &estimates) {
+             onRealtimePitchDetected(estimates);
+         });
+    m_liveDotsFeed.timePaintsOf(pane);
 
     cerr << "setupRealtimePitchLayer: realtime pitch tracking started "
          << "(audio source model " << audioSourceId << ", sr=" << sr << ")" << endl;
@@ -4298,6 +5262,8 @@ MainWindow::setupRealtimePitchLayer()
 void
 MainWindow::stopRealtimePitchTracker()
 {
+    // First: the feed takes from the tracker
+    m_liveDotsFeed.stop();
     if (m_realtimePitchTracker) {
         m_realtimePitchTracker->stop();
         delete m_realtimePitchTracker;
@@ -4309,7 +5275,6 @@ void
 MainWindow::teardownRealtimePitchLayer()
 {
     stopRealtimePitchTracker();
-    m_realtimeDotsNotifier.setModel({});
 
     if (m_realtimeLayerTeardownConnection) {
         disconnect(m_realtimeLayerTeardownConnection);
@@ -4442,6 +5407,16 @@ MainWindow::record()
         return;
     }
 
+#ifdef Q_OS_ANDROID
+    // The microphone is asked for when it is first needed, and the
+    // answer comes later: the take is started then, from the top
+    if (!microphoneAllowed()) {
+        if (m_recordAction) m_recordAction->setChecked(false);
+        askForMicrophone([this]() { record(); });
+        return;
+    }
+#endif
+
     // If a reference track is already loaded, record the microphone input
     // into the singing track rather than replacing the whole session.  We
     // do that by switching to RecordCreateAdditionalModel for the call, so
@@ -4568,7 +5543,13 @@ MainWindow::record()
     // the start of the lead-in, so the cursor runs through the lead-in in
     // step with the reference.
     sv_frame_t playbackStart = currentTakeTiming().playbackStart();
-    if (m_viewManager) m_viewManager->setRecordStartFrame(playbackStart);
+    if (m_viewManager) {
+        m_viewManager->setRecordStartFrame(playbackStart);
+        // What has been recorded is counted in the device's frames, and
+        // the device's rate is known only once it records: until then,
+        // and for a recording that becomes the session, one for one
+        m_viewManager->setRecordFrameRatio(1.0);
+    }
 
     MainWindowBase::record();
 
@@ -4592,6 +5573,10 @@ MainWindow::record()
     if (m_recordingAsSingingTrack && m_viewManager) {
         m_viewManager->setPlaybackFrame(playbackStart);
         m_viewManager->setGlobalCentreFrame(playbackStart);
+        // A device at 48 kHz against the reference at 44.1 would
+        // otherwise run the cursor 8.8% ahead of the reference
+        m_viewManager->setRecordFrameRatio
+            (currentTakeTiming().referenceFramesPerRecordedFrame());
     }
 
     updateAlternatePitchForTake();
@@ -4830,9 +5815,15 @@ MainWindow::recordingStarted()
             // With a pre-roll, playback starts at the beginning of the
             // lead-in rather than at the take's position, and the splice
             // skips the lead-in as well (TakeTiming::spliceOffset()).
-            sv_frame_t playbackStart = currentTakeTiming().playbackStart();
+            TakeTiming timing = currentTakeTiming();
+            sv_frame_t playbackStart = timing.playbackStart();
 
-            sv_frame_t outputLatency = m_playSource->getTargetPlayLatency();
+            // All of it in frames of the recording, at the device's rate.
+            // The play source counts at the reference's rate: bqaudioio's
+            // ResamplerWrapper converts the device's output latency to
+            // that rate when it hands it on
+            sv_frame_t outputLatency = timing.referenceToRecorded
+                (m_playSource->getTargetPlayLatency());
             sv_frame_t inputLatency  = m_recordTarget ? m_recordTarget->getSystemRecordLatency() : 0;
             //
             // The take is already running by now: record() started it, and
@@ -4887,6 +5878,7 @@ MainWindow::recordingStarted()
                 (inUse.source == LatencyCalibration::Source::Measured);
             m_takeLatency.startGap = m_recordingStartGapEstimate;
             m_takeLatency.startGapMeasured = false;
+            deviceRoute(m_takeLatency.route);
             cerr << "MainWindow::recordingStarted: round trip " << roundTrip
                  << " frames at " << recordingRate << " Hz ("
                  << inUse.roundTrip * 1000.0 << " ms), ";
@@ -4897,6 +5889,9 @@ MainWindow::recordingStarted()
                 if (inUse.source == LatencyCalibration::Source::Measured) {
                     cerr << " on "
                          << inUse.date.toString(Qt::ISODate).toStdString();
+                } else if (inUse.stale && m_takeLatency.route.driver != "") {
+                    cerr << ": the measured one is stale, the streams were "
+                         << "opened otherwise";
                 } else if (inUse.stale) {
                     cerr << ": the measured one is stale, the device reports "
                          << "other latencies now";
@@ -4908,6 +5903,9 @@ MainWindow::recordingStarted()
                  << " total compensation=" << m_recordingLatencyFrames << " frames" << endl;
 
             m_recordingStartGapMeasured = -1;
+            m_recordFramesPerPlayFrame =
+                (timing.rate > 0 && timing.recordRate > 0 ?
+                 double(timing.recordRate) / double(timing.rate) : 1.0);
             m_awaitingReferenceStart = true;
 
             liftPlaySelectionForTake();
@@ -4981,18 +5979,67 @@ MainWindow::roundTripAt(sv_samplerate_t recordingRate) const
         LatencyCalibration::reportedSeconds
         (m_recordTarget->getSystemRecordLatency(), recordingRate) : 0.0;
 
+    // A device that knows its route is judged by how it opened its
+    // streams, not by the latencies it reports (LatencyCalibration)
+    AudioRoute::Route route;
+    deviceRoute(route);
+
     QSettings settings;
     LatencyCalibration::Figure figure;
     bool stored = LatencyCalibration::load
-        (settings, LatencyCalibration::currentKey(settings, recordingRate),
-         figure);
+        (settings, latencyKey(recordingRate), figure);
     return LatencyCalibration::roundTripInUse
-        (stored ? &figure : nullptr, output, input);
+        (stored ? &figure : nullptr, output, input,
+         route.outputStreams, route.inputStreams);
+}
+
+bool
+MainWindow::deviceRoute(AudioRoute::Route &route) const
+{
+    route = AudioRoute::Route();
+    breakfastquay::SystemPlaybackTarget *device = m_audioIO;
+    if (!device) device = m_playTarget;
+    auto reporter = dynamic_cast<const AudioRouteReporter *>(device);
+    if (!reporter) return false;
+    route = reporter->getAudioRoute();
+    return route.driver != "";
+}
+
+AudioRoute::Route
+MainWindow::audioRoute() const
+{
+    AudioRoute::Route route;
+    deviceRoute(route);
+    return route;
+}
+
+LatencyCalibration::Key
+MainWindow::latencyKey(sv_samplerate_t rate) const
+{
+    QSettings settings;
+    AudioRoute::Route route;
+    if (!deviceRoute(route)) {
+        return LatencyCalibration::currentKey(settings, rate);
+    }
+
+    // Opened for playback only, as the device is on a phone until the
+    // first take, it cannot say which input it will record from: the one
+    // a figure is kept with for this output, if only one is.  How the
+    // input will open is not known either, and is not compared
+    LatencyCalibration::Key key = LatencyCalibration::routeKey(route, rate);
+    if (!route.hasInput) {
+        LatencyCalibration::onlyRecordDevice(settings, key, key.recordDevice);
+    }
+    return key;
 }
 
 sv_samplerate_t
 MainWindow::expectedRecordingRate() const
 {
+    // A device that knows its route knows its rate as soon as it is open,
+    // and records at it (OboeAudioIO opens its input at its output's)
+    AudioRoute::Route route;
+    if (deviceRoute(route) && route.rate > 0) return route.rate;
     return m_lastRecordingRate > 0 ? m_lastRecordingRate : sessionRate();
 }
 
@@ -5013,6 +6060,8 @@ MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
     figure.date = QDateTime::currentDateTimeUtc();
     figure.reportedOutput = result.reportedOutputLatency;
     figure.reportedInput = result.reportedInputLatency;
+    figure.outputStreams = result.route.outputStreams;
+    figure.inputStreams = result.route.inputStreams;
 
     // Under the devices the check ran on, which the Preferences may no
     // longer name: the result can be on show long after the run
@@ -5024,8 +6073,13 @@ MainWindow::storeMeasuredLatency(const AudioCheckResult &result)
     cerr << "MainWindow::storeMeasuredLatency: round trip "
          << figure.roundTrip * 1000.0 << " ms at " << key.rate
          << " Hz, the device reporting " << figure.reportedOutput * 1000.0
-         << " ms out and " << figure.reportedInput * 1000.0 << " ms in"
-         << endl;
+         << " ms out and " << figure.reportedInput * 1000.0 << " ms in";
+    if (result.route.driver != "") {
+        cerr << "; for the route " << key.playbackDevice << " | "
+             << key.recordDevice << ", its streams: output "
+             << figure.outputStreams << "; input " << figure.inputStreams;
+    }
+    cerr << endl;
     updateLatencyMenuLine();
     return true;
 }
@@ -5035,8 +6089,7 @@ MainWindow::forgetMeasuredLatency()
 {
     QSettings settings;
     LatencyCalibration::forget
-        (settings, LatencyCalibration::currentKey(settings,
-                                                  expectedRecordingRate()));
+        (settings, latencyKey(expectedRecordingRate()));
     cerr << "MainWindow::forgetMeasuredLatency: at "
          << expectedRecordingRate() << " Hz" << endl;
     updateLatencyMenuLine();
@@ -5064,6 +6117,10 @@ MainWindow::calibrateAudio()
 #ifdef TONY_DEV_CHECKS
         m_calibrateAudioDialog->setDevChecks(m_devChecks);
 #endif
+        // Where the dialog goes while its check runs: the right end of
+        // the status bar, a corner the panes never reach, clear of the
+        // status line at its left
+        statusBar()->addPermanentWidget(m_calibrateAudioDialog->indicator());
     }
     m_calibrateAudioDialog->present();
 }
@@ -5074,6 +6131,12 @@ MainWindow::currentTakeTiming() const
     TakeTiming timing;
     auto model = getMainModel();
     timing.rate = model ? model->getSampleRate() : 0;
+    // The device's rate, which the recording is made at; not known until
+    // the recording has been started, and not needed before
+    if (auto recording = ModelById::getAs<WritableWaveFileModel>
+        (m_currentRecordingModelId)) {
+        timing.recordRate = recording->getSampleRate();
+    }
     timing.position = m_takePosition;
     timing.end = m_takeEnd;
     timing.preRoll = m_takePreRoll;
@@ -5105,16 +6168,19 @@ MainWindow::wantedPreRollFrames() const
 }
 
 void
-MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
+MainWindow::onRealtimePitchDetected
+(const RealtimePitchTracker::Estimates &estimates)
 {
-    // Called on the GUI thread via Qt::QueuedConnection (RealtimePitchTracker
-    // emits from its background thread).  Write the point into the model here
-    // so all model mutations stay on the GUI thread.
+    // Everything the tracker has found since the last batch, handed over
+    // by m_liveDotsFeed on the GUI thread, so that all model mutations
+    // stay on this thread.  One estimate at a time, as they were found,
+    // a GUI thread slower than the tracker would fall further behind it
+    // for as long as the take lasted.
     //
-    // Events still queued when the take ended arrive here as well. The
-    // dots may still be on show then, waiting for pYIN, but the take is
-    // over: leave them, and the status bar, alone.
-    if (!m_recordingInProgress) return;
+    // The feed stops with the tracker when the take ends.  A batch that
+    // came even so would find the dots perhaps still on show, waiting for
+    // pYIN, but the take over: leave them, and the status bar, alone.
+    if (!m_recordingInProgress || estimates.empty()) return;
 
     // Draw the dot where the finished pitch track will put this sound: the
     // take is spliced into the singing track from m_takePosition on, with
@@ -5129,20 +6195,41 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
         for (const Event &e : m->getAllEvents()) m->remove(e);
     }
 
-    // A negative answer is sound sung during the lead-in of a pre-roll, or
-    // before the reference started at all: no dot for it
-    sv_frame_t intoTake = currentTakeTiming().liveFrameIntoTake(frame);
-    if (intoTake < 0) return;
-    sv_frame_t dotFrame = m_takePosition + intoTake;
+    // The frames are the recording's, at the device's rate, and the
+    // answers the reference's.  A negative answer is sound sung during the
+    // lead-in of a pre-roll, or before the reference started at all: no
+    // dot for it
+    TakeTiming timing = currentTakeTiming();
+    sv_frame_t from = 0, to = 0;
+    const RealtimePitchTracker::Estimate *newest = nullptr;
+    for (const auto &estimate : estimates) {
+        sv_frame_t intoTake = timing.liveFrameIntoTake(estimate.frame);
+        if (intoTake < 0) continue;
+        sv_frame_t dotFrame = m_takePosition + intoTake;
+        if (m) m->add(Event(dotFrame, float(estimate.hz), tr("")));
+        sv_frame_t dotEnd = dotFrame + RealtimePitchTracker::kHopSize;
+        if (!newest) {
+            from = dotFrame;
+            to = dotEnd;
+        } else {
+            from = std::min(from, dotFrame);
+            to = std::max(to, dotEnd);
+        }
+        newest = &estimate;
+    }
+    if (!newest) return;
 
-    if (m) {
-        m->add(Event(dotFrame, float(hz), tr("")));
-        m_realtimeDotsNotifier.changed
-            (dotFrame, dotFrame + RealtimePitchTracker::kHopSize);
+    // The pane draws again only where the new dots are.  The model's own
+    // notice would have it draw all of itself, which at a phone's pixel
+    // ratio is several times the cost, 25 times a second
+    if (m && m_paneStack && m_paneStack->getPaneCount() > 0) {
+        updateViewFrames(m_paneStack->getPane(0), from, to);
     }
 
-    // Convert Hz to MIDI note number and cents deviation.
-    // MIDI note 69 = A4 = 440 Hz.
+    // The status bar says what is being sung just now: the newest
+    // estimate of the batch.  Convert Hz to MIDI note number and cents
+    // deviation.  MIDI note 69 = A4 = 440 Hz.
+    double hz = newest->hz;
     double midiNote = 12.0 * std::log2(hz / 440.0) + 69.0;
     int nearestNote = int(std::round(midiNote));
     int cents = int(std::round((midiNote - nearestNote) * 100.0));
@@ -5170,6 +6257,36 @@ MainWindow::onRealtimePitchDetected(sv::sv_frame_t frame, double hz)
         .arg(noteName)
         .arg(hz, 0, 'f', 1)
         .arg(centsStr));
+}
+
+void
+MainWindow::logLiveDots(const LiveDotsFeed::Report &report)
+{
+    // Once a second during a take, so that the log of a phone says
+    // whether the dots keep up with the singing there: how much has been
+    // recorded, how far the tracker has analysed it, and how far the dots
+    // handed to the pane have got, all in seconds of the recording; then
+    // what the dots cost the GUI thread
+    sv_samplerate_t rate = 0;
+    if (auto recording = ModelById::getAs<WritableWaveFileModel>
+        (m_currentRecordingModelId)) {
+        rate = recording->getSampleRate();
+    }
+    if (rate <= 0 || !m_recordTarget || !m_realtimePitchTracker) return;
+
+    auto seconds = [rate](sv_frame_t frame) {
+        return QString::number(double(frame) / rate, 'f', 2);
+    };
+    // A dot is at the middle of the window it was found in: the end of
+    // that window is the recording it has caught up with
+    sv_frame_t dotsTo = report.newestFrame < 0 ? 0 :
+        report.newestFrame + RealtimePitchTracker::kWindowSize / 2;
+
+    cerr << "MainWindow: live dots: "
+         << seconds(m_recordTarget->getFramesReceived()) << " s recorded, "
+         << "tracker at " << seconds(m_realtimePitchTracker->getFramesAnalysed())
+         << " s, dots to " << seconds(dotsTo) << " s; "
+         << LiveDotsFeed::describe(report) << endl;
 }
 
 void
@@ -5204,13 +6321,16 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
         teardownRealtimePitchLayer();
     }
 
-    // Stop reference playback that was started for the singer's benefit.
-    // Suspend the audio IO so it doesn't keep consuming CPU while idle.
+    // Stop reference playback that was started for the singer's benefit,
+    // and suspend the audio IO where Stop does (suspendAudioOnStop()):
+    // the application keeps the stream running for the next take
     if (m_playSource && m_playSource->isPlaying()) {
         cerr << "MainWindow::recordingFinishedFull: stopping reference playback" << endl;
         m_playSource->stop();
-        if (m_audioIO) m_audioIO->suspend();
-        else if (m_playTarget) m_playTarget->suspend();
+        if (suspendAudioOnStop()) {
+            if (m_audioIO) m_audioIO->suspend();
+            else if (m_playTarget) m_playTarget->suspend();
+        }
     }
     restorePlaySelectionAfterTake();
 
@@ -5264,8 +6384,9 @@ MainWindow::finishSingingTake()
 
     // A take stopped the moment it was started, or one no longer than the
     // latency and the lead-in together, has nothing in it to add.  Nothing
-    // has gone wrong; there is simply nothing to do
-    if (recordingPath != "" && recorded <= offset) {
+    // has gone wrong; there is simply nothing to do.  (The recording is at
+    // the device's rate, the offset at the reference's.)
+    if (recordingPath != "" && timing.recordedToReference(recorded) <= offset) {
         cerr << "MainWindow::finishSingingTake: nothing to use: " << recorded
              << " frames recorded, the first " << offset
              << " of which are the latency and the lead-in" << endl;
@@ -5291,9 +6412,14 @@ MainWindow::finishSingingTake()
             // Everything before the offset is sound from before the singer
             // could have heard the reference at the take's position: the
             // round trip, and the lead-in of a pre-roll before it.  The
-            // length is what a punch-out allows, or all there is
+            // length is what a punch-out allows, or all there is.  A
+            // device that does not run at the reference's rate made the
+            // recording at its own, and it is converted to the
+            // reference's on the way in: the take's frames are the
+            // reference's, as all three figures are
             error = m_takes->spliceRecording(recordingPath, offset, position,
-                                             length, directory, &placed);
+                                             length, directory, &placed,
+                                             timing.rate);
         }
     }
 
@@ -5403,7 +6529,7 @@ MainWindow::rebuildSingingTrackFromTake(const Coverage::Range &placed)
              tr("<b>The recording was added to the singing track, but it "
                 "could not be shown</b><p>%1</p><p>What is on screen is the "
                 "singing track as it was. The recording is in the take's "
-                "audio file, \"%2\".</p>").arg(error).arg(path),
+                "audio file, \"%2\".</p>").arg(error, path),
              QMessageBox::Ok);
         return false;
     }
@@ -5514,8 +6640,9 @@ MainWindow::startTakeAnalysis(sv_frame_t start, sv_frame_t end)
         return false;
     }
 
-    // A range short enough to have been analysed and merged before the
-    // call returned leaves nothing to wait for
+    // The analysis is merged from the event loop, however soon it is
+    // done (Analyser::analyseRange()); this is for an analyser that
+    // could not start one after all
     if (!m_analyser2->isAnalysingRange()) return false;
 
     m_takeAnalysisRange = Coverage::Range(start, end);
@@ -5650,7 +6777,7 @@ MainWindow::eraseSingingInSelection()
              tr("<b>The singing was erased, but the result could not be "
                 "shown</b><p>%1</p><p>What is on screen is the singing track "
                 "as it was. The erased audio is in the take's audio file, "
-                "\"%2\".</p>").arg(showError).arg(path),
+                "\"%2\".</p>").arg(showError, path),
              QMessageBox::Ok);
     }
 
@@ -6201,7 +7328,7 @@ MainWindow::applyTakeState(SingingTakeCommand *command, const TakeState &state)
              tr("Failed to show the singing track"),
              tr("<b>The singing track could not be shown as it was</b>"
                 "<p>%1</p><p>The take's audio is in the file \"%2\".</p>")
-             .arg(error).arg(state.path),
+             .arg(error, state.path),
              QMessageBox::Ok);
     }
 
@@ -6485,7 +7612,7 @@ MainWindow::activateTake(bool warnIfNoAudio)
             (this,
              tr("Failed to open the take's audio"),
              tr("<b>The take \"%1\" is shown without its audio</b><p>%2</p>")
-             .arg(name).arg(error),
+             .arg(name, error),
              QMessageBox::Ok);
     }
 
@@ -6637,7 +7764,7 @@ MainWindow::duplicateTake()
     documentModified();
 
     emit activity(tr("Copied the take \"%1\" into \"%2\"")
-                  .arg(from).arg(name));
+                  .arg(from, name));
 }
 
 void
@@ -6683,7 +7810,7 @@ MainWindow::renameTake()
     documentModified();
 
     emit activity(tr("The take \"%1\" is called \"%2\" now")
-                  .arg(current).arg(name));
+                  .arg(current, name));
 }
 
 void
@@ -6799,6 +7926,15 @@ MainWindow::openRecentFile()
     QString path = action->objectName();
     if (path == "") return;
 
+#ifdef Q_OS_ANDROID
+    // A file moved or deleted since, said so, rather than "could not be
+    // opened"
+    if (!recentFileIsThere(path)) {
+        setupRecentFilesMenu();
+        return;
+    }
+#endif
+
     FileOpenStatus status = openPath(path, ReplaceSession);
 
     if (status == FileOpenFailed) {
@@ -6814,6 +7950,51 @@ void
 MainWindow::paneAdded(Pane *pane)
 {
     pane->setPlaybackFollow(PlaybackScrollPage);
+
+    // Two fingers zoom and scroll the frequency range as well, in the
+    // pane the reference's analyser shows it in: every pitch and note
+    // layer there is drawn on it, aligned to its spectrogram's scale
+    TouchGestures::VerticalRange range;
+    range.get = [this, pane](VerticalZoom::Range &shown) {
+        double min, max;
+        if (!m_analyser || m_analyser->getPane() != pane ||
+            !m_analyser->getDisplayFrequencyExtents(min, max)) {
+            return false;
+        }
+        // What the pane draws values in Hz on, which is that range
+        // unless something else has come to set the scale
+        CoordinateScale scale = pane->getEffectiveVerticalExtents("Hz");
+        if (scale.getDisplayMinimum() != min ||
+            scale.getDisplayMaximum() != max ||
+            !(scale.isLogarithmic() || scale.isLinear())) {
+            return false;
+        }
+        shown.min = min;
+        shown.max = max;
+        shown.log = scale.isLogarithmic();
+        return true;
+    };
+    range.set = [this](const VerticalZoom::Range &wanted) {
+        m_analyser->setDisplayFrequencyExtents(wanted.min, wanted.max);
+    };
+    range.limits = VerticalZoom::pitchLimits();
+
+    // A zoom keeps in view the reference's pitch and notes and the
+    // singing's, those of them on show, in the time the pane shows
+    range.drawn = [this, pane]() {
+        std::vector<double> values;
+        for (Analyser *a : { m_analyser, m_analyser2 }) {
+            if (a && a->getPane() == pane) {
+                a->getPitchOnShow(pane->getStartFrame(), pane->getEndFrame(),
+                                  values);
+            }
+        }
+        return values;
+    };
+
+    TouchGestures *gestures = new TouchGestures(pane); // owned by the pane
+    gestures->setVerticalRange(range);
+
     m_paneStack->sizePanesEqually();
     if (m_overview) m_overview->registerView(pane);
 }    
@@ -6980,6 +8161,42 @@ MainWindow::checkSaveModified()
 }
 
 bool
+MainWindow::sessionIsIncomplete() const
+{
+    // Set by svapp's session reader for audio it could not read, and kept
+    // by the document until it is replaced (or saved, below)
+    return m_document && m_document->isIncomplete();
+}
+
+bool
+MainWindow::confirmSaveOfIncompleteSession()
+{
+    if (!sessionIsIncomplete()) return true;
+    return askToSaveIncompleteSession();
+}
+
+bool
+MainWindow::askToSaveIncompleteSession()
+{
+    // svapp's words at the load, asked again when it comes to it
+    return QMessageBox::warning
+        (this, tr("Save incomplete session?"),
+         tr("<b>Save this session without all of its audio?</b><p>Some of "
+            "the audio content referred to by the original session file "
+            "could not be loaded. If you save this session, it will be "
+            "saved without any reference to that audio, and information "
+            "may be lost.</p>"),
+         QMessageBox::Save | QMessageBox::Cancel,
+         QMessageBox::Cancel) == QMessageBox::Save;
+}
+
+bool
+MainWindow::maySaveUnasked() const
+{
+    return m_sessionFile != "" && m_documentModified && !sessionIsIncomplete();
+}
+
+bool
 MainWindow::waitForInitialAnalysis()
 {
     // Called before saving a session. We can't safely save while the
@@ -7061,6 +8278,9 @@ MainWindow::waitForRangedAnalysis()
 void
 MainWindow::saveSession()
 {
+    // (Save As asks for itself)
+    if (m_sessionFile != "" && !confirmSaveOfIncompleteSession()) return;
+
     // We do not want to save mid-analysis regions -- that would cause
     // confusion on reloading
     m_analyser->clearReAnalysis();
@@ -7074,6 +8294,7 @@ MainWindow::saveSession()
         } else {
             CommandHistory::getInstance()->documentSaved();
             documentRestored();
+            if (m_document) m_document->setIncomplete(false);
         }
     } else {
         saveSessionAs();
@@ -7084,6 +8305,8 @@ void
 MainWindow::saveSessionInAudioPath()
 {
     if (m_audioFile == "") return;
+
+    if (!confirmSaveOfIncompleteSession()) return;
 
     if (!waitForInitialAnalysis()) return;
 
@@ -7127,6 +8350,10 @@ bool
 MainWindow::saveSessionToPath(QString path)
 {
     if (!saveSessionFile(path)) {
+#ifdef Q_OS_ANDROID
+        // Save As picked it, and the picker made it, empty
+        AndroidFiles::removeIfEmpty(path);
+#endif
         QMessageBox::critical(this, tr("Failed to save file"),
                               tr("Session file \"%1\" could not be saved.").arg(path));
         return false;
@@ -7140,6 +8367,9 @@ MainWindow::saveSessionToPath(QString path)
     // from now on is written into its folder (spec 6.4)
     m_sessionFile = path;
 
+    // and the file is what the session is: nothing it names is missing
+    if (m_document) m_document->setIncomplete(false);
+
     CommandHistory::getInstance()->documentSaved();
     documentRestored();
     m_recentFiles.addFile(path);
@@ -7149,6 +8379,10 @@ MainWindow::saveSessionToPath(QString path)
 void
 MainWindow::saveSessionAs()
 {
+    // Before the picker, which on Android has made the file by the time
+    // it returns
+    if (!confirmSaveOfIncompleteSession()) return;
+
     // We do not want to save mid-analysis regions -- that would cause
     // confusion on reloading
     m_analyser->clearReAnalysis();
@@ -7161,6 +8395,10 @@ MainWindow::saveSessionAs()
     }
 
     if (!waitForInitialAnalysis()) {
+#ifdef Q_OS_ANDROID
+        // The picker made it, empty
+        AndroidFiles::removeIfEmpty(path);
+#endif
         QMessageBox::warning(this, tr("File not saved"),
                              tr("Wait cancelled: the session has not been saved."));
         return;
@@ -8072,6 +9310,8 @@ MainWindow::mainModelChanged(ModelId model)
 
     MainWindowBase::mainModelChanged(model);
 
+    syncSongScrollBar();
+
     if (m_playTarget || m_audioIO) {
         connect(m_fader, SIGNAL(valueChanged(float)),
                 this, SLOT(mainModelGainChanged(float)));
@@ -8326,14 +9566,14 @@ MainWindow::modelRegenerationFailed(QString layerName,
             (this,
              tr("Failed to regenerate layer"),
              tr("<b>Layer generation failed</b><p>Failed to regenerate derived layer \"%1\" using new data model as input.<p>The layer transform \"%2\" failed:<p>%3")
-             .arg(layerName).arg(transformName).arg(message),
+             .arg(layerName, transformName, message),
              QMessageBox::Ok);
     } else {
         QMessageBox::warning
             (this,
              tr("Failed to regenerate layer"),
              tr("<b>Layer generation failed</b><p>Failed to regenerate derived layer \"%1\" using new data model as input.<p>The layer transform \"%2\" failed.<p>No error information is available.")
-             .arg(layerName).arg(transformName),
+             .arg(layerName, transformName),
              QMessageBox::Ok);
     }
 }
@@ -8344,7 +9584,7 @@ MainWindow::modelRegenerationWarning(QString layerName,
                                      QString message)
 {
     QMessageBox::warning
-        (this, tr("Warning"), tr("<b>Warning when regenerating layer</b><p>When regenerating the derived layer \"%1\" using new data model as input:<p>%2").arg(layerName).arg(message), QMessageBox::Ok);
+        (this, tr("Warning"), tr("<b>Warning when regenerating layer</b><p>When regenerating the derived layer \"%1\" using new data model as input:<p>%2").arg(layerName, message), QMessageBox::Ok);
 }
 
 void

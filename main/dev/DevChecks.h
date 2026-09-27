@@ -149,19 +149,18 @@ class DevChecks : public QObject
     Q_OBJECT
 
 public:
-    /// Items 1 and 2: how far from where the reference has it a sweep
-    /// may land, either way
-    static constexpr double kPlacementSeconds = 0.002;
+    /// Items 1, 2, 7 and 13: how far from where the reference has it a
+    /// sweep may land, either way.  Kept running, a stream on two sound
+    /// cards drifts, and PortAudio slips a period (10 ms on WASAPI) to
+    /// match, so a session's takes lie within one period of each other:
+    /// the user's run lay within -5.3 and +4.0 ms of its calibration.
+    /// The user accepted that (2026-09-26), far under what a singer
+    /// hears; 2 ms before
+    static constexpr double kPlacementSeconds = 0.006;
 
-    /// Item 3: more live dots than this in every punch-in
+    /// Item 3: more live dots than this in every punch-in, each where
+    /// TakeDiff::placeLiveDot() allows
     static constexpr int kMinDots = 10;
-
-    /// Item 3: a dot is on one of the reference's sounds when it lies
-    /// from the sound's start to half the live tracker's window past
-    /// its end, give or take this many of its hops (liveDotsCheck()),
-    /// and on a tone, within this many cents of its pitch
-    static constexpr int kDotHops = 1;
-    static constexpr double kDotCents = 50.0;
 
     /// Item 5: an input carries the mic when its peak is no more than
     /// this far below the loudest input's
@@ -193,10 +192,18 @@ public:
 
     /// How long a stage may take.  A stage that runs the audio check
     /// waits for it, and the runner has limits of its own for each
-    /// step, which end its run with a reason: this is a backstop.
-    /// Save and reopen is quick
-    static constexpr int kCheckStageTimeoutMs = 240000;
-    static constexpr int kReopenTimeoutMs = 60000;
+    /// step, which end its run with a reason: this is a backstop behind
+    /// them.  The runner's for the reference's analysis and for those of
+    /// two punch-ins, the most a stage records, and two minutes for the
+    /// rest (writing and opening the reference, recording, stopping):
+    /// 4 minutes on a desktop, 10 on a phone.  Save and reopen is quick
+    /// on a desktop; on a phone it may take as many times longer as an
+    /// analysis may
+    static constexpr int kCheckStageTimeoutMs =
+        AudioCheckRunner::kReferenceTimeoutMs +
+        2 * AudioCheckRunner::kTakeAnalysisTimeoutMs + 120000;
+    static constexpr int kReopenTimeoutMs =
+        60000 * AudioCheckRunner::kAnalysisTimeFactor;
 
     /// The report's file name, in the report directory
     static constexpr const char *kReportFileName = "DevChecks.txt";

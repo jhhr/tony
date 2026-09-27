@@ -15,7 +15,11 @@
 #include "TestViewCache.h"
 #include "TestSingingAnalysis.h"
 #include "TestRecordWorkflow.h"
+#include "TestTouchGestures.h"
+#include "TestCompactLayout.h"
+#include "TestTouchMenuStyle.h"
 #include "TestLyricsLayer.h"
+#include "TestPlotSize.h"
 #include "TestUiChecks.h"
 #include "TestAudioCheck.h"
 
@@ -94,13 +98,37 @@ int main(int argc, char *argv[])
     }
 
     {
+        TestPlotSize t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestRecordWorkflow t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }
 
     {
+        TestTouchGestures t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestUiChecks t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestCompactLayout t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTouchMenuStyle t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

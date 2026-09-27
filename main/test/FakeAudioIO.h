@@ -23,6 +23,8 @@
 // application computes a known compensation, and the input can be
 // made to arrive late by exactly that much.
 
+#include "../AudioRoute.h"
+
 #include <bqaudioio/SystemAudioIO.h>
 #include <bqaudioio/ApplicationPlaybackSource.h>
 #include <bqaudioio/ApplicationRecordTarget.h>
@@ -36,7 +38,8 @@
 #include <thread>
 #include <vector>
 
-class FakeAudioIO : public breakfastquay::SystemAudioIO
+class FakeAudioIO : public breakfastquay::SystemAudioIO,
+                    public AudioRouteReporter
 {
 public:
     struct Config {
@@ -44,10 +47,25 @@ public:
         int blockSize = 512;
         int channels = 2;
 
+        // The input's channels, where they are not as many as the
+        // output's: a phone records one (OboeAudioIO) and plays two. -1
+        // for as many as channels
+        int inputChannels = -1;
+
         // Reported to the application, and nothing else: the delay the
         // input really has is inputDelay
         int recordLatency = 0;
         int playbackLatency = 0;
+
+        // Added to the reported record latency at every resume after the
+        // first: a device that measures its latencies at each start, as
+        // Oboe does from its timestamps, reports others every time. The
+        // input's real delay stays inputDelay
+        int recordLatencyStep = 0;
+
+        // The route reported to the application, as OboeAudioIO reports
+        // the one Android opened; with no driver, none, as PortAudioIO
+        AudioRoute::Route route;
 
         // Mono input, delivered once and followed by silence. The
         // input clock restarts whenever the device is resumed
@@ -80,6 +98,20 @@ public:
         int echoDelay = 0;
         float echoGain = 0.f;
 
+        // How far the loopback (and its echo) moves at each resume after
+        // the first, in frames: restartShift early, then late, then on
+        // time, and so on, as a real stream's input moves against its
+        // output by several ms each time it starts. inputDelay less this
+        // must still be at least a block. 0 for none
+        int restartShift = 0;
+
+        // A steady sine added to the input all along, humGain its peak,
+        // on every channel the input arrives on: a room's fans or a
+        // mains hum, which the microphone hears between the sounds as
+        // well. None while humGain is 0
+        double humHz = 0.0;
+        float humGain = 0.f;
+
         // Tell the application the peak of each block's input and output,
         // left and right, as PortAudioIO does for its level meters
         bool reportLevels = false;
@@ -108,7 +140,8 @@ public:
         m_playStartFrame(-1),
         m_sinceResume(0),
         m_framesBeforePlayStart(-1),
-        m_resumeCount(0)
+        m_resumeCount(0),
+        m_loopbackDelay(config.inputDelay)
     {
         m_source->setSystemPlaybackBlockSize(m_config.blockSize);
         m_source->setSystemPlaybackSampleRate(m_config.sampleRate);
@@ -117,8 +150,9 @@ public:
 
         m_target->setSystemRecordBlockSize(m_config.blockSize);
         m_target->setSystemRecordSampleRate(m_config.sampleRate);
-        m_target->setSystemRecordChannelCount(m_config.channels);
+        m_target->setSystemRecordChannelCount(inputChannelCount());
         m_target->setSystemRecordLatency(m_config.recordLatency);
+        m_reportedRecordLatency = m_config.recordLatency;
 
         m_thread = std::thread([this]() { run(); });
     }
@@ -137,6 +171,8 @@ public:
 
     void suppressRecordSide(bool) override { }
 
+    AudioRoute::Route getAudioRoute() const override { return m_config.route; }
+
     // No callback is running, or will start, once this returns
     void suspend() override {
         std::lock_guard<std::mutex> guard(m_mutex);
@@ -152,6 +188,12 @@ public:
         m_sinceResume = 0;
         m_framesBeforePlayStart = -1;
         ++m_resumeCount;
+        // No callback runs while suspended, and none has started yet
+        if (m_config.recordLatencyStep != 0 && m_resumeCount > 1) {
+            m_reportedRecordLatency += m_config.recordLatencyStep;
+            m_target->setSystemRecordLatency(m_reportedRecordLatency);
+        }
+        m_loopbackDelay = m_config.inputDelay + restartOffset(m_resumeCount);
     }
 
     bool isSuspended() const {
@@ -201,7 +243,17 @@ private:
     long m_sinceResume;
     long m_framesBeforePlayStart;
     int m_resumeCount;
+    int m_reportedRecordLatency = 0;
+    int m_loopbackDelay;
     std::vector<float> m_captured;
+
+    // Where the loopback lands after the given number of starts, against
+    // inputDelay: on time at the first, then -, +, 0 times the shift
+    int restartOffset(int starts) const {
+        if (starts < 2) return 0;
+        static const int cycle[] = { -1, 1, 0 };
+        return cycle[(starts - 2) % 3] * m_config.restartShift;
+    }
 
     void run() {
         using namespace std::chrono;
@@ -220,6 +272,11 @@ private:
             }
             process();
         }
+    }
+
+    int inputChannelCount() const {
+        return m_config.inputChannels > 0 ? m_config.inputChannels
+                                          : m_config.channels;
     }
 
     static float peak(const float *samples, int count) {
@@ -248,8 +305,14 @@ private:
         std::vector<float> in(n, 0.f);
         for (int i = 0; i < n; ++i) {
             in[i] = inputAt(base + i);
+            if (m_config.humGain != 0.f) {
+                const double pi = 3.14159265358979323846;
+                in[i] += m_config.humGain * float(std::sin
+                    (2.0 * pi * m_config.humHz * double(base + i) /
+                     m_config.sampleRate));
+            }
             if (m_config.loopback) {
-                long j = base + i - m_config.inputDelay;
+                long j = base + i - m_loopbackDelay;
                 if (j >= 0 && j < base) in[i] += m_captured[size_t(j)];
                 if (m_config.echoGain != 0.f) {
                     j -= m_config.echoDelay;
@@ -263,18 +326,19 @@ private:
         bool kept = !m_config.inputIsKept || m_config.inputIsKept();
         long keptBefore = m_sinceResume;
 
+        const int inCh = inputChannelCount();
         std::vector<float> silence(n, 0.f);
-        std::vector<const float *> inPtrs(ch, in.data());
+        std::vector<const float *> inPtrs(inCh, in.data());
         if (m_config.inputChannel >= 0) {
-            for (int c = 0; c < ch; ++c) {
+            for (int c = 0; c < inCh; ++c) {
                 if (c != m_config.inputChannel) inPtrs[c] = silence.data();
             }
         }
-        m_target->putSamples(inPtrs.data(), ch, n);
+        m_target->putSamples(inPtrs.data(), inCh, n);
         if (kept) m_sinceResume += n;
         if (m_config.reportLevels) {
             m_target->setInputLevels(peak(inPtrs[0], n),
-                                     peak(inPtrs[ch > 1 ? 1 : 0], n));
+                                     peak(inPtrs[inCh > 1 ? 1 : 0], n));
         }
 
         std::vector<std::vector<float>> out(ch, std::vector<float>(n, 0.f));

@@ -61,6 +61,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QScreen>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -534,6 +535,61 @@ private slots:
         sv::RecordDirectory::setRecordContainerDirectory("");
     }
 
+    // The pane draws again only where new dots go, not all of itself for
+    // each batch of them: at a phone's pixel ratio a whole pane costs
+    // several times as much, 25 times a second
+    void live_dots_draw_only_where_they_are() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 12.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // A take that stays on its page, and away from the start of the
+        // song, where the recording's own frames would be
+        const sv::sv_frame_t P = frames(6.0);
+        showSeconds(5.0, 11.0);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(500);
+
+        // Seen before the paint event reaches anything else
+        struct PaintWatch : public QObject {
+            int whole = 0, parts = 0;
+            bool eventFilter(QObject *object, QEvent *e) override {
+                if (e->type() == QEvent::Paint) {
+                    auto *widget = static_cast<QWidget *>(object);
+                    QRect r = static_cast<QPaintEvent *>(e)->rect();
+                    if (r.width() >= widget->width() - 2) ++whole;
+                    else ++parts;
+                }
+                return false;
+            }
+        } watch;
+        sv::Pane *pane = pane0();
+        sv::sv_frame_t pageStart = pane->getStartFrame();
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (m_window->realtimeModelId());
+        QVERIFY(model);
+        int dotsBefore = model->getEventCount();
+        pane->installEventFilter(&watch);
+        QTest::qWait(1500);
+        pane->removeEventFilter(&watch);
+
+        QCOMPARE(pane->getStartFrame(), pageStart);
+        QVERIFY2(model->getEventCount() > dotsBefore + 100,
+                 "hardly any dots came");
+        QVERIFY2(watch.parts > 10, "the pane was hardly drawn at all");
+        // (a dot that widens the model's pitch range has it drawn whole)
+        QVERIFY2(watch.whole <= 5,
+                 qPrintable(QString("the pane was drawn whole %1 times in "
+                                    "1.5 s, and in part %2 times")
+                            .arg(watch.whole).arg(watch.parts)));
+        stopTake();
+    }
+
     // Checklist: live dots appear under the playback cursor, not behind
     // it; during a take at P > 0 the cursor starts at P, the pane follows
     // it, and cursor and dots are in the same place. Singing exactly in
@@ -566,6 +622,15 @@ private slots:
         sv::Pane *pane = pane0();
         QElapsedTimer timer;
         timer.start();
+
+        // A 20 ms timer of the test's own, ticking as svgui's pointer
+        // timer does: how late this machine runs one (three times and
+        // more on CI's macOS) is how late the pointer may be
+        int ticks = 0;
+        QTimer ticker;
+        ticker.setInterval(20);
+        connect(&ticker, &QTimer::timeout, this, [&ticks]() { ++ticks; });
+        ticker.start();
         int pages = 0, looked = 0;
         int firstPageStart = -1;
         bool sawFirstDots = false;
@@ -584,14 +649,20 @@ private slots:
                                         "followed the cursor (frame %2)")
                                 .arg(timer.elapsed()).arg(cursor)));
             // The view moves its pointer on a timer of its own (20 ms in
-            // the svgui fork), so it may be one tick behind
-            int earliest = pane->getXForFrame(cursorBefore - frames(0.05));
+            // the svgui fork), so it may be one tick behind, and a tick is
+            // as late as this machine's timers make it
+            double late = (ticks > 0 ?
+                           std::max(1.0, double(timer.elapsed()) /
+                                    (20.0 * ticks)) : 1.0);
+            int earliest = pane->getXForFrame
+                (cursorBefore - frames(0.05 * late));
             int latest = pane->getXForFrame(cursor);
             QVERIFY2(x >= earliest - 2 && x <= latest + 2,
                      qPrintable(QString("the pointer is drawn at x = %1, the "
                                         "playback frame is between x = %2 "
-                                        "and %3")
-                                .arg(x).arg(earliest).arg(latest)));
+                                        "and %3 (timers %4 times late)")
+                                .arg(x).arg(earliest).arg(latest)
+                                .arg(late, 0, 'f', 1)));
 
             int start = int(pane->getStartFrame());
             if (firstPageStart < 0) firstPageStart = start;

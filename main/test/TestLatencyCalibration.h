@@ -191,6 +191,166 @@ private slots:
         QCOMPARE(k.recordDevice, QString());
     }
 
+    // A phone's route: its driver, and each device by its type and
+    // product name, never by its id, which a headset gets anew each time
+    // it is plugged in. A device open for playback only has no input yet.
+    // Routes stay apart, and a figure comes back under a name that holds
+    // the characters the settings take for subgroups
+    void route_key_names_the_devices() {
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output.id = 3;
+        route.output.type = 2;
+        route.output.productName = "Pixel 7";
+        route.hasInput = true;
+        route.input.id = 7;
+        route.input.type = 15;
+        route.input.productName = " Pixel 7 ";
+        route.rate = 48000;
+
+        Key k = LatencyCalibration::routeKey(route, 48000);
+        QCOMPARE(k.implementation, QString("oboe"));
+        QCOMPARE(k.playbackDevice, QString("Built-in speaker (Pixel 7)"));
+        QCOMPARE(k.recordDevice, QString("Built-in microphone (Pixel 7)"));
+        QCOMPARE(k.rate, 48000.0);
+
+        AudioRoute::Route again = route;
+        again.output.id = 31;
+        again.input.id = 32;
+        Key k2 = LatencyCalibration::routeKey(again, 48000);
+        QCOMPARE(k2.playbackDevice, k.playbackDevice);
+        QCOMPARE(k2.recordDevice, k.recordDevice);
+
+        AudioRoute::Route playbackOnly = route;
+        playbackOnly.hasInput = false;
+        QCOMPARE(LatencyCalibration::routeKey(playbackOnly, 48000).recordDevice,
+                 QString());
+
+        AudioRoute::Device unknown;
+        QCOMPARE(AudioRoute::deviceName(unknown), QString("Unknown device"));
+        unknown.type = 99;
+        QCOMPARE(AudioRoute::deviceName(unknown), QString("Device of type 99"));
+        AudioRoute::Device headset;
+        headset.type = 8;
+        headset.productName = "WH-1000XM4 / Ren's | 100%";
+        QCOMPARE(AudioRoute::deviceName(headset),
+                 QString("Bluetooth (WH-1000XM4 / Ren's | 100%)"));
+
+        QSettings settings(m_path, QSettings::IniFormat);
+        AudioRoute::Route bluetooth = route;
+        bluetooth.output = headset;
+        const Key kb = LatencyCalibration::routeKey(bluetooth, 48000);
+        Figure f = figure(0.21, 0.004, 0.003);
+        f.outputStreams = "AAudio, 48000 Hz, Shared, burst 240";
+        f.inputStreams = "AAudio (MMAP), 48000 Hz, Exclusive, burst 96";
+        LatencyCalibration::store(settings, k, figure(0.03, 0.005, 0.003));
+        LatencyCalibration::store(settings, kb, f);
+        QCOMPARE(loaded(settings, k), 0.03);
+        Figure back;
+        QVERIFY(LatencyCalibration::load(settings, kb, back));
+        QCOMPARE(back.roundTrip, 0.21);
+        QCOMPARE(back.outputStreams, f.outputStreams);
+        QCOMPARE(back.inputStreams, f.inputStreams);
+
+        // A desktop's figure keeps no streams
+        Figure desk;
+        QVERIFY(LatencyCalibration::load(settings, k, desk));
+        QCOMPARE(desk.outputStreams, QString());
+        QCOMPARE(desk.inputStreams, QString());
+    }
+
+    // With the input not open, the one input a figure is kept with for
+    // the driver and output at the rate, if there is only one; names that
+    // hold what is encoded in a group's name come back whole
+    void only_record_device_for_an_output() {
+        QSettings settings(m_path, QSettings::IniFormat);
+        const QString odd = QString::fromUtf8("Mic 1/2 | \\ 100%2F (\xc3\xa4)");
+        LatencyCalibration::store(settings, key("Speaker", odd, 48000, "oboe"),
+                                  figure(0.03, 0.005, 0.003));
+        LatencyCalibration::store(settings,
+                                  key("Headset", "Headset mic", 48000, "oboe"),
+                                  figure(0.04, 0.005, 0.003));
+        LatencyCalibration::store(settings,
+                                  key("Speaker", "Other", 44100, "oboe"),
+                                  figure(0.05, 0.005, 0.003));
+        LatencyCalibration::store(settings, key("Speaker", "Desk", 48000),
+                                  figure(0.06, 0.005, 0.003));
+
+        QString record;
+        QVERIFY(LatencyCalibration::onlyRecordDevice
+                (settings, key("Speaker", "", 48000, "oboe"), record));
+        QCOMPARE(record, odd);
+        QVERIFY(LatencyCalibration::onlyRecordDevice
+                (settings, key("Headset", "", 48000, "oboe"), record));
+        QCOMPARE(record, QString("Headset mic"));
+        QVERIFY(LatencyCalibration::onlyRecordDevice
+                (settings, key("Speaker", "", 44100, "oboe"), record));
+        QCOMPARE(record, QString("Other"));
+
+        record = "unchanged";
+        QVERIFY(!LatencyCalibration::onlyRecordDevice
+                (settings, key("Speaker", "", 96000, "oboe"), record));
+        QVERIFY(!LatencyCalibration::onlyRecordDevice
+                (settings, key("Speak", "", 48000, "oboe"), record));
+        QVERIFY(!LatencyCalibration::onlyRecordDevice
+                (settings, key("Bluetooth", "", 48000, "oboe"), record));
+        QCOMPARE(record, QString("unchanged"));
+
+        // Two inputs calibrated with the speaker: which one is not known
+        LatencyCalibration::store(settings,
+                                  key("Speaker", "USB mic", 48000, "oboe"),
+                                  figure(0.07, 0.005, 0.003));
+        QVERIFY(!LatencyCalibration::onlyRecordDevice
+                (settings, key("Speaker", "", 48000, "oboe"), record));
+        QCOMPARE(record, QString("unchanged"));
+    }
+
+    // A device that describes its streams is stale when it opened either
+    // otherwise, not when the latencies it reports move: Oboe's moved by
+    // 4 ms from one take to the next on the phone. A stream it does not
+    // describe (the input, before it is opened) is not compared. A figure
+    // kept without streams is stale for such a device; and a device that
+    // describes none is judged by its latencies as before
+    void stale_by_the_streams() {
+        Figure f = figure(0.030, 252 / 48000.0, 134 / 48000.0);
+        f.outputStreams = "AAudio (MMAP), 48000 Hz, Exclusive, burst 96";
+        f.inputStreams = "AAudio (MMAP), 48000 Hz, Exclusive, preset "
+            "VoicePerformance";
+        const double out = 401 / 48000.0;
+        const double in = 222 / 48000.0;
+
+        QVERIFY(!LatencyCalibration::isStale(f, out, in, f.outputStreams,
+                                             f.inputStreams));
+        QVERIFY(!LatencyCalibration::isStale(f, out, 0.0, f.outputStreams, ""));
+        QVERIFY(LatencyCalibration::isStale
+                (f, out, in, "AAudio, 48000 Hz, Shared, burst 96",
+                 f.inputStreams));
+        QVERIFY(LatencyCalibration::isStale
+                (f, out, in, f.outputStreams, "AAudio, 48000 Hz, Shared"));
+        QVERIFY(LatencyCalibration::isStale
+                (f, out, in, "", "AAudio, 48000 Hz, Shared"));
+
+        Figure plain = figure(0.030, 252 / 48000.0, 134 / 48000.0);
+        QVERIFY(LatencyCalibration::isStale(plain, 252 / 48000.0,
+                                            134 / 48000.0, f.outputStreams,
+                                            f.inputStreams));
+
+        // No streams now: the reported pair, to the millisecond
+        QVERIFY(LatencyCalibration::isStale(f, out, in));
+        QVERIFY(!LatencyCalibration::isStale(f, 252 / 48000.0, 134 / 48000.0));
+
+        InUse measured = LatencyCalibration::roundTripInUse
+            (&f, out, in, f.outputStreams, f.inputStreams);
+        QVERIFY(measured.source == Source::Measured);
+        QCOMPARE(measured.roundTrip, 0.030);
+        QCOMPARE(measured.reportedOutput, out);
+        InUse other = LatencyCalibration::roundTripInUse
+            (&f, out, in, "OpenSLES, 48000 Hz", f.inputStreams);
+        QVERIFY(other.source == Source::Reported);
+        QVERIFY(other.stale);
+        QCOMPARE(other.roundTrip, out + in);
+    }
+
     // Stale when either reported latency has moved by more than the
     // tolerance, either way; not when it has moved by less
     void stale_beyond_the_tolerance() {

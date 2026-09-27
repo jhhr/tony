@@ -18,6 +18,10 @@ Upstream Tony analyses the pitch of one recording. This fork makes it a singing 
    "alternate" pitch track to follow, timed lyrics along the bottom of the pane with the
    word being sung highlighted and every word editable in place, and a background music
    track that is played but never analysed.
+6. **An Android build** ([port-android.md](port-android.md)): a compact layout of large
+   buttons, touch gestures on the panes, pitch and lyrics drawn at a size for a small
+   screen, sessions opened and saved where they are, and an audio backend of its own. The
+   compact layout and the gestures work on the desktop too, where the suites test them.
 
 The user-facing description is in the [README](../README.md).
 
@@ -27,13 +31,25 @@ Everything of Tony's own is in `main/`. The sibling directories (`svcore/`, `svg
 `svapp/`, `pyin/`, `bq*/` ...) are separate repositories checked out by repoint and
 **gitignored here**; see [forks.md](forks.md).
 
-`meson.build` splits `main/` into two static libraries so the two test executables link
-only what they need:
+`meson.build` splits `main/` into two static libraries so that the test executables link
+only what they need: `test-tony-core` links `tony_core` alone, `test-tony-app` and
+`test-tony-dev` both. `tony_app` also compiles svgui and svapp in. The application links
+both **whole** (`link_whole`), which keeps objects nothing refers to, such as
+`AndroidMediaReadStream`'s registration with bqaudiostream. On Android the application is
+a shared library (`libTony_arm64-v8a.so`) whose `main()` Qt's Java launcher calls, and no
+test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `ModelChangeThrottle`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `TakeDiff` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+
+Android-only files are in the `if system == 'android'` additions to those lists, and
+Android-only code elsewhere is under `#ifdef Q_OS_ANDROID`; neither may change what the
+desktop does. What only the Android build calls but needs no Android API (`AndroidFiles`,
+`StreamLatency`, `DecodedPcm`, `PopupArea`, `LogFile`, `TouchMenuStyle`) is built
+everywhere, so that the desktop suites test it. Qt defines `Q_OS_LINUX` on Android too:
+code for the Linux desktop alone needs `!defined(Q_OS_ANDROID)` as well.
 
 Development builds are every build type but `release`: they define `TONY_DEV_CHECKS` and
 compile `main/dev/`, and everything that uses it elsewhere is inside `#ifdef
@@ -65,9 +81,12 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   (as must `m_analyser2`). `LyricsEditor` owns no layer: it finds the lyrics through
   `LyricsTrack` at every event, and is deleted before it.
 - `RealtimePitchTracker` is a `QThread` that only **reads** the recording's
-  `WritableWaveFileModel` and emits `pitchDetected(frame, hz)`. It never touches the pitch
-  model; `MainWindow::onRealtimePitchDetected()` writes it on the GUI thread (queued
-  connection). Stop the tracker **before** releasing the model it reads.
+  `WritableWaveFileModel` and keeps its estimates for `takeEstimates()`. It never touches
+  the pitch model; `LiveDotsFeed` (a member of `MainWindow`) takes the estimates on the GUI
+  thread every 40 ms and `MainWindow::onRealtimePitchDetected()` writes them there. Every
+  hop passes, on the tracker's thread, through an `OctaveSlips` of the tracker's own. Stop
+  the feed, then the tracker, **before** releasing the model it reads
+  (`stopRealtimePitchTracker()`).
 - **Calibrate Audio** ([calibrate-audio.md](calibrate-audio.md), §9): `MainWindow` owns
   the `AudioCheckRunner` and, in development builds, the `DevChecks` (both made with the
   window), and the `CalibrateAudioDialog` (made the first time it is asked for).
@@ -76,7 +95,55 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   take's state; the development ones only under `#ifdef TONY_DEV_CHECKS`. `~MainWindow`
   deletes the dialog, then the dev checks, then the runner, before anything they read;
   `closeSession()` tells the runner, then the dev checks. They are driven by timers and
-  signals, never a nested event loop: the window can be closed during a run.
+  signals, never a nested event loop: the window can be closed during a run. The dialog
+  owns the `AudioCheckIndicator` it shrinks to while a check runs, which `calibrateAudio()`
+  puts at the right end of the status bar.
+
+For a phone, all of which the desktop builds too:
+
+- **`CompactLayout`**: `MainWindow` makes it before the menus and hands it the parts in
+  `setupCompactLayout()`: the actions for its one toolbar, what to hide and what to show
+  instead. `main()` switches it on before the window is shown, on Android always and on
+  the desktop with `--compact`; View > Compact Layout switches it. Switching off restores
+  what switching on saved. Anything new that a phone should not show goes into those
+  parts. A shortcut works only while a visible widget holds its action or its menu, so
+  the toolbar's menu button holds every menu of the hidden menu bar.
+- **`SongScrollBar`** stands in for svgui's `Overview`, in its grid cell, in the compact
+  layout, which shows it. `syncSongScrollBar()` hands it the reference's audio and pitch
+  model ids whenever they may have changed (the analyser's layers changed, its analysis
+  completed or merged, the main model changed, the session closed); it holds ids, not
+  models. It moves the panes through the `ViewManager`, as the overview does, and leaves
+  the playhead alone. `SongScroll` is its arithmetic.
+- **`TouchGestures`**: `paneAdded()` gives every pane one, which the pane owns, with a
+  `VerticalRange` of callbacks into the window. `PinchZoom` and `VerticalZoom` are its
+  arithmetic (see [Touch](#smaller-features) below).
+- **`PlotSize`** and **`LyricsSize`**, made before the menus: a View submenu each,
+  remembered in QSettings, with defaults of their own on Android (150 % and 50 %, against
+  100 %). `PlotSize` sets the view manager's plot scale (svgui fork); `LyricsSize` goes to
+  `LyricsTrack::setTextScale()`.
+- **`TouchMenuStyle`** is the application's style on Android only, set by `main()` before
+  any widget is made, with the main window for its safe area margins. `PopupArea` is its
+  arithmetic, which `CalibrateAudioDialog` places itself by too.
+
+Android only:
+
+- **`OboeAudioIO`** is the audio device ([port-android.md](port-android.md)): Android's
+  `MainWindow::createAudioIO()` makes it, with input once recording has been asked for and
+  the microphone allowed, else for output alone; a 250 ms timer (`checkAudioDevice()`)
+  stops whatever is going on and replaces one that has failed, up to three times in ten
+  seconds. `StreamLatency` is its latency arithmetic, and `AudioRoute` the route it
+  reports (as an `AudioRouteReporter`, which the tests' `FakeAudioIO` is too), by which a
+  measured round trip is kept ([calibrate-audio.md](calibrate-audio.md), §5).
+- **`AndroidStorage`** (All files access; documents read and written through a picker's
+  grant) is owned by `MainWindow`. `AndroidFiles` is the path work behind it and behind
+  `main()`'s links to the Vamp plugins. `AndroidScreen` keeps the screen on while
+  `CalibrateAudioDialog` runs a check. `LogFile` is the copy of the system log that
+  `main()` writes and Help > Save Log... saves.
+- **`AndroidMediaReadStream`** reads what the Android build's libraries cannot (M4A, AAC,
+  FLAC, Ogg and the like) through Android's decoders. It registers itself with
+  bqaudiostream's reader factory, so svcore's reader finds it; nothing refers to it, which
+  is why the libraries are linked whole. `DecodedPcm` makes the decoder's buffers into
+  float frames.
 
 The reference is the pane's **work model** (`Pane::setWorkModel()`, svgui fork, set in
 `analyseNewMainModel()`). Without that the pane greys itself out from the end of the
@@ -166,14 +233,28 @@ leaves whoever keeps a pointer to it holding a layer that the redo stack owns an
   transformer is usually running afterwards. Tests cannot assert
   `!haveRunningTransformers()` after selecting.
 
+### Drawing
+
+- A pane draws its layers into an image at the **whole** pixel ratio above the screen's
+  (3 on a phone at 2.75), through a `ViewProxy` whose coordinates are those physical
+  pixels, while mouse events come in the pane's logical pixels. A size a layer gives in
+  pixels is therefore physical: size a plot element with `scalePlotSize()` (it follows
+  View > Plot Size), anything else with `scalePixelSize()` (it follows the font), and a
+  hit area as what is drawn. The coverage strip and the lyrics use the latter.
+- A change to the model of a layer in the pane's cache has the pane draw every cached
+  layer again. A layer whose model changes many times a second is kept out of the cache
+  (`Layer::setCachedInView(false)`, as the live dots are), and whatever lies in front of
+  it is then drawn at every paint too ([recording.md](recording.md#the-live-tracker)).
+
 ### Signals
 
 - Connect with **member pointers**, not `SIGNAL()`/`SLOT()` strings, for anything whose
   signature has `sv::` types when the receiving class is outside namespace `sv`: the
   string form need not match, and then fails silently at run time (this kept
-  `Analyser::layerAboutToBeDeleted` from ever being called). Whether it matches can
-  depend on the Qt version: Qt 6.4 does not match `ModelId` in a string against a slot
-  moc recorded as taking `sv::ModelId`, where the Qt used for development does.
+  `Analyser::layerAboutToBeDeleted` from ever being called). Whether it matches depends
+  on the type and the Qt version: a pointer (`Layer *` against `sv::Layer *`) never
+  matches; a registered value type (`ModelId`, `sv_frame_t`) matches from Qt 6.5 but not
+  in 6.4. Member pointers are checked when compiling and match under any version.
 - `audioFileLoaded()` is emitted for `CreateAdditionalModel` too (singing track, background
   music). `analyseNewMainModel()` returns early if the main model is the one it already
   analysed (`m_analysedMainModelId`); handing the reference to `m_analyser` twice forgets
@@ -204,8 +285,11 @@ leaves whoever keeps a pointer to it holding a layer that the redo stack owns an
 - `WritableWaveFileModel::addSamples()` does not update the read view; the record target
   calls `updateModel()` on a timer (10 ms in the svapp fork, ~200 ms upstream). Readers
   of a recording in progress poll and wait.
-- The build force-includes `main/mingw_byte_fix.h` to resolve the MinGW C++17
+- The MinGW build force-includes `main/mingw_byte_fix.h` to resolve the C++17
   `std::byte` / `byte` clash; do not remove it.
+- A path, a URI or a name the user typed goes into a message in one `arg()` call with
+  all the arguments (`arg(a, b)`), or the last of a chain: a `%1` or `%3A` in it (a take
+  called "a %1", a `content://` URI) is taken for a placeholder by the `arg()` after it.
 
 ## Smaller features
 
@@ -227,6 +311,38 @@ saved in the session.
 after `openPath()`, and only then prune the extra pane — the imported waveform in that pane
 is the only reference to the model until `m_analyser2` has a layer of its own. It ends with
 `clearTakeHistory()`, which also disposes of the "Import" command for the pruned pane.
+
+**Touch** (`TouchGestures`, one per pane: an event filter in `main/`, not a change to
+svgui, so that synthetic touch events test it on the desktop). One finger is left to Qt,
+which makes mouse events of a touch nothing accepts, so taps, drags and selections go
+through the pane's mouse handling as before; the first press is held back until the
+finger moves, lifts or has been down 500 ms, so that a long press or a second finger
+leaves no drag, selection or playhead move behind. Why the pane subscribes to a gesture
+that never happens is in `TouchGestures.cpp`: it is how the second finger reaches the pane
+rather than the scroll area. Two fingers zoom and scroll time; a long press opens the
+pane's right-button menu, which then waits for a tap. Spread up the pane and moved up and
+down, the fingers zoom and scroll the **frequency range**, which is the reference
+analyser's spectrogram's, dormant or not: every pitch and note layer in the pane defers
+its scale to the topmost Hz layer with a scale of its own, which is that one. So the range
+is zoomed only in the reference's pane and only while it draws Hz on it, between A0 and C8
+and never narrower than a major third (`VerticalZoom::pitchLimits()`). It is not undoable
+and marks nothing modified; the session saves it with the spectrogram, and a new
+reference resets it. A zoom is anchored at the middle of the pitch on show (both
+analysers' pitch tracks and notes, those not hidden, in the pane's time range), pulled
+towards the pane's middle as it zooms in, so that a low voice stays in view; with none on
+show, about the fingers. The median was rejected as the anchor: it centres a lopsided
+phrase badly while it still fits. Not built: the range following the pitch in playback,
+and a "fit the pitch" action.
+
+**Song scroll bar** (`SongScrollBar`, compact layout only): the whole song, a faint
+contour of the reference's pitch (per pixel column its lowest to highest, on a log scale;
+unvoiced frames leave gaps), a thumb for what the panes show and the playhead. The contour
+is drawn into an image at the pixel ratio and made again only when the pitch model has
+settled after a change, on a resize or a new ratio; playback's paging moves the panes
+without a signal, so the thumb is checked each time the playhead moves and the strip
+repainted only when something moved a pixel. The song's extent is the reference's audio
+(a take past its end is not shown), and nothing of the singing or the takes is drawn: the
+simpler option.
 
 **Lyrics** (`Lyrics` and `LyricsTtml` read the file, `LyricsTrack` owns the layer,
 `LyricsEditor` edits the words): one `RegionModel` in pane 0 on the reference's timeline,

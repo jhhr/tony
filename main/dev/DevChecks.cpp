@@ -16,6 +16,7 @@
 
 #include "DevChecks.h"
 
+#include "../AudioDriverMenus.h"
 #include "../MainWindow.h"
 #include "../RealtimePitchTracker.h"
 #include "../SingingTakes.h"
@@ -54,7 +55,7 @@ using namespace sv;
 
 namespace {
 
-// Signed, to a tenth of a millisecond: the tolerance is 2 ms
+// Signed, to a tenth of a millisecond: the tolerance is 6 ms
 QString
 signedMs(double seconds)
 {
@@ -490,10 +491,8 @@ DevChecks::start(const Options &options)
     m_sessionPath = QDir(scratch).filePath(kSessionFileName);
     m_saved = false;
     m_startedAt = QDateTime::currentDateTime();
-    {
-        QSettings settings;
-        m_devices = LatencyCalibration::currentKey(settings, 0);
-    }
+    // As the Preferences name them, or the route a phone has open
+    m_devices = m_window->latencyKey(0);
 
     m_layout = LatencyCheck::devLayout();
     m_observedPunchIn = 0;
@@ -1173,21 +1172,33 @@ DevChecks::latencyCheck(QString reason) const
     if (!sameEvents(m_notesBefore, m_notesAfter, rate, tr("notes"), notes)) {
         problems << tr("the take's notes changed after reopening");
     }
-    if (m_pitchBefore.empty()) {
-        problems << tr("the take had no pitch track to compare");
+    // With no pitch in the take, as when a phone's speaker plays none of
+    // the tones, there is nothing to compare, and the part is not judged
+    // rather than failed
+    QString notJudged;
+    if (m_pitchBefore.empty() && m_pitchAfter.empty()) {
+        notJudged = tr("Its pitch and notes after reopening were not judged: "
+                       "the take had no pitch to compare.");
     }
     c.numbers.push_back({ tr("pitch after reopening"), pitch });
     c.numbers.push_back({ tr("notes after reopening"), notes });
 
-    if (problems.isEmpty()) {
+    if (problems.isEmpty() && notJudged == "") {
         c.verdict = CheckResult::Verdict::Pass;
         c.message = tr("Every sweep landed within %1 of where the reference "
                        "has it, and the session saved and opened again "
                        "gives the same offsets, pitch and notes.")
             .arg(unsignedMs(kPlacementSeconds));
+    } else if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Every sweep landed within %1 of where the reference "
+                       "has it, and the session saved and opened again "
+                       "gives the same offsets. %2")
+            .arg(unsignedMs(kPlacementSeconds)).arg(notJudged);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+        if (notJudged != "") c.message += " " + notJudged;
     }
     return c;
 }
@@ -1283,28 +1294,17 @@ DevChecks::liveDotsCheck(QString reason) const
     // Every dot where the take's pitch track will have the sound it
     // came from: on one of the reference's tones, and at its pitch.  The
     // loopback records the reference, so that is where the singing is.
-    //
-    // A dot is drawn at the middle of the tracker's window, but YIN
-    // hears mostly the window's first half, so a dot comes up to half a
-    // window after the sound that made it, and not before it: on the
-    // loopback fake a tone's dots begin about 540 frames into it and
-    // end up to 440 past it.  So a sound's dots lie from its start to
-    // half a window past its end, give or take kDotHops.  The end of
-    // each sweep, near 8 kHz, makes a dot or two at a subharmonic just
-    // under the tracker's 1 kHz ceiling: dots of the sweeps are counted
-    // apart, and their pitch means nothing
+    // Where a sound's dots may lie, and which of them are counted apart
+    // and not judged (on the sweeps, and at the start of a tone or of
+    // the punch-in or at a tone's end), TakeDiff::placeLiveDot() says
     const sv_samplerate_t rate = m_fresh.referenceRate;
     const LatencyCheck::Layout &layout = m_layout;
-    const double before =
-        double(kDotHops * RealtimePitchTracker::kHopSize) / rate;
-    const double after = before +
-        double(RealtimePitchTracker::kWindowSize / 2) / rate;
-    const double sweepSeconds =
-        double(LatencyCheck::sweep(layout.rate).size()) / layout.rate;
+    const TakeDiff::DotReach reach = TakeDiff::dotReach(layout.rate);
     const LatencyCheck::TakeSummary &s = m_fresh.summary;
 
     QStringList problems;
     vector<double> behind;
+    int atEdges = 0;
     for (int i = 0; i < int(s.punchIns.size()); ++i) {
         const LatencyCheck::PunchInResult &p = s.punchIns[i];
         const Watched *w = freshWatched(i);
@@ -1315,6 +1315,7 @@ DevChecks::liveDotsCheck(QString reason) const
 
         const vector<TakeObserver::Dot> &dots = w->seen.dots;
         int onSweeps = 0;
+        int edges = 0;
         int off = 0;
         QString firstOff;
         for (const TakeObserver::Dot &d : dots) {
@@ -1323,34 +1324,28 @@ DevChecks::liveDotsCheck(QString reason) const
             behind.push_back(double(d.playbackFrame - d.frame) / rate);
 
             const double t = double(d.frame) / rate;
-            bool on = false;
-            bool sweep = false;
-            QString why = tr("on no tone");
-            for (const LatencyCheck::Event &e : layout.events) {
-                const double sweepAt = double(e.sweepStart) / layout.rate;
-                if (t >= sweepAt - before &&
-                    t <= sweepAt + sweepSeconds + after) {
-                    sweep = true;
-                    break;
-                }
-                const double from = double(e.toneStart) / layout.rate;
-                const double to =
-                    double(e.toneStart + e.toneLength) / layout.rate;
-                if (t < from - before || t > to + after) continue;
-                const double cents =
-                    1200.0 * std::log2(double(d.hz) / e.toneHz);
-                on = (std::fabs(cents) <= kDotCents);
-                why = tr("%1 cents from the tone of %2 Hz")
-                    .arg(cents, 0, 'f', 0).arg(e.toneHz);
-                break;
+            const TakeDiff::LiveDot dot =
+                TakeDiff::placeLiveDot(layout, p.range.start, t, d.hz);
+            if (dot.place == TakeDiff::DotPlace::OnPitch) continue;
+            if (dot.place == TakeDiff::DotPlace::OnSweep) {
+                ++onSweeps;
+                continue;
             }
-            if (sweep) ++onSweeps;
-            if (on || sweep) continue;
+            if (dot.place == TakeDiff::DotPlace::AtEdge) {
+                ++edges;
+                continue;
+            }
             if (off++ == 0) {
+                const QString why =
+                    dot.place == TakeDiff::DotPlace::OffPitch ?
+                    tr("%1 cents from the tone of %2 Hz")
+                    .arg(dot.cents, 0, 'f', 0).arg(dot.toneHz) :
+                    tr("on no tone");
                 firstOff = tr("the first at %1 s, %2 Hz, %3")
                     .arg(t, 0, 'f', 3).arg(d.hz, 0, 'f', 1).arg(why);
             }
         }
+        atEdges += edges;
 
         if (int(dots.size()) <= kMinDots) {
             problems << tr("punch-in %1 drew %2 live dots").arg(i + 1)
@@ -1365,9 +1360,11 @@ DevChecks::liveDotsCheck(QString reason) const
             ({ tr("dots, punch-in %1 (%2 to %3 s)").arg(i + 1)
                .arg(secondsText(p.range.start))
                .arg(secondsText(p.range.end)),
-               tr("%1: %2 on the tones, %3 on the sweeps, %4 elsewhere")
-               .arg(dots.size()).arg(int(dots.size()) - onSweeps - off)
-               .arg(onSweeps).arg(off) });
+               tr("%1: %2 on the tones, %3 at edges, %4 on the sweeps, %5 "
+                  "elsewhere")
+               .arg(dots.size())
+               .arg(int(dots.size()) - onSweeps - edges - off)
+               .arg(edges).arg(onSweeps).arg(off) });
     }
     if (s.punchIns.empty()) problems << tr("no punch-in was judged");
 
@@ -1387,11 +1384,21 @@ DevChecks::liveDotsCheck(QString reason) const
                        "one of the reference's sounds (from %2 before it "
                        "to %3 after it), and those on its tones within %4 "
                        "cents of their pitch.")
-            .arg(kMinDots).arg(unsignedMs(before)).arg(unsignedMs(after))
-            .arg(kDotCents);
+            .arg(kMinDots).arg(unsignedMs(reach.before))
+            .arg(unsignedMs(reach.after)).arg(TakeDiff::kDotCents);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+    }
+    // A window that straddles a start or a tone's end wanders off pitch
+    // through a real speaker and mic, so what the dots there did is only
+    // told
+    if (atEdges > 0) {
+        c.message += tr(" %1 dots within %2 after the start of a tone or "
+                        "of a punch-in, or within %3 either side of a "
+                        "tone's end, were not judged.")
+            .arg(atEdges).arg(unsignedMs(reach.onset))
+            .arg(unsignedMs(reach.end));
     }
     return c;
 }
@@ -1704,6 +1711,15 @@ DevChecks::micChannelCheck(QString reason) const
         return c;
     }
 
+    // A phone's microphone, which OboeAudioIO opens as the one channel
+    // it records: there is no other input it could be on
+    if (loudest.size() == 1) {
+        c.verdict = CheckResult::Verdict::Measured;
+        c.message = tr("Not applicable here: the device records one input "
+                       "channel.");
+        return c;
+    }
+
     if (carrying != vector<int>{ 1 }) {
         c.verdict = CheckResult::Verdict::Measured;
         c.message = tr("Not applicable here: the mic is on %1, not on "
@@ -1788,8 +1804,12 @@ DevChecks::positionCheck(QString reason) const
                                     "changed");
     if (!notes.pass) problems << tr("the take's notes outside the range "
                                     "changed");
-    if (countOutside(before.pitch, pitch.window) == 0) {
-        problems << tr("the take had no pitch outside the range to compare");
+    // With no pitch there, as when a phone's speaker plays none of the
+    // tones, there is nothing to compare: not judged, rather than failed
+    QString notJudged;
+    if (countOutside(before.pitch, pitch.window) == 0 && pitch.pass) {
+        notJudged = tr("Its pitch and notes outside the range were not "
+                       "judged: the take had no pitch there to compare.");
     }
     c.numbers.push_back({ tr("pitch"), eventsText(pitch, before.pitch,
                                                   tr("pitch events"), where,
@@ -1797,7 +1817,7 @@ DevChecks::positionCheck(QString reason) const
     c.numbers.push_back({ tr("notes"), eventsText(notes, before.notes,
                                                   tr("notes"), where, rate) });
 
-    if (problems.isEmpty()) {
+    if (problems.isEmpty() && notJudged == "") {
         c.verdict = CheckResult::Verdict::Pass;
         c.message = tr("Recorded over part of an earlier punch-in, the take "
                        "was placed within %1, and outside the range its "
@@ -1805,9 +1825,16 @@ DevChecks::positionCheck(QString reason) const
                        "notes beyond %2 s of it.")
             .arg(unsignedMs(kPlacementSeconds))
             .arg(TakeDiff::kEventMarginSeconds);
+    } else if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Recorded over part of an earlier punch-in, the take "
+                       "was placed within %1, and outside the range its "
+                       "audio is the same bit for bit. %2")
+            .arg(unsignedMs(kPlacementSeconds)).arg(notJudged);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+        if (notJudged != "") c.message += " " + notJudged;
     }
     return c;
 }
@@ -1845,6 +1872,7 @@ DevChecks::longSongCheck(QString reason) const
     if (whole < 0.0) problems << tr("the whole song's analysis was not timed");
 
     int compared = 0;
+    bool allSeenAlike = true;
     for (int i = 0; i < int(summary.punchIns.size()); ++i) {
         const LatencyCheck::PunchIn &p = summary.punchIns[i].range;
         const QString range = rangeText(p.start, p.end);
@@ -1871,6 +1899,7 @@ DevChecks::longSongCheck(QString reason) const
         if (i + 1 >= int(s.pitch.size())) {
             problems << tr("the take's pitch around punch-in %1 was not seen")
                 .arg(i + 1);
+            allSeenAlike = false;
             continue;
         }
         const EventVector &before = s.pitch[i];
@@ -1882,6 +1911,7 @@ DevChecks::longSongCheck(QString reason) const
         if (!pitch.pass) {
             problems << tr("punch-in %1 changed the take's pitch outside its "
                            "range").arg(i + 1);
+            allSeenAlike = false;
         }
         c.numbers.push_back
             ({ tr("pitch, punch-in %1").arg(i + 1),
@@ -1891,12 +1921,16 @@ DevChecks::longSongCheck(QString reason) const
                                          double(pitch.window.end) / rate)),
                           rate) });
     }
-    if (compared == 0) {
-        problems << tr("the take had no pitch outside the punch-ins to "
-                       "compare");
+    // With no pitch there, as when a phone's speaker plays none of the
+    // tones, there is nothing to compare: not judged, rather than failed.
+    // A comparison that failed, or could not be made, is a problem above
+    QString notJudged;
+    if (compared == 0 && allSeenAlike) {
+        notJudged = tr("The take's pitch outside the punch-ins was not "
+                       "judged: it had none there to compare.");
     }
 
-    if (problems.isEmpty()) {
+    if (problems.isEmpty() && notJudged == "") {
         c.verdict = CheckResult::Verdict::Pass;
         c.message = tr("On a song of %1 s, each punch-in had its pitch merged "
                        "in under %2 of the time the whole song's analysis "
@@ -1904,9 +1938,17 @@ DevChecks::longSongCheck(QString reason) const
                        "range as it was: only the range was analysed.")
             .arg(secondsText(double(s.layout.length) / s.layout.rate))
             .arg(kStopShare).arg(TakeDiff::kEventMarginSeconds);
+    } else if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("On a song of %1 s, each punch-in had its analysis "
+                       "merged in under %2 of the time the whole song's "
+                       "analysis took. %3")
+            .arg(secondsText(double(s.layout.length) / s.layout.rate))
+            .arg(kStopShare).arg(notJudged);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+        if (notJudged != "") c.message += " " + notJudged;
     }
     return c;
 }
@@ -1993,7 +2035,16 @@ DevChecks::joinsCheck(QString reason) const
                 'f', 1)
            .arg(at(pitch.largestGapFrom)).arg(pitch.doubled)
            .arg(pitch.outOfOrder) });
-    if (!pitch.pass) {
+    // With no pitch near the join, as when a phone's speaker plays none
+    // of the tones, the pitch and note parts have nothing to judge: not
+    // judged, rather than failed.  A track with a gap is judged
+    QStringList notJudged;
+    const bool pitchNear = (pitch.events > 0);
+    if (!pitchNear) {
+        notJudged << tr("pitch: not judged, there was no pitch within %1 s "
+                        "of the join")
+            .arg(TakeDiff::kPitchWindowSeconds);
+    } else if (!pitch.pass) {
         QStringList why;
         if (pitch.largestGap > TakeDiff::kMaxGapHops * TakeDiff::kHopFrames) {
             why << tr("a gap of %1 from %2")
@@ -2038,7 +2089,11 @@ DevChecks::joinsCheck(QString reason) const
                           signedMs(double(notes.nearestEdge) / rate) });
     c.numbers.push_back({ tr("notes within 1 s of the join"),
                           around.isEmpty() ? tr("none") : around.join(", ") });
-    if (!notes.pass) {
+    const bool notesNear = pitchNear || !around.isEmpty();
+    if (!notesNear) {
+        notJudged << tr("note: not judged, there was no note within 1 s of "
+                        "the join, nor any pitch");
+    } else if (!notes.pass) {
         QStringList why;
         if (notes.spanning.size() != 1) {
             why << tr("%1 notes hold the join, not one")
@@ -2068,9 +2123,12 @@ DevChecks::joinsCheck(QString reason) const
     if (!notesOutside.pass) {
         problems << tr("outside: the take's notes outside the ranges changed");
     }
-    if (countOutside(before.pitch, pitchOutside.window) == 0) {
-        problems << tr("outside: the take had no pitch outside the ranges to "
-                       "compare");
+    const bool pitchOutsideJudged =
+        (countOutside(before.pitch, pitchOutside.window) > 0 ||
+         !pitchOutside.pass);
+    if (!pitchOutsideJudged) {
+        notJudged << tr("outside: the take's pitch and notes not judged, it "
+                        "had no pitch outside the ranges to compare");
     }
     c.numbers.push_back({ tr("pitch outside"),
                           eventsText(pitchOutside, before.pitch,
@@ -2079,7 +2137,11 @@ DevChecks::joinsCheck(QString reason) const
                           eventsText(notesOutside, before.notes, tr("notes"),
                                      where, rate) });
 
-    if (problems.isEmpty()) {
+    // What was not judged is said after the rest, in the order of the
+    // parts, as the failures are
+    const QString unjudged =
+        notJudged.isEmpty() ? QString() : notJudged.join("; ") + ".";
+    if (problems.isEmpty() && notJudged.isEmpty()) {
         c.verdict = CheckResult::Verdict::Pass;
         c.message = tr("Two punch-ins meeting at %1 s, in the middle of a "
                        "held tone, left no step in the samples there, the "
@@ -2090,9 +2152,16 @@ DevChecks::joinsCheck(QString reason) const
             .arg(secondsText(first.end))
             .arg(TakeDiff::kNoteClearanceSeconds)
             .arg(TakeDiff::kEventMarginSeconds);
+    } else if (problems.isEmpty()) {
+        c.verdict = CheckResult::Verdict::Pass;
+        c.message = tr("Two punch-ins meeting at %1 s, in the middle of a "
+                       "held tone, left no step in the samples there, and "
+                       "passed every part that could be judged. %2")
+            .arg(secondsText(first.end)).arg(unjudged);
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+        if (unjudged != "") c.message += " " + unjudged;
     }
     return c;
 }
@@ -2152,9 +2221,13 @@ DevChecks::leadInCheck(QString reason) const
                                     "changed");
     if (!notes.pass) problems << tr("the take's notes before the punch-in "
                                     "changed");
-    if (countOutside(before.pitch, pitch.window) == 0) {
-        problems << tr("the take had no pitch before the punch-in to "
-                       "compare");
+    // With no pitch there, as when a phone's speaker plays none of the
+    // tones, there is nothing to compare: not judged, rather than failed
+    QString pitchNotJudged;
+    if (countOutside(before.pitch, pitch.window) == 0 && pitch.pass) {
+        pitchNotJudged = tr("Its pitch and notes before the punch-in were "
+                            "not judged: the take had no pitch there to "
+                            "compare.");
     }
     c.numbers.push_back({ tr("pitch"), eventsText(pitch, before.pitch,
                                                   tr("pitch events"), where,
@@ -2206,23 +2279,39 @@ DevChecks::leadInCheck(QString reason) const
         }
     }
 
-    if (problems.isEmpty() && notJudged == "") {
+    // Either part may have nothing to judge: what was judged is said
+    // first, then what was not
+    QStringList unjudged;
+    if (pitchNotJudged != "") unjudged << pitchNotJudged;
+    if (notJudged != "") unjudged << notJudged;
+    if (problems.isEmpty()) {
         c.verdict = CheckResult::Verdict::Pass;
-        c.message = tr("Before the punch-in the take's audio is the same bit "
-                       "for bit, and its pitch and notes beyond %1 s of it; "
-                       "and while the lead-in played over the take, Tony "
-                       "played nothing where the reference is silent.")
-            .arg(TakeDiff::kEventMarginSeconds);
-    } else if (problems.isEmpty()) {
-        c.verdict = CheckResult::Verdict::Pass;
-        c.message = tr("Before the punch-in the take's audio is the same bit "
-                       "for bit, and its pitch and notes beyond %1 s of it. "
-                       "%2").arg(TakeDiff::kEventMarginSeconds)
-            .arg(notJudged);
+        if (pitchNotJudged == "" && notJudged == "") {
+            c.message = tr("Before the punch-in the take's audio is the same "
+                           "bit for bit, and its pitch and notes beyond %1 s "
+                           "of it; and while the lead-in played over the "
+                           "take, Tony played nothing where the reference is "
+                           "silent.")
+                .arg(TakeDiff::kEventMarginSeconds);
+        } else if (pitchNotJudged == "") {
+            c.message = tr("Before the punch-in the take's audio is the same "
+                           "bit for bit, and its pitch and notes beyond %1 s "
+                           "of it.").arg(TakeDiff::kEventMarginSeconds);
+        } else if (notJudged == "") {
+            c.message = tr("Before the punch-in the take's audio is the same "
+                           "bit for bit; and while the lead-in played over "
+                           "the take, Tony played nothing where the "
+                           "reference is silent.");
+        } else {
+            c.message = tr("Before the punch-in the take's audio is the same "
+                           "bit for bit.");
+        }
+        c.message += " " + unjudged.join(" ");
+        c.message = c.message.trimmed();
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
-        if (notJudged != "") c.message += " " + notJudged;
+        if (!unjudged.isEmpty()) c.message += " " + unjudged.join(" ");
     }
     return c;
 }
@@ -2401,20 +2490,23 @@ DevChecks::stopsItselfCheck(QString reason) const
         // the end (TakeTiming::shouldStopAt()), and is then stopped by
         // the take timer's next look, with the block coming in as it
         // looks.  Not worked out with TakeTiming, whose margin is part of
-        // what is checked
+        // what is checked.  In seconds: the raw recording, the round trip
+        // and the start gap count frames of the recording, at the
+        // device's rate; the lead-in and the selection count the
+        // reference's
         if (!w) {
             problems << tr("the take at %1 was not watched").arg(range);
         } else if (stage->recorded < 0) {
             problems << tr("the take at %1: %2").arg(range)
                 .arg(stage->recordedError);
-        } else if (t.recordingRate <= 0) {
+        } else if (t.recordingRate <= 0 || rate <= 0) {
             problems << tr("the take at %1: its rate is not known")
                 .arg(range);
         } else {
-            const sv_frame_t needed =
-                t.roundTrip + t.startGap + stage->preRoll + (end - start);
-            const double past =
-                double(stage->recorded - needed) / t.recordingRate;
+            const double needed =
+                t.recordingSeconds(t.roundTrip + t.startGap) +
+                double(stage->preRoll + (end - start)) / rate;
+            const double past = t.recordingSeconds(stage->recorded) - needed;
             const double allowed = kStopMarginSeconds + poll + gapLooks
                 (m_layout, w->seen, t, rate,
                  std::numeric_limits<double>::max()).margin;
@@ -2510,6 +2602,15 @@ DevChecks::writeReport(const DevReport &report) const
     out << "Output device: " << device(m_devices.playbackDevice) << "\n";
     out << "Input device: " << device(m_devices.recordDevice) << "\n";
 
+    // So that runs on two drivers, or at two latencies, can be told apart
+    out << "Audio driver: "
+        << AudioDriverMenus::driverName(m_devices.implementation) << "\n";
+    const double latencyAsked = m_window->m_audioDriverMenus ?
+        m_window->m_audioDriverMenus->appliedLatency() : 0.0;
+    out << "Latency asked for: "
+        << (latencyAsked > 0.0 ? unsignedMs(latencyAsked)
+            : QString("none")) << "\n";
+
     // What the device says of itself, as the window has it now.  The
     // output latency counts frames at the rate the play source was told
     // the device runs at, else the recording's (MainWindow::roundTripAt())
@@ -2518,8 +2619,26 @@ DevChecks::writeReport(const DevReport &report) const
              breakfastquay::AudioFactory::getImplementationNames()) {
         drivers << QString::fromStdString(name);
     }
+#ifdef Q_OS_ANDROID
+    // Tony's own, which MainWindow::createAudioIO() opens: bqaudioio's
+    // factory has none for Android
+    drivers << "oboe";
+#endif
     out << "Audio drivers built in: " << drivers.join(", ") << "\n";
     const vector<Run> all = runs();
+
+    // A device that reports the route it opened, as OboeAudioIO does on
+    // a phone, is none of those: which it is, and how its streams opened
+    // for the first punch-in, on which the latencies below depend
+    const AudioRoute::Route route =
+        all.empty() ? AudioRoute::Route() : all.front().result->route;
+    if (route.driver != "") {
+        out << "Audio driver in use: " << route.driver << "\n";
+        out << "Output streams: " << route.outputStreams << "\n";
+        out << "Input streams: " << (route.inputStreams != "" ?
+                                     route.inputStreams :
+                                     QString("none open")) << "\n";
+    }
     const sv_samplerate_t recordingRate =
         all.empty() ? 0 : all.front().result->recordingRate;
     sv_samplerate_t outputRate = m_window->m_playSource ?

@@ -14,6 +14,8 @@
 #ifndef TONY_LATENCY_CALIBRATION_H
 #define TONY_LATENCY_CALIBRATION_H
 
+#include "AudioRoute.h"
+
 #include "base/BaseTypes.h"
 
 #include <QDateTime>
@@ -34,6 +36,12 @@ class QSettings;
  * have changed (in the driver's control panel, say), the round trip
  * has changed with them, and the figure is stale: takes go back to the
  * reported pair until the check is run again.
+ *
+ * A device that knows its route (AudioRouteReporter: Oboe's, on a
+ * phone) is keyed by that instead, as the Preferences name no device
+ * there, and its fingerprint is how it opened its streams: Oboe works
+ * its latencies out from timestamps, and they move by several ms from
+ * one start of the same streams to the next.
  *
  * In the settings group "LatencyCalibration", one group for the driver
  * and devices, within it one for the rate.  All times are in seconds.
@@ -66,6 +74,22 @@ namespace LatencyCalibration
      */
     Key currentKey(QSettings &settings, sv::sv_samplerate_t recordingRate);
 
+    /**
+     * The key for a route a device reports: its driver, and its output
+     * and input device as AudioRoute::deviceName() names them, the input
+     * "" while it is not open.
+     */
+    Key routeKey(const AudioRoute::Route &route, sv::sv_samplerate_t rate);
+
+    /**
+     * The record device of the one figure kept for the key's driver and
+     * playback device at its rate, whatever its record device: for a
+     * device open for playback only, which cannot say what it will
+     * record from.  False if there is none, or more than one.
+     */
+    bool onlyRecordDevice(QSettings &settings, const Key &key,
+                          QString &recordDevice);
+
     struct Figure {
         /// What the check measured
         double roundTrip;
@@ -75,6 +99,11 @@ namespace LatencyCalibration
         /// What the device reported then: the staleness fingerprint
         double reportedOutput;
         double reportedInput;
+
+        /// How a device that knows its route had opened its streams
+        /// (AudioRoute::Route): its fingerprint instead; "" for others
+        QString outputStreams;
+        QString inputStreams;
 
         Figure() : roundTrip(0), spread(0),
                    reportedOutput(0), reportedInput(0) { }
@@ -89,11 +118,20 @@ namespace LatencyCalibration
     /// Drop the figure kept for the key, if there is one
     void forget(QSettings &settings, const Key &key);
 
-    /// Whether either latency the device reports now differs from the
-    /// one it reported when the figure was measured by more than
-    /// kStaleToleranceSeconds
+    /**
+     * Whether the figure is out of date.  For a device that describes
+     * its streams (outputStreams or inputStreams not ""), if either
+     * stream it describes was opened otherwise than when the figure was
+     * measured; a stream it does not describe (the input of a device
+     * open for playback only) is not compared, and the latencies it
+     * reports are not either.  For any other device, if either latency
+     * it reports now differs from the one it reported then by more than
+     * kStaleToleranceSeconds.
+     */
     bool isStale(const Figure &figure,
-                 double reportedOutput, double reportedInput);
+                 double reportedOutput, double reportedInput,
+                 const QString &outputStreams = QString(),
+                 const QString &inputStreams = QString());
 
     enum class Source {
         Reported, ///< the device's reported output and input latency
@@ -124,11 +162,14 @@ namespace LatencyCalibration
     };
 
     /**
-     * The stored figure, if there is one and it is not stale; otherwise
-     * the sum of the two reported latencies.  stored may be null.
+     * The stored figure, if there is one and it is not stale (isStale(),
+     * with the streams the device describes, if any); otherwise the sum
+     * of the two reported latencies.  stored may be null.
      */
     InUse roundTripInUse(const Figure *stored,
-                         double reportedOutput, double reportedInput);
+                         double reportedOutput, double reportedInput,
+                         const QString &outputStreams = QString(),
+                         const QString &inputStreams = QString());
 
     /// A reported latency, counted in frames at the given rate, in
     /// seconds.  A latency reported as zero or less, or a rate not yet

@@ -11,7 +11,7 @@
 #   COPYING included with this distribution for more information.
 #
 # Makes a fresh Ubuntu 24.04 cloud container able to build Tony and run
-# both test suites: installs the apt packages and Qt, checks out the
+# its test suites: installs the apt packages and Qt, checks out the
 # library directories at the revisions pinned in repoint-lock.json, and
 # configures build/ with meson.
 #
@@ -23,12 +23,12 @@
 # sv-dependency-builds is skipped: only the macOS and Windows branches
 # of meson.build use it.
 #
-# Qt is conda-forge's qt6-main, not Ubuntu's Qt 6.4. Tony builds with
-# 6.4, but its analysis never completes there: Analyser connects by
-# SIGNAL()/SLOT() strings naming ModelId and sv_frame_t to slots that
-# moc records as sv::ModelId and sv::sv_frame_t, and only Qt 6.5 and
-# later match those by their registered metatypes rather than by name.
-# The development machine and the Android build use Qt 6.11.
+# Qt is conda-forge's qt6-main, the 6.11 of the development machine and
+# the Android build, not Ubuntu's Qt 6.4: 6.4 does not match a SIGNAL()/
+# SLOT() string naming ModelId or sv_frame_t against a slot moc recorded
+# as taking sv::ModelId or sv::sv_frame_t, so such a connection fails
+# silently there and works on the development machine
+# (docs/building.md).
 #
 # Safe to run again. Packages already installed, a Qt of the right
 # version and libraries already at their pins are left alone, and a
@@ -37,8 +37,9 @@
 # Usage, from anywhere:
 #   deploy/linux/container-setup.sh           set up and configure build/
 #   deploy/linux/container-setup.sh --build   the same, then build Tony,
-#                                             the pYIN plugin and both
-#                                             test executables
+#                                             the pYIN plugin and the
+#                                             core and app test
+#                                             executables
 
 set -eu -o pipefail
 
@@ -149,9 +150,7 @@ done
 # carry, and a conversion back to Mercurial does not reproduce it. Each
 # pin was matched to a mirror commit by hand, by date and message:
 #
-# - bqaudioio 017ab3ed3a33 is the merge of toggle-record-in-io into
-#   default: the mirror's "Merge from branch toggle-record-in-io".
-# - The other pins were taken by upstream Tony's "Update Repoint
+# - The pins were taken by upstream Tony's "Update Repoint
 #   locations and revisions" (2024-06-25). For each, the commit is the
 #   last one on the mirror's master before that date, and Sonic
 #   Visualiser's repoint-lock.json took the same Mercurial pin shortly
@@ -168,7 +167,6 @@ done
 
 mirror_commit() {
     case "$1 $2" in
-        "bqaudioio 017ab3ed3a33")      echo 7ab6de96b44d2f0c8ce58a16ce1a9831724dd29f ;;
         "dataquay 79623fb778da")       echo 2dbf1bed112c1a7eaaf43335abbe5ddb5c03d0ff ;;
         "bqvec 291cde50db9d")          echo ddfcd1716576c6bb44218c5f5696bf24a248960a ;;
         "bqfft d41a117b8cbe")          echo 68dc4c5735c1e0da099e8473fc4562acf2895cb8 ;;
@@ -194,6 +192,12 @@ checkout() {
             echo "  $name: WARNING: has local changes and is not at $short; left alone"
             warnings=1
             return
+        fi
+        # A library that has moved, as bqaudioio did from its mirror to
+        # the fork, is fetched from where it is now
+        if [ "$(git -C "$name" remote get-url origin 2>/dev/null)" != "$url" ]; then
+            echo "  $name: origin is now $url"
+            git -C "$name" remote set-url origin "$url"
         fi
         if ! git -C "$name" cat-file -e "$commit^{commit}" 2>/dev/null; then
             echo "  $name: fetching from $url"
