@@ -92,11 +92,11 @@ export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
 ninja -j 4 -C build_ci >> tmp/ci.log 2>&1; echo "exit:$?" >> tmp/ci.log; tail -5 tmp/ci.log
 mkdir -p tmp/tl-ci
 TONY_TEST_LOG_DIR=$(cygpath -m "$PWD/tmp/tl-ci") meson test -C build_ci --print-errorlogs --num-processes 1 > tmp/ci-test.log 2>&1; echo "exit:$?"
-grep -a "^FAIL\|^   Loc\|^Totals" tmp/tl-ci/*.txt; tail -12 tmp/ci-test.log
+grep -a -E -A3 "^(FAIL!|XPASS|QFATAL)" tmp/tl-ci/*.txt; tail -20 tmp/ci-test.log
 ```
 
 In a Linux cloud session (Qt 6.4 is installed once per session; `meson setup` must report
-`qt6 ... found: YES 6.4.2`; a first build takes about 5 minutes, the tests about 11, in the
+`qt6 ... found: YES 6.4.2`; a first build takes about 5 minutes, the tests about 12, in the
 background, with nothing else building):
 
 ```sh
@@ -104,7 +104,7 @@ apt-get install -y -q --no-install-recommends qt6-base-dev qt6-base-dev-tools qt
 [ -f build_ci/build.ninja ] || CC_LD=mold CXX_LD=mold meson setup build_ci --buildtype release > tmp/ci.log 2>&1
 ninja -j 4 -C build_ci >> tmp/ci.log 2>&1; echo "exit:$?" >> tmp/ci.log; tail -5 tmp/ci.log
 meson test -C build_ci --print-errorlogs --num-processes 1 > tmp/ci-test.log 2>&1; echo "exit:$?"
-grep -a "^FAIL\|^   Loc\|^Totals" build_ci/meson-logs/testlog.txt; tail -12 tmp/ci-test.log
+grep -a -E -A3 "^(FAIL!|XPASS|QFATAL)|Received signal" build_ci/meson-logs/testlog.txt; tail -20 tmp/ci-test.log
 ```
 
 Then, in the same session, the Android job. Its scripts take about 20 minutes the first
@@ -116,6 +116,8 @@ deploy/android/setup-toolchain.sh && deploy/android/build-qt.sh && deploy/androi
   deploy/android/build-tony.sh && deploy/android/build-apk.sh
 ```
 
+- The `grep` prints each failed test with its details, as CI's `test-failures` step does,
+  and nothing when all passed; the `tail` is meson's line per test executable.
 - A job that fails here is a red CI run: fix it before pushing.
 - CI checks the libraries out at `repoint-lock.json`'s pins. A fork change that is not
   pushed and pinned there is in the tree built here and not in CI's
