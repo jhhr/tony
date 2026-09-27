@@ -202,6 +202,12 @@ Why each part is as it is:
   `repoint-lock.json` pins them by Mercurial hash, which the mirrors do not carry.
   `container-setup.sh` has a table from pin to mirror commit and stops at a pin it does not
   know.
+- **Each library is cloned into `tmp/clones/`** and moved into place once checked out. A
+  kill lets git clean nothing up, and the environment's snapshot was once taken while the
+  session hook's build was cloning: it kept a library directory holding only a `.git` with
+  no commit, and every session's setup stopped on it. Such a directory (nothing but `.git`,
+  no commit, no local branch) is cloned again; one without a commit that holds more stops
+  the script, naming it.
 - **ccache**, which meson uses by itself when it is installed, with `hash_dir = false`
   (`/etc/ccache.conf`). With `-g` every result's key otherwise holds the build directory,
   and a second build directory or a worktree found 0.4 % of a full cache. The compiler's
