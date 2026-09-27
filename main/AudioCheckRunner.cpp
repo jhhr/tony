@@ -620,9 +620,9 @@ AudioCheckRunner::setPlayback()
 
     // The toolbar's level control shows the reference's gain.  Given one
     // between its notches, it moves to the nearest and says so, and the
-    // window sets that gain through Analyser::setGain() and setAudible(),
-    // which write the shared settings.  Moved here first without a word,
-    // it has nothing to say when the window shows the gain
+    // window would set that gain through Analyser::setGain() and
+    // setAudible(), which write the user's settings.  Moved without a
+    // word, here as updateLayerStatuses() moves it, it says nothing
     if (LevelPanToolButton *control = m_window->m_audioLPW) {
         QSignalBlocker quiet(control);
         control->setLevel(gain);

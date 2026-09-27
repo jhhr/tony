@@ -473,6 +473,9 @@ MainWindow::MainWindow(AudioMode audioMode,
         m_notesLPW->setObjectName(tr("Note Track Level and Pan"));
         connect(m_notesLPW, SIGNAL(levelChanged(float)), this, SLOT(notesGainChanged(float)));
         connect(m_notesLPW, SIGNAL(panChanged(float)), this, SLOT(notesPanChanged(float)));
+    } else {
+        m_pitchLPW = nullptr;
+        m_notesLPW = nullptr;
     }
 
     layout->setSpacing(4);
@@ -2885,26 +2888,57 @@ MainWindow::playSingingAudioToggled()
     updateLayerStatuses();
 }
 
+namespace {
+
+// Show a level and a pan on a toolbar control without a word from it.
+// Given a level between its notches, the control moves to the nearest
+// and says so, as if the user had moved it, and the window would set
+// that level and switch the track on, both written to the settings as
+// the user's choice: Play Pitch Track and Play Notes, switched off, were
+// on again after the first file of every launch.  Only the control is
+// quiet: the widget inside it still tells the control's own slot, which
+// keeps its mute state right
+void
+showLevelAndPan(LevelPanToolButton *control, float level, float pan)
+{
+    if (!control) return;
+    QSignalBlocker quiet(control);
+    control->setLevel(level);
+    control->setPan(pan);
+}
+
+}
+
 void
 MainWindow::updateLayerStatuses()
 {
     m_showAudio->setChecked(m_analyser->isVisible(Analyser::Audio));
     m_playAudio->setChecked(m_analyser->isAudible(Analyser::Audio));
     m_audioLPW->setEnabled(m_analyser->isAudible(Analyser::Audio));
-    m_audioLPW->setLevel(m_analyser->getGain(Analyser::Audio));
-    m_audioLPW->setPan(m_analyser->getPan(Analyser::Audio));
-    
+    showLevelAndPan(m_audioLPW, m_analyser->getGain(Analyser::Audio),
+                    m_analyser->getPan(Analyser::Audio));
+
+    // Without sonification (--no-sonification) pitch and notes have no
+    // play toggle and no level control
     m_showPitch->setChecked(m_analyser->isVisible(Analyser::PitchTrack));
-    m_playPitch->setChecked(m_analyser->isAudible(Analyser::PitchTrack));
-    m_pitchLPW->setEnabled(m_analyser->isAudible(Analyser::PitchTrack));
-    m_pitchLPW->setLevel(m_analyser->getGain(Analyser::PitchTrack));
-    m_pitchLPW->setPan(m_analyser->getPan(Analyser::PitchTrack));
+    if (m_playPitch) {
+        m_playPitch->setChecked(m_analyser->isAudible(Analyser::PitchTrack));
+    }
+    if (m_pitchLPW) {
+        m_pitchLPW->setEnabled(m_analyser->isAudible(Analyser::PitchTrack));
+    }
+    showLevelAndPan(m_pitchLPW, m_analyser->getGain(Analyser::PitchTrack),
+                    m_analyser->getPan(Analyser::PitchTrack));
 
     m_showNotes->setChecked(m_analyser->isVisible(Analyser::Notes));
-    m_playNotes->setChecked(m_analyser->isAudible(Analyser::Notes));
-    m_notesLPW->setEnabled(m_analyser->isAudible(Analyser::Notes));
-    m_notesLPW->setLevel(m_analyser->getGain(Analyser::Notes));
-    m_notesLPW->setPan(m_analyser->getPan(Analyser::Notes));
+    if (m_playNotes) {
+        m_playNotes->setChecked(m_analyser->isAudible(Analyser::Notes));
+    }
+    if (m_notesLPW) {
+        m_notesLPW->setEnabled(m_analyser->isAudible(Analyser::Notes));
+    }
+    showLevelAndPan(m_notesLPW, m_analyser->getGain(Analyser::Notes),
+                    m_analyser->getPan(Analyser::Notes));
 
     m_showSpect->setChecked(m_analyser->isVisible(Analyser::Spectrogram));
 
@@ -2985,8 +3019,9 @@ MainWindow::updateLayerStatuses()
             m_playBackgroundMusic->setChecked(audible);
             if (m_bgMusicLPW) {
                 m_bgMusicLPW->setEnabled(audible);
-                m_bgMusicLPW->setLevel(params ? params->getPlayGain() : 1.f);
-                m_bgMusicLPW->setPan(params ? params->getPlayPan() : 0.f);
+                showLevelAndPan(m_bgMusicLPW,
+                                params ? params->getPlayGain() : 1.f,
+                                params ? params->getPlayPan() : 0.f);
             }
         } else {
             m_playBackgroundMusic->setChecked(true); // default on when track arrives
@@ -9520,13 +9555,17 @@ MainWindow::analyseNewMainModel()
     // session saved faded whose lyrics have gone since
     updateWaveformFade();
 
+    // What the command line leaves out is not the user's choice: kept off
+    // by the analyser, for Analyse Now too, and not written to the
+    // settings, which a launch with the spectrogram or the sonification
+    // reads
     if (!m_withSpectrogram) {
-        m_analyser->setVisible(Analyser::Spectrogram, false);
+        m_analyser->keepHidden(Analyser::Spectrogram);
     }
 
     if (!m_withSonification) {
-        m_analyser->setAudible(Analyser::PitchTrack, false);
-        m_analyser->setAudible(Analyser::Notes, false);
+        m_analyser->keepSilent(Analyser::PitchTrack);
+        m_analyser->keepSilent(Analyser::Notes);
     }
 
     // A session used to be searched here for a second WaveFileModel, which

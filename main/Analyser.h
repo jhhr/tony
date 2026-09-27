@@ -21,6 +21,7 @@
 #include <QMutex>
 
 #include <map>
+#include <set>
 #include <vector>
 
 #include "TakeEvents.h"
@@ -134,6 +135,17 @@ public:
     void toggleAudible(Component c) { setAudible(c, !isAudible(c)); }
 
     /**
+     * Keep a track hidden, or silent, whatever the settings say: for
+     * what the command line leaves out (--no-spectrogram,
+     * --no-sonification), which is not the user's choice.  Applied now
+     * and again whenever this analyser loads its layers (Analyse Now
+     * makes them anew), and written to no setting, so that a launch
+     * with the track has it as the user left it.
+     */
+    void keepHidden(Component c);
+    void keepSilent(Component c);
+
+    /**
      * Draw the waveform paler than usual, for while something is drawn
      * over it (the lyrics), or back in its usual grey.  Remembered, so
      * that a waveform this analyser makes or takes over later is drawn
@@ -166,6 +178,10 @@ public:
         return sv::ModelById::getAs<sv::WaveFileModel>(m_fileModel);
     }
 
+    // For the user's own level controls, as setVisible() and
+    // setAudible() are for the toggles: each writes its own setting.
+    // Only the reference's audio, pitch and notes have controls and
+    // keep a level: the singing analyser keeps none
     float getGain(Component c) const;
     void setGain(Component c, float gain);
 
@@ -445,6 +461,10 @@ protected:
     // See setWaveformFaded()
     bool m_waveformFaded;
 
+    // See keepHidden() and keepSilent()
+    std::set<Component> m_keptHidden;
+    std::set<Component> m_keptSilent;
+
     QString doAllAnalyses(bool withPitchTrack);
 
     QString addVisualisations();
@@ -501,10 +521,17 @@ protected:
     // Apply the settings to our layers, writing none
     void loadState(Component c);
 
-    // setVisible() and setAudible() without the write to the settings.
-    // False if there is no layer (or play parameters) to apply it to
+    // Whether a track keeps its level and pan in the settings: see
+    // setGain()
+    bool keepsLevel(Component c) const;
+
+    // setVisible(), setAudible(), setGain() and setPan() without the
+    // write to the settings.  False if there is no layer (or play
+    // parameters) to apply it to
     bool applyVisible(Component c, bool v);
     bool applyAudible(Component c, bool a);
+    bool applyGain(Component c, float gain);
+    bool applyPan(Component c, float pan);
 };
 
 #endif

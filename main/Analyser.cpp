@@ -1861,13 +1861,53 @@ Analyser::loadState(Component c)
     // reference's model, which are the audio's: only whether it is on
     // show is its own, and its audible setting, which once came back in
     // place of the audio's, is neither read nor written
+    //
+    // A level and a pan not in the settings are what the layer has now:
+    // the fixed ones addWaveform() and configureAnalysisLayers() give a
+    // new layer, or a session's for the layers it had.  What the command
+    // line keeps off is kept off, over the settings
     QSettings settings;
     const QString group = getSettingsGroup();
     const bool playable = (c != Spectrogram);
-    bool v = PlaybackSettings::visible(settings, group, c, c != Spectrogram);
-    bool a = playable && PlaybackSettings::audible(settings, group, c, true);
+    const bool levelled = keepsLevel(c);
+    bool v = !m_keptHidden.count(c) &&
+        PlaybackSettings::visible(settings, group, c, c != Spectrogram);
+    bool a = playable && !m_keptSilent.count(c) &&
+        PlaybackSettings::audible(settings, group, c, true);
+    float gain = 1.f, pan = 0.f;
+    if (levelled) {
+        gain = float(PlaybackSettings::gain(settings, group, c, getGain(c)));
+        pan = float(PlaybackSettings::pan(settings, group, c, getPan(c)));
+    }
     applyVisible(c, v);
     if (playable) applyAudible(c, a);
+    if (levelled) {
+        applyGain(c, gain);
+        applyPan(c, pan);
+    }
+}
+
+bool
+Analyser::keepsLevel(Component c) const
+{
+    // The toolbar has level controls for the reference's audio, pitch
+    // and notes only.  The spectrogram plays through the audio's play
+    // parameters
+    return m_colorScheme != SecondaryColors && c != Spectrogram;
+}
+
+void
+Analyser::keepHidden(Component c)
+{
+    m_keptHidden.insert(c);
+    applyVisible(c, false);
+}
+
+void
+Analyser::keepSilent(Component c)
+{
+    m_keptSilent.insert(c);
+    applyAudible(c, false);
 }
 
 void
@@ -1971,11 +2011,19 @@ Analyser::getGain(Component c) const
 void
 Analyser::setGain(Component c, float gain)
 {
-    if (m_layers[c]) {
-        auto params = m_layers[c]->getPlayParameters();
-        if (!params) return;
-        params->setPlayGain(gain);
-    }
+    if (!applyGain(c, gain) || !keepsLevel(c)) return;
+    QSettings settings;
+    PlaybackSettings::setGain(settings, getSettingsGroup(), c, gain);
+}
+
+bool
+Analyser::applyGain(Component c, float gain)
+{
+    if (!m_layers[c]) return false;
+    auto params = m_layers[c]->getPlayParameters();
+    if (!params) return false;
+    params->setPlayGain(gain);
+    return true;
 }
 
 float
@@ -1993,11 +2041,19 @@ Analyser::getPan(Component c) const
 void
 Analyser::setPan(Component c, float pan)
 {
-    if (m_layers[c]) {
-        auto params = m_layers[c]->getPlayParameters();
-        if (!params) return;
-        params->setPlayPan(pan);
-    }
+    if (!applyPan(c, pan) || !keepsLevel(c)) return;
+    QSettings settings;
+    PlaybackSettings::setPan(settings, getSettingsGroup(), c, pan);
+}
+
+bool
+Analyser::applyPan(Component c, float pan)
+{
+    if (!m_layers[c]) return false;
+    auto params = m_layers[c]->getPlayParameters();
+    if (!params) return false;
+    params->setPlayPan(pan);
+    return true;
 }
 
 

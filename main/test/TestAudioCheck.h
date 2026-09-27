@@ -517,13 +517,19 @@ class TestAudioCheck : public QObject
         return problems.join(", ");
     }
 
-    // The settings the analysers' show and play toggles are kept in, as
-    // Analyser::loadState() reads them: the reference's, and the singing
-    // track's in a group of its own. The spectrogram has no play toggle
-    // of its own
+    // The settings the analysers' show and play toggles and the
+    // reference's levels are kept in, as Analyser::loadState() reads
+    // them: the reference's, and the singing track's in a group of its
+    // own. The spectrogram has no play toggle of its own. The singing
+    // track keeps no level, looked for all the same; a level or pan never
+    // set reads as "none", so that one the check writes shows
     static QStringList analyserSettings() {
         QSettings settings;
         QStringList state;
+        const double none = -99.0;
+        auto number = [none](double value) {
+            return value == none ? QString("none") : QString::number(value);
+        };
         for (QString group : { PlaybackSettings::kReferenceGroup,
                                PlaybackSettings::kSingingGroup }) {
             for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
@@ -535,6 +541,12 @@ class TestAudioCheck : public QObject
                 state << QString("%1 component %2 audible %3").arg(group)
                     .arg(c).arg(PlaybackSettings::audible
                                 (settings, group, c, true));
+                state << QString("%1 component %2 gain %3 pan %4")
+                    .arg(group).arg(c)
+                    .arg(number(PlaybackSettings::gain
+                                (settings, group, c, none)))
+                    .arg(number(PlaybackSettings::pan
+                                (settings, group, c, none)));
             }
         }
         return state;
@@ -549,8 +561,9 @@ class TestAudioCheck : public QObject
     }
 
     // How the session open now plays its reference, and its pitch and
-    // notes. Not the gain of those two: the toolbar moves it to a notch
-    // of its own level control in the first session of a window only
+    // notes. Their gains too: the toolbar's level controls show a gain
+    // without setting one, so that each session of a window has those
+    // it was made with
     QStringList sessionPlayback() {
         QStringList state;
         auto reference = sv::PlayParameterRepository::getInstance()
@@ -568,9 +581,11 @@ class TestAudioCheck : public QObject
             sv::Layer *layer = m_window->analyser()->getLayer(c);
             auto params = layer ? layer->getPlayParameters() : nullptr;
             if (params) {
-                state << QString("layer %1 audible %2 pan %3").arg(int(c))
+                state << QString("layer %1 audible %2 pan %3 gain %4")
+                    .arg(int(c))
                     .arg(params->isPlayAudible())
-                    .arg(params->getPlayPan());
+                    .arg(params->getPlayPan())
+                    .arg(params->getPlayGain());
             } else {
                 state << QString("no layer %1").arg(int(c));
             }
