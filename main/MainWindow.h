@@ -1299,6 +1299,10 @@ protected:
     virtual void openAudioIO();
 #endif
 
+    // The master volume given to the open device, if any, as its output
+    // gain
+    void applyMasterVolume(float gain);
+
     // A session must not be saved in the middle of the analysis of a
     // recorded range: the take's pitch and notes still hold the state
     // before the merge, and the two models the run works in are in the

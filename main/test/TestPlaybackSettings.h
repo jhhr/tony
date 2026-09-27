@@ -14,8 +14,9 @@
 #ifndef TEST_PLAYBACK_SETTINGS_H
 #define TEST_PLAYBACK_SETTINGS_H
 
-// Tier 2: how the toolbar's tracks are shown and played, as the settings
-// keep them between launches. No window and no analyser. The settings
+// Tier 2: how the toolbar's tracks are shown and played, and the master
+// volume, as the settings keep them between launches. No window and no
+// analyser. The settings
 // are an INI file of each test's own, as TestAudioDriverSettings' are.
 
 #include "../PlaybackSettings.h"
@@ -181,6 +182,95 @@ private slots:
                  false);
         QCOMPARE(PlaybackSettings::gain(settings, singing, 0, 1.0), 0.3);
         QCOMPARE(PlaybackSettings::pan(settings, singing, 0, 0.0), 0.4);
+    }
+
+    // The master volume and the background music are the window's, in
+    // the group of its other options; the mix is a bool, the numbers
+    // text, as the tracks' are
+    void window_keys() {
+        QCOMPARE(QString(PlaybackSettings::kWindowGroup),
+                 QString("MainWindow"));
+
+        QSettings settings(m_path, QSettings::IniFormat);
+        PlaybackSettings::setMasterVolume(settings, 0.5);
+        PlaybackSettings::setBackgroundMusicMix(settings, false);
+        PlaybackSettings::setBackgroundMusicGain(settings, 0.25);
+        PlaybackSettings::setBackgroundMusicPan(settings, -0.75);
+        QCOMPARE(settings.group(), QString());
+        QCOMPARE(settings.value("MainWindow/backgroundmusicmix").typeId(),
+                 int(QMetaType::Bool));
+        for (const char *key : { "MainWindow/mastervolume",
+                                 "MainWindow/backgroundmusicgain",
+                                 "MainWindow/backgroundmusicpan" }) {
+            QCOMPARE(settings.value(key).typeId(), int(QMetaType::QString));
+        }
+        settings.sync();
+
+        QSettings again(m_path, QSettings::IniFormat);
+        QCOMPARE(again.allKeys().size(), 4);
+        QCOMPARE(again.value("MainWindow/mastervolume").toString(),
+                 QString("0.5"));
+        QCOMPARE(again.value("MainWindow/backgroundmusicmix").toBool(),
+                 false);
+        QCOMPARE(again.value("MainWindow/backgroundmusicgain").toString(),
+                 QString("0.25"));
+        QCOMPARE(again.value("MainWindow/backgroundmusicpan").toString(),
+                 QString("-0.75"));
+    }
+
+    // Full volume, mixed in, at its own level in the middle: as a window
+    // was before any of it was kept. So too for a key that holds no
+    // number, and the reference's own gain and pan are not these
+    void window_defaults() {
+        QSettings settings(m_path, QSettings::IniFormat);
+        QCOMPARE(PlaybackSettings::masterVolume(settings), 1.0);
+        QCOMPARE(PlaybackSettings::backgroundMusicMix(settings), true);
+        QCOMPARE(PlaybackSettings::backgroundMusicGain(settings), 1.0);
+        QCOMPARE(PlaybackSettings::backgroundMusicPan(settings), 0.0);
+
+        PlaybackSettings::setGain(settings, reference, 0, 0.3);
+        PlaybackSettings::setPan(settings, reference, 0, -1.0);
+        QCOMPARE(PlaybackSettings::backgroundMusicGain(settings), 1.0);
+        QCOMPARE(PlaybackSettings::backgroundMusicPan(settings), 0.0);
+
+        for (const char *text : { "nonsense", "", "nan", "inf" }) {
+            settings.setValue("MainWindow/mastervolume", text);
+            settings.setValue("MainWindow/backgroundmusicgain", text);
+            settings.setValue("MainWindow/backgroundmusicpan", text);
+            QCOMPARE(PlaybackSettings::masterVolume(settings), 1.0);
+            QCOMPARE(PlaybackSettings::backgroundMusicGain(settings), 1.0);
+            QCOMPARE(PlaybackSettings::backgroundMusicPan(settings), 0.0);
+        }
+    }
+
+    // Each comes back exactly, the fader's float and the level control's
+    // included, and each is written alone
+    void window_round_trip() {
+        const float volume = 0.7079458f; // -3 dB, as the fader keeps it
+        const float level = 0.562f;
+        {
+            QSettings settings(m_path, QSettings::IniFormat);
+            PlaybackSettings::setMasterVolume(settings, volume);
+            PlaybackSettings::setBackgroundMusicMix(settings, false);
+            PlaybackSettings::setBackgroundMusicGain(settings, level);
+            PlaybackSettings::setBackgroundMusicPan(settings, 0.25);
+        }
+
+        QSettings settings(m_path, QSettings::IniFormat);
+        QCOMPARE(float(PlaybackSettings::masterVolume(settings)), volume);
+        QCOMPARE(PlaybackSettings::backgroundMusicMix(settings), false);
+        QCOMPARE(float(PlaybackSettings::backgroundMusicGain(settings)),
+                 level);
+        QCOMPARE(PlaybackSettings::backgroundMusicPan(settings), 0.25);
+
+        // Mixed in again, and silenced: the rest stays as it was
+        PlaybackSettings::setBackgroundMusicMix(settings, true);
+        PlaybackSettings::setMasterVolume(settings, 0.0);
+        QCOMPARE(PlaybackSettings::backgroundMusicMix(settings), true);
+        QCOMPARE(PlaybackSettings::masterVolume(settings), 0.0);
+        QCOMPARE(float(PlaybackSettings::backgroundMusicGain(settings)),
+                 level);
+        QCOMPARE(PlaybackSettings::backgroundMusicPan(settings), 0.25);
     }
 };
 

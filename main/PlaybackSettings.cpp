@@ -112,4 +112,52 @@ setPan(QSettings &settings, QString group, int component, double pan)
     setNumber(settings, group, key("pan", component), pan);
 }
 
+double
+masterVolume(QSettings &settings)
+{
+    return number(settings, kWindowGroup, "mastervolume", 1.0);
+}
+
+void
+setMasterVolume(QSettings &settings, double volume)
+{
+    setNumber(settings, kWindowGroup, "mastervolume", volume);
+}
+
+bool
+backgroundMusicMix(QSettings &settings)
+{
+    return flag(settings, kWindowGroup, "backgroundmusicmix", true);
+}
+
+void
+setBackgroundMusicMix(QSettings &settings, bool mix)
+{
+    setFlag(settings, kWindowGroup, "backgroundmusicmix", mix);
+}
+
+double
+backgroundMusicGain(QSettings &settings)
+{
+    return number(settings, kWindowGroup, "backgroundmusicgain", 1.0);
+}
+
+void
+setBackgroundMusicGain(QSettings &settings, double gain)
+{
+    setNumber(settings, kWindowGroup, "backgroundmusicgain", gain);
+}
+
+double
+backgroundMusicPan(QSettings &settings)
+{
+    return number(settings, kWindowGroup, "backgroundmusicpan", 0.0);
+}
+
+void
+setBackgroundMusicPan(QSettings &settings, double pan)
+{
+    setNumber(settings, kWindowGroup, "backgroundmusicpan", pan);
+}
+
 }

@@ -20,7 +20,8 @@ class QSettings;
 
 /**
  * How the user has the tracks of the "Show and Play" toolbar shown and
- * played, as the settings keep them between launches.
+ * played, and the master volume, as the settings keep them between
+ * launches.
  *
  * A track is a component of an analyser (Analyser::Component, passed
  * here as an int: Audio 0, PitchTrack 1, Notes 2, Spectrogram 3), and
@@ -29,6 +30,10 @@ class QSettings;
  * the other way round.  In the group, "visible-N", "audible-N", "gain-N"
  * and "pan-N" for track N.  Whoever reads a key says what it is when
  * the user has never set it.
+ *
+ * The master volume and the background music belong to no analyser:
+ * they are the window's, and what they are when never set is fixed
+ * here.
  */
 namespace PlaybackSettings
 {
@@ -62,6 +67,25 @@ namespace PlaybackSettings
                double byDefault);
     void setPan(QSettings &settings, QString group, int component,
                 double pan);
+
+    /// The window's, with its other options
+    constexpr const char *kWindowGroup = "MainWindow";
+
+    /// The master volume: the Playback Controls fader's value, which the
+    /// device gets as its output gain.  1 (the mix as it is) if never set
+    double masterVolume(QSettings &settings);
+    void setMasterVolume(QSettings &settings, double volume);
+
+    /// Mix Background Music.  On if never set
+    bool backgroundMusicMix(QSettings &settings);
+    void setBackgroundMusicMix(QSettings &settings, bool mix);
+
+    /// The background music's play gain and pan, as PlayParameters has
+    /// them.  1 and 0 (the middle) if never set
+    double backgroundMusicGain(QSettings &settings);
+    void setBackgroundMusicGain(QSettings &settings, double gain);
+    double backgroundMusicPan(QSettings &settings);
+    void setBackgroundMusicPan(QSettings &settings, double pan);
 }
 
 #endif

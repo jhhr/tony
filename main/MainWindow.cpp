@@ -430,6 +430,17 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(m_fader, SIGNAL(mouseEntered()), this, SLOT(mouseEnteredWidget()));
     connect(m_fader, SIGNAL(mouseLeft()), this, SLOT(mouseLeftWidget()));
 
+    // At the master volume the user left it at. setValue() says nothing:
+    // the fader speaks only when the user moves it, and that is kept,
+    // device or none. Each device takes the fader's value as it opens
+    // (createAudioIO())
+    {
+        QSettings settings;
+        m_fader->setValue(float(PlaybackSettings::masterVolume(settings)));
+    }
+    connect(m_fader, &Fader::valueChanged,
+            this, &MainWindow::mainModelGainChanged);
+
     m_playSpeed = new AudioDial(frame);
     m_playSpeed->setMeterColor(Qt::darkBlue);
     m_playSpeed->setMinimum(0);
@@ -1841,6 +1852,12 @@ MainWindow::createAudioIO()
     if (m_audioDriverMenus) m_audioDriverMenus->applyLatency();
 
     openAudioIO();
+
+    // A device opens at full volume. Every one the window opens is
+    // opened here (at the first file, for the first take, for a device,
+    // driver or latency chosen, as the device menus list the devices),
+    // and plays at the fader's volume from the start
+    applyMasterVolume(m_fader->getValue());
 }
 
 void
@@ -2423,7 +2440,12 @@ MainWindow::setupToolbars()
 
     m_playBackgroundMusic = toolbar->addAction(il.load("speaker"), tr("Mix Background Music"));
     m_playBackgroundMusic->setCheckable(true);
-    m_playBackgroundMusic->setChecked(true);
+    {
+        // As the next track loaded will be (updateLayerStatuses())
+        QSettings settings;
+        m_playBackgroundMusic->setChecked
+            (PlaybackSettings::backgroundMusicMix(settings));
+    }
     m_playBackgroundMusic->setToolTip(
         tr("Enable/disable mixing the background music track during playback and recording"));
     m_playBackgroundMusic->setEnabled(false);
@@ -3024,7 +3046,14 @@ MainWindow::updateLayerStatuses()
                                 params ? params->getPlayPan() : 0.f);
             }
         } else {
-            m_playBackgroundMusic->setChecked(true); // default on when track arrives
+            // What the next track loaded is given (loadBackgroundMusic())
+            QSettings settings;
+            m_playBackgroundMusic->setChecked
+                (PlaybackSettings::backgroundMusicMix(settings));
+            showLevelAndPan
+                (m_bgMusicLPW,
+                 float(PlaybackSettings::backgroundMusicGain(settings)),
+                 float(PlaybackSettings::backgroundMusicPan(settings)));
         }
     }
 }
@@ -3765,6 +3794,9 @@ MainWindow::createAudioIO()
         }
     }
 
+    // At the fader's volume, as the desktop's createAudioIO() has it
+    applyMasterVolume(m_fader->getValue());
+
     if (m_audioIO) {
         m_audioIO->suspend();
         m_playSource->setSystemPlaybackTarget(m_audioIO);
@@ -4249,12 +4281,17 @@ MainWindow::loadBackgroundMusic(QString path)
                 // the play source — we don't want it rendered on screen.
                 m_backgroundMusicLayer->showLayer(pane, false);
 
-                // Set initial audibility from the toggle state.
+                // Mixed in or not, and at the level and pan, the user
+                // last chose, in this launch or an earlier one
                 auto params = m_backgroundMusicLayer->getPlayParameters();
                 if (params) {
-                    bool wantAudible = !m_playBackgroundMusic ||
-                                       m_playBackgroundMusic->isChecked();
-                    params->setPlayAudible(wantAudible);
+                    QSettings settings;
+                    params->setPlayAudible
+                        (PlaybackSettings::backgroundMusicMix(settings));
+                    params->setPlayGain
+                        (float(PlaybackSettings::backgroundMusicGain(settings)));
+                    params->setPlayPan
+                        (float(PlaybackSettings::backgroundMusicPan(settings)));
                 }
 
                 cerr << "loadBackgroundMusic: waveform layer added for model "
@@ -4311,6 +4348,10 @@ MainWindow::backgroundMusicToggled()
     if (m_bgMusicLPW) m_bgMusicLPW->setEnabled(wantAudible);
     cerr << "backgroundMusicToggled: background music "
          << (wantAudible ? "unmuted" : "muted") << endl;
+
+    // Nothing but the user switches the mix: kept for the next track
+    QSettings settings;
+    PlaybackSettings::setBackgroundMusicMix(settings, wantAudible);
 }
 
 void
@@ -4319,13 +4360,21 @@ MainWindow::backgroundMusicGainChanged(float gain)
     if (!m_backgroundMusicLayer) return;
     auto params = m_backgroundMusicLayer->getPlayParameters();
     if (!params) return;
+
+    // As the reference's level: taken to nothing, the mix is switched
+    // off and the level kept, so that switching it on again brings the
+    // level back; any other switches the mix on at that level
+    QSettings settings;
     if (gain == 0.f) {
         params->setPlayAudible(false);
         if (m_playBackgroundMusic) m_playBackgroundMusic->setChecked(false);
+        PlaybackSettings::setBackgroundMusicMix(settings, false);
     } else {
         params->setPlayAudible(true);
         if (m_playBackgroundMusic) m_playBackgroundMusic->setChecked(true);
         params->setPlayGain(gain);
+        PlaybackSettings::setBackgroundMusicMix(settings, true);
+        PlaybackSettings::setBackgroundMusicGain(settings, gain);
     }
 }
 
@@ -4334,7 +4383,10 @@ MainWindow::backgroundMusicPanChanged(float pan)
 {
     if (!m_backgroundMusicLayer) return;
     auto params = m_backgroundMusicLayer->getPlayParameters();
-    if (params) params->setPlayPan(pan);
+    if (!params) return;
+    params->setPlayPan(pan);
+    QSettings settings;
+    PlaybackSettings::setBackgroundMusicPan(settings, pan);
 }
 
 void
@@ -9357,15 +9409,19 @@ MainWindow::mainModelChanged(ModelId model)
     MainWindowBase::mainModelChanged(model);
 
     syncSongScrollBar();
-
-    if (m_playTarget || m_audioIO) {
-        connect(m_fader, SIGNAL(valueChanged(float)),
-                this, SLOT(mainModelGainChanged(float)));
-    }
 }
 
 void
 MainWindow::mainModelGainChanged(float gain)
+{
+    // The user has moved the fader
+    QSettings settings;
+    PlaybackSettings::setMasterVolume(settings, gain);
+    applyMasterVolume(gain);
+}
+
+void
+MainWindow::applyMasterVolume(float gain)
 {
     if (m_playTarget) {
         m_playTarget->setOutputGain(gain);

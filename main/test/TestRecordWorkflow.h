@@ -78,6 +78,7 @@
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPointer>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -168,6 +169,25 @@ class TestRecordWorkflow : public QObject
                               Qt::NoScrollPhase, false);
             QApplication::sendEvent(control, &wheel);
         }
+    }
+
+    // The master volume's fader dragged sideways by that many pixels, as
+    // the user drags it: pressed, moved and let go. (Its wheel says so
+    // to the window but moves nothing)
+    static void dragFader(sv::Fader *fader, int pixels) {
+        const QPointF from(fader->width() / 2.0, fader->height() / 2.0);
+        const QPointF to = from + QPointF(pixels, 0);
+        QMouseEvent press(QEvent::MouseButtonPress, from,
+                          fader->mapToGlobal(from), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(fader, &press);
+        QMouseEvent move(QEvent::MouseMove, to, fader->mapToGlobal(to),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(fader, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, to,
+                            fader->mapToGlobal(to), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(fader, &release);
     }
 
     // Complete, and with the transform threads gone as well. A model
@@ -1549,6 +1569,12 @@ private slots:
         settings.setValue("preroll", false);
         settings.setValue("recordintoselection", false);
         settings.remove("prerollseconds");
+        // The master volume and the background music as a new user has
+        // them
+        settings.remove("mastervolume");
+        settings.remove("backgroundmusicmix");
+        settings.remove("backgroundmusicgain");
+        settings.remove("backgroundmusicpan");
         settings.endGroup();
 
         // The toggles of the reference's tracks and the singing track's;
@@ -3818,6 +3844,153 @@ private slots:
                  "Analyse Now made the notes play in a window without "
                  "sonification");
         QCOMPARE(settingsChangedByOpening(before), QStringList());
+    }
+
+    // The master volume the user drags the fader to is kept at once, and
+    // is what every device the window opens after it plays at: one
+    // opened again from the menus, and a relaunch's, opened at its first
+    // file. A device opens at full volume, whatever the fader shows
+    void master_volume_survives_a_relaunch() {
+        makeWindow(FakeAudioIO::Config());
+        QVERIFY(m_window->fader());
+        QCOMPARE(m_window->fader()->getValue(), 1.f);
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), 1.f);
+
+        auto before = allSettings();
+        dragFader(m_window->fader(), -30);
+        const float volume = m_window->fader()->getValue();
+        QVERIFY(volume > 0.f && volume < 1.f);
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+        QStringList keys;
+        for (const QString &change : settingsChanged(before, allSettings())) {
+            keys << change.section(' ', 0, 0);
+        }
+        QCOMPARE(keys, QStringList() << "MainWindow/mastervolume");
+        {
+            QSettings settings;
+            QCOMPARE(float(PlaybackSettings::masterVolume(settings)), volume);
+        }
+
+        // Opened again as the device menus open it, to list what is
+        // connected now, and as a device, driver or latency chosen does
+        const int opened = m_window->audioIOOpened();
+        m_window->doRescanAudioDevices();
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+        m_window->recreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), opened + 2);
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->fader()->getValue(), volume);
+        QVERIFY(!m_window->fake());
+        before = allSettings();
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->fake());
+        QCOMPARE(m_window->fake()->getOutputGain(), volume);
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+    }
+
+    // Mix Background Music, its level and its pan, as the user sets them,
+    // are kept at once, and are what the next track loaded plays at, in
+    // this launch or the next; before one is loaded the toggle and the
+    // level control show what it will be. The level taken to nothing
+    // switches the mix off and keeps the level it had, which the mix
+    // switched on again brings back
+    void background_music_settings_survive_a_relaunch() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *mix = m_window->backgroundMusicAction();
+        QVERIFY(mix && mix->isChecked() && !mix->isEnabled());
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        const QString music = writeWav(tone(highHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        m_window->doLoadBackgroundMusic(music);
+        QVERIFY(m_window->backgroundMusicLayer());
+        auto params = m_window->backgroundMusicLayer()->getPlayParameters();
+        QVERIFY(params);
+        QVERIFY(params->isPlayAudible());
+        QCOMPARE(params->getPlayGain(), 1.f);
+        QCOMPARE(params->getPlayPan(), 0.f);
+        QVERIFY(mix->isChecked() && mix->isEnabled());
+
+        auto before = allSettings();
+        sv::LevelPanToolButton *control =
+            m_window->backgroundMusicLevelControl();
+        QVERIFY(control);
+        turnWheel(control, -2, false);
+        turnWheel(control, 3, true);
+        const float level = control->getLevel();
+        const float pan = control->getPan();
+        QVERIFY(level > 0.f && level < 1.f);
+        QVERIFY(pan > 0.f);
+        QCOMPARE(params->getPlayGain(), level);
+        QCOMPARE(params->getPlayPan(), pan);
+        QVERIFY(params->isPlayAudible());
+
+        // Taken to nothing, as the control's own mute sends it (its notches
+        // stop short of nothing)
+        emit control->levelChanged(0.f);
+        QVERIFY(!params->isPlayAudible());
+        QVERIFY(!mix->isChecked());
+
+        QStringList keys;
+        for (const QString &change : settingsChanged(before, allSettings())) {
+            keys << change.section(' ', 0, 0);
+        }
+        keys.sort();
+        QCOMPARE(keys, QStringList()
+                 << "MainWindow/backgroundmusicgain"
+                 << "MainWindow/backgroundmusicmix"
+                 << "MainWindow/backgroundmusicpan");
+        {
+            QSettings settings;
+            QVERIFY(!PlaybackSettings::backgroundMusicMix(settings));
+            QCOMPARE(float(PlaybackSettings::backgroundMusicGain(settings)),
+                     level);
+            QCOMPARE(float(PlaybackSettings::backgroundMusicPan(settings)),
+                     pan);
+        }
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        mix = m_window->backgroundMusicAction();
+        QVERIFY2(!mix->isChecked(), "Mix Background Music was on in a new "
+                 "window, with no track loaded");
+        before = allSettings();
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(!mix->isChecked(), "Mix Background Music was on after the "
+                 "first file, with no track loaded");
+        control = m_window->backgroundMusicLevelControl();
+        QCOMPARE(control->getLevel(), level);
+        QCOMPARE(control->getPan(), pan);
+        m_window->doLoadBackgroundMusic(music);
+        QVERIFY(m_window->backgroundMusicLayer());
+        params = m_window->backgroundMusicLayer()->getPlayParameters();
+        QVERIFY(params);
+        QVERIFY2(!params->isPlayAudible(), "the background music loaded "
+                 "after a relaunch was mixed in");
+        QCOMPARE(params->getPlayGain(), level);
+        QCOMPARE(params->getPlayPan(), pan);
+        QVERIFY(!mix->isChecked() && mix->isEnabled());
+        QCOMPARE(control->getLevel(), level);
+        QCOMPARE(control->getPan(), pan);
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+
+        mix->trigger();
+        QVERIFY(params->isPlayAudible());
+        QCOMPARE(params->getPlayGain(), level);
+        QSettings settings;
+        QVERIFY(PlaybackSettings::backgroundMusicMix(settings));
     }
 
     // The take's stored pitch track and notes sit over the same part of

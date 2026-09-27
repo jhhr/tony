@@ -30,6 +30,7 @@
 #endif
 
 #include "view/ViewManager.h"
+#include "widgets/Fader.h"
 #include "widgets/LevelPanToolButton.h"
 #include "audio/AudioCallbackPlaySource.h"
 #include "audio/AudioCallbackRecordTarget.h"
@@ -242,6 +243,14 @@ public:
     sv::LevelPanToolButton *audioLevelControl() { return m_audioLPW; }
     sv::LevelPanToolButton *pitchLevelControl() { return m_pitchLPW; }
     sv::LevelPanToolButton *notesLevelControl() { return m_notesLPW; }
+
+    // The background music's toggle and level control, and the master
+    // volume's fader
+    QAction *backgroundMusicAction() { return m_playBackgroundMusic; }
+    sv::LevelPanToolButton *backgroundMusicLevelControl() {
+        return m_bgMusicLPW;
+    }
+    sv::Fader *fader() { return m_fader; }
 
     Analyser *analyser() { return m_analyser; }
     Analyser *analyser2() { return m_analyser2; }
