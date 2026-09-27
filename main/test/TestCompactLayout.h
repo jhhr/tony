@@ -1008,16 +1008,16 @@ private slots:
         QTRY_VERIFY(paintedAsNow());
         SongScroll::Thumb before = strip->getPaintedThumb();
 
-        sv::sv_frame_t far = 60000;
-        QVERIFY(far > p->getEndFrame());
-        m_window->viewManager()->setPlaybackFrame(far);
-        QVERIFY2(p->getStartFrame() <= far && far <= p->getEndFrame(),
+        sv::sv_frame_t ahead = 60000;
+        QVERIFY(ahead > p->getEndFrame());
+        m_window->viewManager()->setPlaybackFrame(ahead);
+        QVERIFY2(p->getStartFrame() <= ahead && ahead <= p->getEndFrame(),
                  "the pane did not turn the page");
         QTRY_VERIFY(paintedAsNow());
         QVERIFY2(strip->getPaintedThumb().x0 > before.x0 + 100.0,
                  qPrintable(text(strip->getPaintedThumb())));
         int x = int(std::lround(SongScroll::xForFrame
-                                (far, strip->getSongFrames(),
+                                (ahead, strip->getSongFrames(),
                                  strip->width())));
         QCOMPARE(strip->getPaintedPlayheadX(), x);
     }
