@@ -31,6 +31,7 @@
 #include "../AudioCheckRunner.h"
 #include "../CalibrateAudioDialog.h"
 #include "../LatencyCheck.h"
+#include "../PlaybackSettings.h"
 
 #include "version.h"
 
@@ -517,32 +518,34 @@ class TestAudioCheck : public QObject
     }
 
     // The settings the analysers' show and play toggles are kept in, as
-    // Analyser::loadState() reads them
+    // Analyser::loadState() reads them: the reference's, and the singing
+    // track's in a group of its own. The spectrogram has no play toggle
+    // of its own
     static QStringList analyserSettings() {
         QSettings settings;
-        settings.beginGroup("Analyser");
         QStringList state;
-        for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
-            state << QString("component %1 visible %2 audible %3").arg(c)
-                .arg(settings.value(QString("visible-%1").arg(c),
-                                    c != Analyser::Spectrogram).toBool())
-                .arg(settings.value(QString("audible-%1").arg(c), true)
-                     .toBool());
+        for (QString group : { PlaybackSettings::kReferenceGroup,
+                               PlaybackSettings::kSingingGroup }) {
+            for (int c = Analyser::Audio; c <= Analyser::Spectrogram; ++c) {
+                state << QString("%1 component %2 visible %3").arg(group)
+                    .arg(c).arg(PlaybackSettings::visible
+                                (settings, group, c,
+                                 c != Analyser::Spectrogram));
+                if (c == Analyser::Spectrogram) continue;
+                state << QString("%1 component %2 audible %3").arg(group)
+                    .arg(c).arg(PlaybackSettings::audible
+                                (settings, group, c, true));
+            }
         }
-        settings.endGroup();
         return state;
     }
 
-    // The reference muted in the user's own sessions. Its spectrogram's
-    // setting as well: both are read for the reference's model, the
-    // spectrogram's last
+    // The reference muted in the user's own sessions
     static void muteReferenceInSettings() {
         QSettings settings;
-        settings.beginGroup("Analyser");
-        settings.setValue(QString("audible-%1").arg(Analyser::Audio), false);
-        settings.setValue(QString("audible-%1").arg(Analyser::Spectrogram),
-                          false);
-        settings.endGroup();
+        PlaybackSettings::setAudible(settings,
+                                     PlaybackSettings::kReferenceGroup,
+                                     Analyser::Audio, false);
     }
 
     // How the session open now plays its reference, and its pitch and
@@ -754,6 +757,9 @@ private slots:
         settings.remove("prerollseconds");
         settings.endGroup();
         settings.beginGroup("Analyser");
+        settings.remove("");
+        settings.endGroup();
+        settings.beginGroup("SingingAnalyser");
         settings.remove("");
         settings.endGroup();
         settings.beginGroup("Preferences");

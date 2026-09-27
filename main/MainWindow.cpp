@@ -30,6 +30,7 @@
 #include "Lyrics.h"
 #include "LyricsTtml.h"
 #include "PaneUtils.h"
+#include "PlaybackSettings.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
 #include "TakesFile.h"
@@ -2871,8 +2872,13 @@ void
 MainWindow::playSingingAudioToggled()
 {
     if (m_singingAudioMutedForTake) {
-        // Muted whatever the button says; it takes effect after the take
+        // Muted whatever the button says; it takes effect after the take.
+        // The user's choice all the same, kept at once as it is at any
+        // other time: the next take, or the next launch, starts from it
         m_singingAudioAfterTake = !m_singingAudioAfterTake;
+        QSettings settings;
+        PlaybackSettings::setAudible(settings, PlaybackSettings::kSingingGroup,
+                                     Analyser::Audio, m_singingAudioAfterTake);
     } else if (m_analyser2) {
         m_analyser2->toggleAudible(Analyser::Audio);
     }
@@ -2934,7 +2940,12 @@ MainWindow::updateLayerStatuses()
         } else if (m_analyser2) {
             m_playSingingAudio->setChecked(m_analyser2->isAudible(Analyser::Audio));
         } else {
-            m_playSingingAudio->setChecked(true); // default on when track arrives
+            // What the singing track is given when it arrives
+            QSettings settings;
+            m_playSingingAudio->setChecked
+                (PlaybackSettings::audible(settings,
+                                           PlaybackSettings::kSingingGroup,
+                                           Analyser::Audio, true));
         }
     }
 
@@ -4007,8 +4018,8 @@ MainWindow::swapSingingAudio(QString path)
     }
 
     // What the swap must leave as it was.  The analyser of the new audio
-    // starts from the settings the two analysers share, which know
-    // nothing of what a take has done to these layers
+    // starts from the singing track's settings, which know nothing of
+    // what a take has done to these layers
     const Analyser::Component components[] = {
         Analyser::Audio, Analyser::PitchTrack, Analyser::Notes
     };
@@ -4062,9 +4073,9 @@ MainWindow::swapSingingAudio(QString path)
     }
 
     // 6. What the swap was not to change.  On the layers themselves:
-    // setVisible() and setAudible() write to the shared settings, and
-    // neither the muting of a take nor the pane's own stacking is the
-    // user's wish about the reference
+    // setVisible() and setAudible() write to the settings, and neither
+    // the muting of a take nor the pane's own stacking is the user's
+    // wish
     for (int i = 0; i < componentCount; ++i) {
         Layer *layer = m_analyser2->getLayer(components[i]);
         if (!layer) continue;
@@ -4399,7 +4410,7 @@ MainWindow::updateSingingTrackForTake()
     // one from the other, and neither helps them follow the track they
     // are singing to.  So the stored pitch and notes make way, and come
     // back when the take stops.  Not with Analyser::setVisible(), which
-    // would write the state to the settings the reference shares.
+    // would write the state to the settings as the user's choice.
     bool inTake = (m_recordingAsSingingTrack &&
                    m_recordTarget && m_recordTarget->isRecording());
 
@@ -4995,9 +5006,9 @@ MainWindow::muteSingingAudioForTake()
     // The singing that is there is not heard while it is being recorded
     // into: the singer would hear themselves along with the reference,
     // and on speakers that goes back into the microphone.  Not with
-    // setAudible(), which would write the state to the settings the
-    // reference shares; the button goes on saying what the user asked
-    // for, and restoreSingingAudioAfterTake() applies it afterwards.
+    // setAudible(), which would write the state to the settings as the
+    // user's choice; the button goes on saying what the user asked for,
+    // and restoreSingingAudioAfterTake() applies it afterwards.
     m_singingAudioAfterTake =
         (m_analyser2 ? m_analyser2->isAudible(Analyser::Audio) : true);
 

@@ -261,7 +261,7 @@ class TestTouchGestures : public QObject
 
     // An analyser's pitch and notes hidden or shown again, straight to
     // the layers as the app does for a while: Analyser::setVisible()
-    // writes a setting that both analysers share
+    // writes the user's setting
     void showPitch(Analyser *a, bool shown) {
         a->getLayer(Analyser::PitchTrack)->showLayer(pane(), shown);
         a->getLayer(Analyser::Notes)->showLayer(pane(), shown);

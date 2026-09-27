@@ -32,6 +32,7 @@
 #include "../LyricsEditor.h"
 #include "../LyricsTrack.h"
 #include "../LyricsTtml.h"
+#include "../PlaybackSettings.h"
 #include "../SingingTakes.h"
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
@@ -139,6 +140,16 @@ class TestRecordWorkflow : public QObject
     void makeWindow(FakeAudioIO::Config config, bool installDevice = true) {
         delete m_window;
         m_window = new TestMainWindow(config, installDevice);
+    }
+
+    // As a relaunch: the session closed as cleanup() closes it, and a
+    // new window, which starts from the settings the old one left
+    void relaunch(FakeAudioIO::Config config) {
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        m_window->doCloseSession();
+        makeWindow(config);
     }
 
     // Complete, and with the transform threads gone as well. A model
@@ -1511,9 +1522,13 @@ private slots:
         settings.remove("prerollseconds");
         settings.endGroup();
 
-        // The audible flags are shared by both analysers; a test that
-        // failed half way must not leave the next one's tracks muted
+        // The toggles of the reference's tracks and the singing track's;
+        // a test that failed half way must not leave the next one's
+        // tracks muted
         settings.beginGroup("Analyser");
+        settings.remove("");
+        settings.endGroup();
+        settings.beginGroup("SingingAnalyser");
         settings.remove("");
         settings.endGroup();
 
@@ -3371,6 +3386,178 @@ private slots:
         QVERIFY(!m_window->playSingingAudioAction()->isChecked());
 
         // The reference was not touched by any of this
+        QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+    }
+
+    // Play Audio switched off is off after a relaunch, and on again once
+    // switched on. The spectrogram plays through the reference's play
+    // parameters, and the audible setting it used to keep of its own,
+    // read after the audio's, is not what the audio comes back as
+    void play_audio_off_survives_a_relaunch() {
+        QSettings().setValue(QString("%1/audible-%2")
+                             .arg(PlaybackSettings::kReferenceGroup)
+                             .arg(int(Analyser::Spectrogram)), true);
+        makeWindow(FakeAudioIO::Config());
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+
+        m_window->playAudioAction()->trigger();
+        QVERIFY(!m_window->analyser()->isAudible(Analyser::Audio));
+
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(!m_window->analyser()->isAudible(Analyser::Audio),
+                 "Play Audio came back on after a relaunch");
+        QVERIFY(!m_window->playAudioAction()->isChecked());
+
+        m_window->playAudioAction()->trigger();
+        QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
+        relaunch(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_window->analyser()->isAudible(Analyser::Audio),
+                 "Play Audio came back off after a relaunch");
+        QVERIFY(m_window->playAudioAction()->isChecked());
+    }
+
+    // The singing track's toggles are kept apart from the reference's.
+    // The reference's Play Audio switched off does not mute the audio of
+    // the next take; Show Singing Pitch Track, Show Singing Notes and
+    // Play Singing Audio write the singing track's settings and none of
+    // the reference's, and the first take after a relaunch has them
+    void singing_toggles_kept_apart_from_the_reference() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+
+        m_window->playAudioAction()->trigger();
+        QVERIFY(!m_window->analyser()->isAudible(Analyser::Audio));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        Analyser *a2 = m_window->analyser2();
+        QVERIFY2(a2->isAudible(Analyser::Audio),
+                 "the reference's Play Audio off muted the take");
+        QVERIFY(m_window->playSingingAudioAction()->isChecked());
+        QVERIFY(a2->isVisible(Analyser::PitchTrack));
+        QVERIFY(a2->isVisible(Analyser::Notes));
+
+        const auto before = allSettings();
+        m_window->showSingingPitchAction()->trigger();
+        m_window->showSingingNotesAction()->trigger();
+        m_window->playSingingAudioAction()->trigger();
+        QVERIFY(!a2->isVisible(Analyser::PitchTrack));
+        QVERIFY(!a2->isVisible(Analyser::Notes));
+        QVERIFY(!a2->isAudible(Analyser::Audio));
+        QStringList changed = settingsChanged(before, allSettings());
+        changed.sort();
+        QCOMPARE(changed, QStringList()
+                 << "SingingAnalyser/audible-0 added: false"
+                 << "SingingAnalyser/visible-1 added: false"
+                 << "SingingAnalyser/visible-2 added: false");
+        Analyser *a = m_window->analyser();
+        QVERIFY(a->isVisible(Analyser::PitchTrack));
+        QVERIFY(a->isVisible(Analyser::Notes));
+        QVERIFY(!a->isAudible(Analyser::Audio));
+
+        relaunch(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        a = m_window->analyser();
+        QVERIFY(a->isVisible(Analyser::PitchTrack));
+        QVERIFY(a->isVisible(Analyser::Notes));
+        QVERIFY(!a->isAudible(Analyser::Audio));
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        a2 = m_window->analyser2();
+        QVERIFY(!a2->isVisible(Analyser::PitchTrack));
+        QVERIFY(!a2->isVisible(Analyser::Notes));
+        QVERIFY(!a2->isAudible(Analyser::Audio));
+        QVERIFY(!m_window->showSingingPitchAction()->isChecked());
+        QVERIFY(!m_window->showSingingNotesAction()->isChecked());
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
+    }
+
+    // Play Singing Audio pressed while a take is being recorded, when the
+    // singing that is there is muted whatever the button says, is the
+    // user's setting at once, and does not unmute the take. Switched
+    // off, it holds for the next take, the first after a relaunch too
+    void play_singing_audio_off_during_a_take_remembered() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        const QString reference = writeWav(tone(lowHz, 1.0));
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        auto takeParams = [this]() {
+            return m_window->analyser2()->getLayer(Analyser::Audio)
+                ->getPlayParameters();
+        };
+        auto setting = []() {
+            QSettings settings;
+            return PlaybackSettings::audible
+                (settings, PlaybackSettings::kSingingGroup, Analyser::Audio,
+                 true);
+        };
+        QAction *play = m_window->playSingingAudioAction();
+        QVERIFY(takeParams()->isPlayAudible());
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!takeParams()->isPlayAudible());
+        play->trigger();
+        QVERIFY(!play->isChecked());
+        QVERIFY2(!setting(), "Play Singing Audio off was not kept at once");
+        play->trigger();
+        QVERIFY(play->isChecked());
+        QVERIFY(setting());
+        QVERIFY2(!takeParams()->isPlayAudible(),
+                 "Play Singing Audio on unmuted the take being recorded");
+        play->trigger();
+        QVERIFY(!play->isChecked());
+        QVERIFY(!setting());
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!takeParams()->isPlayAudible());
+        QVERIFY(!play->isChecked());
+
+        // Before there is a singing track, the button says what the one
+        // to come will be given, as the dev checks' punch-ins expect it to
+        relaunch(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(reference);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->analyser2());
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(!takeParams()->isPlayAudible(),
+                 "Play Singing Audio came back on after a relaunch");
+        QVERIFY(!m_window->playSingingAudioAction()->isChecked());
         QVERIFY(m_window->analyser()->isAudible(Analyser::Audio));
     }
 

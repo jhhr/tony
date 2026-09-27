@@ -490,6 +490,9 @@ private slots:
         settings.beginGroup("Analyser");
         settings.remove("");
         settings.endGroup();
+        settings.beginGroup("SingingAnalyser");
+        settings.remove("");
+        settings.endGroup();
         settings.beginGroup("Preferences");
         settings.remove("audio-playback-device");
         settings.remove("audio-record-device");

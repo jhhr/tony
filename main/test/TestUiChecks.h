@@ -510,6 +510,9 @@ private slots:
         settings.beginGroup("Analyser");
         settings.remove("");
         settings.endGroup();
+        settings.beginGroup("SingingAnalyser");
+        settings.remove("");
+        settings.endGroup();
         SingingTakes::setOverwriteConfirmationWanted(true);
     }
 

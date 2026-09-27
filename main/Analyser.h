@@ -121,6 +121,10 @@ public:
         Spectrogram = 3,
     };
 
+    // For the user's own toggles: each writes its own setting (in this
+    // analyser's group, see getSettingsGroup()), which every file this
+    // analyser shows later starts from.  Not for a temporary state: for
+    // that, the layer's showLayer() or its play parameters
     bool isVisible(Component c) const;
     void setVisible(Component c, bool v);
     void toggleVisible(Component c) { setVisible(c, !isVisible(c)); }
@@ -490,8 +494,17 @@ protected:
     void layersCreated(sv::Document::LayerCreationAsyncHandle,
                        std::vector<sv::Layer *>, std::vector<sv::Layer *>);
 
-    void saveState(Component c) const;
+    // Where this analyser keeps its toggles: PlaybackSettings'
+    // reference group, or the singing one for the secondary colours
+    QString getSettingsGroup() const;
+
+    // Apply the settings to our layers, writing none
     void loadState(Component c);
+
+    // setVisible() and setAudible() without the write to the settings.
+    // False if there is no layer (or play parameters) to apply it to
+    bool applyVisible(Component c, bool v);
+    bool applyAudible(Component c, bool a);
 };
 
 #endif

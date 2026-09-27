@@ -35,6 +35,7 @@
 #include "TestLatencyCheck.h"
 #include "TestLatencyCalibration.h"
 #include "TestAudioDriverSettings.h"
+#include "TestPlaybackSettings.h"
 #include "TestTakeDiff.h"
 #include "TestLiveDotsFeed.h"
 #include "TestRunSuite.h"
@@ -205,6 +206,12 @@ int main(int argc, char *argv[])
 
     {
         TestAudioDriverSettings t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestPlaybackSettings t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

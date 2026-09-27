@@ -14,6 +14,7 @@
 */
 
 #include "Analyser.h"
+#include "PlaybackSettings.h"
 
 #include "transform/TransformFactory.h"
 #include "transform/ModelTransformer.h"
@@ -580,8 +581,7 @@ Analyser::setWaveformFaded(bool faded)
     m_waveformFaded = faded;
 
     // Straight on the layer, which only repaints: no command, no
-    // modified flag, and not saveState(), which is for the user's own
-    // choices and would write this to the settings both analysers share
+    // modified flag, and no setting, which is for the user's own choices
     if (Layer *audio = m_layers[Audio]) {
         if (auto waveform = qobject_cast<WaveformLayer *>(audio)) {
             waveform->setBaseColour(getWaveformColour());
@@ -889,8 +889,8 @@ Analyser::silenceSecondaryAnalysisLayers()
     // The secondary analyser's pitch and note tracks are visual-only (there is
     // no UI toggle to control their audibility, and sonifying two pitch/note
     // tracks at once is confusing).  Mute them directly — do NOT call
-    // setAudible(), which would also call saveState() and corrupt the primary
-    // analyser's shared settings key.
+    // setAudible(), which would also write the mute to the settings as if
+    // the user had asked for it.
     if (m_colorScheme != SecondaryColors) return;
 
     for (Component c : { PitchTrack, Notes }) {
@@ -1841,29 +1841,33 @@ Analyser::getEnclosingSelectionScope(sv_frame_t f, sv_frame_t &f0, sv_frame_t &f
     f1 = (f1i < 0 ? 0 : f1i);
 }
 
-void
-Analyser::saveState(Component c) const
+QString
+Analyser::getSettingsGroup() const
 {
-    bool v = isVisible(c);
-    bool a = isAudible(c);
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue(QString("visible-%1").arg(int(c)), v);
-    settings.setValue(QString("audible-%1").arg(int(c)), a);
-    settings.endGroup();
+    // The colour scheme is what tells the singing track's analyser from
+    // the reference's (only MainWindow::setupSingingTrackAnalyser() makes
+    // one with the secondary colours).  Each keeps its toggles apart, so
+    // that neither changes what the other shows or plays
+    return m_colorScheme == SecondaryColors ?
+        PlaybackSettings::kSingingGroup : PlaybackSettings::kReferenceGroup;
 }
 
 void
 Analyser::loadState(Component c)
 {
+    // Everything read before anything is applied, and nothing written
+    // back: the settings are what the user chose, and a load is not a
+    // choice.  The spectrogram plays through the play parameters of the
+    // reference's model, which are the audio's: only whether it is on
+    // show is its own, and its audible setting, which once came back in
+    // place of the audio's, is neither read nor written
     QSettings settings;
-    settings.beginGroup("Analyser");
-    bool deflt = (c == Spectrogram ? false : true);
-    bool v = settings.value(QString("visible-%1").arg(int(c)), deflt).toBool();
-    bool a = settings.value(QString("audible-%1").arg(int(c)), true).toBool();
-    settings.endGroup();
-    setVisible(c, v);
-    setAudible(c, a);
+    const QString group = getSettingsGroup();
+    const bool playable = (c != Spectrogram);
+    bool v = PlaybackSettings::visible(settings, group, c, c != Spectrogram);
+    bool a = playable && PlaybackSettings::audible(settings, group, c, true);
+    applyVisible(c, v);
+    if (playable) applyAudible(c, a);
 }
 
 void
@@ -1891,25 +1895,33 @@ Analyser::isVisible(Component c) const
 void
 Analyser::setVisible(Component c, bool v)
 {
-    if (m_layers[c]) {
-        m_layers[c]->setLayerDormant(m_pane, !v);
+    if (!applyVisible(c, v)) return;
+    QSettings settings;
+    PlaybackSettings::setVisible(settings, getSettingsGroup(), c, v);
+}
 
-        if (v) {
-            if (c == Notes) {
-                m_paneStack->setCurrentLayer(m_pane, m_layers[c]);
-            } else if (c == PitchTrack) {
-                // raise the pitch track, then notes on top (if present)
-                m_paneStack->setCurrentLayer(m_pane, m_layers[c]);
-                if (m_layers[Notes] &&
-                    !m_layers[Notes]->isLayerDormant(m_pane)) {
-                    m_paneStack->setCurrentLayer(m_pane, m_layers[Notes]);
-                }
+bool
+Analyser::applyVisible(Component c, bool v)
+{
+    if (!m_layers[c]) return false;
+
+    m_layers[c]->setLayerDormant(m_pane, !v);
+
+    if (v) {
+        if (c == Notes) {
+            m_paneStack->setCurrentLayer(m_pane, m_layers[c]);
+        } else if (c == PitchTrack) {
+            // raise the pitch track, then notes on top (if present)
+            m_paneStack->setCurrentLayer(m_pane, m_layers[c]);
+            if (m_layers[Notes] &&
+                !m_layers[Notes]->isLayerDormant(m_pane)) {
+                m_paneStack->setCurrentLayer(m_pane, m_layers[Notes]);
             }
         }
-
-        m_pane->layerParametersChanged();
-        saveState(c);
     }
+
+    m_pane->layerParametersChanged();
+    return true;
 }
 
 bool
@@ -1927,12 +1939,21 @@ Analyser::isAudible(Component c) const
 void
 Analyser::setAudible(Component c, bool a)
 {
-    if (m_layers[c]) {
-        auto params = m_layers[c]->getPlayParameters();
-        if (!params) return;
-        params->setPlayAudible(a);
-        saveState(c);
-    }
+    if (!applyAudible(c, a)) return;
+    // The spectrogram's play parameters are the audio's (see loadState())
+    if (c == Spectrogram) return;
+    QSettings settings;
+    PlaybackSettings::setAudible(settings, getSettingsGroup(), c, a);
+}
+
+bool
+Analyser::applyAudible(Component c, bool a)
+{
+    if (!m_layers[c]) return false;
+    auto params = m_layers[c]->getPlayParameters();
+    if (!params) return false;
+    params->setPlayAudible(a);
+    return true;
 }
 
 float
@@ -1954,7 +1975,6 @@ Analyser::setGain(Component c, float gain)
         auto params = m_layers[c]->getPlayParameters();
         if (!params) return;
         params->setPlayGain(gain);
-        saveState(c);
     }
 }
 
@@ -1977,7 +1997,6 @@ Analyser::setPan(Component c, float pan)
         auto params = m_layers[c]->getPlayParameters();
         if (!params) return;
         params->setPlayPan(pan);
-        saveState(c);
     }
 }
 

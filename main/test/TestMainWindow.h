@@ -228,6 +228,9 @@ public:
     }
     TakeLatency takeLatency() { return m_takeLatency; }
     QAction *playSingingAudioAction() { return m_playSingingAudio; }
+    QAction *showSingingPitchAction() { return m_showSingingPitch; }
+    QAction *showSingingNotesAction() { return m_showSingingNotes; }
+    QAction *playAudioAction() { return m_playAudio; }
 
     Analyser *analyser() { return m_analyser; }
     Analyser *analyser2() { return m_analyser2; }
