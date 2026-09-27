@@ -1,6 +1,6 @@
 name: Windows CI
 
-on: workflow_dispatch
+on: [push, pull_request]
 
 # Built as it is on the development machine (docs/building.md): MSYS2's
 # mingw64 toolchain, Qt and libraries, with meson and ninja

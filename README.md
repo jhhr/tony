@@ -140,11 +140,11 @@ session, choose a take, select a phrase, record, listen, erase and undo.
 Editing notes and the reference is left to the desktop, and their tools are
 hidden.
 
- * there is no release yet. Each run of the Android CI workflow (started
-   by hand under Actions) builds a test version and keeps it as its
-   Tony-debug-apk artifact, which GitHub lets you download once signed in.
-   Unzip it and open Tony-debug.apk on the phone, allowing the app you open
-   it with to install unknown apps
+ * there is no release yet. Each run of the Android CI workflow (under
+   Actions) builds a test version and keeps it as its Tony-debug-apk
+   artifact, which GitHub lets you download once signed in. Unzip it and open
+   Tony-debug.apk on the phone, allowing the app you open it with to install
+   unknown apps
  * one toolbar of large buttons replaces the menus and the other toolbars: a
    menu button that holds every menu, Play, Record and Record into Selection,
    the take box, Undo and Redo, Erase, Zoom In and Zoom Out, and a button

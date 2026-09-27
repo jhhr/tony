@@ -221,8 +221,7 @@ bqaudioio's resampler holding playback back about 1.1 ms at 48 kHz, unreported.
     library static, and Oboe. Tony is built as the shared library
     `libTony_arm64-v8a.so` that Qt for Android loads, and the test executables are left
     out. How to build it, and why so: [building.md](building.md#building-for-android).
-- `.github/workflows/android.yml` builds the APK, as a cloud session does, when started by
-  hand.
+- `.github/workflows/android.yml` builds the APK on every push, as a cloud session does.
 - The test suites use `FakeAudioIO` and run on the desktop only. `OboeAudioIO`,
   `AndroidStorage`, `AndroidMediaReadStream` and `AndroidScreen` are compiled for Android
   only and can be judged on the phone only; their plain parts (`StreamLatency`,
