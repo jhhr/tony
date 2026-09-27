@@ -970,6 +970,17 @@ protected:
     void loadBackgroundMusic(QString path);
     void teardownBackgroundMusic();
 
+    // The background music of a session that has just been read back: its
+    // hidden waveform layer is in pane 0, found by its name, heard or muted
+    // and at the gain and pan the session saved.  restoreTakes() calls it
+    // before it drops every other audio model but the reference.  The
+    // layer of music that could not be read is dropped
+    void adoptBackgroundMusic();
+
+    // The object name that marks the background music's layer, in the
+    // session file as well.  Not translated
+    static QString backgroundMusicLayerName();
+
     // Put another audio file under the take's pitch and notes layers,
     // keeping those layers and everything in them.  The new audio is not
     // analysed: what the layers hold is the analysis of all of the take

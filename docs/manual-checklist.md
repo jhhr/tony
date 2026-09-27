@@ -219,7 +219,11 @@ Not tried yet.
    smoothly, and neither they nor the cursor stutter, in a maximised window. None appear
    between phrases, and none are lost on soft singing: with Voice Threshold Off the
    tracker ignores only what is quieter than −60 dBFS.
-8. **Music on speakers: Playback > Voice Threshold.** With the reference or the
+8. **Background music in a session**: load it, turn its level down, save, close and open
+   the session: it plays with the reference at that level, and during a take. Move the
+   music file and open the session again: Tony asks where it is, and Locate file... finds
+   it.
+9. **Music on speakers: Playback > Voice Threshold.** With the reference or the
    background music on speakers, at the volume you sing with, and the threshold Off:
    record the music alone, not singing, and see its dots and, after Stop, its pitch.
    Raise the threshold a step at a time, recording the music alone each time, until the
@@ -409,7 +413,7 @@ The design is in [port-android.md](port-android.md) and
     way in use?
 13. **Voice Threshold on the phone's own speaker**: from the compact layout's menu button,
     Playback > Voice Threshold opens, shows which is ticked, and takes a tap; then
-    section 3, item 8, with the reference on the phone's speaker. Nothing on the phone
+    section 3, item 9, with the reference on the phone's speaker. Nothing on the phone
     explains the entries: are "Off" and the dBFS figures clear enough there?
 
 A Windows touch screen has not been tried either: Windows makes its own mouse events from

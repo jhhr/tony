@@ -45,7 +45,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   exclusive mode and WDM-KS, lower still but taking the device from every other program.
 - Showing two takes at once, or any comparison of takes other than switching.
 - Singing track gain and pan are not saved in the session.
-- Background music is not saved in the session; it is reloaded by hand.
 - An old session (before takes) loses its singing track without telling the user why.
 - Recording that starts before frame 0 of the reference.
 - A Sailfish OS version: researched, not built ([port-sailfish.md](port-sailfish.md)).

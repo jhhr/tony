@@ -100,8 +100,8 @@ Following the reference
  * background music: File -> Load Background Music... loads a second audio
    file, such as the accompaniment or the full mix, that plays along with the
    reference, while recording as well, but is never analysed. The speaker
-   button after "Background:" in the toolbar turns it on and off. It is not
-   saved with the session
+   button after "Background:" in the toolbar turns it on and off. The session
+   remembers it, with its level and pan and whether it was on
 
 
 Timed lyrics

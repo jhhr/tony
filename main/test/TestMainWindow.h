@@ -282,6 +282,8 @@ public:
     sv::ModelId pendingSingingModelId() { return m_pendingSingingModelId; }
     sv::ModelId backgroundMusicModelId() { return m_backgroundMusicModelId; }
     sv::WaveformLayer *backgroundMusicLayer() { return m_backgroundMusicLayer; }
+    QAction *playBackgroundMusicAction() { return m_playBackgroundMusic; }
+    sv::LevelPanToolButton *backgroundMusicLevelPan() { return m_bgMusicLPW; }
     bool recordingInProgress() { return m_recordingInProgress; }
     bool recordingAsSingingTrack() { return m_recordingAsSingingTrack; }
     sv::sv_frame_t recordingLatencyFrames() { return m_recordingLatencyFrames; }

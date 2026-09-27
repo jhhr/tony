@@ -286,8 +286,9 @@ Tony's own.
 **Restore** (`openSession()` → `restoreTakes()`, with `m_restoringSession` set around the
 base call so the queued `analyseRestoredSingingModel()` stands aside):
 
-1. `dropRestoredSingingTrack()` drops every audio model but the reference. Current
-   sessions carry none, older ones do — keep it.
+1. `dropRestoredSingingTrack()` drops every audio model but the reference and the
+   background music, which `adoptBackgroundMusic()` has claimed by then. Current sessions
+   carry no take's audio, older ones do — keep it.
 2. No `<takes>` element: an old session. Derived layers and take-named layers go too.
 3. Reserve names, add each take, read coverage from its strip, resolve its audio path
    against the `.ton`'s directory.
