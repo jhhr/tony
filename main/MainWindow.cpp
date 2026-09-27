@@ -4194,6 +4194,9 @@ MainWindow::loadBackgroundMusic(QString path)
             m_backgroundMusicLayer = qobject_cast<WaveformLayer *>(rawLayer);
             if (m_backgroundMusicLayer) {
                 m_document->setModel(m_backgroundMusicLayer, m_backgroundMusicModelId);
+                // The session saves the layer, and its name is what says
+                // which audio is the background music when it is opened
+                m_backgroundMusicLayer->setObjectName(backgroundMusicLayerName());
                 ColourDatabase *cdb = ColourDatabase::getInstance();
                 m_backgroundMusicLayer->setBaseColour(
                     cdb->getColourIndex(tr("Green")));
@@ -4252,6 +4255,53 @@ MainWindow::teardownBackgroundMusic()
         m_backgroundMusicLayer = nullptr;
     }
     m_backgroundMusicModelId = {};
+}
+
+QString
+MainWindow::backgroundMusicLayerName()
+{
+    return "Background Music";
+}
+
+void
+MainWindow::adoptBackgroundMusic()
+{
+    if (m_backgroundMusicLayer || !m_document || !m_paneStack) return;
+
+    Pane *pane = m_paneStack->getPane(0);
+    if (!pane) return;
+
+    // The layer and its model are as loadBackgroundMusic() left them, in
+    // the play source because the layer is in a view.  A session saved
+    // before the layer had its name carries it too, as an audio model
+    // that restoreTakes() cannot tell from a take's, and drops.
+    //
+    // Music the reader could not find (moved, and not located when it
+    // asked) leaves the layer with no model: a waveform layer may be
+    // without one.  Of no use, and it would go into the next save too
+    std::vector<Layer *> orphans;
+
+    for (int i = 0; i < pane->getLayerCount(); ++i) {
+        auto layer = qobject_cast<WaveformLayer *>(pane->getLayer(i));
+        if (!layer || layer->objectName() != backgroundMusicLayerName()) {
+            continue;
+        }
+        ModelId modelId = layer->getModel();
+        if (modelId.isNone()) {
+            orphans.push_back(layer);
+            continue;
+        }
+        if (m_backgroundMusicLayer || modelId == getMainModelId() ||
+            !ModelById::isa<WaveFileModel>(modelId)) {
+            continue;
+        }
+        m_backgroundMusicLayer = layer;
+        m_backgroundMusicModelId = modelId;
+        cerr << "adoptBackgroundMusic: found the background music of the "
+             << "session, model " << modelId << endl;
+    }
+
+    for (Layer *layer : orphans) dropLayerSilently(layer);
 }
 
 void
@@ -6997,6 +7047,10 @@ MainWindow::restoreTakes(QString sessionPath)
     // Opening a session is not a change to it, whatever is done below
     bool wasModified = m_documentModified;
 
+    // The background music first, so that its audio model is not taken
+    // for a singing track's below
+    adoptBackgroundMusic();
+
     // The audio model of the active take, which the document carried
     // because the waveform layer showing it is in pane 0: of no use here,
     // and not to be mistaken for a singing track of its own
@@ -7119,12 +7173,13 @@ MainWindow::dropRestoredSingingTrack(bool withTakeLayers)
 
     if (!m_document) return;
 
-    // The reference is the main model; every other audio model in a
-    // restored document belongs to a singing track
+    // The reference is the main model and the background music has been
+    // adopted by now; every other audio model in a restored document
+    // belongs to a singing track
     ModelId mainId = getMainModelId();
     std::vector<ModelId> audio;
     for (ModelId id : m_document->getModels()) {
-        if (id == mainId) continue;
+        if (id == mainId || id == m_backgroundMusicModelId) continue;
         if (ModelById::isa<WaveFileModel>(id)) audio.push_back(id);
     }
 
