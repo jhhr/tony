@@ -83,8 +83,9 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   `initialAnalysisCompleted`, which then never comes.
 - **`Analyser::newFileLoaded()` error path for the singing track** (pYIN plugin missing):
   not verified that no layers or models are leaked before the error return.
-- **Play Singing Audio turned off during a take is not remembered for the next take**: it
-  lives in `m_singingAudioAfterTake`, not in the settings.
+- **Play Singing Audio pressed during the first take of a song** (no singing track yet)
+  does nothing: there is no singing audio to mute or unmute, and nothing is written, so
+  the choice is not kept for the next take. During any later take it is kept at once.
 - `Analyser::cancelAnalyses()` cannot see transforms whose layers are held only by the undo
   history.
 - The dead pane-pruning fallback in `record()` (`m_pendingExtraPanes`,
@@ -135,17 +136,18 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   deferred and error paths of the dot teardown; `ContinuousSynth` deletion in the svapp
   fork; the 30 s give-up of `waitForRangedAnalysis()`; `commitData()` relocating takes on
   Windows (the test runs elsewhere only); the two other ways `MainWindowBase::record()` can
-  fail.
+  fail; the device opened again with input for the first take (svapp's `record()`, in the
+  application's `AUDIO_PLAYBACK_NOW_RECORD_LATER` mode) and given the master volume there,
+  since the test window's device is duplex from the start.
 - **Closing the session during an ordinary take, then pressing Stop, hung** (seen once,
   2026-09-26, while testing the audio check; not looked into). `closeSession()` stops a
   check's take through the Stop path, but not the user's own.
-- **The toolbar's level controls write the settings on their own.** In a window's first
-  file, `updateLayerStatuses()` shows the pitch and notes gain of 0.5, which lies between
-  two notches; the control moves to the nearest, 0.562, emits it, and the window makes
-  both audible and writes that to the shared settings.
-- **Play Audio's setting is overridden on load by the spectrogram's**: the spectrogram
-  layer is on the reference's model and shares its play parameters, and `Analyser` loads
-  `audible-3` after `audible-0`.
+- **With `--no-sonification`, hiding the pitch track or the notes crashes**:
+  `showPitchToggled()` and `showNotesToggled()` keep the Play button's state before they
+  hide, and there is no Play button (`m_playPitch`, `m_playNotes` are null). Showing one
+  there that the settings keep hidden switches its sonification on, over the command line,
+  and writes that to the settings: the Show toggles bring Play back as it was
+  (`MainWindow/playpitchwas`, on if never kept). Neither is new; not fixed.
 - **At a device rate other than the reference's playback goes out about 53 frames late**
   (1.1 ms at 48 kHz): bqaudioio's resampler holds it back by that much and reports nothing.
   A round trip measured by Calibrate Audio includes it; takes placed with the reported pair
@@ -225,8 +227,16 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
 - **A round trip is kept per driver, not per latency**: after a latency change the kept
   figure is used unless the latencies the device reports moved by more than 1 ms. And
   before a device's first take, the menu line, Forget Measured Latency and the dialog
-  look the figure up at the session's rate, so on a 48 kHz device they show the driver's
-  figure although one is kept ([audio-drivers.md](audio-drivers.md), §8).
+  do not know its rate: with figures kept at two rates for the devices they look at the
+  session's, and may show the driver's figure although one is kept
+  ([audio-drivers.md](audio-drivers.md), §8).
+- **The menu line before the first take** compares the output latency the device reports
+  while open for playback only with the duplex stream's at the check: a real device that
+  reports them more than 1 ms apart has the line say "out of date" from the first file to
+  the first take. The fake is duplex from the start; not yet tried on a real device
+  ([manual checklist](manual-checklist.md), 2.6).
+- **The check plays at the master volume**, which is kept between launches: a fader left
+  low is low in the next launch's check too.
 - The runner allows the reference's analysis 60 s (`kReferenceTimeoutMs`); the 4-minute
   song's took 10.4 s on the cloud machine, so a PC six times slower ends the dev run at its
   first stage. On Android every analysis limit is four times as long

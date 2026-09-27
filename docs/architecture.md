@@ -41,7 +41,7 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
 | `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
@@ -213,15 +213,69 @@ leaves whoever keeps a pointer to it holding a layer that the redo stack owns an
 - The svapp fork emits `Document::modelAboutToBeReleased(ModelId)` and `MainWindowBase`
   removes the model from the play source on it. Upstream only did so from
   `RemoveLayerCommand`, which forced deletes never run.
-- Mute with `getPlayParameters()->setPlayAudible(false)` directly. `Analyser::setAudible()`
-  and `Analyser::setVisible()` **write QSettings keys that both analysers share**; use them
-  only for the user's own toggles, never for temporary states such as "during a take".
-  For temporary hiding use `showLayer(pane, false)`.
-- The toolbar's level controls (`LevelPanToolButton`) answer a gain between their notches
-  by moving to the nearest notch and emitting it, and the window then sets that gain
-  through `Analyser::setGain()` and `setAudible()`, writing the shared settings. A play gain
-  set directly on the reference (as the audio check's is) needs the control moved first,
-  under a `QSignalBlocker`, before `updateLayerStatuses()` shows it.
+- Mute with `getPlayParameters()->setPlayAudible(false)` directly.
+  `Analyser::setAudible()`, `setVisible()`, `setGain()` and `setPan()` **write the user's
+  settings** (below); use them only for the user's own toggles and controls, never for
+  temporary states such as "during a take". For temporary hiding use
+  `showLayer(pane, false)`.
+- The toolbar's level controls (`LevelPanToolButton`) answer a level between their notches
+  by moving to the nearest notch and emitting it, as if the user had moved them, and the
+  window then sets that level with `Analyser::setGain()` and switches the track on with
+  `setAudible()`, both written as the user's choice. New pitch and notes are made at 0.5,
+  between two notches. So a control is shown a level only under a `QSignalBlocker`:
+  `updateLayerStatuses()` shows every one so (`showLevelAndPan()`), and so must anything
+  else that moves one (the audio check's runner does). The toggles answer `triggered`,
+  which `setChecked()` does not emit.
+
+### The bottom bar's settings
+
+The mixer of the Show and Play and the Playback Controls toolbars is kept between
+launches: the tracks' Show and Play toggles, levels and pans, the master volume, and the
+background music's mix, level and pan. It is the user's, not part of the song.
+`PlaybackSettings` (`tony_core`) names the groups and keys and reads and writes them,
+numbers as text as `LatencyCalibration` keeps its figures, so that every settings format
+(the Windows registry too) keeps them exactly. The reference's tracks are in group
+`Analyser` (`visible-N`, `audible-N`, `gain-N`, `pan-N`, N being the
+`Analyser::Component`), the singing track's toggles in `SingingAnalyser`, the master
+volume and the background music in `MainWindow`.
+
+- **Written only for the user's own action on a control**: the `Analyser` setters above,
+  the fader, the background music's toggle and level control. Never for a temporary state:
+  a take's mutes and hides, the lifted constrain mode, the audio check's playback, a level
+  only being shown, what the command line leaves out.
+- **Each setter writes its own key, and a load writes nothing.** `Analyser::loadState()`
+  reads all of a track's keys, then applies them with the `apply*()` functions, the setters
+  without the write. A key never set stays unset: a default is not the user's choice.
+- **The settings win over a session.** Every load (a file, a session, Analyse Now) applies
+  what they hold. A level or pan never set is the layer's own: the fixed one a new layer is
+  given (`addWaveform()`, `configureAnalysisLayers()`), or a session's for its own layers.
+- **Each analyser has its own group** (`getSettingsGroup()`, from the colour scheme), so
+  that the singing toggles never change what the reference shows or plays, nor the other
+  way round. The analysis options stay in `Analyser`, for both. The singing analyser keeps
+  no level or pan (there is no control for them), and its pitch and notes are silenced by
+  `silenceSecondaryAnalysisLayers()`, never through the settings. Play Singing Audio
+  pressed while a take has the singing muted is written at once, and applied when the
+  take stops.
+- **The spectrogram keeps `visible-3` only.** It is on the reference's model and plays
+  through the audio's play parameters, so an audible setting of its own, loaded after the
+  audio's, would be what Play Audio came back as. `audible-3` is neither read nor written.
+- **`--no-spectrogram` and `--no-sonification` hold a track off**
+  (`Analyser::keepHidden()`, `keepSilent()`): applied at once and at every later load,
+  since Analyse Now makes the layers anew, and written nowhere, so that a launch without
+  the switch has the track as the user left it.
+- **Every device opened gets the master volume.** A device opens at unity gain, whatever
+  the fader shows, and every one the window opens goes through
+  `MainWindow::createAudioIO()`, which gives it the fader's value: at the first file;
+  again with input for the first take (svapp's `record()`); for a device, driver or
+  latency chosen; for a device menu opened. The fader is set from the settings in the
+  constructor, where `setValue()` says nothing, so a device need not exist yet.
+- **The background music** is given the kept mix, level and pan as it is loaded; while
+  none is loaded, its toggle and level control show them. A level taken to nothing
+  switches the mix off and keeps the level, as the reference's controls do.
+- **Not remembered, on purpose** (the user's decision): the playback speed, Loop Playback
+  and Constrain Playback to Selection, which belong to a song or a moment. The alternate
+  pitch track's octaves are the song's: a session saved with the track on keeps them, in
+  its layer's name.
 
 ### Selection and tools
 

@@ -48,9 +48,10 @@ measurements) was a separate report, not kept in the repository.
 - a line that cannot be chosen, the latency takes are placed with now: "Latency: measured
   281 ms, 26 Sep" (the year only when it is not this one), or "Latency: driver's figure,
   279 ms", with "(the measured one is out of date)" when a stored figure is stale, or "not
-  known yet" while the device reports nothing. Brought up to date whenever the menu opens;
-- **Forget Measured Latency**, enabled while a figure is kept for these devices, stale or
-  not.
+  known yet" while the device reports nothing and no kept figure applies (one that does is
+  shown before the device is open too, §5). Brought up to date whenever the menu opens;
+- **Forget Measured Latency**, enabled while a figure is kept for these devices at the
+  rate the line looks up (§5), stale or not.
 
 While a check runs, Record, the driver and latency menus and both device submenus are
 disabled as well.
@@ -121,7 +122,9 @@ goes off sends Tony to the background, which stops the take
    and pans the reference hard left and its pitch and notes sonification hard right. The
    check's session plays the reference centred, at a gain that brings it back to the
    −12 dBFS it was made at, and the sonification silent. It stays so after the run; a
-   session opened afterwards plays as before.
+   session opened afterwards plays as before. It plays through the master volume (the
+   Playback Controls fader), which is kept between launches: a volume left low in one
+   launch is low in the next launch's check too.
 4. **Judged from the take's file** (`AudioCheckRunner::readTakeFile()`), mixed to one
    channel at the file's rate (the reference's), never from the take's model: the model
    is normalised to full scale as it is read, so every take would read as clipped.
@@ -251,7 +254,17 @@ latency the device reported then, in seconds. That pair is the **staleness finge
 when either latency the device reports now differs by more than 1 ms, its buffers have
 changed and the round trip with them, and takes go back to the reported pair until the
 check is run again. A stale figure is not deleted: it applies again if the driver goes back
-to its old buffers.
+to its old buffers. A latency reported as zero (or less) is a stream that is not open,
+and is not compared: on a desktop there is no device before the first file (unless one is
+chosen from the menus), and until the first take it is open for playback only, its input
+reporting 0. With neither open, the
+figure is not stale; it is judged by what the streams report once they are open. So after
+a relaunch the menu line can show the kept figure, as the takes use it (at the rate below),
+and a take whose input reports 0 while its output matches is placed with the figure too.
+Before the first take the output a playback-only stream reports is still compared: if it
+differs by more than 1 ms from the one the duplex stream reported at the check, the line
+says "out of date" until the first take. Whether a real device does so is not known yet
+([manual checklist](manual-checklist.md), 2.6).
 
 **On Android** there are no device settings: `OboeAudioIO` opens whatever route the phone
 has and reports it (`AudioRoute`, through `AudioRouteReporter`): each device's type and
@@ -283,13 +296,15 @@ the recording ([recording.md](recording.md#latency)). With no figure stored, at 
 the round trip is exactly the old sum; a core test checks it over a grid of values.
 
 The menu line, Forget Measured Latency and the dialog's instructions use the rate of the
-last take placed with a round trip, or before any take the session's: on a desktop the
-device's rate is not known before a take (`AudioCallbackRecordTarget` has no getter for
-it). Choosing a device or a driver from the menu resets it. So on a device at another
-rate than the session's, the three see a figure kept for it only once a take has been
-recorded since Tony started or the device or driver was chosen; takes are placed with it
-from the first. A device that reports its route says its rate as soon as it is open, and
-records at it, so on a phone the three use that.
+last take placed with a round trip (`MainWindow::expectedRecordingRate()`). Before any
+take, on a desktop, the device's rate is not known (`AudioCallbackRecordTarget` has no
+getter for it): they take the rate of the figure kept for these devices when there is
+one rate only (`LatencyCalibration::onlyRate()`), else the session's. Choosing a device or
+a driver from the menu forgets the last take's rate. So with figures kept at two rates for
+the same devices, the three look at the session's (44.1 kHz) until a take has been
+recorded since Tony started or the device or driver was chosen; takes are placed with the
+figure at their own rate from the first. A device that reports its route says its rate as
+soon as it is open, and records at it, so on a phone the three use that.
 
 A dev run places its takes with the round trip the calibration before it measured, for the
 run only: nothing is stored, the menu line goes on describing the window's own figure, and
@@ -544,11 +559,12 @@ What it rests on:
   `pollTakeProgress()`'s, and a press would stop the check's take or record one of the
   user's into the check's session.
 - **The check's playback** is set on the play parameters of the session's own models,
-  never through `Analyser::setAudible()` and the like, which write settings every session
-  reads ([architecture.md](architecture.md)). The toolbar's reference level control
-  answers a gain between its notches by moving to the nearest and saying so, and the window
-  then sets that gain through `Analyser::setGain()` and `setAudible()`: the runner moves the
-  control first, under a `QSignalBlocker`.
+  never through `Analyser::setAudible()` and the like, which write the user's settings
+  that every session reads ([architecture.md](architecture.md#the-bottom-bars-settings)).
+  The toolbar's reference level control answers a gain between its notches by moving to
+  the nearest and saying so, and the window would then set that gain through
+  `Analyser::setGain()` and `setAudible()`: the runner moves the control under a
+  `QSignalBlocker`, as `updateLayerStatuses()` shows every level.
 - **The levels have one reader each.** `getOutputLevels()` and `getInputLevels()` give the
   peak since the previous call and reset it. While recording, lead-in included,
   `ViewManager::checkPlayStatus()` reads the input levels only, for the meter's signal; the
@@ -657,6 +673,13 @@ below).
 - A dev run's session refers to its reference in the application data directory, which the
   next check removes unless that session is open, and the next dev run removes its scratch
   folder: only the latest run can be looked at.
+- **The menu line before the first take** compares the output latency a playback-only
+  stream reports with the one the duplex stream reported at the check (§5). A real device
+  that reports them more than 1 ms apart has the line say "out of date" from the first file
+  to the first take, though the take uses the figure. The fake is duplex from the start,
+  so no test sees it; not yet tried on a real device.
+- **The check plays at the master volume**, which is kept between launches (§2): a fader
+  left low is low in the next launch's check too.
 
 **Later candidates:**
 
@@ -668,7 +691,9 @@ below).
 - A quick re-measure after the device is opened or resumed again (a Bluetooth reconnect;
   on a phone, a resume after two idle minutes), without a test session.
 - A getter for the rate the record target records at (svapp fork), so that on a desktop
-  the menu line and Forget know the device's rate before the first take (§5).
+  the menu line and Forget know the device's rate before the first take also when figures
+  are kept at more than one rate for the devices; with one rate kept, that one is taken
+  (§5).
 
 ## 11. Tests
 
@@ -683,8 +708,9 @@ below).
   with and without their fundamental, at 44.1 and 48 kHz. `TestLatencyCalibration`: a
   figure stored and read back under a device name holding `/` and `ä`, keys kept apart,
   the key as the Preferences give it, a route's key by type and product name, the one
-  input kept for an output, staleness either side of the tolerance and by the streams,
-  the round trip in use and its frames at the recording's rate. `TestPopupArea`: the
+  input kept for an output, the one rate kept for the devices, staleness either side of
+  the tolerance, by the streams and with a stream not open (a latency reported as 0), the
+  round trip in use and its frames at the recording's rate. `TestPopupArea`: the
   dialog centred in the safe area and kept inside. `TestTakeDiff`: each comparison
   passing and failing on purpose, and the real `splice()` and `erase()` through files,
   whose fades lie inside the range; item 3's places for a live dot, with dots 67 cents
@@ -699,7 +725,11 @@ below).
 - **The round trip in the take path** (`TestRecordWorkflow`, `latency_*`): a stored figure
   lines a take up where the reported pair does not, a stale one is ignored, and the
   reported pair is converted at the device's rate, also when the device was opened before
-  any file.
+  any file. The menu line after a relaunch (`measured_latency_shown_after_a_relaunch`,
+  `latency_line_with_figures_at_two_rates`): on a 48 kHz fake with a figure kept at
+  48 kHz, "measured" before any file and after one, before the first take, and Forget
+  drops that figure; with figures at 48 and 96 kHz, the driver's figure, not "out of
+  date", and nothing to forget.
 - **`TestAudioCheck`** (`test-tony-app`): the check on the loopback fake, whose device
   reports 2 × 4096 frames out and 4096 in while the true round trip is 123 frames longer.
   The check measures the true one, and once it is stored a second check finds its takes
@@ -708,10 +738,10 @@ below).
   that belongs to the round trip); the same when the reported input latency moves 10 ms
   from one take to the next; cancel, a closed session, no device, a device that never
   calls back; the check's playback, and a session opened after it playing as before; the
-  user's toggles and their settings untouched; plans refused; the plan's round trip and
-  pre-roll; keeping the session; replacing a check's own session without asking, and
-  asking before the user's; Record ignored; the menu and the dialog, the dialog naming the
-  driver. A phone's route (`FakeAudioIO::Config::route`): the figure kept for the route
+  user's toggles, levels and pans and their settings (both analysers' groups) untouched;
+  plans refused; the plan's round trip and pre-roll; keeping the session; replacing a
+  check's own session without asking, and asking before the user's; Record ignored; the
+  menu and the dialog, the dialog naming the driver. A phone's route (`FakeAudioIO::Config::route`): the figure kept for the route
   whatever the Preferences name, used although the reported latencies move, none for
   another route, the input kept with an output taken while only the output is open, stale
   once a stream opens otherwise, and forgotten; the phone's instructions and advice. The
@@ -773,6 +803,7 @@ and the dev checks".
 | When a measured figure is used | After **Use this latency**, for the devices and rate it was measured on; a dev run uses the new figure for itself only |
 | The key on a phone | The route: `oboe` and each device's type and product name, never its id, which a headset changes at each plug-in |
 | When a phone's figure is stale | When a stream opened otherwise than when it was measured; not by the reported latencies, which move by several ms from start to start |
+| The Playback menu's line after a relaunch, before the first take | The kept figure, as the takes use it (the user, 2026-09-27): a stream not open is not compared, and the one rate kept for the devices is taken (§5) |
 | The dialog while a check runs | Hidden behind a bar and a line at the right end of the status bar, which covers nothing; back on a tap and at the run's end. Closing it still cancels |
 | Analysis limits on a phone | Four times a desktop's, a margin until a phone's times are known |
 | Dev mode | Any build type that does not start with `release` (`TONY_DEV_CHECKS`); no runtime flag. The Android build is `debugoptimized` and has them |

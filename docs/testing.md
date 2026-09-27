@@ -6,7 +6,7 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`, and Tony's icons (`tony.qrc`: without them every toolbar button is as wide as its text, and `TestCompactLayout` needs the real sizes). | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestPlotSize`, `TestRecordWorkflow`, `TestTouchGestures`, `TestUiChecks`, `TestCompactLayout`, `TestTouchMenuStyle`, `TestAudioCheck` | on Linux about 10.5 minutes in one process, under two in eight; on Windows about 12 in one process, measured before the touch and compact-layout suites came. Nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`, then `TestTouchGestures`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`, without the icons; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 7.5 minutes in one process, two in eight (Linux): each test records a dev run's takes, or part of them, in real time |
 
@@ -175,10 +175,14 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   Playback menu's actions). It installs the fake device through `openAudioIO()`, which
   `MainWindow::createAudioIO()` calls once it has named the driver and applied its
   latency, or no device at all when made with `installDevice` false, and keeps what the
-  Preferences named for the last device opened (`audioIOOpenedFor()`). The drivers are
-  the ones a test gives with `setAudioImplementations()`, none by default, whatever the
-  platform has. **It suspends the device at Stop and at the end of a take**, as svapp does
-  by default and unlike the application, which keeps the stream running
+  Preferences named for the last device opened (`audioIOOpenedFor()`). Every test window
+  is without the spectrogram, as `--no-spectrogram` makes it; made with
+  `withSonification` false, it is without the sonification too. It hands out the bottom
+  bar's toggles, level controls and fader (`playAudioAction()`, `audioLevelControl()`,
+  `fader()` and the like). The drivers are the ones a test gives with
+  `setAudioImplementations()`, none by default, whatever the platform has. **It suspends
+  the device at Stop and at the end of a take**, as svapp does by default and unlike the
+  application, which keeps the stream running
   ([recording.md](recording.md#latency)): a great many tests rely on each take resuming
   the fake, and so starting its programmed input again. A test that wants the
   application's way calls `keepAudioRunning(true)`; `applicationSuspendsAudioOnStop()`
@@ -208,6 +212,14 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `verifyEventsSurvived()`; for the lyrics `lyricsFixture()`, `writeLrc()`,
   `verifyLyricsUntouched()`; for editing them `lyricsEditFixture()` and the mouse helpers
   below.
+- For what is kept between launches (`TestRecordWorkflow`): `relaunch(config)` is a new
+  window reading the settings the old one left (the session closed as `cleanup()` closes
+  it). `turnWheel()` turns a level control's level or pan with real wheel events, and
+  `dragFader()` drags the fader, as the user does: the fader's `setValue()` says nothing,
+  and a level set in code is not the user's action. `allSettings()` and
+  `settingsChanged()` say which keys a step wrote; `settingsChangedByOpening()` leaves out
+  the `FileFinder/` keys every Open writes. `storeRoundTrip()` keeps a measured figure at
+  a device rate, and `latencyLine()` reads the Playback menu's line as the menu shows it.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
   dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
@@ -281,6 +293,11 @@ The rules of the edits themselves are tested without a window, in `TestLyricsEdi
   `setApplicationSessionExtension("ton")` and the record directory.
 - `QSignalSpy` connects directly; for a signal from another thread use a receiver object
   on the test thread.
+- A window starts from the bottom bar's settings, which the tests' own settings store
+  keeps from one test to the next. The four suites that drive a `TestMainWindow` remove,
+  in `init()`, both analysers' groups (`Analyser`, `SingingAnalyser`) and the master
+  volume and background music keys of `MainWindow`: without that, a track one test
+  switched off is off in the next test's window. A new such suite needs the same.
 - In `TestMainWindow` override only `openAudioIO()`: `~MainWindowBase` calls
   `deleteAudioIO()` non-virtually, and `MainWindow::createAudioIO()` names the driver and
   applies its latency before it calls `openAudioIO()`.

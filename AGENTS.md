@@ -15,7 +15,7 @@ code.
 | --- | --- |
 | [docs/building.md](docs/building.md) | building for the first time in a session |
 | [docs/testing.md](docs/testing.md) | running or writing tests |
-| [docs/architecture.md](docs/architecture.md) | touching layers, models, the document, commands, playback or the session file |
+| [docs/architecture.md](docs/architecture.md) | touching layers, models, the document, commands, playback, the bottom bar's remembered settings or the session file |
 | [docs/recording.md](docs/recording.md) | touching `record()`, the Stop path, latency, pre-roll, the live tracker |
 | [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore |
 | [docs/calibrate-audio.md](docs/calibrate-audio.md) | touching Calibrate Audio (`AudioCheckRunner`, `CalibrateAudioDialog`), the dev checks (`main/dev/`) or the measured latency (`LatencyCheck`, `LatencyCalibration`) |
@@ -99,7 +99,9 @@ first). The rest is in [docs/building.md](docs/building.md#building-on-linux).
     redo. Commands hold values, never layer or model pointers.
   - Remove a pane only with `pruneExtraPane()`, and only after another layer holds the model.
   - Temporary mute/hide goes straight to the play parameters / `showLayer()`;
-    `Analyser::setAudible()` / `setVisible()` write settings shared by both analysers.
+    `Analyser::setAudible()` / `setVisible()` / `setGain()` / `setPan()` write the user's
+    settings, kept between launches. A load writes none; a toolbar level control is shown
+    a level only under a `QSignalBlocker`.
   - Use member-pointer `connect`; string-based connects with `sv::` types fail silently.
   - Stop `RealtimePitchTracker` before releasing the model it reads. All model writes
     happen on the GUI thread.
