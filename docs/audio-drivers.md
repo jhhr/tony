@@ -40,9 +40,11 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
 - **Audio Driver**, in the Playback menu before the two device submenus: MME, DirectSound,
   WASAPI, in that order, the one in use ticked. **Audio Latency** next to it: 10, 20, 50,
   100 and 200 ms, the one chosen for that driver ticked; where none has been, 20 ms on
-  WASAPI and 200 ms on the others. Both
-  are shown only where two drivers or more are built in, which is on Windows; on Linux and
-  Android nothing changed.
+  WASAPI and 200 ms on the others. Both are shown only where two drivers or more are built
+  in, which is on Windows. Linux has none of the three. Nor has Android, where Tony opens
+  a device of its own, `OboeAudioIO` ([port-android.md](port-android.md#audio)), on
+  whatever route the phone has: there is no driver, device or latency to choose, and the
+  compact layout hides these menus and the device submenus as well.
 - **Choosing a driver** stops playback and opens the device again through it, with the
   devices chosen under it (the driver's own default devices where none are) and its
   latency. The device submenus then list that driver's devices and write its keys; going
@@ -127,7 +129,8 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   latency chosen for the driver to bqaudioio (`AudioFactory::setSuggestedLatency()`, for
   the streams opened after), then `openAudioIO()`, which opens the device as svapp does.
   Every device is opened through it: the first, and each recreate. The Playback menu names
-  the default too, as it opens, before the device menus read the driver.
+  the default too, as it opens, before the device menus read the driver. On Android
+  `createAudioIO()` opens `OboeAudioIO` instead, and none of this applies.
 - **A choice** stops playback, forgets the device's rate when the driver changed (another
   driver may record at another rate, as another device may), and recreates the audio IO.
 - **The report's latency** is the one last handed to bqaudioio, not the Preferences', so
@@ -138,15 +141,19 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   it again (a driver, a latency or a device chosen, either device menu opened, Tony
   started again) moves the alignment, by up to about 8 ms on the user's PC. The input
   stays open from the first take on, and Windows shows the microphone in use until Tony
-  quits. Android does the same, and suspends the device once it has idled for two
-  minutes, or Tony goes to the background ([recording.md](recording.md#latency)).
+  quits. Android keeps the stream running too, but suspends the device once it has idled,
+  neither playing nor recording, for two minutes (`audioIdleSuspendMillis()`, never on
+  desktop), and when Tony goes to the background, so that a phone does not keep its
+  microphone open and its battery draining; the next Play or Record resumes it, which
+  moves the alignment as opening it again does ([recording.md](recording.md#latency)).
 
 ## 6. Tests
 
 - **Core** (`TestAudioDriverSettings`): the drivers picked out of any list in their order;
-  MME named where nothing or `auto` is, the unsuffixed devices carried over only where MME
-  has none, and nothing named again, nor where another driver is named or MME is not
-  built in; the latency kept per driver, read back from a file, 200 ms where unset or
+  WASAPI named where nothing or `auto` is (MME where there is no WASAPI), the unsuffixed
+  devices carried over only where the driver named has none of its own, and nothing named
+  again, nor where another driver is named or neither is built in; the latency kept per
+  driver, read back from a file, 20 ms on WASAPI and 200 ms on the others where unset or
   unreadable.
 - **App** (`TestAudioCheck`): the menus from a given list, in order, with the ticks, before
   the device menus, and hidden with one driver; WASAPI chosen, its setting written, the
@@ -302,10 +309,11 @@ checks' placement ends here.
   playback, about every 100 s on the user's cards. Of three runs that began with Calibrate
   Audio, two measured in the middle of that window and passed items 1, 2, 7 and 13; the
   third measured at its edge and failed items 1 and 2. On one device it should not drift;
-  not measured.
+  not measured. (A phone's Bluetooth output drifted against its microphone by about 1 ms a
+  minute: [calibrate-audio.md](calibrate-audio.md), §14.)
   Opening the device again still moves it, so a figure kept from an earlier session is up
-  to about 8 ms off: calibrate at the start of a session for the best placement. The
-  microphone shows as in use from the first take until Tony quits.
+  to about 8 ms off: calibrate at the start of a session for the best placement. On
+  Windows the microphone shows as in use from the first take until Tony quits.
 - On the loopback fake at 48 kHz, two runs in four read an output peak near 0 dBFS in the
   first block after a stream started, where the reference peaks at −12 dBFS; never at
   44.1 kHz. It may be an audible click at a take's start on a 48 kHz device.

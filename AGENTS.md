@@ -74,7 +74,7 @@ first). The rest is in [docs/building.md](docs/building.md#building-on-linux).
 - Build what was asked. Where the request is silent, take the simpler option and say so.
   No drive-by refactors. If the plan turns out wrong or impossible, do not improvise
   another design: finish what can be finished, leave the tree building and green, report.
-- `main/MainWindow.cpp` is over 6000 lines and `main/test/TestRecordWorkflow.h` over 2000.
+- `main/MainWindow.cpp` and `main/test/TestRecordWorkflow.h` are each over 9000 lines.
   Never read them whole: search, then read a range.
 - `svcore/`, `svgui/`, `svapp/`, `pyin/` and the other top-level library directories are
   **separate git repositories, gitignored here**, so ripgrep-based search tools skip them

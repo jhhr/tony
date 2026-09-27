@@ -1556,9 +1556,10 @@ if system != 'android'
     win_subsystem: 'console'
   )
 
-  # Tony's own tests. Two executables, because they differ in cost and in
-  # what they link: test-tony-core needs no GUI and no audio device;
-  # test-tony-app creates widgets (offscreen) and links svgui and svapp.
+  # Tony's own tests. Two executables here, because they differ in cost
+  # and in what they link: test-tony-core needs no GUI and no audio
+  # device; test-tony-app creates widgets (offscreen) and links svgui and
+  # svapp. The dev checks' test-tony-dev is a third, below.
 
   tony_core_test_moc_files = qt.preprocess(
     moc_headers: [

@@ -6,13 +6,20 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 
 | Directory | Fork branch | Why it is forked |
 | --- | --- | --- |
-| `svcore/` | `jhhr/svcore` `tony-customizations` | Qt 6.11 build fixes only. No behaviour change. |
+| `svcore/` | `jhhr/svcore` `tony-customizations` | Qt 6.11 build fixes, and one of its own tests made to pass on macOS. No behaviour change. |
 | `svgui/` | `jhhr/svgui` `tony-customizations` | See below. |
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
 | `bqaudioio/` | `jhhr/bqaudioio` `tony-customizations` | See below. Upstream is Mercurial on sourcehut; the fork started from its GitHub mirror. |
 
 `pyin/` and the rest are upstream and must stay untouched.
+
+Every fork's branch for Tony is `tony-customizations` (bqaudiostream, which has no such
+branch, stays on `master`), and `repoint-lock.json` pins their heads. The fork branches
+made for Tony's feature branches are merged there: svgui's `feat/tonyandroid` (the plot
+scale, the record frame ratio, the lyrics' text scale) and svapp's and bqaudioio's
+`feat/wasapi` (the stream kept running, the drivers). A checkout left on one of those is
+not what the lock file names: move it to `tony-customizations`.
 
 ## Changing a fork
 
@@ -90,7 +97,9 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `SVFileReader` restores the `start` attribute of wave file models (upstream wrote it and
   never read it). Only older `.ton` files need it now.
 - `MainWindowBase::suspendAudioOnStop()`, a virtual that `stop()` asks before it suspends
-  the device: Tony's is false on desktop, so the stream runs on between takes
+  the device, true by default as upstream behaves: Tony's is false on every platform, so
+  the stream runs on between takes, and Tony suspends it itself once it has idled (on
+  Android) or when Android sends it to the background
   ([recording.md](recording.md#latency)).
 
 ### svgui
@@ -100,9 +109,10 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
 - `ViewManager::setRecordStartFrame()` / `getRecordStartFrame()`: while recording, the
   playback frame is this plus the recorded duration, not the duration alone. Without it a
   take recorded at P > 0 showed the cursor crawling from frame 0 and the pane scrolling
-  away from the dots. `setRecordFrameRatio()` scales the
-  duration, which the record target counts in the device's frames, to the timeline's: a
-  phone at 48 kHz against a reference at 44.1 kHz.
+  away from the dots. `setRecordFrameRatio()` scales the duration, which the record
+  target counts in the device's frames, to the timeline's: a phone at 48 kHz against a
+  reference at 44.1 kHz. svcore's record target has no rate, so the application gives the
+  ratio once the recording has started; the default of 1 changes nothing.
 - `RegionLayer::PlotStrip` plot style: the coverage strip. Saved through the existing
   `plotStyle` attribute.
 - `RegionLayer::PlotLyrics` plot style, after `PlotStrip` so saved numbers keep their
@@ -173,13 +183,17 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   layers at the whole pixel ratio (3 on a phone at 2.75), but `TimeValueLayer`'s points
   (2 px high) and `FlexiNoteLayer`'s notes (`NOTE_HEIGHT`) were sized in those physical
   pixels and pens scaled by only the square root of the ratio, so on a phone pitch and
-  notes were a third of their size. Now
-  `LayerGeometryProvider::scalePlotSize()` (logical px x ratio x plot scale, no font factor:
-  unchanged at ratio 1 and scale 1) sizes them, the notes' hit areas use it too, and
-  `ViewProxy::scalePenWidth()` scales by the whole ratio and the plot scale.
-  `ViewManager::setPlotScale()` / `plotScaleChanged()` is Tony's View > Plot Size; each
-  view drops its cache on a change. On a hi-DPI desktop (ratio 2) this doubles points and
-  notes, and thickens the pens of every layer drawn through a `ViewProxy`.
+  notes were a third of their size. Now `LayerGeometryProvider::scalePlotSize()` (logical
+  px x ratio x plot scale, no font factor: unchanged at ratio 1 and scale 1) sizes them,
+  the notes' hit areas use it too, and `ViewProxy::scalePenWidth()` scales by the whole
+  ratio and the plot scale. `ViewManager::setPlotScale()` / `plotScaleChanged()` is Tony's
+  View > Plot Size; each view drops its cache on a change. At ratio 1 and scale 1 a pane
+  drew exactly as before. On a hi-DPI desktop (ratio 2) this doubles points and notes, and
+  thickens the pens of every layer drawn through a `ViewProxy`. Not sized by it: the
+  coverage strip and the lyrics (`scalePixelSize()`, which follows the font; the lyrics
+  have a size of their own), and the waveform, spectrogram and time ruler, whose lines
+  stay one physical pixel. A pen wider than a pixel leaves Qt's fast path: at ratio 1,
+  150 % and 200 % double the pitch track's paint time.
 
 ### bqaudioio
 
@@ -199,7 +213,10 @@ The driver project ([audio-drivers.md](audio-drivers.md)), on the fork branch
   for, for the streams opened after; 0.2 s, upstream's fixed figure, when unset.
 
 Only the Windows cross-compile (MinGW-w64 against PortAudio 19.7.0's headers) and the
-user's PC see the Windows part; Linux builds none of it.
+user's PC see the Windows part; Linux builds none of it. The Android build has no
+bqaudioio backend at all: its device is Tony's own `OboeAudioIO`, a `SystemAudioIO` as
+bqaudioio's are, installed by `MainWindow::createAudioIO()`, so the port needed no change
+here.
 
 A `bqaudioio/` cloned from the mirror before the fork was pinned does not have the pin:
 `git remote add jhhr https://github.com/jhhr/bqaudioio`, `git fetch jhhr`, then
@@ -223,8 +240,18 @@ does the equivalent by itself in a cloud session.
   crash of `test-tony-app` in the fill thread, in a sharded run whose processes shared
   their settings; not seen otherwise.
 
-## Changes that would tidy Tony up but were not made
+## Changes considered but not made
 
+- svgui's `SpectrogramLayer` keeps its display range in whole Hz (`int`, rounded in
+  `setDisplayExtents()`), and Tony's vertical zoom is that range: near its narrowest it
+  moves in steps, up to about 12 px at a major third about 110 Hz in a 300 px pane.
+  `double` bounds, no rounding there, and `toDouble()` in `setProperties()` would smooth
+  it.
+- svgui's `TimeValueLayer::paint()` works out for every point what could be worked out
+  once a paint (`getModelsEndFrame()`, font metrics, a pen and a brush): about 10 µs a
+  dot on the cloud machine. On a core four or five times slower, the play pointer's
+  strip paints during a take would take half of it or more, by that machine's figures;
+  they coalesce, so that means fewer frames, not a lag.
 - `Document::setModelSource()` (or any way to set or clear a derivation record) would
   replace `MainWindow::adoptTakeLayers()` setting source models by hand.
 - A hook in `MainWindowBase::toXml()` would save `MainWindow::toXml()` buffering the whole

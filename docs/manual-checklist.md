@@ -49,6 +49,24 @@ file, and compares the take before and after each punch-in.
    data folder (`%APPDATA%\sonic-visualiser\Tony` on Windows). The test session is saved
    beside it in a `dev-checks-<n>` folder and left open, to be looked at and played.
 
+**On the phone** (every APK is a development build), the same with these differences:
+
+- There are no device menus: Tony uses whatever route the phone has, and Calibrate Audio
+  keeps a figure for each. Plug in what you will sing with first; the first page names
+  the route once a file is open.
+- The loop: wired headphones with one earcup held to the phone's microphone (usually at
+  its bottom edge), off your ears; with Bluetooth earphones, an earbud held there; with
+  nothing plugged in, the phone's own speaker and microphone, lying in a quiet room. A
+  headset with a microphone of its own records from that microphone: hold the earcup to
+  it.
+- Allow the microphone when asked. The screen stays on while the run lasts; do not leave
+  Tony meanwhile (the power key, a call, another app), which ends the run wrongly.
+- While it runs the dialog shrinks to a bar in the status bar; a tap on it opens the
+  progress page again, with Cancel.
+- `DevChecks.txt` cannot be reached on a phone: **Save Report...** on the result page saves
+  the result and the dev checks' report through the file picker (**Copy** takes them too),
+  and **Help > Save Log...** saves the log. Send both.
+
 The report's header names the devices, the driver and the latency asked of it, the audio
 drivers built in, the playback and record latencies the device reports, and the round trip
 used. Then, item by item:
@@ -306,6 +324,81 @@ Not tried yet.
     export made with the exporter's default offset, -0.2 the other way): the words move
     by that much, the status bar says how far and which way, and an Export writes the
     shifted times. Is the dialog's wording clear about which sign is earlier?
+
+## 6. On the phone (Android)
+
+The APK is installed as the top-level README's "On Android" says. **Help > Save Log...**
+saves Tony's log, to send with anything that went wrong: its first line names the build.
+The design is in [port-android.md](port-android.md) and
+[mobile-port.md](mobile-port.md).
+
+**Tried** on the user's Pixel 9a, 2026-09-26 and 2026-09-27, with the APK of the day:
+
+- Opening, analysis and playback: a WAV, an M4A, and a desktop session in a folder a sync
+  app keeps on the phone, which found its reference beside it; pitch track and notes
+  drawn; playback stops when Tony goes into the background.
+- The All files access prompt, and Save Session As with a suggested name.
+- Menus scrolled by a finger; pinch zoom and two-finger scrolling in time, and the zoom of
+  the pitch range.
+- Live dots in real time and in their place during a take, with the reference in time;
+  the cursor keeping to the take on the phone's 48 kHz device.
+- Plot Size at 150 %: pitch and notes easier to see.
+- Help > Save Log... and the result page's Save Report..., to Google Drive and the phone's
+  Music folder: whole files (the report's log line "wrote the report, 9809 bytes ... its
+  provider says the document holds 9809 bytes").
+- Calibrate Audio and dev runs through Bluetooth (earphones on A2DP out, the phone's
+  microphone in, an earbud held to it): the calibration steady at 276 ms. With the stream
+  kept running between takes, the calibration's punch-ins lay within 0.5 ms and every
+  placement check passed; item 3 failed on dots an octave under the tones, which the live
+  tracker now drops. Across that run the takes drifted by about 1 ms a minute.
+- The song scroll bar: the user judged its size right.
+
+**Not tried yet**:
+
+1. **A dev run with the octave slips dropped**: item 3 through Bluetooth, and the rest as
+   before.
+2. **A take of ten minutes or more through Bluetooth**, placed against the reference at
+   its start and at its end: does the drift of about 1 ms a minute go on growing, or
+   correct itself?
+3. **Other routes**: wired or USB headphones with the phone's microphone, and the phone's
+   own speaker and microphone in a quiet room. Calibrate Audio keeps a figure for each
+   route: the Playback menu's latency line changes with the route, and each figure places
+   its takes.
+4. **Headphones plugged in or out** during playback and during a take: the take is kept as
+   Stop keeps it, and the next Play or Record works on the new route.
+5. **The background and the idle suspend**: go to the home screen during a take (the take
+   is kept), with a changed session that has a file (it is saved: the log says
+   "saveWhenSuspended: saving"), and with a session that loaded incomplete (not saved);
+   come back, and Play and Record work. After a take and then two minutes of neither
+   playing nor recording, the phone's microphone indicator goes off, and the next Play or
+   Record starts again.
+6. **Files from other places**: audio from Google Drive (copied in), a session from Drive
+   (refused, with a message naming the app it came from), a file from Downloads and from
+   the picker's Recent and Audio, a name with parentheses, and Open Recent after a file
+   has moved.
+7. **Lyrics Size at 50 %**, the default on Android: the words over the take, at least a
+   verse on screen and still readable. The first smaller size (65 %) was not small
+   enough.
+8. **An M4A reference of a desktop session**: the log's "decoded N frames" for it against
+   the length the desktop gives it (the user's session with an M4A reference has 9352192
+   frames from Windows, a whole number of AAC frames). If they differ, the session's pitch
+   is out of line with the reference on one of them.
+9. **The Calibrate Audio dialog** on the phone's screen: every page fits with its buttons
+   on screen, the texts scroll by a finger, the indicator in the status bar expands on a
+   tap, and Make Small collapses it again. Used in the dev runs, but not reported on.
+10. **The other dialogs**: the take name, message boxes, Edit Display Extents and the
+    lyrics' dialogs should fit; What's New and About (at a large font) do not, and the Key
+    and Mouse Reference is placed by Qt. Which of these matter on a phone?
+11. **By finger**: the take box in the toolbar, the long-press menu (it waits for a tap),
+    a selection dragged in the ruler strip, and the song scroll bar's thumb when it is at
+    its narrowest (16 dp: a press just beside it centres the panes there instead of
+    grabbing it).
+12. **A take longer than the phone's screen timeout**: nothing keeps the screen on outside
+    a check, and a screen that goes off ends the take as Stop does. Does that get in the
+    way in use?
+
+A Windows touch screen has not been tried either: Windows makes its own mouse events from
+touches, and its own right click from a press and hold.
 
 The questions the automated checks raised, and the facts they established for the
 decisions above, are in [open-points.md](open-points.md).

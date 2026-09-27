@@ -11,7 +11,7 @@
 #   COPYING included with this distribution for more information.
 #
 # Makes a fresh Ubuntu 24.04 cloud container able to build Tony and run
-# both test suites: installs the apt packages and Qt, checks out the
+# its test suites: installs the apt packages and Qt, checks out the
 # library directories at the revisions pinned in repoint-lock.json, and
 # configures build/ with meson.
 #
@@ -23,12 +23,12 @@
 # sv-dependency-builds is skipped: only the macOS and Windows branches
 # of meson.build use it.
 #
-# Qt is conda-forge's qt6-main, not Ubuntu's Qt 6.4. Tony builds with
-# 6.4, but its analysis never completes there: Analyser connects by
-# SIGNAL()/SLOT() strings naming ModelId and sv_frame_t to slots that
-# moc records as sv::ModelId and sv::sv_frame_t, and only Qt 6.5 and
-# later match those by their registered metatypes rather than by name.
-# The development machine and the Android build use Qt 6.11.
+# Qt is conda-forge's qt6-main, the 6.11 of the development machine and
+# the Android build, not Ubuntu's Qt 6.4: 6.4 does not match a SIGNAL()/
+# SLOT() string naming ModelId or sv_frame_t against a slot moc recorded
+# as taking sv::ModelId or sv::sv_frame_t, so such a connection fails
+# silently there and works on the development machine
+# (docs/building.md).
 #
 # Safe to run again. Packages already installed, a Qt of the right
 # version and libraries already at their pins are left alone, and a
@@ -37,8 +37,9 @@
 # Usage, from anywhere:
 #   deploy/linux/container-setup.sh           set up and configure build/
 #   deploy/linux/container-setup.sh --build   the same, then build Tony,
-#                                             the pYIN plugin and both
-#                                             test executables
+#                                             the pYIN plugin and the
+#                                             core and app test
+#                                             executables
 
 set -eu -o pipefail
 

@@ -1,8 +1,10 @@
 # Sailfish OS port: findings and first steps
 
-Researched 2026-09-25; nothing built. Read [mobile-port.md](mobile-port.md) first: it has
-the decisions, the facts about Tony's own code that any port depends on, and the work
-common to both platforms.
+Researched 2026-09-25; nothing built for Sailfish OS, since Android was chosen. Read
+[mobile-port.md](mobile-port.md) first: it has the decisions, the facts about Tony's own
+code that any port depends on, and what was built for Android that a port here would
+share (the compact layout, touch, plot and lyrics sizes, the song scroll bar, a device at
+any rate, Calibrate Audio).
 
 The research proxy blocked forum.sailfishos.org, docs.sailfishos.org, jolla.com,
 openrepos.net and build.sailfishos.org. The facts below come from Sailfish's source
@@ -86,8 +88,8 @@ source. *(snippet)* marks a fact seen only in search results.
   Tony's Linux build already. What it does is described in
   [mobile-port.md](mobile-port.md#audio-io).
 - It asks PulseAudio for 44.1 kHz, the rate Tony's models run at, and PulseAudio resamples
-  to the hardware. The sample-rate question in
-  [mobile-port.md](mobile-port.md#sample-rate) is therefore probably moot here.
+  to the hardware. Tony handles a device at any rate in any case
+  ([mobile-port.md](mobile-port.md#sample-rate)).
 - **Routing** (`xpolicy.conf` in `mer-hybris/droid-hal-configs`):
   - Ordinary media and app streams go to the **"media_latency" sink**. That is the
     deep-buffer output when the HAL has one, otherwise the primary.
@@ -100,10 +102,11 @@ source. *(snippet)* marks a fact seen only in search results.
   - `pa_stream_get_latency()` therefore returns the HAL's figure, not a measurement.
   - No published round-trip figures for any Sailfish device were found. Expect to
     calibrate on the device.
-  - Possible levers, all untried:
+  - Possible levers, all untried on Sailfish:
     - buffer attributes and `PA_STREAM_ADJUST_LATENCY` in a bqaudioio fork;
     - a stream role that the policy routes to the low-latency sink;
-    - Tony's missing latency calibration setting.
+    - Calibrate Audio, which measures the round trip and keeps it for the driver and
+      devices ([calibrate-audio.md](calibrate-audio.md)).
 - **Microphone:** the Sailjail `Microphone` permission includes `Audio` ("playback and
   record streams cannot be separated on pulseaudio"). `libpulse` is on Harbour's allowed
   list.
@@ -223,11 +226,11 @@ source. *(snippet)* marks a fact seen only in search results.
 | --- | --- | --- |
 | RPM spec with meson, the six missing libraries, and a Sailfish branch in `meson.build` | Medium | Build engine on the Windows machine through Docker, or in CI |
 | `.desktop` file with `[X-Sailjail]`, and a launcher that sets the Qt 6 environment | Small | Model: `sailfishos-chum/neochat` and `qt6-sailfishos-util` |
-| Qt 6 on 6.8.4 | Unknown | Tony has only been built with 6.11 |
-| Audio | None to medium | The backend exists; latency may need buffer settings (a bqaudioio fork) or calibration |
+| Qt 6 on 6.8.4 | Unknown | Tony has been built with 6.4 and 6.11, not 6.8 |
+| Audio | None to medium | The backend exists; latency may need buffer settings (a bqaudioio fork), or Calibrate Audio's figure |
 | Dialogs that suit a maximised, undecorated window | Unknown | Depends on how the test port looks |
-| Compact touch mode and gestures | Medium to large | Common to both ports, plus the edge-swipe check |
-| Sample-rate check, latency calibration | Small each | Common to both ports |
+| Compact layout, gestures, menus kept on screen | Small | Built for Android; `--compact` starts it elsewhere, but the touch menu style and the phone's defaults for plot and lyrics size are Android's only (`#ifdef Q_OS_ANDROID`). Plus the edge-swipe check |
+| A device at any rate, latency calibration | None | Built |
 
 ## Test port
 
@@ -245,17 +248,18 @@ reported.
 3. **Without audio first** (`--no-audio` on the launcher's command line):
    - open a WAV from `~/Music`, analyse it, see the pitch track;
    - pan with one finger, drag a selection in the ruler strip;
-   - open the menus, trigger a message box and the preferences dialog;
+   - open the menus, trigger a message box and a dialog (Calibrate Audio's; Tony has no
+     preferences dialog);
    - check the scaling.
 4. **With audio**:
    - play the reference;
-   - do the clap test (manual checklist item 1) with a USB-C headset on the Jolla Phone,
-     or wired on the C2;
+   - run Calibrate Audio with the dev checks ([manual checklist](manual-checklist.md),
+     section 1) with a USB-C headset on the Jolla Phone, or wired on the C2;
    - read what latency PulseAudio reports (bqaudioio logs it: "playback latency = ... usec",
-     "record latency = ...") and compare it with where the claps land.
+     "record latency = ...") and compare it with the round trip Calibrate Audio measures.
 
 If the windows are unusable, stop; nothing in Tony fixes lipstick. If only the latency is
-wrong, the fix is buffer settings or the calibration setting.
+wrong, the fix is buffer settings or Calibrate Audio's figure.
 
 ## Unconfirmed
 

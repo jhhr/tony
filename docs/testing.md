@@ -6,9 +6,9 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestLatencyShift`, `TestCoverage`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
-| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`. | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestRecordWorkflow`, `TestUiChecks`, `TestAudioCheck` | about 12 minutes on Windows; on Linux about 10 in one process, a minute and a half in eight (measured 2026-09-26), nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`: takes are recorded in real time |
-| `test-tony-dev` | as `test-tony-app`; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 7.5 minutes in one process, under two in eight (2026-09-26, Linux): each test records a dev run's takes, or part of them, in real time |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`, and Tony's icons (`tony.qrc`: without them every toolbar button is as wide as its text, and `TestCompactLayout` needs the real sizes). | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestPlotSize`, `TestRecordWorkflow`, `TestTouchGestures`, `TestUiChecks`, `TestCompactLayout`, `TestTouchMenuStyle`, `TestAudioCheck` | on Linux about 10.5 minutes in one process, under two in eight; on Windows about 12 in one process, measured before the touch and compact-layout suites came. Nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`, then `TestTouchGestures`: takes are recorded in real time |
+| `test-tony-dev` | as `test-tony-app`, without the icons; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 7.5 minutes in one process, two in eight (Linux): each test records a dev run's takes, or part of them, in real time |
 
 `meson test` / `build.bat test` runs these three (`test-tony-dev` where it is built) plus
 four svcore suites. No suite uses the
@@ -19,10 +19,11 @@ it when a change touches what the development checks drive (see
 [AGENTS.md](../AGENTS.md)).
 
 - The `tony-app` and `tony-dev` meson tests have `timeout: 900`; the app suite took about
-  277 s unloaded when that was set, and about 550 s on Linux on 2026-09-26. Every workflow
-  test adds real time, so if a suite comes near it, raise it in `meson.build`: `meson test`
-  reports a timeout even when every test passes. Running the executable by hand has no
-  timeout.
+  277 s unloaded when that was set. On 2026-09-26 it took 628 s on Linux and 743 s on
+  Windows, the Windows run before the touch and compact-layout suites came, which add about
+  half a minute: near the limit there. Every workflow test adds real time, so if a suite
+  comes near it, raise it in `meson.build`: `meson test` reports a timeout even when every
+  test passes. Running the executable by hand has no timeout.
 - `main()` of the app and dev suites replaces `VAMP_PATH` with the executable's directory,
   so an installed pYIN is never the one tested; their meson tests `depends:` on
   `pyin_plugin` because nothing else builds `pyin.dll`. Build `pyin.dll` (`pyin.so` on
@@ -38,16 +39,19 @@ it when a change touches what the development checks drive (see
 
 Suites are header-only classes (`TestX.h`). A new suite needs: the header, an `#include`
 and a `runSuite()` block in `tony-core-test.cpp` or `tony-app-test.cpp`, and the header in
-the matching `*_test_moc_files` list in `meson.build`. `tony-dev-test.cpp` runs
-`TestDevChecks` alone, and its moc list is inside meson's `if dev_checks` with the
-`TONY_DEV_CHECKS` define for moc. A new test function in an existing
+the matching moc list in `meson.build` (`tony_core_test_moc_files`,
+`tony_app_test_moc_headers`). The tests are built for the desktop only, never for
+Android, but for every desktop: a test's names must not be Windows' macros (`near`, `far`
+and the rest: [building.md](building.md#what-is-particular-about-this-mesonbuild)).
+`tony-dev-test.cpp` runs `TestDevChecks` alone, and its moc list is inside meson's `if
+dev_checks` with the `TONY_DEV_CHECKS` define for moc. A new test function in an existing
 suite needs nothing but itself (a private slot). **Every private slot runs as a test**, so
 helpers must not be slots; connect to lambdas instead. For access to private statics use
 `friend class TestX;`, as `RealtimePitchTracker.h` does.
 
 Suites find the files in `testdata/` through `TONY_TEST_DATA_DIR`, which `meson.build`
-defines for both test executables as a path with forward slashes: the backslash of a
-Windows path would start an escape in the C string.
+defines for the core and app executables (not the dev one) as a path with forward
+slashes: the backslash of a Windows path would start an escape in the C string.
 
 ## Running
 
@@ -84,7 +88,14 @@ Windows path would start an escape in the C string.
   processes (the tracker itself 313 and 325 ms behind the cursor, over the test's 300 ms)
   and passed with `-j 4`. Judge a failure of it there by running it alone. So too the dev
   checks' item 14, whose allowance is one look of the take timer: in eight processes a
-  take once stopped 0.400 s past its selection against 0.385 s allowed, and passed alone.
+  take once stopped 0.400 s past its selection against 0.385 s allowed, and passed alone;
+  and `stale_pitch_event_ignored`, which once failed at `QVERIFY(model)` in eight
+  processes and passed alone and in the next run.
+- **Under that load a stopwatch must start before the call that starts the application's
+  clock**, not after it returns. Stop splices the take before it returns, after the idle
+  time before a suspend has started: timed from Stop's return, a device suspended on time
+  looked early (`a_kept_running_device_is_suspended_once_idle`, now timed from before
+  Stop).
 - **On Linux no test is expected to fail** in a one-process run, with Ubuntu's Qt 6.4 as
   with conda-forge's 6.11 ([building.md](building.md#building-on-linux)). `TestTakesFile`
   checks Windows paths (`C:\...`, case-insensitive) on Windows only, and the tests that
@@ -103,12 +114,14 @@ Windows path would start an escape in the C string.
   `openWindow()` moves the mouse away first on that Qt; a new suite that touches needs
   the same.
 - CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
-  suite at a time. When a run fails, its `test-failures` step lists each failed test with
-  the lines QTest indents under it, from meson's full log.
+  suite at a time; the Android job runs none. When a run fails, its `test-failures` step
+  lists each failed test with the lines QTest indents under it, from meson's full log.
 - **CI's macOS runs timers and sleeps late**: a 20 ms `QTimer` fired every 60 to 67 ms and
   a 5.8 ms sleep took about 30. A test that needs something to have happened a number of
   times waits for it (`QTRY_*`), and one that checks what was timed checks it against its
-  own clock, not against the interval asked for.
+  own clock, not against the interval asked for. One that checks what a pane's own timer
+  drew runs a timer of its own at the same interval, and allows as much more as that one
+  is late (`live_dots_under_the_cursor`, for the play pointer).
 
 ## Design principles
 
@@ -134,13 +147,18 @@ Windows path would start an escape in the C string.
 ## What is there to reuse (`TestRecordWorkflow.h`, `TestMainWindow.h`)
 
 - `FakeAudioIO` (`FakeAudioIO.h`): a duplex device with a worker thread that runs the
-  callback in real time, input first and then output, as PortAudio and JACK do. `Config`
-  sets rate, block size, reported latencies, a programmed mono input, its delay, and
-  whether the input clock starts at the first audible output sample ("a singer exactly on
-  time"), `loopback` (the output, the mean of its channels, fed back into the input
-  `inputDelay` frames late, as speakers into a microphone), `echoDelay` / `echoGain` (a
-  second arrival of the loopback, as an input played back out and heard again),
-  `inputChannel` (the input on one channel only, as a microphone on input 2),
+  callback in real time, input first and then output, as PortAudio, JACK and Oboe do.
+  `Config` sets rate, block size, channels, `inputChannels` (fewer inputs than outputs, as
+  a phone records one and plays two), reported latencies, `recordLatencyStep` (added to
+  the reported record latency at each resume after the first, as Oboe measures its
+  latencies anew at each start, while the input's real delay stays put), `route` (the
+  route reported, as `OboeAudioIO` reports the one Android opened), a programmed mono
+  input, its delay, and whether the input clock starts at the first audible output sample
+  ("a singer exactly on time"), `loopback` (the output, the mean of its channels, fed
+  back into the input `inputDelay` frames late, as speakers into a microphone),
+  `echoDelay` / `echoGain` (a second arrival of the loopback, as an input played back out
+  and heard again), `inputChannel` (the input on one channel only, as a microphone on
+  input 2), `humHz` / `humGain` (a steady sine under everything, as a room's fans),
   `reportLevels` (the peaks of each block, as `PortAudioIO` reports them for the meters),
   `restartShift` (the loopback moved that many frames at each resume after the first:
   early, late, on time, and again, as a real stream's input moves against its output at
@@ -165,17 +183,24 @@ Windows path would start an escape in the C string.
   application's way calls `keepAudioRunning(true)`; `applicationSuspendsAudioOnStop()`
   gives what `MainWindow` itself chooses. Nor does it suspend a device that idles, unless
   a test sets an idle time (`setAudioIdleSuspendMillis()`;
-  `applicationAudioIdleSuspendMillis()` is the application's). It **answers dialogs through virtual seams**: `confirmRecordingOverTake()`,
-  `confirmDeleteTake()`, `askForTakeName()`, `askForLyricsFile()`,
-  `askForLyricsExportFile()` (which also keeps
-  the path it was offered), each with a `set...Answer()` and a counter of questions asked.
-  `askForLyricsWordText()` takes a queue of answers (`answerWordText()`,
+  `applicationAudioIdleSuspendMillis()` is the application's). `setFakeRoute()` changes
+  the route the fake reports and opens the device again, as a phone does when its route
+  changes; `setLiveDotsDelay()` makes the GUI thread that much slower each time the live
+  dots are handed to it, as a phone's is. It **answers dialogs through virtual seams**:
+  `confirmRecordingOverTake()`, `confirmDeleteTake()`, `askForTakeName()`,
+  `askToSaveIncompleteSession()`, `getSaveFileName()` (Save As's file; the real dialog
+  when no answer is set), `askForLyricsFile()`, `askForLyricsExportFile()` (which also
+  keeps the path it was offered), each with a `set...Answer()` and most with a counter of
+  questions asked. `askForLyricsWordText()` takes a queue of answers (`answerWordText()`,
   `cancelWordText()`; none left is Cancel) and can run something while the question is
   open (`whileAskingWordText()`), as a real dialog's event loop lets anything happen.
   `askForLyricsShift()` is answered the same way (`answerLyricsShift()`,
-  `cancelLyricsShift()`, `whileAskingLyricsShift()`).
-  Anything new that asks the user needs such a virtual. `setRecordOverAskedInDialog()`
-  lets the real dialog through instead, for a test that presses its buttons.
+  `cancelLyricsShift()`, `whileAskingLyricsShift()`). Anything new that asks the user
+  needs such a virtual. `setRecordOverAskedInDialog()` lets the real dialog through
+  instead, for a test that presses its buttons.
+- `TestTouchGestures` and `TestCompactLayout` have `MainWindow` subclasses of their own,
+  on show at a size of their own (see "The phone on the desktop"); `TestPlotSize`,
+  `TestViewCache` and `TestLyricsLayer` paint panes or layers with no `MainWindow`.
 - Fixture helpers: `makeWindow(config)`, `writeWav()`, `openReference()`, `startTake()` /
   `stopTake()` / `take(ms)`, `verifyPlaySourceClean()`, `layersOnModel()`,
   `paneHasLayer()`, `documentHasLayer()`, `reopenAsSession()` / `reopenSession()`,
@@ -287,7 +312,18 @@ it first, or break the code for a moment (mark the line `MUTATION`, and check
   paths, which are both empty when neither file exists.
 - **Test tones need a whole number of samples per period** (220.5 Hz = 200 samples,
   294 Hz = 150, at 44.1 kHz). Otherwise pYIN reports a subharmonic: 220, 330 and 440 Hz all
-  came out as 110 Hz.
+  came out as 110 Hz. That is at the rate pYIN is given, which for a take is the
+  reference's: a take sung at 48 kHz uses the same two pitches, as sines (a sawtooth made
+  at 48 kHz aliases into partials that are not harmonics, and those whole at both rates
+  came out an octave low after a step, or not, as the step fell between frames). Even
+  whole, **a tone that repeats exactly** repeats at two and three periods as exactly as at
+  one, pYIN weighs those alike, and it took some for a subharmonic (294 Hz as 73.5): a
+  slight vibrato, as Calibrate Audio's tones have, leaves the period the best match.
+- **A repaint from elsewhere can hide a missing connection.** The song scroll bar's
+  contour, rebuilt late, repainted the strip and so hid that it was never told of the
+  playback frame, until the test first waited for the rebuild
+  (`SongScrollBar::isContourPending()`). Let what is pending settle before checking that
+  a signal repaints.
 - `MainWindowBase::m_timeRulerLayer` is set only by a `.ton` load. Bugs about the ruler or
   pane pruning show only in the `_after_session` variants; the plain-wav tests passed
   against the broken code.
@@ -449,6 +485,58 @@ adding to them:
   build, where it is the only test of the button.
 - **No device, and a dead one.** `makeWindow(config, false)` makes a window with no audio
   device at all; `neverCallsBack` a device that opens and delivers nothing.
+
+## The phone on the desktop
+
+The suites run on the desktop only. What only Android has cannot run here:
+`OboeAudioIO`, `AndroidStorage` (the picker's documents, All files access, MediaStore),
+`AndroidScreen`, `AndroidMediaReadStream` (the phone's decoders), and the `Q_OS_ANDROID`
+parts of `MainWindow` and `main.cpp` (the microphone permission, what happens when Tony
+goes to the background, the log kept from logcat, the plugins' links). The port covered
+them in three ways:
+
+- **Their arithmetic and rules are pure functions in `tony_core`, with core suites**, so
+  that what is left in the Android-only classes is calls into Android: `StreamLatency`
+  (Oboe's latencies from its timestamps, how much input a callback reads, which readings
+  are refused), `AndroidFiles` (a picked URI to a path, names, the size a provider
+  reports), `DecodedPcm` (the decoders' samples to float), `LogFile`, `PopupArea` (popups
+  clear of a phone's bars and edges), and the route's key and staleness rule in
+  `TestLatencyCalibration`.
+- **What the phone needs but Android does not provide is built for every platform** and
+  tested here: the touch gestures (`TestTouchGestures`), the compact layout and the song
+  scroll bar (`TestCompactLayout`), the touch menu style (`TestTouchMenuStyle`), the plot
+  size (`TestPlotSize`), Calibrate Audio's dialog in a phone's window
+  (`calibrate_audio_fits_a_phone`).
+- **The fake plays the phone's device**: at 48 kHz (the `..._at_48000` tests), one input
+  and two outputs, a route, reported latencies that move at each start, the stream kept
+  running and suspended once idle; and the window a phone's slow GUI thread
+  (`live_dots_keep_up_with_a_slow_gui`). `calibrate_audio_on_a_phone` and
+  `dev_checks_on_a_phone` put these together.
+
+The rest is judged on the phone, from its log ([manual-checklist.md](manual-checklist.md)).
+Not tested anywhere but there: Oboe itself, the picker and the storage grants, the
+decoders, the suspend when Tony goes to the background, the screen kept on during a check.
+
+What these tests need:
+
+- **Touch needs a window on show**, since Qt looks for the widget under a touch only among
+  widgets on show, **and a touch device of its own for each test**: fingers that a failed
+  test left down stay down on its device. `QTest::touchEvent()` goes in where a platform's
+  touch does, so Qt makes mouse events of it as it does on a phone. Qt 6.4's double click
+  needs clearing first (see "Running").
+- **A phone's size.** The phone's window in landscape is 923 x 411 logical pixels, 817 x
+  387 of it clear of the system bars; the offscreen platform has no bars, so a test that
+  wants the clear part makes the window that size. `TestCompactLayout` shows its window at
+  900 x 400. Sizes at a phone's pixel ratio (3) are judged in images painted through a
+  `ViewProxy` at that ratio (`TestPlotSize`), not by scaling the platform.
+- **A screen Android draws itself** (the picker, the settings page for All files access) is
+  not a modal widget of Qt's, and `QApplication::activeModalWidget()` misses it: on the
+  phone only the event loop Tony runs while it is up shows it. `dev_checks_see_a_dialog_qt_does_not_draw` makes
+  such a loop with nothing on screen.
+- **To look at the phone's layout on the desktop**, start the desktop build with
+  `--compact` and `QT_SCALE_FACTOR=3` in a window of about the phone's logical size: the
+  panes then paint at the phone's pixel ratio, which is also how its painting costs were
+  measured here.
 
 ## What stays manual
 
