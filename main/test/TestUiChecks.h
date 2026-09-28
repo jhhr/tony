@@ -754,6 +754,53 @@ private slots:
         QCOMPARE(m_window->statusText(), status);
     }
 
+    // Space ends a take as Record does, and the cursor is back at the
+    // take's position and on show, however far the pane followed the
+    // take: Play then hears what was sung, and Record records the same
+    // part again.  With the reference playing for the take, whose
+    // playback went back there with the cursor and played on from there
+    // after Stop, leaving the cursor past the position
+    void space_ends_a_take_back_at_its_position() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 6.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(tone(lowHz, 8.0)));
+        if (QTest::currentTestFailed()) return;
+
+        // A page of about two seconds, which the take runs off
+        const sv::sv_frame_t P = frames(1.0);
+        showSeconds(0.5, 2.5);
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        sv::Pane *pane = pane0();
+        QTRY_VERIFY_WITH_TIMEOUT(pane->getStartFrame() > P, 5000);
+
+        press(QKeySequence(Qt::Key_Space));
+        QVERIFY2(!m_window->recordTarget()->isRecording(),
+                 "Space did not stop the take");
+        QVERIFY2(!m_window->playSource()->isPlaying(),
+                 "the reference plays on after Space stopped the take");
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        QCOMPARE(m_window->playbackFrame(), P);
+        QVERIFY2(pane->getStartFrame() <= P && P < pane->getEndFrame(),
+                 qPrintable(QString("the take's position, frame %1, is off "
+                                    "the page [%2,%3)")
+                            .arg(P).arg(pane->getStartFrame())
+                            .arg(pane->getEndFrame())));
+        QImage image = grabPane();
+        int x = pointerX(image);
+        int want = pane->getXForFrame(P);
+        QVERIFY2(std::abs(x - want) <= 2,
+                 qPrintable(QString("the pointer is drawn at x = %1, the "
+                                    "take's position is at x = %2")
+                            .arg(x).arg(want)));
+        saveShot("stopped", image);
+    }
+
     // Checklist: recording over singing that is there, that take's own
     // pitch track and notes are out of sight for the take, so only the
     // dots are drawn, and they are back when the take stops

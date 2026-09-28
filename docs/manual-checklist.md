@@ -199,7 +199,9 @@ Not tried yet.
    nothing harmful, and the next file opened is analysed as usual.
 2. **The practice loop**, the one this is all for: select, Record, hear the lead-in, sing,
    and be back with nothing to press; Play hears it, and it sits in time by ear. Is
-   anything else needed to make repeating that pleasant?
+   anything else needed to make repeating that pleasant? Stopped by hand, with Space or
+   with Record, after a take of a minute or more with the reference playing: nothing is
+   heard after Stop, and the cursor is back where the take started, on show.
 3. **Is a 3 s pre-roll right, and is the countdown readable while singing?** (QSettings
    `MainWindow/prerollseconds`; there is deliberately no UI yet.)
 4. **Looks**, from the screenshots (`TONY_TEST_SHOT_DIR=../tmp/shots` on a run of
