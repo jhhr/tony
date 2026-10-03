@@ -263,6 +263,79 @@ reference's: the recording is at the device's rate. A desktop device whose defau
   checks on a 48 kHz fake land every sweep +1.0 to +1.1 ms, calibrate-audio.md). A round
   trip measured by Calibrate Audio includes it; the reported pair does not.
 
+## Input channels
+
+What a take is made of when the microphone is on one input of an interface with two (a
+headset on input 1 of a two-input USB interface, say). Found on the fake device
+(`FakeAudioIO`, two input channels, the input on channel 1 or 2 only) and by reading the
+code; the Android part from the platform's source, as no test can run it.
+
+**On the desktop the take is stereo.** bqaudioio's `PortAudioIO` opens as many input
+channels as the record target asks for, at most as many as the device has; the record
+target asks for two, and records what it is given. So a two-input interface gives a
+two-channel `recorded-*.wav`, and the take's file, which has the channels of its first
+recording (`TakeAudio::splice()`), is stereo too: the voice in one channel, the other
+input's noise or silence in the other. A one-input device gives a mono take. The record
+target answers that question with the channels of the device opened last, so after a
+one-input device the next device is opened with one input as well, until Tony is started
+again.
+
+**Every take plays in the left ear only**, whatever its channels:
+`Analyser::addWaveform()` pans every waveform it makes hard left, upstream Tony's
+arrangement for the reference (its audio left, the pitch and notes played as tones on the
+right), and the singing track has no pan control and keeps it. On the fake a mono take
+and a stereo one alike came out at full level on the left and not at all on the right; a
+take whose microphone was on input 2 alone came out **silent**: the left ear is given the
+take's first channel, which holds input 1, and the right ear nothing.
+
+**The levels are the channels' average**, so a microphone on one input of two reads
+6.02 dB under its own level everywhere a level is judged. On the fake, a sawtooth at
+−10.82 dBFS RMS on input 1:
+
+| | Mono device, or both inputs | Input 1 of 2 |
+| --- | --- | --- |
+| The live tracker's level (its floor, the voice threshold) | −10.82 dBFS | −16.84 dBFS |
+| The take's analysis gate (`VoiceGate`) | the same measure | the same measure |
+| What pYIN is given (svcore's transformer divides the mixdown by the channels; Tony reads a take normalised to its peak) | −4.80 dBFS RMS | −10.82 dBFS RMS |
+
+- With the voice threshold at −20 dBFS and singing at −17 dBFS RMS on its input, the
+  phrase had 203 dots and 203 pitch events on a mono device and on both inputs, and none
+  of either on one input of two.
+- pYIN found the same pitch either way on the fake's steady tones, at every level tried
+  down to 18 dB under the take's peak. Tony sets pYIN's low-amplitude suppression at
+  0.2 RMS of the normalised take (−14 dBFS); under it pYIN scales down how likely a
+  frame is to be voiced in proportion to its level, so soft singing on one input of two
+  loses half its weight there.
+- The master volume fader's peak bars show input 1 on the left and input 2 on the right
+  during a take.
+
+**On Android Tony asks for a mono input** (`OboeAudioIO`, with Oboe allowed to convert
+channels), and what a two-input USB interface then gives depends on layers below Tony.
+From the source (Oboe 1.11.0; Android 14 to 16's frameworks, read in LineageOS's mirrors,
+as android.googlesource.com cannot be reached from a cloud session):
+
+- **Oboe converts nothing on a Pixel.** It opens another channel count than asked for in
+  two quirks only (stereo input on Android 8.0's OpenSL ES; mono MMAP input on two
+  Samsung Exynos chips), and passes one channel to AAudio otherwise. Where it does reduce
+  two channels to one it keeps the first (`MultiToMonoConverter`).
+- **AAudio cannot reduce channels.** Its client-side converter refuses ("Channel reduction
+  not supported"), so a mono MMAP stream on a stereo device does not open, and an MMAP
+  stream that does not open falls back to the legacy path.
+- **The legacy path averages.** AudioPolicyManager opens the device at the mono asked
+  for only where the device lists mono; otherwise at its own stereo, and AudioFlinger's
+  `RecordBufferConverter` downmixes `(L + R) / 2`. A microphone on input 1 then arrives
+  6 dB down with input 2's noise in it, and as the client's channels differ from the
+  device's, the input gets no FAST track: not the low-latency path asked for.
+- **A USB audio HAL that does list mono** for a stereo device (AOSP's legacy HAL, where
+  ALSA reports one channel as the device's least) drops the channels past the first:
+  input 1 alone. AOSP's AIDL HAL converts nothing. The Pixel 9a's HAL is Google's own
+  AIDL HAL, not public: which of these a two-input interface meets there is not known.
+- So on the phone a microphone on input 1 most likely arrives averaged, 6 dB down and
+  without the FAST track, and possibly whole; on input 2, averaged or not at all.
+  `AudioDeviceInfo.getChannelCounts()` gives the channel counts a device can be opened
+  with (empty for any count), and Oboe's `getHardwareChannelCount()` (Android 14 and
+  later) the count the hardware runs at.
+
 ## Pre-roll and Record into Selection
 
 - **Pre-roll**: R = `MainWindow/prerollseconds` (3 s, no UI on purpose) clipped to the
