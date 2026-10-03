@@ -6,7 +6,7 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestVoiceThreshold`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestVoiceThreshold`, `TestInputChannel`, `TestInputLevel`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`, and Tony's icons (`tony.qrc`: without them every toolbar button is as wide as its text, and `TestCompactLayout` needs the real sizes). | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestPlotSize`, `TestRecordWorkflow`, `TestTouchGestures`, `TestUiChecks`, `TestCompactLayout`, `TestTouchMenuStyle`, `TestAudioCheck` | on Linux about 10.5 minutes in one process, under two in eight; on Windows about 12 in one process, measured before the touch and compact-layout suites came. Nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`, then `TestTouchGestures`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`, without the icons; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 7.5 minutes in one process, two in eight (Linux): each test records a dev run's takes, or part of them, in real time |
 
@@ -168,13 +168,15 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   back into the input `inputDelay` frames late, as speakers into a microphone),
   `echoDelay` / `echoGain` (a second arrival of the loopback, as an input played back out
   and heard again), `inputChannel` (the input on one channel only, as a microphone on
-  input 2), `humHz` / `humGain` (a steady sine under everything, as a room's fans),
+  input 2), `otherInput` (what the other inputs hear meanwhile), `humHz` / `humGain` (a steady sine under everything, as a room's fans),
   `reportLevels` (the peaks of each block, as `PortAudioIO` reports them for the meters),
   `restartShift` (the loopback moved that many frames at each resume after the first:
   early, late, on time, and again, as a real stream's input moves against its output at
   each start) and `neverCallsBack` (a device that opens and then delivers nothing). It
-  captures the output, so tests can assert what reached the speakers, and counts its
-  resumes (`getResumeCount()`, `isSuspended()`). Its programmed input, the origin of
+  opens as many inputs as the application asks for, at most `inputChannels`, as
+  `PortAudioIO` does. It captures the output, mixed to mono and each channel apart
+  (`getCapturedOutput(channel)`: which ear a sound went to), so tests can assert what
+  reached the speakers, and counts its resumes (`getResumeCount()`, `isSuspended()`). Its programmed input, the origin of
   `inputFollowsPlayback` and `getPlayStartFrame()` all start again at each resume.
 - `TestMainWindow` (`TestMainWindow.h`, shared by the four suites that drive a window:
   `TestRecordWorkflow`, `TestUiChecks` and `TestAudioCheck` in `test-tony-app`,
@@ -182,9 +184,16 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
   and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
   Playback menu's actions). The voice threshold the take started with is
-  `takeVoiceThreshold()`, and Playback > Voice Threshold is `voiceThresholdMenu()`;
+  `takeVoiceThreshold()`, and Playback > Voice Threshold is `voiceThresholdMenu()`; the
+  input channel likewise `takeInputChannel()` and `inputChannelMenu()`, with the device a
+  choice is kept for (`doInputChannelKey()`); the input meters' levels `inputLevels()`,
+  the meter's action `inputMeterAction()`, and Playback > Check Input Level
+  `checkInputLevelAction()` and `checkInputLevelDialog()`;
   `setAudioCheckTakes()` sets the check's override by hand, as the runner does before each
-  of its takes, and the test that sets it clears it again, as the runner does. It
+  of its takes, and the test that sets it clears it again, as the runner does. Made with the application's audio mode
+  (`AUDIO_PLAYBACK_NOW_RECORD_LATER`; the default is duplex from the start), the window
+  opens the device again when recording is first asked for, which `audioIOOpened()` counts,
+  though the fake is duplex either way. It
   installs the fake device through `openAudioIO()`, which `MainWindow::createAudioIO()`
   calls once it has named the driver and applied its latency, or no device at all when
   made with `installDevice` false, and keeps what the Preferences named for the last
@@ -202,7 +211,8 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   a test sets an idle time (`setAudioIdleSuspendMillis()`;
   `applicationAudioIdleSuspendMillis()` is the application's). `setFakeRoute()` changes
   the route the fake reports and opens the device again, as a phone does when its route
-  changes; `setLiveDotsDelay()` makes the GUI thread that much slower each time the live
+  changes, and `setFakeInputChannels()` the inputs it has, as another device chosen;
+  `setLiveDotsDelay()` makes the GUI thread that much slower each time the live
   dots are handed to it, as a phone's is. It **answers dialogs through virtual seams**:
   `confirmRecordingOverTake()`, `confirmDeleteTake()`, `askForTakeName()`,
   `askToSaveIncompleteSession()`, `getSaveFileName()` (Save As's file; the real dialog
@@ -229,6 +239,14 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `TestRecordWorkflow` sets the voice threshold Off in `init()` and in `cleanup()`: a test
   of it that sets one relies on that to leave it Off, for the next test and for the other
   suites of the process, which record too. Another suite that sets it has to do the same.
+  So with the input channel (group `InputChannel`, removed in both), which
+  `chooseInputChannel()` chooses through the menu.
+- For the input level: `toolbarMeter()` (the meter in the window's toolbar),
+  `meterBar()` and `meterHold()` (the feed's meter now; judge a steady sound by its hold,
+  as the bar falls up to 1 dB between two readings), `drawnMeter()` (a meter of the
+  window's levels drawn at a size of the test's own: the window is never shown, and its
+  toolbar's meter has no size of its own) and `clippedAt()` (where the status bar says a
+  take clipped). The meters read nothing unless the fake has `reportLevels` on.
 - For what is kept between launches (`TestRecordWorkflow`): `relaunch(config)` is a new
   window reading the settings the old one left (the session closed as `cleanup()` closes
   it). `turnWheel()` turns a level control's level or pan with real wheel events, and
@@ -238,7 +256,8 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   the `FileFinder/` keys every Open writes. `storeRoundTrip()` keeps a measured figure at
   a device rate, and `latencyLine()` reads the Playback menu's line as the menu shows it.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
-  `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
+  `cleanup()` fails the test for one that was not expected. Check Input Level's dialog is
+  the exception: its tests open it, drive it and close it. `dialogsMatching()` is for the
   dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
   title macOS does not keep, so that there its text alone must tell it apart.
 - `analysed()` waits for analysis completion, no running transformers **and** no ranged

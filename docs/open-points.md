@@ -66,11 +66,14 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   the amount in the status bar (the dialog's) or by the words stopping (the drag's).
 - **TTML and LRC only**: no SRT or Moises JSON. Another format is another parser that
   `parseLyrics()` chooses.
-- **No level meter for the voice threshold**: the user chooses it blind, by recording the
-  music alone and raising it until the music gives no dots (the README says how). A meter
-  of the input beside the menu, or Calibrate Audio suggesting a threshold
-  ([calibrate-audio.md](calibrate-audio.md), §10), would show where the music and the
-  voice are.
+- **A take's clipped places are not marked on the coverage strip**: the strip's model is
+  the stored coverage, read back from it as it is, so marks there would read as coverage.
+  They would need a model and a layer of their own for each take (saved with the session,
+  or not), and a style of the svgui fork's to draw them; the status bar says where
+  instead ([recording.md](recording.md#the-input-level)).
+- **The meter shows peaks, the voice threshold compares a level** (RMS) that a voice's
+  peaks stand some 10 dB over: a second bar of that level would show the two on one scale,
+  but only the live tracker measures it, and only during a take.
 
 ## Weak spots
 
@@ -199,6 +202,11 @@ The platform's own limits are in [port-android.md](port-android.md#known-limitat
   from CI (a session's clone is shallow), so it installs over one from CI only after
   uninstalling it, which loses Tony's settings and log
   ([building.md](building.md#building-for-android)).
+- **Input Channel on the phone has not been tried**: whether the Pixel's audio HAL
+  averages a two-input USB interface into the mono input Tony asks for (likely, from
+  Android's source, but the HAL is not public), and whether the input opened at the
+  device's own channels, for one input chosen, keeps the low-latency path
+  ([recording.md](recording.md#input-channels); the checklist's section 7).
 - **Touch on a Windows touch screen** has not been tried: Windows makes its own mouse
   events from touches, and its own right click from a press and hold.
 
@@ -263,8 +271,30 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   two stages).
 - Every take logs "No such signal sv::WritableWaveFileModel::aboutToBeDeleted()", from the
   svapp fork ([forks.md](forks.md), known defects).
-- The calibration's result page does not give the microphone's channel or the noise
-  floor, which nothing in it measures.
+- The calibration's result page does not give the noise floor (Check Input Level does);
+  it gives the microphone's input, and offers to choose it.
+
+### Input channel and input level
+
+The design is in [recording.md](recording.md#input-channels) and
+[recording.md](recording.md#the-input-level).
+
+- **The numbers are starting values**, chosen without the user's devices: a clip is 3
+  samples in a row within 0.01 dB of full scale; the meter's bar and hold fall at 20 dB a
+  second, the hold after 1.5 s; Check Input Level reads 2 s of silence, aims peaks at
+  −10 dBFS, calls a gain within 2 dB right, and suggests a threshold 5 dB over the noise's
+  peaks; an input carries the microphone within 20 dB of the louder. Each is argued for
+  there; none has met the HS2 and the AI-Micro yet (the checklist's section 7).
+- **The take's scan runs on the GUI thread at Stop**, after the splice: a read of what went
+  into the take, a block at a time. Not timed on the phone.
+- **On a phone, before its input is open**, Input Channel applies to the input the driver
+  last recorded from: a guess, as `LatencyCalibration::onlyRecordDevice()` is for a
+  measured round trip. The menu's first line names it.
+- **Choosing an input on a phone opens the device again** while its input is open, which
+  moves the alignment, and the input then opens with the device's channels, which puts a
+  kept round trip out of date: calibrate again after choosing.
+- Untested anywhere but on the phone: `OboeAudioIO` opening its input at the device's own
+  channels, and Check Input Level asking for the microphone first.
 
 ### The voice threshold
 

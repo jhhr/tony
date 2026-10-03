@@ -37,6 +37,11 @@
 #include "TouchGestures.h"
 #include "VoiceThreshold.h"
 #include "VoiceThresholdMenu.h"
+#include "InputChannelMenu.h"
+#include "InputLevel.h"
+#include "InputLevelFeed.h"
+#include "InputLevelMeter.h"
+#include "CheckInputLevelDialog.h"
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
@@ -222,6 +227,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takePreRoll(0),
     m_takeEnd(-1),
     m_takeVoiceThreshold(VoiceThreshold::kOff),
+    m_takeInputChannel(InputChannel::kBoth),
     m_takeTimer(nullptr),
     m_backgroundMusicModelId(),
     m_backgroundMusicLayer(nullptr),
@@ -240,6 +246,12 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioInputDeviceGroup(0),
     m_audioDriverMenus(nullptr),
     m_voiceThresholdMenu(nullptr),
+    m_inputChannelMenu(nullptr),
+    m_inputLevels(nullptr),
+    m_inputMeterAction(nullptr),
+    m_checkInputLevelAction(nullptr),
+    m_checkInputLevelDialog(nullptr),
+    m_checkingInputLevel(false),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -640,6 +652,12 @@ MainWindow::~MainWindow()
 #endif
     delete m_audioCheck;
     m_audioCheck = nullptr;
+
+    // The meters read the record target, which the base class deletes
+    delete m_checkInputLevelDialog;
+    m_checkInputLevelDialog = nullptr;
+    delete m_inputLevels;
+    m_inputLevels = nullptr;
 
     // Nothing must poll a take while the window is coming down
     stopTakePolling();
@@ -1788,6 +1806,26 @@ MainWindow::audioLatencyChosen(double)
     recreateAudioIO();
 }
 
+void
+MainWindow::inputChannelChosen(int)
+{
+    updateInputMeterChannel();
+
+    // A desktop's device has both inputs open whatever is chosen, and the
+    // next take reads the choice.  A phone opens one input of the
+    // device's for both, and all of its own for one (OboeAudioIO): one
+    // open for recording now opens again, as it does for a route that
+    // changes
+#ifdef Q_OS_ANDROID
+    if (m_audioIO && !(m_recordTarget && m_recordTarget->isRecording())) {
+        if (m_playSource && m_playSource->isPlaying()) {
+            stop();
+        }
+        recreateAudioIO();
+    }
+#endif
+}
+
 bool
 MainWindow::suspendAudioOnStop() const
 {
@@ -1817,7 +1855,8 @@ void
 MainWindow::audioActivityChanged()
 {
     bool busy = (m_playSource && m_playSource->isPlaying()) ||
-        (m_recordTarget && m_recordTarget->isRecording());
+        (m_recordTarget && m_recordTarget->isRecording()) ||
+        m_checkingInputLevel;
     int idle = audioIdleSuspendMillis();
     if (busy || idle <= 0) {
         m_audioIdleTimer->stop();
@@ -1831,7 +1870,8 @@ MainWindow::suspendIdleAudio()
 {
     m_audioIdleTimer->stop();
     if ((m_playSource && m_playSource->isPlaying()) ||
-        (m_recordTarget && m_recordTarget->isRecording())) {
+        (m_recordTarget && m_recordTarget->isRecording()) ||
+        m_checkingInputLevel) {
         return;
     }
     if (!m_audioIO && !m_playTarget) return;
@@ -1862,6 +1902,9 @@ MainWindow::createAudioIO()
     // driver or latency chosen, as the device menus list the devices),
     // and plays at the fader's volume from the start
     applyMasterVolume(m_fader->getValue());
+
+    // Another device may have another input chosen
+    updateInputMeterChannel();
 }
 
 void
@@ -1941,6 +1984,19 @@ MainWindow::setupToolbars()
     connect(this, SIGNAL(canRecord(bool)),
             recordAction, SLOT(setEnabled(bool)));
     m_recordAction = recordAction;
+
+    // The input meter, beside Record. It reads the levels the device
+    // reports already, and draws at most 20 times a second
+    m_inputLevels = new InputLevelFeed(m_viewManager, m_recordTarget, this);
+    m_inputLevels->setThreshold(currentVoiceThreshold());
+    // Playback writes its position over the take's level, which is then
+    // no longer held
+    connect(m_playSource, &AudioCallbackPlaySource::playStatusChanged,
+            this, [this](bool playing) {
+                if (playing) m_takeLevelMessage = "";
+            });
+    m_inputMeterAction = new InputLevelMeterAction(m_inputLevels, this);
+    toolbar->addAction(m_inputMeterAction);
 
     // The takes of the session, beside the recording controls: choosing
     // one shows it, with its audio, pitch track and notes (spec 5.3).
@@ -2051,6 +2107,24 @@ MainWindow::setupToolbars()
     // the compact layout hides those on a phone, where this is wanted
     // as much
     m_voiceThresholdMenu = new VoiceThresholdMenu(menu, this);
+    // Here too, for the same reason: a phone with an interface plugged in
+    // needs it, and the device menus are hidden there
+    m_inputChannelMenu = new InputChannelMenu
+        (menu, [this]() { return inputChannelKey(); },
+         [](const InputChannel::Key &key) {
+             return key.recordDevice == "" ? tr("(System Default)") :
+                 key.recordDevice;
+         }, this);
+    connect(m_inputChannelMenu, &InputChannelMenu::channelChosen,
+            this, &MainWindow::inputChannelChosen);
+    connect(m_voiceThresholdMenu, &VoiceThresholdMenu::thresholdChosen,
+            m_inputLevels, &InputLevelFeed::setThreshold);
+    m_checkInputLevelAction = menu->addAction(tr("Check Input &Level..."));
+    m_checkInputLevelAction->setStatusTip
+        (tr("See the microphone's level without recording, and how far to "
+            "turn the interface's gain"));
+    connect(m_checkInputLevelAction, &QAction::triggered,
+            this, &MainWindow::checkInputLevel);
     menu->addSeparator();
 
     // The driver and the latency asked of it, before the devices, which
@@ -2495,6 +2569,7 @@ MainWindow::setupCompactLayout()
     parts.play = m_playAction;
     parts.record = m_recordAction;
     parts.recordIntoSelection = m_recordIntoSelection;
+    parts.inputMeter = m_inputMeterAction;
     parts.takeBox = m_takeCombo;
     parts.erase = m_eraseSingingAction;
     parts.zoomIn = m_zoomInAction;
@@ -2777,6 +2852,17 @@ MainWindow::updateMenuStates()
     // have none: a choice made meanwhile would look as if it applied
     if (m_voiceThresholdMenu) {
         m_voiceThresholdMenu->setEnabled(!inTake && !checking);
+    }
+    // Likewise: a take is made from the input it started with
+    if (m_inputChannelMenu) {
+        m_inputChannelMenu->setEnabled(!inTake && !checking);
+    }
+    // It runs the device's input as a take does
+    if (m_checkInputLevelAction) {
+        m_checkInputLevelAction->setEnabled
+            (!inTake && !checking && m_recordTarget &&
+             (m_audioMode == AUDIO_PLAYBACK_AND_RECORD ||
+              m_audioMode == AUDIO_PLAYBACK_NOW_RECORD_LATER));
     }
     for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (m) m->menuAction()->setEnabled(!checking);
@@ -3164,6 +3250,9 @@ void
 MainWindow::closeSession()
 {
     if (!checkSaveModified()) return;
+
+    // The last take's level is no more the next session's
+    m_takeLevelMessage = "";
 
     // A check has nothing left to record into; a take of its own that is
     // running is stopped through the Stop path, as the check's Cancel does.
@@ -3789,7 +3878,16 @@ MainWindow::createAudioIO()
     // may be used, which record() asks for first
     if (m_audioMode == AUDIO_PLAYBACK_AND_RECORD && m_recordTarget &&
         microphoneAllowed()) {
-        OboeAudioIO *io = new OboeAudioIO(m_recordTarget, source);
+        // Input Channel, as inputChannelKey() keys it once the route has
+        // its input, which is the device asked about: its driver is
+        // "oboe" (OboeAudioIO::findRoute())
+        OboeAudioIO *io = new OboeAudioIO
+            (m_recordTarget, source,
+             [](const AudioRoute::Device &input) {
+                 QSettings settings;
+                 return InputChannel::channel
+                     (settings, { "oboe", AudioRoute::deviceName(input) });
+             });
         if (io->isOK()) {
             m_audioIO = io;
         } else {
@@ -3810,6 +3908,7 @@ MainWindow::createAudioIO()
 
     // At the fader's volume, as the desktop's createAudioIO() has it
     applyMasterVolume(m_fader->getValue());
+    updateInputMeterChannel();
 
     if (m_audioIO) {
         m_audioIO->suspend();
@@ -5424,6 +5523,7 @@ MainWindow::setupRealtimePitchLayer()
     // and never while it runs
     m_realtimePitchTracker->setMinLevel
         (VoiceThreshold::liveFloor(m_takeVoiceThreshold));
+    m_realtimePitchTracker->setChannel(m_takeInputChannel);
     m_realtimePitchTracker->start();
 
     RealtimePitchTracker *tracker = m_realtimePitchTracker;
@@ -5746,6 +5846,22 @@ MainWindow::record()
     }
 
     MainWindowBase::record();
+
+    // The take is made from the input chosen for the device it records
+    // from, which a phone knows only once its input is open: inside the
+    // base call for the first take.  Read after it, as the tracker is set
+    // up after it too (recordingStarted() defers that).  The audio check's
+    // takes are made of every input, whatever is chosen: they measure the
+    // device, and find which input the microphone is on
+    m_takeInputChannel = m_audioCheckTakes ? InputChannel::kBoth :
+        currentInputChannel();
+    // The meters show that input, and their clip light is the take's
+    updateInputMeterChannel();
+    m_takeLevelMessage = "";
+    m_takeInputPeaks.clear();
+    if (m_inputLevels && m_recordTarget && m_recordTarget->isRecording()) {
+        m_inputLevels->setClipped(false);
+    }
 
     // The base class gives up without a signal when the device cannot be
     // opened or the recording cannot be started.  No take is coming then,
@@ -6227,6 +6343,201 @@ MainWindow::latencyKey(sv_samplerate_t rate) const
     return key;
 }
 
+InputChannel::Key
+MainWindow::inputChannelKey() const
+{
+    QSettings settings;
+    AudioRoute::Route route;
+    if (!deviceRoute(route)) {
+        const LatencyCalibration::Key devices =
+            LatencyCalibration::currentKey(settings, 0);
+        return { devices.implementation, devices.recordDevice };
+    }
+
+    // A phone names no devices: its input is the route's, once it is open
+    // for recording, and until then the one it recorded from last
+    if (route.hasInput) {
+        const QString input = AudioRoute::deviceName(route.input);
+        InputChannel::setLastInput(settings, route.driver, input);
+        return { route.driver, input };
+    }
+    return { route.driver, InputChannel::lastInput(settings, route.driver) };
+}
+
+int
+MainWindow::currentInputChannel() const
+{
+    QSettings settings;
+    return InputChannel::channel(settings, inputChannelKey());
+}
+
+void
+MainWindow::chooseInputChannel(const InputChannel::Key &key, int channel)
+{
+    QSettings settings;
+    if (InputChannel::channel(settings, key) == channel) return;
+    InputChannel::setChannel(settings, key, channel);
+    const InputChannel::Key now = inputChannelKey();
+    if (now.driver == key.driver && now.recordDevice == key.recordDevice) {
+        inputChannelChosen(channel);
+    }
+}
+
+void
+MainWindow::updateInputMeterChannel()
+{
+    if (!m_inputLevels) return;
+    const bool inTake = m_recordTarget && m_recordTarget->isRecording();
+    m_inputLevels->setChannel(inTake ? m_takeInputChannel :
+                              currentInputChannel());
+}
+
+bool
+MainWindow::openInputForLevels()
+{
+#ifdef Q_OS_ANDROID
+    // As record() does: asked for first, and the check started again
+    // once it is allowed
+    if (!microphoneAllowed()) {
+        askForMicrophone([this]() { checkInputLevel(); });
+        return false;
+    }
+#endif
+
+    // The device with its input, as MainWindowBase::record() opens it for
+    // the first take: opened again if it was for playback only.  This is
+    // the opening the first take would make, which moves the device's
+    // alignment as that would; after a take, or a check, the input is
+    // open and running already, and nothing is opened again
+    if (m_audioMode == AUDIO_PLAYBACK_NOW_RECORD_LATER) {
+        m_audioMode = AUDIO_PLAYBACK_AND_RECORD;
+        if (m_playSource && m_playSource->isPlaying()) stop();
+        deleteAudioIO();
+    }
+    if (!m_audioIO && m_playTarget) {
+        if (m_playSource && m_playSource->isPlaying()) stop();
+        deleteAudioIO();
+    }
+    if (!m_audioIO) createAudioIO();
+    if (!m_audioIO) {
+        QMessageBox::warning
+            (this, tr("No record device available"),
+             tr("<b>No record device available</b><p>Failed to find or "
+                "open an audio device to record from, so there is no "
+                "input level to check.</p>"));
+        updateMenuStates();
+        return false;
+    }
+
+    // Running, as a take's start resumes it, and left running afterwards,
+    // as after a take: suspending it again would move the alignment that
+    // the takes after it share (recording.md, "Latency")
+    m_audioIO->resume();
+    return true;
+}
+
+void
+MainWindow::checkInputLevel()
+{
+    if ((m_recordTarget && m_recordTarget->isRecording()) ||
+        audioCheckRunning() || m_checkingInputLevel) {
+        return;
+    }
+    if (!openInputForLevels()) return;
+
+    if (!m_checkInputLevelDialog) {
+        m_checkInputLevelDialog =
+            new CheckInputLevelDialog(m_inputLevels, this);
+        connect(m_checkInputLevelDialog,
+                &CheckInputLevelDialog::thresholdChosen,
+                this, [this](double dbfs) {
+                    // As the menu sets it: the user's own choice
+                    QSettings settings;
+                    VoiceThreshold::setThreshold(settings, dbfs);
+                    m_inputLevels->setThreshold
+                        (VoiceThreshold::threshold(settings));
+                });
+        connect(m_checkInputLevelDialog, &QDialog::finished,
+                this, [this]() {
+                    m_checkingInputLevel = false;
+                    audioActivityChanged();
+                    updateMenuStates();
+                });
+    }
+
+    updateInputMeterChannel();
+    // Busy while it is open: a phone does not suspend an idle device
+    // under it
+    m_checkingInputLevel = true;
+    audioActivityChanged();
+    m_checkInputLevelDialog->start(currentVoiceThreshold());
+    m_checkInputLevelDialog->open();
+}
+
+void
+MainWindow::reportTakeLevel(QString recordingPath, const TakeTiming &timing)
+{
+    if (recordingPath == "") return;
+
+    // What went into the take: the recording, at the device's rate, from
+    // the latency and the lead-in on, to the punch-out if there is one;
+    // of the take's input, if one was chosen
+    const sv_frame_t from = timing.referenceToRecorded(timing.spliceOffset());
+    const sv_frame_t length = timing.spliceLength();
+    const sv_frame_t count =
+        length < 0 ? -1 : timing.referenceToRecorded(length);
+    QString error;
+    const InputLevel::Scan scan = InputLevel::scanFile
+        (recordingPath, m_takeInputChannel, from, count, error);
+    if (error != "") {
+        cerr << "MainWindow::reportTakeLevel: " << error << endl;
+        return;
+    }
+    m_takeInputPeaks = scan.channelPeaks;
+
+    const auto levelText = [](double db) {
+        QString number = QString::number(std::fabs(db), 'f', 1);
+        if (db < -0.05) number = QChar(0x2212) + number;
+        return tr("%1 dBFS").arg(number);
+    };
+
+    QString message;
+    if (!scan.clipped()) {
+        message = tr("Take: peak %1").arg(levelText(InputLevel::dbfs(scan.peak)));
+    } else {
+        // Where on the song, as the dots are placed
+        const sv_samplerate_t recordRate =
+            timing.recordRate > 0 ? timing.recordRate : timing.rate;
+        const auto places = InputLevel::places
+            (scan.clips, sv_frame_t(recordRate * InputLevel::kPlaceSeconds));
+        QStringList times;
+        for (const InputLevel::Clip &place : places) {
+            if (times.size() == 3) break;
+            const double seconds = double
+                (timing.position + timing.liveFrameIntoTake(place.start)) /
+                timing.rate;
+            const int minutes = int(seconds / 60.0);
+            times << QString("%1:%2").arg(minutes)
+                .arg(seconds - 60.0 * minutes, 4, 'f', 1, QChar('0'));
+        }
+        QString where = times.join(", ");
+        if (places.size() > 3) {
+            where = tr("%1 and %n more", "", int(places.size()) - 3)
+                .arg(where);
+        }
+        message = tr("Take: clipped at %1. Turn the input gain down "
+                     "(Playback > Check Input Level)").arg(where);
+        if (m_inputLevels) m_inputLevels->setClipped(true);
+    }
+
+    cerr << "MainWindow::reportTakeLevel: peak "
+         << InputLevel::dbfs(scan.peak) << " dBFS over " << scan.frames
+         << " frames, " << scan.clips.size() << " clipped run(s)" << endl;
+    m_takeLevelMessage = message;
+    m_myStatusMessage = message;
+    getStatusLabel()->setText(message);
+}
+
 sv_samplerate_t
 MainWindow::expectedRecordingRate() const
 {
@@ -6625,10 +6936,12 @@ MainWindow::finishSingingTake()
             // device that does not run at the reference's rate made the
             // recording at its own, and it is converted to the
             // reference's on the way in: the take's frames are the
-            // reference's, as all three figures are
+            // reference's, as all three figures are.  Only the input the
+            // take is made from goes in, if one was chosen and the
+            // recording has it
             error = m_takes->spliceRecording(recordingPath, offset, position,
                                              length, directory, &placed,
-                                             timing.rate);
+                                             timing.rate, m_takeInputChannel);
         }
     }
 
@@ -6685,6 +6998,9 @@ MainWindow::finishSingingTake()
 
     // The dots stay until the analysis that replaces them is done
     recordingFinishedFull(analysing ? m_analyser2 : nullptr);
+
+    // Last, so that nothing above writes over it in the status bar
+    reportTakeLevel(recordingPath, timing);
 }
 
 bool
@@ -9406,6 +9722,12 @@ MainWindow::updateVisibleRangeDisplay(Pane *p) const
             startFrame = s.getStartFrame();
             endFrame = s.getEndFrame();
         }
+    }
+
+    // The take's level stays until something the user does replaces it
+    if (m_takeLevelMessage != "") {
+        if (!haveSelection) return;
+        m_takeLevelMessage = "";
     }
 
     if (!haveSelection) {

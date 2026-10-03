@@ -559,9 +559,13 @@ Analyser::addWaveform()
     waveform->setMiddleLineHeight(0.9);
     waveform->setShowMeans(false); // too small & pale for this
     waveform->setBaseColour(getWaveformColour());
+    // The reference plays on the left and its pitch and notes on the
+    // right, as upstream Tony has it, until the user pans them.  A take
+    // is listened back to for how the voice sounds, has no pan control,
+    // and its pitch and notes are silent: it plays centred, in both ears
     auto params = waveform->getPlayParameters();
     if (params) {
-        params->setPlayPan(-1);
+        params->setPlayPan(m_colorScheme == SecondaryColors ? 0 : -1);
         params->setPlayGain(1);
     }
     

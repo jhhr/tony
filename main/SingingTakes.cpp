@@ -311,7 +311,8 @@ SingingTakes::spliceRecording(QString recordingPath,
                               sv_frame_t length,
                               QString directory,
                               Coverage::Range *placed,
-                              sv_samplerate_t rate)
+                              sv_samplerate_t rate,
+                              int recordingChannel)
 {
     QString outPath = nextAudioPath(directory);
     if (outPath == "") {
@@ -341,7 +342,7 @@ SingingTakes::spliceRecording(QString recordingPath,
     Coverage::Range range;
     QString error = TakeAudio::splice(take.audioPath, source,
                                       recordingOffset, position, length,
-                                      outPath, &range);
+                                      outPath, &range, -1, recordingChannel);
     if (error != "") return error;
 
     if (take.audioPath != "") m_superseded.push_back(take.audioPath);

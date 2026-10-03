@@ -118,6 +118,15 @@ public:
     double getMinLevel() const { return m_minLevel; }
 
     /**
+     * The one channel of the recording to track, counting from 0, as
+     * the take is made from it (InputChannel), or -1 for the mixdown of
+     * them all. A channel the recording does not have is the mixdown.
+     * Default: -1. Before start(): the thread reads it as a plain value.
+     */
+    void setChannel(int channel) { m_channel = channel; }
+    int getChannel() const { return m_channel; }
+
+    /**
      * The level of \a count frames of the mixdown of \a channels
      * channels, in dBFS: the RMS of their average. The mixdown is their
      * sum, so a microphone on two inputs would read 6 dB louder than on
@@ -158,6 +167,7 @@ private:
     double          m_maxFreq;
     double          m_threshold;
     double          m_minLevel;
+    int             m_channel;
 
     std::mutex      m_estimatesMutex;
     Estimates       m_estimates;

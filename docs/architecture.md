@@ -41,8 +41,8 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputLevel`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
 Android-only code elsewhere is under `#ifdef Q_OS_ANDROID`; neither may change what the
@@ -213,6 +213,10 @@ leaves whoever keeps a pointer to it holding a layer that the redo stack owns an
 - The svapp fork emits `Document::modelAboutToBeReleased(ModelId)` and `MainWindowBase`
   removes the model from the play source on it. Upstream only did so from
   `RemoveLayerCommand`, which forced deletes never run.
+- **A take plays centred**: `Analyser::addWaveform()` pans the reference's waveform hard
+  left (its pitch and notes, right) as upstream does, and the singing track's to the
+  centre: it has no pan control, its pitch and notes are silent, and it is listened to for
+  how the voice sounds ([recording.md](recording.md#input-channels)).
 - Mute with `getPlayParameters()->setPlayAudible(false)` directly.
   `Analyser::setAudible()`, `setVisible()`, `setGain()` and `setPan()` **write the user's
   settings** (below); use them only for the user's own toggles and controls, never for
@@ -400,6 +404,29 @@ key at all, and anything at or under the tracker's −60 dBFS floor reads as Off
 for every driver and device, and not in the session. A choice only writes it: `record()`
 reads it at every Start, and Analyse Now and a redo that analyses again read it when they
 run.
+
+**Input channel** (`InputChannel`, `InputChannelMenu`): Playback > Input Channel, for a
+microphone on one input of an interface with two. Both Inputs, the default, makes a stereo
+take of a two-input device, whose levels are the channels' average; Input 1 or Input 2
+makes the take mono, from that input alone, which the live tracker reads, the splice puts
+in, and pYIN and the voice threshold then hear at its own level. The design, and what a
+phone's Android does with a stereo device, are in
+[recording.md](recording.md#input-channels). Next to Voice Threshold, for the same
+reasons: with Record, reached on a phone from the menu button, greyed out during a take
+and a check. Kept per input device, as `LatencyCalibration` keys its figures (group
+`InputChannel`), and the menu's first line names that device. `record()` reads it after
+the base call, as a phone's input is known only then; the audio check's takes are made of
+both inputs. A choice on a phone opens the device again, as its input is opened otherwise
+for one input than for both (`OboeAudioIO`).
+
+**The input level** (`InputLevel`, `InputLevelFeed`, `InputLevelMeter`,
+`CheckInputLevelDialog`; [recording.md](recording.md#the-input-level)): a meter beside
+Record, in the compact layout's toolbar too (a `QWidgetAction`, so that each toolbar has a
+meter of its own, all drawing one feed's state: the clip light lit in one is lit in all);
+the take's peak and clipped places in the status bar at Stop; Playback > Check Input
+Level, next to Input Channel. `MainWindow` owns the feed, made with the toolbar, and the
+dialog, made when first asked for, and deletes both in `~MainWindow` before the base class
+deletes the record target the feed reads.
 
 **Touch** (`TouchGestures`, one per pane: an event filter in `main/`, not a change to
 svgui, so that synthetic touch events test it on the desktop). One finger is left to Qt,

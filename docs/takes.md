@@ -30,6 +30,7 @@ of the SV libraries this leans on are in [architecture.md](architecture.md).
 | Showing two takes at once | Not supported. |
 | Where audio lives | `<session>.takes/` beside the `.ton`, relative paths in the file. So a session is opened and saved only by a path, never through a `content://` URI on Android, where it needs All files access ([port-android.md](port-android.md)). |
 | A device at another rate than the reference's (a phone at 48 kHz) | The recording is converted to the reference's rate before the splice (`SingingTakes::spliceRecording()`, `TakeAudio::resample()`, at the quality svcore loads files with), in a temporary folder beside the take's files: a take's file is always at the reference's rate, and the splice, the coverage and the events count the reference's frames. The raw recordings stay at the device's rate. Rejected: opening the device at 44.1 kHz ([recording.md](recording.md#a-device-at-another-rate)). |
+| The channels of a take's file | Those of its first recording, or one with one input chosen (Playback > Input Channel): then the take is made of that input alone. A recording into a stereo take with one input chosen goes into both of its channels, as a mono recording does ([recording.md](recording.md#input-channels)). A take plays centred, whatever its channels. |
 | Sessions from before takes | No migration: they open without their singing track, silently. |
 | Editing | One operation, Erase Singing in Selection, covers remove, trim and split. No hand-editing of singing pitch or notes exists, so replacing a range loses nothing the user made. |
 | Undo | Recordings and erases are undoable to any depth. Take operations (new, duplicate, delete, switch, Load Singing Track) are not, and **clear the undo history** without a prompt; Rename does not. |
@@ -168,8 +169,9 @@ command first.
 For a singer with the music on speakers: what pYIN found where the take is quieter than
 the threshold, where the microphone heard only the music, is not merged. The measure is
 the live tracker's for its dots ([recording.md](recording.md#the-live-tracker)): the level
-of the half window whose frames YIN compared to find a result, the channels' average, a
-level at the threshold counting as voice. For a stamp f that is **[f − 512, f + 512) in
+of the half window whose frames YIN compared to find a result, the channels' average (of
+a take made of one input, that input's own level), a level at the threshold counting as
+voice. For a stamp f that is **[f − 512, f + 512) in
 either timing**. With the default timing pYIN stamps a block 512 frames in and compares
 its first half, as the live tracker does; with the Analysis menu's Unbiased Timing
 (`precisetime`) it stamps the block 1024 frames in but compares its middle half
@@ -350,6 +352,10 @@ Things to know, none of which stops the feature being used. See also
   take whose file is at its own rate (only the model in memory is at 44.1 kHz): the next
   recording's splice refuses it, the rates differing, and an erase silences the wrong
   frames, since coverage counts the reference's.
+- A take made with Both Inputs of a microphone on one input of two is stereo, and stays
+  so after Input 1 or Input 2 is chosen: what was recorded before plays in one ear and
+  reads 6 dB down for the voice threshold and pYIN; only what is recorded into it after
+  the choice is the chosen input in both channels. A new take is mono from the start.
 - A session that loaded without its reference cannot be saved as it is: Save As waits for
   the reference's analysis (`waitForInitialAnalysis()`), which never comes, until Cancel.
 - **The voice threshold gates ranged runs only.** A file loaded with Load Singing Track is

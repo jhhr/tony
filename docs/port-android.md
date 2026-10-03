@@ -274,7 +274,11 @@ A `breakfastquay::SystemAudioIO`, as `PortAudioIO` is on the desktop, which
 
 - **Full duplex**: a stereo float output at the device's own rate and, once recording has
   been asked for and the microphone allowed, a mono float input at the same rate, read in
-  the output's callback through `oboe::FullDuplexStream`. Every callback hands the input
+  the output's callback through `oboe::FullDuplexStream`. With one input chosen for the
+  input device Android opened (Playback > Input Channel), the input is opened again at the
+  device's own channel count, so that Android does not average a stereo interface's two
+  inputs into one, and Tony takes the input itself
+  ([recording.md](recording.md#input-channels)). Every callback hands the input
   to the record target before it asks for output (the start gap, as above), and reads
   **all** the input waiting, not only what the output asks for. Before any take the output
   runs alone; after one the device stays duplex (svapp), so Play opens the microphone too.

@@ -254,7 +254,8 @@ Not tried yet.
    with this microphone, and is soft singing kept? Then lower or raise it and choose
    Analysis > Analyse Now!: the take's pitch and notes change to match, and Play still
    plays what was recorded, the music included. The menu cannot be opened during a take.
-   Is choosing blind, without a level meter, workable?
+   Then Playback > Check Input Level with the music playing in its silence: is the
+   threshold it suggests over the music, and under soft singing?
 
 ## 4. Lyrics
 
@@ -442,3 +443,76 @@ touches, and its own right click from a press and hold.
 
 The questions the automated checks raised, and the facts they established for the
 decisions above, are in [open-points.md](open-points.md).
+
+## 7. A headset on an interface: input channel and levels
+
+For a headset microphone on one input of a two-input interface: the user's Rode HS2 on
+input 1 of a Rode AI-Micro, on Windows (WASAPI) and on the phone. The design is in
+[recording.md](recording.md#input-channels) and
+[recording.md](recording.md#the-input-level). None of it has been tried on a device
+yet.
+
+**On Windows**, with the AI-Micro chosen under Playback > Audio Input Device:
+
+1. **Which input the HS2 is on.** Calibrate Audio, an earcup held to the HS2: the result
+   page says "The microphone is on input 1 alone" and offers **Use Input 1**; its
+   "Inputs:" line gives each input's peak (with the dev checks, item 5's "the mic is on"
+   says the same). If it names neither, the AI-Micro feeds the one microphone to both
+   inputs, and Both Inputs is right as it is.
+2. **Input Channel** (Playback > Input Channel): its first line names the AI-Micro (or
+   "(System Default)" if that is what Audio Input Device has ticked). Choose Input 1,
+   record a short take and play it back: the voice in both ears, equally. Then a take with
+   Both Inputs into a new take: the voice in the left ear only.
+3. **The level.** With Input 1, sing at the volume you practise at: the live dots come
+   through with the voice threshold at the same setting they did before with Both, or one
+   step (5 dB) higher. Choosing another input device and coming back keeps Input 1 for
+   the AI-Micro.
+
+**On the phone**, with the AI-Micro plugged in:
+
+4. Record a take with Both Inputs, then **Help > Save Log...**: the line "OboeAudioIO:
+   input: 1 channel(s), the hardware N, ..." says whether Android averaged the AI-Micro's
+   two inputs (the hardware 2) or opened it with one (the hardware 1, or not said before
+   Android 14), and the "input" stream line before it whether it got the low-latency
+   path ("MMAP", "LowLatency").
+5. Playback > Input Channel names the AI-Micro (after a take, or as the input recorded
+   from last). Choose Input 1: the log says "the input opened at the device's own 2
+   channels" (or why not). Record and play back: the voice in both ears; the dots as above.
+   The latency line then says the measured figure is out of date: run Calibrate Audio
+   again on this route.
+6. Unplug the AI-Micro: the phone's own microphone keeps Both Inputs, and records as
+   before.
+
+**The input level, on Windows** (the design: [recording.md](recording.md#the-input-level)):
+
+7. **Check Input Level** (Playback menu) before the first take of a launch: the meter in
+   the dialog moves with the room in the two quiet seconds, and with your loudest phrase
+   after them. Set the AI-Micro's gain as it says (in RØDE's own software, with Windows'
+   input volume for it at 100) and check again until it says the gain is right. Is the
+   noise floor it gives plausible, and the threshold it suggests (Off, likely, for a
+   headset in a quiet room)? Then a take at full voice: the status bar's "Take: peak"
+   near −10 dBFS.
+8. **The meter beside Record** during a take follows the voice without lag you can see,
+   and shows input 1 with Input 1 chosen; between takes it shows the input as well. The
+   tick sits at the voice threshold when one is set: are the voice's peaks well over it
+   where dots come, as the tooltip says?
+9. **Clipping**: turn the gain up until full voice clips. The light turns red, the status
+   bar says "clipped at" with the times, and playing those places back the distortion is
+   heard there. A click on the meter puts the light out, and so does the next take. Then
+   sing at full voice with the gain right: if the take sounds distorted with nothing
+   reported, the HS2 itself is overloading (it is rated to about 122 dB SPL), which no
+   meter can see; move it a little further from the mouth.
+10. **The interface's processing**: in RØDE's software and in Windows' sound settings, no
+    automatic gain, noise reduction or enhancements for the AI-Micro; the noise floor
+    Check Input Level gives stays the same with them off.
+
+**On the phone**:
+
+11. Check Input Level from the compact layout's menu button, before any take: the
+    microphone is asked for if it has not been allowed, and the dialog fits the screen,
+    its buttons in reach. Leave it open past two minutes: the device is not suspended
+    under it. After Close, Record starts at once.
+12. The meter in the compact toolbar fits beside Record and reads as on the desktop. In
+    the log's live dots lines during a take, the GUI thread's share of a core
+    ("GUI thread ...% of a core") is no higher than before the meter (about 70 %).
+

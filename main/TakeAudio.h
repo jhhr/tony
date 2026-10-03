@@ -57,6 +57,11 @@ namespace TakeAudio
      * crossfaded with what was there over fadeFrames frames; negative
      * means defaultFadeFrames().
      *
+     * With a recordingChannel that the recording has, only that channel
+     * of it is used, as a mono recording would be: copied into every
+     * channel of the old take, or a mono take if there was none
+     * (InputChannel). -1, or a channel it does not have, uses them all.
+     *
      * If placed is not null, it receives the range of the take that
      * the recording now fills.
      */
@@ -67,7 +72,8 @@ namespace TakeAudio
                    sv::sv_frame_t length,
                    QString outPath,
                    Coverage::Range *placed = nullptr,
-                   sv::sv_frame_t fadeFrames = -1);
+                   sv::sv_frame_t fadeFrames = -1,
+                   int recordingChannel = -1);
 
     /**
      * Write to outPath the take in oldPath with the given ranges made

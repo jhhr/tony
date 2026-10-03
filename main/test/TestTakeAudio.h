@@ -341,6 +341,69 @@ private slots:
         QVERIFY(allNearly(a, 2000, 3000, 0.1f));
     }
 
+    // A microphone on one input of two, that input chosen
+    // (InputChannel): the take is made of it alone, mono, at its own
+    // level, not of the average with the other input
+    void splice_one_channel_into_nothing() {
+        Signal stereo;
+        for (int i = 0; i < 1000; ++i) {
+            stereo.push_back(0.6f);
+            stereo.push_back(0.2f);
+        }
+        QString recording = writeWav(stereo, 2);
+        for (int channel : { 0, 1 }) {
+            QString out = newPath();
+            QCOMPARE(TakeAudio::splice("", recording, 0, 500, -1, out,
+                                       nullptr, 0, channel), QString());
+            Audio a = read(out);
+            QCOMPARE(a.channels, 1);
+            QCOMPARE(a.frames, frame_t(1500));
+            QVERIFY(allNearly(a, 0, 500, 0.f));
+            QVERIFY(allNearly(a, 500, 1500, channel == 0 ? 0.6f : 0.2f));
+        }
+    }
+
+    // A take made of both inputs before one was chosen stays stereo, and
+    // the chosen input goes into both of its channels, as a mono
+    // recording would
+    void splice_one_channel_into_stereo() {
+        Signal old;
+        for (int i = 0; i < 3000; ++i) {
+            old.push_back(0.3f);
+            old.push_back(-0.3f);
+        }
+        Signal stereo;
+        for (int i = 0; i < 1000; ++i) {
+            stereo.push_back(0.6f);
+            stereo.push_back(0.2f);
+        }
+        QString take = writeWav(old, 2);
+        QString recording = writeWav(stereo, 2);
+        QString out = newPath();
+        QCOMPARE(TakeAudio::splice(take, recording, 0, 1000, -1, out,
+                                   nullptr, 0, 1), QString());
+        Audio a = read(out);
+        QCOMPARE(a.channels, 2);
+        QCOMPARE(a.frames, frame_t(3000));
+        QVERIFY(allNearly(a, 0, 1000, 0.3f, 0));
+        QVERIFY(allNearly(a, 0, 1000, -0.3f, 1));
+        QVERIFY(allNearly(a, 1000, 2000, 0.2f, 0));
+        QVERIFY(allNearly(a, 1000, 2000, 0.2f, 1));
+        QVERIFY(allNearly(a, 2000, 3000, 0.3f, 0));
+    }
+
+    // An input chosen that the recording does not have, as on a device
+    // with one: the recording goes in as it is
+    void splice_a_channel_the_recording_lacks() {
+        QString recording = writeWav(constant(1000, 0.5f));
+        QString out = newPath();
+        QCOMPARE(TakeAudio::splice("", recording, 0, 0, -1, out,
+                                   nullptr, 0, 1), QString());
+        Audio a = read(out);
+        QCOMPARE(a.channels, 1);
+        QVERIFY(allNearly(a, 0, 1000, 0.5f));
+    }
+
     // Longer than the block the work is done in, with the recording
     // across a block boundary
     void splice_long_files() {

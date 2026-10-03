@@ -26,9 +26,9 @@ class QActionGroup;
  * the music on speakers.  One entry for each of VoiceThreshold::choices(),
  * with the one kept in the settings ticked.
  *
- * A choice is only written to the settings.  record() reads them as each
- * take starts, and Analyse Now as it runs, so nothing else needs to hear
- * of it.
+ * A choice is written to the settings, which record() reads as each take
+ * starts, and Analyse Now as it runs, and then signalled, for the input
+ * meters' tick.
  */
 class VoiceThresholdMenu : public QObject
 {
@@ -49,6 +49,10 @@ public:
 
     /// Not while a take is being recorded or an audio check runs
     void setEnabled(bool enabled);
+
+signals:
+    /// A threshold chosen, and written to the settings
+    void thresholdChosen(double dbfs);
 
 private:
     QMenu *m_menu;

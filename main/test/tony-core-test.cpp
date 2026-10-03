@@ -39,6 +39,8 @@
 #include "TestTakeDiff.h"
 #include "TestLiveDotsFeed.h"
 #include "TestVoiceThreshold.h"
+#include "TestInputChannel.h"
+#include "TestInputLevel.h"
 #include "TestVoiceGate.h"
 #include "TestRunSuite.h"
 
@@ -232,6 +234,18 @@ int main(int argc, char *argv[])
 
     {
         TestVoiceThreshold t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestInputChannel t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestInputLevel t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

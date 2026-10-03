@@ -29,6 +29,7 @@
 #include "LatencyUtils.h"
 #include "LatencyCalibration.h"
 #include "LiveDotsFeed.h"
+#include "InputChannel.h"
 
 #include <vector>
 #include <string>
@@ -55,6 +56,10 @@ class AudioCheckRunner;
 struct AudioCheckResult;
 class AudioDriverMenus;
 class VoiceThresholdMenu;
+class InputChannelMenu;
+class InputLevelFeed;
+class InputLevelMeterAction;
+class CheckInputLevelDialog;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -152,6 +157,20 @@ public:
     // The route the open device reports; its driver is "" if it reports
     // none, or there is no device open
     AudioRoute::Route audioRoute() const;
+
+    // The input device an Input Channel choice is kept for: the record
+    // device the Preferences name, or the input of the route the open
+    // device reports (on a phone), or while it is open for playback only
+    // the input its driver last recorded from (InputChannel::lastInput())
+    InputChannel::Key inputChannelKey() const;
+
+    // The input channel chosen for that device now (InputChannel)
+    int currentInputChannel() const;
+
+    // Choose the input channel for the input device given, as the menu
+    // chooses it for the device in use (Calibrate Audio's result page
+    // offers the one its check heard the microphone on)
+    void chooseInputChannel(const InputChannel::Key &key, int channel);
 
 #ifdef Q_OS_ANDROID
     // The microphone is asked for when it is first needed: Record starts
@@ -362,6 +381,14 @@ protected slots:
     // Preferences: the device is opened again, with it
     void audioDriverChosen(QString implementation);
     void audioLatencyChosen(double seconds);
+
+    // Playback > Input Channel chosen, and written to the settings: a
+    // phone opens its device again if the input is open otherwise
+    void inputChannelChosen(int channel);
+
+    // Playback > Check Input Level: the input opened and run as a take's
+    // is, nothing recorded, and the meter shown large
+    void checkInputLevel();
 
     // Playback > Calibrate Audio: the audio check's dialog, not modal
     virtual void calibrateAudio();
@@ -772,6 +799,14 @@ protected:
     // analysis of the take at Stop both go by it
     double m_takeVoiceThreshold;
 
+    // The input channel (InputChannel) of the take being recorded, or of
+    // the one most recently recorded, read as the voice threshold is:
+    // the choice for the input device as the take started, and both
+    // inputs for the audio check's takes, which measure the device and
+    // say which input the microphone is on.  The live tracker reads that
+    // channel, and the splice makes the take from it
+    int m_takeInputChannel;
+
     // Polls the record target while a take that has an end to reach
     // runs, and stops the take once the singing for that end has
     // arrived.  Not running for a take that goes on until Stop.
@@ -869,8 +904,42 @@ protected:
     // Playback > Audio Driver and Audio Latency, before the device menus
     AudioDriverMenus *m_audioDriverMenus;
 
-    // Playback > Voice Threshold, after Record
+    // Playback > Voice Threshold and Input Channel, after Record
     VoiceThresholdMenu *m_voiceThresholdMenu;
+    InputChannelMenu *m_inputChannelMenu;
+
+    // The input meters' levels, the meter beside Record (in the compact
+    // layout's toolbar too), and Playback > Check Input Level, its dialog
+    // and whether it is open (the device then counts as busy)
+    InputLevelFeed *m_inputLevels;
+    InputLevelMeterAction *m_inputMeterAction;
+    QAction *m_checkInputLevelAction;
+    CheckInputLevelDialog *m_checkInputLevelDialog;
+    bool m_checkingInputLevel;
+
+    // The input the meters show: the take's while one is recorded, else
+    // the one chosen for the device
+    void updateInputMeterChannel();
+
+    // Open the device with its input and run it, as a take's start does,
+    // for the input level to be read without recording.  False if there
+    // is no input to be had (said in a box), or on a phone the microphone
+    // has yet to be allowed (then asked for, and the check started again
+    // once it is)
+    bool openInputForLevels();
+
+    // Scan what of the recording at path went into the take, and say
+    // its peak, and where it clipped, in the status bar
+    void reportTakeLevel(QString recordingPath, const TakeTiming &timing);
+
+    // What reportTakeLevel() said, kept in the status bar until the next
+    // take, playback or a selection: the view moves back to the take's
+    // position after Stop, which would write the visible range over it
+    mutable QString m_takeLevelMessage;
+
+    // The peak of each input in what went into the last take, as its
+    // scan found them; empty if it was not scanned
+    std::vector<float> m_takeInputPeaks;
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;

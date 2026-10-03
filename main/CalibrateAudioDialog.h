@@ -93,6 +93,14 @@ public:
     /// Whether Use this latency is offered, and not yet pressed
     bool canUseLatency() const;
 
+    /// The input the result offers to make takes from (Use Input N), or
+    /// -1: offered where the check heard the microphone on one input of
+    /// two alone, and another is chosen under Input Channel
+    int offeredInput() const;
+
+    /// The result page's Use Input N
+    QPushButton *inputButton() const { return m_inputButton; }
+
     /// What the dialog becomes while its check runs, for the window's
     /// status bar.  Hidden until then; the dialog deletes it
     AudioCheckIndicator *indicator() const { return m_indicator; }
@@ -161,6 +169,10 @@ public slots:
     /// Keep the round trip the check measured, for the devices it ran on
     void useLatency();
 
+    /// Make takes from the input the check heard the microphone on, on
+    /// the input device it ran on
+    void useInput();
+
     /// The result page's Copy: reportText() on the clipboard, which on a
     /// phone is how selected text would be copied, and cannot
     void copyReport();
@@ -188,6 +200,7 @@ private:
 
     AudioCheckResult m_result;
     bool m_latencyKept;
+    int m_inputChosen;
 
     /// The time the run was expected to take when it began, and the
     /// share of it the progress bar has shown, which never goes back
@@ -213,6 +226,7 @@ private:
     QPushButton *m_cancelButton;
     QPushButton *m_smallButton;
     QPushButton *m_useButton;
+    QPushButton *m_inputButton;
     QPushButton *m_againButton;
     QPushButton *m_closeButton;
     QPushButton *m_copyButton;

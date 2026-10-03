@@ -25,6 +25,10 @@
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
 #include "../VoiceThresholdMenu.h"
+#include "../InputChannelMenu.h"
+#include "../InputLevelFeed.h"
+#include "../InputLevelMeter.h"
+#include "../CheckInputLevelDialog.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -55,9 +59,13 @@ class TestMainWindow : public MainWindow
 public:
     // Without the spectrogram, as every test window is; without the
     // sonification as well, as --no-sonification has it, when asked
+    // In the application's own audio mode when asked (playback now,
+    // recording once asked for), which opens the device again for the
+    // first take; the fake is duplex either way
     TestMainWindow(FakeAudioIO::Config config, bool installDevice = true,
-                   bool withSonification = true) :
-        MainWindow(AUDIO_PLAYBACK_AND_RECORD, withSonification, false),
+                   bool withSonification = true,
+                   AudioMode audioMode = AUDIO_PLAYBACK_AND_RECORD) :
+        MainWindow(audioMode, withSonification, false),
         m_fakeConfig(config),
         m_installDevice(installDevice) { }
 
@@ -67,6 +75,11 @@ public:
     // device opened again, as a phone's is when its route changes
     void setFakeRoute(const AudioRoute::Route &route) {
         m_fakeConfig.route = route;
+    }
+    // The inputs the fake has from the next time it is opened, as
+    // another device chosen has others
+    void setFakeInputChannels(int channels) {
+        m_fakeConfig.inputChannels = channels;
     }
     void doRecreateAudioIO() { recreateAudioIO(); }
 
@@ -214,6 +227,17 @@ public:
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
     // Playback > Voice Threshold, which is always shown
     VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
+    // Playback > Input Channel, likewise, and the device it is kept for
+    InputChannelMenu *inputChannelMenu() { return m_inputChannelMenu; }
+    InputChannel::Key doInputChannelKey() const { return inputChannelKey(); }
+    // The input meters' levels, the meter beside Record, and Playback >
+    // Check Input Level with its dialog (made the first time it opens)
+    InputLevelFeed *inputLevels() { return m_inputLevels; }
+    InputLevelMeterAction *inputMeterAction() { return m_inputMeterAction; }
+    QAction *checkInputLevelAction() { return m_checkInputLevelAction; }
+    CheckInputLevelDialog *checkInputLevelDialog() {
+        return m_checkInputLevelDialog;
+    }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as
@@ -274,6 +298,7 @@ public:
     sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
     sv::sv_frame_t takeEnd() { return m_takeEnd; }
     double takeVoiceThreshold() { return m_takeVoiceThreshold; }
+    int takeInputChannel() { return m_takeInputChannel; }
     bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
 
     void seekTo(sv::sv_frame_t frame) {

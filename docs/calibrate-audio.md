@@ -222,14 +222,24 @@ and 28 dB over it); none has been tuned on a real device yet.
 
 ## 4. The result page
 
-The verdict in one sentence and its fix; the echo, if one was heard; then a table: the
-round trip measured (not for NoSignal) against the driver's, output plus input; what the
-takes were placed with (measured before, or the driver's figure); where each punch-in
-landed (+ is late); the spread; sweeps found of those judged; both rates ("recorded at
-48000 Hz, converted to the reference's 44100 Hz" where they differ); the input peak in
-dBFS; the echo; the driver and the devices; on a phone, how each stream was opened
-("Streams:"), which a kept figure is checked against (§5). A failed run shows why it
-ended instead.
+The verdict in one sentence and its fix; the echo, if one was heard; on a device with two
+inputs, the one the microphone is on, when it is on one alone; then a table: the round
+trip measured (not for NoSignal) against the driver's, output plus input; what the takes
+were placed with (measured before, or the driver's figure); where each punch-in landed (+
+is late); the spread; sweeps found of those judged; both rates ("recorded at 48000 Hz,
+converted to the reference's 44100 Hz" where they differ); the input peak in dBFS; each
+input's peak ("Inputs:"); the echo; the driver and the devices; on a phone, how each
+stream was opened ("Streams:"), which a kept figure is checked against (§5). A failed run
+shows why it ended instead.
+
+**Use Input N** is offered where the microphone was on one input of two alone (within 20
+dB of the louder, as the dev checks' item 5 judges it) and Input Channel has another for
+the input device the first punch-in recorded from: it chooses that input for that device,
+as the menu does ([recording.md](recording.md#input-channels)). The peaks are each
+input's in what the punch-ins kept, from the scan every take's raw recording gets at Stop
+(`MainWindow::reportTakeLevel()`): nothing is read twice. The check's takes are made of
+both inputs whatever is chosen, so that a microphone on the input not chosen is heard and
+found.
 
 **Use this latency** keeps the calibrated round trip for the devices the check started on,
 not for those the Preferences name when it is pressed (the result stays on show for as long
@@ -284,7 +294,10 @@ for new buffers at every take. So on a route the fingerprint is how each stream 
 **opened** (the audio API, MMAP or not, rate, channels, format, performance and sharing
 mode, burst, buffer and capacity, and the input's preset), stored with the figure: it is
 stale when a stream it describes opened otherwise, never because the reported pair moved,
-and a stream not open (the input before the first take) is not compared. For the same
+and a stream not open (the input before the first take) is not compared. An input opened
+at the device's own channels, for one input chosen under Input Channel, is opened
+otherwise: a figure kept with the mono input is out of date after the choice, and the
+other way round ([recording.md](recording.md#input-channels)). For the same
 reason the check counts each punch-in as if placed with the first one's round trip
 (`LatencyCheck::PunchIn::placedWith`), so that a reported pair that moved between
 punch-ins does not read as spread.
@@ -553,8 +566,8 @@ What it rests on:
   While Recording and Pre-roll write QSettings when toggled, so the runner sets an override
   (`m_audioCheckTakes`, with the plan's pre-roll and round trip) that `record()`,
   `recordingStarted()` and `wantedPreRollFrames()` read, and clears it when the take stops
-  or the run ends. It also records them with the voice threshold Off, whatever the setting
-  ([recording.md](recording.md#the-audio-checks-takes)).
+  or the run ends. It also records them with the voice threshold Off and with both
+  inputs, whatever the settings ([recording.md](recording.md#the-audio-checks-takes)).
 - **Record during a check.** The Record action goes to `recordPressed()`, which ignores a
   press while a check runs: `record()` itself cannot tell a press from the runner's calls or
   `pollTakeProgress()`'s, and a press would stop the check's take or record one of the
@@ -570,7 +583,8 @@ What it rests on:
   peak since the previous call and reset it. While recording, lead-in included,
   `ViewManager::checkPlayStatus()` reads the input levels only, for the meter's signal; the
   observer then reads the output levels, and only then, and takes the input levels from
-  that signal.
+  that signal, as the input meters' feed does (`InputLevelFeed`), which reads the input
+  levels itself only outside a take ([recording.md](recording.md#the-input-level)).
 - **A take's audio is read from its file**, never from its model (§2).
 
 ## 10. Known limitations and open points
@@ -657,8 +671,9 @@ below).
 - Items 3 and 5 judge stage 2's punch-ins only. Item 14 cannot see an overwrite question:
   `record()` would ask it before the observer starts. The check's takes record into a
   selection, where none is asked, so "no question" is watched for, not arranged.
-- The calibration's result page does not give the microphone's channel or the noise floor:
-  nothing in the calibration measures them (item 5 of the dev run finds the channel).
+- The calibration's result page does not give the noise floor: its silences hold the room
+  as the earcup-to-microphone loop has it. Check Input Level gives it
+  ([recording.md](recording.md#the-input-level)).
 - Windows' audio enhancements, echo cancellation or noise suppression can take the sweeps
   out, and Tony does not ask for raw capture (MME has no raw mode, and the bqaudioio
   fork does not ask WASAPI for its own): NoSignal and Fading tell the user to turn them
@@ -684,15 +699,11 @@ below).
 
 **Later candidates:**
 
-- A measured noise floor, and a suggested voice threshold: `RealtimePitchTracker`'s own
-  floor is a fixed −60 dBFS ([recording.md](recording.md#the-live-tracker)), which kept
-  out the room noise that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS). A
-  microphone noisier than that still gives dots in silence, unless the user raises
-  Playback > Voice Threshold over it; and a singer with the music on speakers chooses
-  that threshold blind, by recording the music alone. Calibrate Audio could measure the
-  microphone's floor in the silence between its sounds and, played through the speakers
-  as they are sung with, the level they reach the microphone at, put both on the result
-  page with the microphone's channel, and suggest a threshold over them.
+- A measured noise floor, and a suggested voice threshold, on the result page: Playback >
+  Check Input Level measures the floor (with the music playing, if the singer plays it on
+  speakers) and suggests a threshold ([recording.md](recording.md#the-input-level)), but
+  Calibrate Audio does not: its silences between the sweeps hold the room as the
+  earcup-to-microphone loop has it, not as the singer sings.
 - A quick re-measure after the device is opened or resumed again (a Bluetooth reconnect;
   on a phone, a resume after two idle minutes), without a test session.
 - A getter for the rate the record target records at (svapp fork), so that on a desktop
@@ -758,7 +769,9 @@ below).
   ([audio-drivers.md](audio-drivers.md), §6). On a fake whose loopback moves 10 ms at each
   restart, a check whose window suspends at Stop lands its punch-ins 10 ms apart
   (Unsteady), and one kept running, as the application keeps it, lands them alike (Ok),
-  the fake resumed once. Its runs are two punch-ins of two sweeps on the first 11 s of the
+  the fake resumed once. With the loopback on input 2 of two and Input 1 chosen, the check
+  hears the sweeps all the same, its result names input 2, and Use Input 2 chooses it for
+  the device. Its runs are two punch-ins of two sweeps on the first 11 s of the
   calibration reference, about 13 s each.
 - **`TestDevChecks`** (`test-tony-dev`, development builds only): whole dev runs on the
   loopback fake. Passing, with the fake's true round trip and a long song of 60 s (240 s
