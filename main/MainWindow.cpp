@@ -37,6 +37,7 @@
 #include "TouchGestures.h"
 #include "VoiceThreshold.h"
 #include "VoiceThresholdMenu.h"
+#include "InputChannelMenu.h"
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
@@ -222,6 +223,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_takePreRoll(0),
     m_takeEnd(-1),
     m_takeVoiceThreshold(VoiceThreshold::kOff),
+    m_takeInputChannel(InputChannel::kBoth),
     m_takeTimer(nullptr),
     m_backgroundMusicModelId(),
     m_backgroundMusicLayer(nullptr),
@@ -240,6 +242,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioInputDeviceGroup(0),
     m_audioDriverMenus(nullptr),
     m_voiceThresholdMenu(nullptr),
+    m_inputChannelMenu(nullptr),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -1788,6 +1791,24 @@ MainWindow::audioLatencyChosen(double)
     recreateAudioIO();
 }
 
+void
+MainWindow::inputChannelChosen(int)
+{
+    // A desktop's device has both inputs open whatever is chosen, and the
+    // next take reads the choice.  A phone opens one input of the
+    // device's for both, and all of its own for one (OboeAudioIO): one
+    // open for recording now opens again, as it does for a route that
+    // changes
+#ifdef Q_OS_ANDROID
+    if (m_audioIO && !(m_recordTarget && m_recordTarget->isRecording())) {
+        if (m_playSource && m_playSource->isPlaying()) {
+            stop();
+        }
+        recreateAudioIO();
+    }
+#endif
+}
+
 bool
 MainWindow::suspendAudioOnStop() const
 {
@@ -2051,6 +2072,16 @@ MainWindow::setupToolbars()
     // the compact layout hides those on a phone, where this is wanted
     // as much
     m_voiceThresholdMenu = new VoiceThresholdMenu(menu, this);
+    // Here too, for the same reason: a phone with an interface plugged in
+    // needs it, and the device menus are hidden there
+    m_inputChannelMenu = new InputChannelMenu
+        (menu, [this]() { return inputChannelKey(); },
+         [](const InputChannel::Key &key) {
+             return key.recordDevice == "" ? tr("(System Default)") :
+                 key.recordDevice;
+         }, this);
+    connect(m_inputChannelMenu, &InputChannelMenu::channelChosen,
+            this, &MainWindow::inputChannelChosen);
     menu->addSeparator();
 
     // The driver and the latency asked of it, before the devices, which
@@ -2777,6 +2808,10 @@ MainWindow::updateMenuStates()
     // have none: a choice made meanwhile would look as if it applied
     if (m_voiceThresholdMenu) {
         m_voiceThresholdMenu->setEnabled(!inTake && !checking);
+    }
+    // Likewise: a take is made from the input it started with
+    if (m_inputChannelMenu) {
+        m_inputChannelMenu->setEnabled(!inTake && !checking);
     }
     for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (m) m->menuAction()->setEnabled(!checking);
@@ -3789,7 +3824,16 @@ MainWindow::createAudioIO()
     // may be used, which record() asks for first
     if (m_audioMode == AUDIO_PLAYBACK_AND_RECORD && m_recordTarget &&
         microphoneAllowed()) {
-        OboeAudioIO *io = new OboeAudioIO(m_recordTarget, source);
+        // Input Channel, as inputChannelKey() keys it once the route has
+        // its input, which is the device asked about: its driver is
+        // "oboe" (OboeAudioIO::findRoute())
+        OboeAudioIO *io = new OboeAudioIO
+            (m_recordTarget, source,
+             [](const AudioRoute::Device &input) {
+                 QSettings settings;
+                 return InputChannel::channel
+                     (settings, { "oboe", AudioRoute::deviceName(input) });
+             });
         if (io->isOK()) {
             m_audioIO = io;
         } else {
@@ -5424,6 +5468,7 @@ MainWindow::setupRealtimePitchLayer()
     // and never while it runs
     m_realtimePitchTracker->setMinLevel
         (VoiceThreshold::liveFloor(m_takeVoiceThreshold));
+    m_realtimePitchTracker->setChannel(m_takeInputChannel);
     m_realtimePitchTracker->start();
 
     RealtimePitchTracker *tracker = m_realtimePitchTracker;
@@ -5746,6 +5791,15 @@ MainWindow::record()
     }
 
     MainWindowBase::record();
+
+    // The take is made from the input chosen for the device it records
+    // from, which a phone knows only once its input is open: inside the
+    // base call for the first take.  Read after it, as the tracker is set
+    // up after it too (recordingStarted() defers that).  The audio check's
+    // takes are made of every input, whatever is chosen: they measure the
+    // device, and find which input the microphone is on
+    m_takeInputChannel = m_audioCheckTakes ? InputChannel::kBoth :
+        currentInputChannel();
 
     // The base class gives up without a signal when the device cannot be
     // opened or the recording cannot be started.  No take is coming then,
@@ -6227,6 +6281,34 @@ MainWindow::latencyKey(sv_samplerate_t rate) const
     return key;
 }
 
+InputChannel::Key
+MainWindow::inputChannelKey() const
+{
+    QSettings settings;
+    AudioRoute::Route route;
+    if (!deviceRoute(route)) {
+        const LatencyCalibration::Key devices =
+            LatencyCalibration::currentKey(settings, 0);
+        return { devices.implementation, devices.recordDevice };
+    }
+
+    // A phone names no devices: its input is the route's, once it is open
+    // for recording, and until then the one it recorded from last
+    if (route.hasInput) {
+        const QString input = AudioRoute::deviceName(route.input);
+        InputChannel::setLastInput(settings, route.driver, input);
+        return { route.driver, input };
+    }
+    return { route.driver, InputChannel::lastInput(settings, route.driver) };
+}
+
+int
+MainWindow::currentInputChannel() const
+{
+    QSettings settings;
+    return InputChannel::channel(settings, inputChannelKey());
+}
+
 sv_samplerate_t
 MainWindow::expectedRecordingRate() const
 {
@@ -6625,10 +6707,12 @@ MainWindow::finishSingingTake()
             // device that does not run at the reference's rate made the
             // recording at its own, and it is converted to the
             // reference's on the way in: the take's frames are the
-            // reference's, as all three figures are
+            // reference's, as all three figures are.  Only the input the
+            // take is made from goes in, if one was chosen and the
+            // recording has it
             error = m_takes->spliceRecording(recordingPath, offset, position,
                                              length, directory, &placed,
-                                             timing.rate);
+                                             timing.rate, m_takeInputChannel);
         }
     }
 

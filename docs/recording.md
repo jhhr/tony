@@ -82,8 +82,9 @@ and the splice reads from there.
 10. `modelAdded()` sees `m_recordingAsSingingTrack`, stores `m_currentRecordingModelId`
     and returns. The recording is raw material, not the singing track; no analyser is
     made.
-11. After the base call: if `isRecording()` is false (no device, device busy) the take
-    flags are cleared and the singing unmuted. Otherwise the playback and centre frames
+11. After the base call: the take's input channel is read
+    ([Input channels](#input-channels)). If `isRecording()` is false (no device, device
+    busy) the take flags are cleared and the singing unmuted. Otherwise the playback and centre frames
     are restored to S, `setupRecordingLayer()` gives the recording a hidden, muted
     waveform layer (`attachLayerToView`, `setSavedInSession(false)`) — the document needs
     *some* layer to hold the model — and `startTakePolling()` starts the 100 ms timer if
@@ -122,8 +123,9 @@ that handler may wait for it.
    longer the take, and the cursor would be left past P. `stopReferenceAfterTake()` also
    suspends the device where Stop does (`suspendAudioOnStop()`, which says no; see
    [Latency](#latency)).
-4. `m_takes->spliceRecording(...)` — see [takes.md](takes.md). A recording no longer than
-   L + R is dropped quietly; a real failure is a dialog and leaves the track as it was.
+4. `m_takes->spliceRecording(...)` — see [takes.md](takes.md), from the take's input
+   channel. A recording no longer than L + R is dropped quietly; a real failure is a
+   dialog and leaves the track as it was.
 5. The undo command is made, the audio swapped, the ranged analysis started (gated by the
    take's voice threshold: [takes.md](takes.md#the-voice-threshold)), the command pushed,
    and `syncCoverageStrip()` called **after** the swap.
@@ -266,48 +268,74 @@ reference's: the recording is at the device's rate. A desktop device whose defau
 ## Input channels
 
 What a take is made of when the microphone is on one input of an interface with two (a
-headset on input 1 of a two-input USB interface, say). Found on the fake device
-(`FakeAudioIO`, two input channels, the input on channel 1 or 2 only) and by reading the
-code; the Android part from the platform's source, as no test can run it.
+headset on input 1 of a two-input USB interface, say), and **Playback > Input Channel**,
+which chooses. Found on the fake device (`FakeAudioIO`, two input channels, the input on
+channel 1 or 2 only) and by reading the code; the Android part from the platform's
+source, as no test can run it.
 
-**On the desktop the take is stereo.** bqaudioio's `PortAudioIO` opens as many input
-channels as the record target asks for, at most as many as the device has; the record
-target asks for two, and records what it is given. So a two-input interface gives a
-two-channel `recorded-*.wav`, and the take's file, which has the channels of its first
-recording (`TakeAudio::splice()`), is stereo too: the voice in one channel, the other
-input's noise or silence in the other. A one-input device gives a mono take. The record
-target answers that question with the channels of the device opened last, so after a
-one-input device the next device is opened with one input as well, until Tony is started
-again.
+**Both Inputs**, the default, is what a take was before there was a choice:
 
-**Every take plays in the left ear only**, whatever its channels:
-`Analyser::addWaveform()` pans every waveform it makes hard left, upstream Tony's
-arrangement for the reference (its audio left, the pitch and notes played as tones on the
-right), and the singing track has no pan control and keeps it. On the fake a mono take
-and a stereo one alike came out at full level on the left and not at all on the right; a
-take whose microphone was on input 2 alone came out **silent**: the left ear is given the
-take's first channel, which holds input 1, and the right ear nothing.
+- **On the desktop the take is stereo.** bqaudioio's `PortAudioIO` opens as many input
+  channels as the record target asks for, at most as many as the device has; the record
+  target asks for two, and records what it is given. So a two-input interface gives a
+  two-channel `recorded-*.wav`, and the take's file, which has the channels of its first
+  recording (`TakeAudio::splice()`), is stereo too: the voice in one channel, the other
+  input's noise or silence in the other. A one-input device gives a mono take. The svapp
+  fork's record target asks every device for two, whatever the device before it gave:
+  asked for the channels of the one opened last, a two-input interface chosen after a
+  one-input microphone would be opened with one.
+- **It plays the voice in one ear**: a take plays centred (below), its first channel in
+  the left ear and its second in the right.
+- **The levels are the channels' average**, so a microphone on one input of two reads
+  6.02 dB under its own level everywhere a level is judged. On the fake, a sawtooth at
+  −10.82 dBFS RMS on input 1:
 
-**The levels are the channels' average**, so a microphone on one input of two reads
-6.02 dB under its own level everywhere a level is judged. On the fake, a sawtooth at
-−10.82 dBFS RMS on input 1:
+  | | Mono device, or both inputs | Input 1 of 2 |
+  | --- | --- | --- |
+  | The live tracker's level (its floor, the voice threshold) | −10.82 dBFS | −16.84 dBFS |
+  | The take's analysis gate (`VoiceGate`) | the same measure | the same measure |
+  | What pYIN is given (svcore's transformer divides the mixdown by the channels; Tony reads a take normalised to its peak) | −4.80 dBFS RMS | −10.82 dBFS RMS |
 
-| | Mono device, or both inputs | Input 1 of 2 |
-| --- | --- | --- |
-| The live tracker's level (its floor, the voice threshold) | −10.82 dBFS | −16.84 dBFS |
-| The take's analysis gate (`VoiceGate`) | the same measure | the same measure |
-| What pYIN is given (svcore's transformer divides the mixdown by the channels; Tony reads a take normalised to its peak) | −4.80 dBFS RMS | −10.82 dBFS RMS |
-
-- With the voice threshold at −20 dBFS and singing at −17 dBFS RMS on its input, the
+  With the voice threshold at −20 dBFS and singing at −17 dBFS RMS on its input, the
   phrase had 203 dots and 203 pitch events on a mono device and on both inputs, and none
-  of either on one input of two.
-- pYIN found the same pitch either way on the fake's steady tones, at every level tried
-  down to 18 dB under the take's peak. Tony sets pYIN's low-amplitude suppression at
-  0.2 RMS of the normalised take (−14 dBFS); under it pYIN scales down how likely a
-  frame is to be voiced in proportion to its level, so soft singing on one input of two
-  loses half its weight there.
-- The master volume fader's peak bars show input 1 on the left and input 2 on the right
-  during a take.
+  of either on one input of two. pYIN found the same pitch either way on the fake's
+  steady tones, at every level tried down to 18 dB under the take's peak; but Tony sets
+  pYIN's low-amplitude suppression at 0.2 RMS of the normalised take (−14 dBFS), under
+  which pYIN scales down how likely a frame is to be voiced in proportion to its level, so
+  soft singing on one input of two loses half its weight there.
+
+**Input 1 or Input 2** makes the take from that input alone:
+
+- `record()` reads the choice for the device it records from **after** the base call
+  (`m_takeInputChannel`), not before as it reads the voice threshold: a phone knows its
+  input only once it is open, which for the first take is inside the base call. The live
+  tracker, set up after the base call, reads that channel of the recording
+  (`RealtimePitchTracker::setChannel()`) and measures its level as one channel; the
+  splice (`SingingTakes::spliceRecording()`, `TakeAudio::splice()`) puts that channel
+  alone into the take. The raw `recorded-*.wav` keeps every input, as recorded.
+- The first recording of a take makes it **mono**: it plays in both ears, and pYIN and
+  the analysis gate, which read the take, hear the input at its own level. Into a take
+  that is stereo already (made with both inputs, before the choice) the chosen input goes
+  into both channels, as a mono recording always did; the rest of that take stays as it
+  was, and still reads 6 dB down where it was made of one input. A new take starts
+  afresh.
+- A device that does not have the input chosen (Input 2 of a one-input microphone) gives
+  its take as Both would: the one channel there is.
+- The choice is shut during a take and while an audio check runs, as the voice
+  threshold is. The audio check's takes are made of both inputs whatever is chosen
+  ([below](#the-audio-checks-takes)).
+- **Kept per input device** (`InputChannel`, group `InputChannel`): under the driver and
+  the record device as `LatencyCalibration` names them, the Preferences' names on a
+  desktop and the route's input on a phone. A phone's device open for playback only
+  cannot say which input it will record from, and takes the one its driver last recorded
+  from. The menu's first line names the device a choice is for.
+
+**Every take plays centred.** `Analyser::addWaveform()` pans the reference's waveform
+hard left, upstream Tony's arrangement (its audio left, the pitch and notes played as
+tones on the right), which the user can change from the toolbar; the singing track has no
+pan control and its pitch and notes are silent, and it is listened back to for how the
+voice sounds, so its waveform is given the centre. Panned left as the reference is, a take
+would be heard in the left ear only, and a stereo one from input 2 alone not at all.
 
 **On Android Tony asks for a mono input** (`OboeAudioIO`, with Oboe allowed to convert
 channels), and what a two-input USB interface then gives depends on layers below Tony.
@@ -330,11 +358,19 @@ as android.googlesource.com cannot be reached from a cloud session):
   ALSA reports one channel as the device's least) drops the channels past the first:
   input 1 alone. AOSP's AIDL HAL converts nothing. The Pixel 9a's HAL is Google's own
   AIDL HAL, not public: which of these a two-input interface meets there is not known.
-- So on the phone a microphone on input 1 most likely arrives averaged, 6 dB down and
-  without the FAST track, and possibly whole; on input 2, averaged or not at all.
-  `AudioDeviceInfo.getChannelCounts()` gives the channel counts a device can be opened
-  with (empty for any count), and Oboe's `getHardwareChannelCount()` (Android 14 and
-  later) the count the hardware runs at.
+- So with Both a microphone on input 1 most likely arrives averaged, 6 dB down and without
+  the FAST track, and possibly whole; on input 2, averaged or not at all.
+- **With one input chosen** for the input device Android opened, `OboeAudioIO` opens the
+  input again at the device's own channel count, the most `AudioDeviceInfo` lists for it
+  (`getChannelCounts()`), with Oboe's conversion off and the device named, so that
+  Android has nothing to convert; Tony then takes the channel itself, as on the desktop.
+  A device that cannot be opened so keeps the mono input, and the log says why. Choosing
+  from the menu opens the device again if its input is open. Each open logs the
+  channels the input has, those the hardware runs at (Android 14 and later,
+  `getHardwareChannelCount()`) and the most the device lists, which says whether Android
+  converted. The input's streams are then described with the device's channel count, so
+  a round trip kept for the route with a mono input is out of date
+  ([calibrate-audio.md](calibrate-audio.md), §5): calibrate again after choosing.
 
 ## Pre-roll and Record into Selection
 
@@ -374,7 +410,9 @@ The same override records them with the **voice threshold Off**, whatever the se
 they measure the device, and what reaches the microphone from the speakers or an earcup is
 what they listen for. A threshold over the level that reaches it would take out the dots
 item 3 judges and the pitch and notes other items compare
-([calibrate-audio.md](calibrate-audio.md), §7).
+([calibrate-audio.md](calibrate-audio.md), §7). And with **both inputs**, whatever
+Input Channel says: one chosen that the microphone is not on would make takes of silence,
+and the dev checks' item 5 looks for the input that carries the microphone.
 
 Record's action goes to `recordPressed()`, which ignores a press while a check runs (the
 button is greyed then as well). The guard is not in `record()`: the runner and
@@ -384,7 +422,8 @@ their calls from a press.
 ## The live tracker
 
 `RealtimePitchTracker::run()`: read a 2048-frame window of the **mixdown**
-(`getData(-1, ...)`, so a mic on input 2 works), YIN, keep the estimate, advance 256;
+(`getData(-1, ...)`, so a mic on input 2 works), or of the one input the take is made
+from ([Input channels](#input-channels)), YIN, keep the estimate, advance 256;
 sleep 5 ms when there is not a full window yet. `kHopSize` is also the resolution of the
 dot model, whose unit must be `"Hz"` for the layer to align to the pane's log-frequency
 scale.
@@ -402,7 +441,7 @@ is:
   before it: on the fake, dots of its hum just before every sweep;
 - **the channels' average**, not the mixdown's sum: a microphone on both inputs would read
   6 dB louder than on one. A microphone on one input of two reads 6 dB below its own
-  level.
+  level, unless that input is chosen, which the tracker then reads alone.
 
 A microphone whose noise is louder than −60 dBFS still gives such dots, unless the voice
 threshold below is set over it; Calibrate Audio could measure that noise and suggest one

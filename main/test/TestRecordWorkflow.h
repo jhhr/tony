@@ -37,6 +37,8 @@
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
 #include "../VoiceThreshold.h"
+#include "../InputChannel.h"
+#include "../InputChannelMenu.h"
 
 #include "version.h"
 
@@ -1657,6 +1659,110 @@ class TestRecordWorkflow : public QObject
         return model ? model->getEventCount() : -1;
     }
 
+    // Playback > Input Channel, as the user chooses from it
+    void chooseInputChannel(int channel) {
+        InputChannelMenu *menu = m_window->inputChannelMenu();
+        QVERIFY(menu);
+        menu->tick();
+        for (QAction *action : menu->menu()->actions()) {
+            if (action->isCheckable() && action->data().toInt() == channel) {
+                QVERIFY(action->isEnabled());
+                action->trigger();
+                return;
+            }
+        }
+        QFAIL(qPrintable(QString("no entry for input %1").arg(channel)));
+    }
+
+    // The entry of Playback > Input Channel that is ticked, or -2 for none
+    int inputChannelTicked() {
+        InputChannelMenu *menu = m_window->inputChannelMenu();
+        if (!menu) return -2;
+        menu->tick();
+        for (QAction *action : menu->menu()->actions()) {
+            if (action->isCheckable() && action->isChecked()) {
+                return action->data().toInt();
+            }
+        }
+        return -2;
+    }
+
+    // The menu's line naming the device the choice is kept for
+    QString inputChannelDeviceLine() {
+        InputChannelMenu *menu = m_window->inputChannelMenu();
+        if (!menu) return {};
+        menu->tick();
+        for (QAction *action : menu->menu()->actions()) {
+            if (!action->isSeparator() && !action->isCheckable()) {
+                return action->text();
+            }
+        }
+        return {};
+    }
+
+    static std::vector<float> silence(double seconds) {
+        return std::vector<float>(size_t(seconds * rate), 0.f);
+    }
+
+    static double energy(const std::vector<float> &data, size_t from) {
+        double sum = 0.0;
+        for (size_t i = from; i < data.size(); ++i) {
+            sum += double(data[i]) * double(data[i]);
+        }
+        return sum;
+    }
+
+    // The take played back from its start, the reference silent: as much
+    // of it in the left ear as in the right
+    void verifyTakePlaysInBothEars() {
+        FakeAudioIO *fake = m_window->fake();
+        QVERIFY(fake);
+        const size_t from = fake->getCapturedOutput(0).size();
+        m_window->seekTo(0);
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        QTest::qWait(1000);
+        m_window->doPlay();
+        const double left = energy(fake->getCapturedOutput(0), from);
+        const double right = energy(fake->getCapturedOutput(1), from);
+        QVERIFY2(left > 10.0 && right > 10.0 &&
+                 std::fabs(left - right) <= 0.01 * std::max(left, right),
+                 qPrintable(QString("the take played with an energy of %1 "
+                                    "in the left ear and %2 in the right")
+                            .arg(left).arg(right)));
+    }
+
+    // The channels of the take's audio file, and the RMS of one of them
+    // over [from, to) in seconds; 0 channels if it cannot be read
+    struct TakeFile {
+        int channels = 0;
+        std::vector<std::vector<float>> samples;
+        double rms(int channel, double from, double to) const {
+            if (channel >= channels) return -1.0;
+            const auto &c = samples[size_t(channel)];
+            size_t a = size_t(from * rate), b = size_t(to * rate);
+            b = std::min(b, c.size());
+            if (b <= a) return -1.0;
+            double sum = 0.0;
+            for (size_t i = a; i < b; ++i) sum += double(c[i]) * double(c[i]);
+            return std::sqrt(sum / double(b - a));
+        }
+    };
+    TakeFile takeFile() {
+        TakeFile f;
+        sv::WavFileReader reader
+            { sv::FileSource(m_window->takes()->getAudioPath()) };
+        if (!reader.isOK()) return f;
+        f.channels = reader.getChannelCount();
+        auto data = reader.getInterleavedFrames(0, reader.getFrameCount());
+        f.samples.resize(size_t(f.channels));
+        for (size_t i = 0; i < data.size(); ++i) {
+            f.samples[i % size_t(f.channels)].push_back(data[i]);
+        }
+        return f;
+    }
+
+
     // Steps between one live dot and the next that are not one hop: the
     // dots missing from a sound that goes on
     int liveDotGaps() {
@@ -1760,6 +1866,8 @@ private slots:
 
         // No voice threshold, whatever a test that set one left behind
         VoiceThreshold::setThreshold(settings, VoiceThreshold::kOff);
+        // Nor an input channel: takes are made of both inputs
+        settings.remove("InputChannel");
 
         // The toggles of the reference's tracks and the singing track's;
         // a test that failed half way must not leave the next one's
@@ -1782,6 +1890,8 @@ private slots:
         QSettings().remove("LatencyCalibration");
         // Nor a voice threshold: the other suites of this process record
         setVoiceThreshold(VoiceThreshold::kOff);
+        // Nor an input channel, for the same reason
+        QSettings().remove("InputChannel");
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -1979,6 +2089,281 @@ private slots:
         QVERIFY2(pitch.size() > 20, "the take of input 2 has no pitch track");
         QVERIFY(std::fabs(TestSignals::centsBetween
                           (medianHz(pitch), highHz)) < 10.0);
+    }
+
+    // A take is listened back to for how the voice sounds: it plays in
+    // both ears alike, mono or stereo. (Panned hard left, as the
+    // reference is, it was heard in the left ear only)
+    void a_take_plays_in_both_ears() {
+        for (int inputs : { 1, 2 }) {
+            FakeAudioIO::Config config;
+            config.channels = 2;
+            config.inputChannels = inputs;
+            config.input = tone(highHz, 3.0);
+            makeWindow(config);
+            openReference(writeWav(silence(3.0)));
+            if (QTest::currentTestFailed()) return;
+            take(1200);
+            if (QTest::currentTestFailed()) return;
+            QCOMPARE(takeFile().channels, inputs);
+            verifyTakePlaysInBothEars();
+            if (QTest::currentTestFailed()) return;
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(), 30000);
+            m_window->doCloseSession();
+        }
+    }
+
+    // A microphone on one input of two, the other input hearing
+    // something else, and that input chosen (Playback > Input Channel):
+    // the take is mono, made of that input alone; the live dots and the
+    // analysis hear it alone; and it plays in both ears. With both
+    // inputs a take of a microphone on input 2 alone played silent
+    void one_input_chosen_makes_a_mono_take_of_it() {
+        for (int channel : { 0, 1 }) {
+            FakeAudioIO::Config config;
+            config.channels = 2;
+            config.inputChannel = channel;
+            config.input = tone(highHz, 3.0);
+            config.otherInput = TestSignals::sawtooth
+                (lowHz, rate, int(3.0 * rate), 0.3);
+            makeWindow(config);
+            openReference(writeWav(silence(3.0)));
+            if (QTest::currentTestFailed()) return;
+            chooseInputChannel(channel);
+            if (QTest::currentTestFailed()) return;
+            QCOMPARE(inputChannelTicked(), channel);
+
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QCOMPARE(m_window->takeInputChannel(), channel);
+            QTest::qWait(1200);
+            auto dots = sv::ModelById::getAs<sv::SparseTimeValueModel>
+                (m_window->realtimeModelId());
+            QVERIFY(dots);
+            const double dotsHz = medianHz(dots->getAllEvents());
+            QVERIFY2(std::fabs(TestSignals::centsBetween(dotsHz, highHz))
+                     < 10.0,
+                     qPrintable(QString("input %1: the live dots are at %2 "
+                                        "Hz, not the microphone's %3 Hz")
+                                .arg(channel + 1).arg(dotsHz).arg(highHz)));
+            stopTake();
+            if (QTest::currentTestFailed()) return;
+
+            const TakeFile file = takeFile();
+            QCOMPARE(file.channels, 1);
+            QVERIFY(file.rms(0, 0.2, 1.0) > 0.2);
+            const auto pitch = pitchEvents(m_window->analyser2());
+            QVERIFY(pitch.size() > 20);
+            QVERIFY2(std::fabs(TestSignals::centsBetween
+                               (medianHz(pitch), highHz)) < 10.0,
+                     qPrintable(QString("input %1: the take's pitch is at "
+                                        "%2 Hz").arg(channel + 1)
+                                .arg(medianHz(pitch))));
+            verifyTakePlaysInBothEars();
+            if (QTest::currentTestFailed()) return;
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(), 30000);
+            m_window->doCloseSession();
+        }
+    }
+
+    // A microphone on one input of two, singing 3 dB over the voice
+    // threshold on its input: with both inputs the channels' average
+    // reads it 3 dB under, and it gets no dots and no pitch; with that
+    // input chosen, it is heard at its own level
+    void one_input_chosen_is_heard_at_its_own_level() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 0;
+        // -17 dBFS RMS
+        config.input = TestSignals::sawtooth(highHz, rate, int(3.0 * rate),
+                                             0.2447);
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        setVoiceThreshold(-20.0);
+
+        for (int channel : { InputChannel::kBoth, 0 }) {
+            chooseInputChannel(channel);
+            if (QTest::currentTestFailed()) return;
+            m_window->seekTo(0);
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QTest::qWait(1200);
+            const int dots = liveDots();
+            stopTake();
+            if (QTest::currentTestFailed()) return;
+            const auto pitch = pitchEvents(m_window->analyser2());
+            if (channel == InputChannel::kBoth) {
+                QVERIFY2(dots == 0 && pitch.empty(),
+                         qPrintable(QString("both inputs: %1 dots and %2 "
+                                            "pitch events")
+                                    .arg(dots).arg(pitch.size())));
+            } else {
+                QVERIFY2(dots > 20 && pitch.size() > 20,
+                         qPrintable(QString("input 1: %1 dots and %2 pitch "
+                                            "events")
+                                    .arg(dots).arg(pitch.size())));
+            }
+        }
+    }
+
+    // A take made of both inputs before one was chosen keeps its two
+    // channels: what is recorded into it then goes into both of them,
+    // from the input chosen, and the rest of it stays as it was
+    void a_stereo_take_takes_one_input_into_both_channels() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 0;
+        config.input = tone(highHz, 2.0);
+        config.otherInput = TestSignals::sawtooth
+            (lowHz, rate, int(2.0 * rate), 0.3);
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(1200);
+        if (QTest::currentTestFailed()) return;
+        TakeFile before = takeFile();
+        QCOMPARE(before.channels, 2);
+        const double otherBefore = before.rms(1, 0.2, 0.9);
+        QVERIFY(otherBefore > 0.1);
+
+        chooseInputChannel(0);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(sv::sv_frame_t(3.0 * rate));
+        take(1200);
+        if (QTest::currentTestFailed()) return;
+
+        TakeFile after = takeFile();
+        QCOMPARE(after.channels, 2);
+        // The new part: input 1 in both channels
+        const double left = after.rms(0, 3.2, 3.9);
+        QVERIFY(left > 0.2);
+        QCOMPARE(after.rms(1, 3.2, 3.9), left);
+        // The old part as it was, input 2 in its second channel
+        QCOMPARE(after.rms(1, 0.2, 0.9), otherBefore);
+        QCOMPARE(after.rms(0, 0.2, 0.9), before.rms(0, 0.2, 0.9));
+        const auto pitch = pitchEvents(m_window->analyser2());
+        const auto newPart = eventsBetween(pitch, sv::sv_frame_t(3.2 * rate),
+                                           sv::sv_frame_t(3.9 * rate));
+        QVERIFY(newPart.size() > 20);
+        QVERIFY(std::fabs(TestSignals::centsBetween(medianHz(newPart),
+                                                    highHz)) < 10.0);
+    }
+
+    // A device with two inputs opened after one with one input gives
+    // both: the device is asked for two whatever the last one gave
+    // (svapp's record target), else the second input of an interface
+    // chosen after a one-input microphone could not be had until Tony
+    // was started again
+    void a_device_after_a_one_input_one_records_both_inputs() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannels = 1;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(takeFile().channels, 1);
+
+        m_window->setFakeInputChannels(2);
+        m_window->doRecreateAudioIO();
+        m_window->doNewEmptyTake();
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(takeFile().channels, 2);
+    }
+
+    // Playback > Input Channel is kept for the input device the
+    // Preferences name, which its first line names; another device has
+    // its own; it is shut during a take; and the audio check's takes are
+    // made of both inputs whatever is chosen, as the runner sets them
+    void input_channel_is_kept_per_input_device() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(inputChannelDeviceLine(), QString("For: (System Default)"));
+        QCOMPARE(inputChannelTicked(), InputChannel::kBoth);
+        chooseInputChannel(1);
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        QCOMPARE(InputChannel::channel(settings, { "", "" }), 1);
+        QCOMPARE(inputChannelTicked(), 1);
+
+        settings.setValue("Preferences/audio-record-device", "Other Mic");
+        QCOMPARE(inputChannelDeviceLine(), QString("For: Other Mic"));
+        QCOMPARE(inputChannelTicked(), InputChannel::kBoth);
+        settings.setValue("Preferences/audio-record-device", "");
+        QCOMPARE(inputChannelTicked(), 1);
+
+        QVERIFY(m_window->inputChannelMenu()->menu()->menuAction()
+                ->isEnabled());
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeInputChannel(), 1);
+        QVERIFY(!m_window->inputChannelMenu()->menu()->menuAction()
+                ->isEnabled());
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->inputChannelMenu()->menu()->menuAction()
+                ->isEnabled());
+
+        m_window->setAudioCheckTakes(true);
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        startTake();
+        QCOMPARE(m_window->takeInputChannel(), InputChannel::kBoth);
+        waitForSomethingRecorded();
+        stopTake();
+        m_window->setAudioCheckTakes(false);
+    }
+
+    // On a phone the input device is the route's (the fake reports one,
+    // as OboeAudioIO does), and while the device is open for playback
+    // only, the input its driver last recorded from
+    void input_channel_of_a_route() {
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output.id = 3;
+        route.output.type = 22;
+        route.output.productName = "AI-Micro";
+        route.hasInput = true;
+        route.input.id = 4;
+        route.input.type = 22;
+        route.input.productName = "AI-Micro";
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const QString name = AudioRoute::deviceName(route.input);
+        QCOMPARE(m_window->doInputChannelKey().driver, QString("oboe"));
+        QCOMPARE(m_window->doInputChannelKey().recordDevice, name);
+        chooseInputChannel(0);
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        QCOMPARE(InputChannel::channel(settings, { "oboe", name }), 0);
+
+        // Opened for playback only, it names the input it had
+        route.hasInput = false;
+        m_window->setFakeRoute(route);
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->doInputChannelKey().recordDevice, name);
+        QCOMPARE(inputChannelTicked(), 0);
+        QCOMPARE(inputChannelDeviceLine(), QString("For: %1").arg(name));
     }
 
     void live_dots_removed() {

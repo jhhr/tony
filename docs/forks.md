@@ -89,7 +89,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   deleted, so the history had to be cleared before every take (undo depth one).
 - `AudioCallbackRecordTarget`: `recordUpdateTimeout` 10 ms (upstream ~200 ms) so the live
   tracker sees audio promptly; `setSystemRecordLatency()` actually stores its value
-  (upstream: a no-op); `getSystemRecordLatency()`; `getFramesReceived()`.
+  (upstream: a no-op); `getSystemRecordLatency()`; `getFramesReceived()`;
+  `getApplicationChannelCount()` is always two, where upstream it was the channels the
+  device opened last gave, so that after a one-input device every device was opened with
+  one, and an interface's second input could not be had (Input Channel,
+  [recording.md](recording.md#input-channels)).
 - `AudioCallbackPlaySource`: `setPlayStartCallback(std::function<void(int)>)`, run from
   the audio callback with the first block after `play()` (start-gap measurement);
   `getModels()` for tests; `removeModel()` tolerates a model already gone.

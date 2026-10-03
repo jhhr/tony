@@ -44,6 +44,12 @@ Recording
    and the pre-roll are buttons in the toolbar, after "While recording:"
  * the microphone and the output are chosen in Playback -> Audio Input Device
    and Playback -> Audio Output Device
+ * a microphone on one input of an interface with two: Playback -> Input
+   Channel -> Input 1 (or Input 2) makes each take from that input alone, so
+   that it plays back in both ears and the live dots, the analysis and the
+   voice threshold hear it at its own level. With Both Inputs, the default, a
+   take of a microphone on one input plays in one ear only. The choice is kept
+   for each input device
  * on Windows, Playback -> Audio Driver chooses MME, DirectSound or WASAPI, and
    Playback -> Audio Latency how much latency is asked of it (10 to 200 ms);
    each driver keeps its own devices, latency and measured round trip. WASAPI

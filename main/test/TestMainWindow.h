@@ -25,6 +25,7 @@
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
 #include "../VoiceThresholdMenu.h"
+#include "../InputChannelMenu.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -67,6 +68,11 @@ public:
     // device opened again, as a phone's is when its route changes
     void setFakeRoute(const AudioRoute::Route &route) {
         m_fakeConfig.route = route;
+    }
+    // The inputs the fake has from the next time it is opened, as
+    // another device chosen has others
+    void setFakeInputChannels(int channels) {
+        m_fakeConfig.inputChannels = channels;
     }
     void doRecreateAudioIO() { recreateAudioIO(); }
 
@@ -214,6 +220,9 @@ public:
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
     // Playback > Voice Threshold, which is always shown
     VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
+    // Playback > Input Channel, likewise, and the device it is kept for
+    InputChannelMenu *inputChannelMenu() { return m_inputChannelMenu; }
+    InputChannel::Key doInputChannelKey() const { return inputChannelKey(); }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as
@@ -274,6 +283,7 @@ public:
     sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
     sv::sv_frame_t takeEnd() { return m_takeEnd; }
     double takeVoiceThreshold() { return m_takeVoiceThreshold; }
+    int takeInputChannel() { return m_takeInputChannel; }
     bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
 
     void seekTo(sv::sv_frame_t frame) {

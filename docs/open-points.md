@@ -199,6 +199,11 @@ The platform's own limits are in [port-android.md](port-android.md#known-limitat
   from CI (a session's clone is shallow), so it installs over one from CI only after
   uninstalling it, which loses Tony's settings and log
   ([building.md](building.md#building-for-android)).
+- **Input Channel on the phone has not been tried**: whether the Pixel's audio HAL
+  averages a two-input USB interface into the mono input Tony asks for (likely, from
+  Android's source, but the HAL is not public), and whether the input opened at the
+  device's own channels, for one input chosen, keeps the low-latency path
+  ([recording.md](recording.md#input-channels); the checklist's section 7).
 - **Touch on a Windows touch screen** has not been tried: Windows makes its own mouse
   events from touches, and its own right click from a press and hold.
 

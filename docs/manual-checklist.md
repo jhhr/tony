@@ -442,3 +442,40 @@ touches, and its own right click from a press and hold.
 
 The questions the automated checks raised, and the facts they established for the
 decisions above, are in [open-points.md](open-points.md).
+
+## 7. A headset on an interface: input channel and levels
+
+For a headset microphone on one input of a two-input interface: the user's Rode HS2 on
+input 1 of a Rode AI-Micro, on Windows (WASAPI) and on the phone. The design is in
+[recording.md](recording.md#input-channels). None of it has been tried on a device yet.
+
+**On Windows**, with the AI-Micro chosen under Playback > Audio Input Device:
+
+1. **Which input the HS2 is on.** Calibrate Audio with the dev checks, an earcup held to
+   the HS2: item 5's "the mic is on" names the input (with the HS2 on input 1, item 5 reads
+   Measured, "not on input 2 alone"). If it names both inputs, the AI-Micro feeds the
+   one microphone to both, and Both Inputs is right as it is.
+2. **Input Channel** (Playback > Input Channel): its first line names the AI-Micro (or
+   "(System Default)" if that is what Audio Input Device has ticked). Choose Input 1,
+   record a short take and play it back: the voice in both ears, equally. Then a take with
+   Both Inputs into a new take: the voice in the left ear only.
+3. **The level.** With Input 1, sing at the volume you practise at: the live dots come
+   through with the voice threshold at the same setting they did before with Both, or one
+   step (5 dB) higher. Choosing another input device and coming back keeps Input 1 for
+   the AI-Micro.
+
+**On the phone**, with the AI-Micro plugged in:
+
+4. Record a take with Both Inputs, then **Help > Save Log...**: the line "OboeAudioIO:
+   input: 1 channel(s), the hardware N, ..." says whether Android averaged the AI-Micro's
+   two inputs (the hardware 2) or opened it with one (the hardware 1, or not said before
+   Android 14), and the "input" stream line before it whether it got the low-latency
+   path ("MMAP", "LowLatency").
+5. Playback > Input Channel names the AI-Micro (after a take, or as the input recorded
+   from last). Choose Input 1: the log says "the input opened at the device's own 2
+   channels" (or why not). Record and play back: the voice in both ears; the dots as above.
+   The latency line then says the measured figure is out of date: run Calibrate Audio
+   again on this route.
+6. Unplug the AI-Micro: the phone's own microphone keeps Both Inputs, and records as
+   before.
+

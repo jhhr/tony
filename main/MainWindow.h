@@ -29,6 +29,7 @@
 #include "LatencyUtils.h"
 #include "LatencyCalibration.h"
 #include "LiveDotsFeed.h"
+#include "InputChannel.h"
 
 #include <vector>
 #include <string>
@@ -55,6 +56,7 @@ class AudioCheckRunner;
 struct AudioCheckResult;
 class AudioDriverMenus;
 class VoiceThresholdMenu;
+class InputChannelMenu;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -152,6 +154,15 @@ public:
     // The route the open device reports; its driver is "" if it reports
     // none, or there is no device open
     AudioRoute::Route audioRoute() const;
+
+    // The input device an Input Channel choice is kept for: the record
+    // device the Preferences name, or the input of the route the open
+    // device reports (on a phone), or while it is open for playback only
+    // the input its driver last recorded from (InputChannel::lastInput())
+    InputChannel::Key inputChannelKey() const;
+
+    // The input channel chosen for that device now (InputChannel)
+    int currentInputChannel() const;
 
 #ifdef Q_OS_ANDROID
     // The microphone is asked for when it is first needed: Record starts
@@ -362,6 +373,10 @@ protected slots:
     // Preferences: the device is opened again, with it
     void audioDriverChosen(QString implementation);
     void audioLatencyChosen(double seconds);
+
+    // Playback > Input Channel chosen, and written to the settings: a
+    // phone opens its device again if the input is open otherwise
+    void inputChannelChosen(int channel);
 
     // Playback > Calibrate Audio: the audio check's dialog, not modal
     virtual void calibrateAudio();
@@ -772,6 +787,14 @@ protected:
     // analysis of the take at Stop both go by it
     double m_takeVoiceThreshold;
 
+    // The input channel (InputChannel) of the take being recorded, or of
+    // the one most recently recorded, read as the voice threshold is:
+    // the choice for the input device as the take started, and both
+    // inputs for the audio check's takes, which measure the device and
+    // say which input the microphone is on.  The live tracker reads that
+    // channel, and the splice makes the take from it
+    int m_takeInputChannel;
+
     // Polls the record target while a take that has an end to reach
     // runs, and stops the take once the singing for that end has
     // arrived.  Not running for a take that goes on until Stop.
@@ -869,8 +892,9 @@ protected:
     // Playback > Audio Driver and Audio Latency, before the device menus
     AudioDriverMenus *m_audioDriverMenus;
 
-    // Playback > Voice Threshold, after Record
+    // Playback > Voice Threshold and Input Channel, after Record
     VoiceThresholdMenu *m_voiceThresholdMenu;
+    InputChannelMenu *m_inputChannelMenu;
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;

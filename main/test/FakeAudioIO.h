@@ -79,6 +79,12 @@ public:
         // every channel
         int inputChannel = -1;
 
+        // What the other channels have, with inputChannel set: mono,
+        // delivered once from the same time as the input and followed by
+        // silence, as what the interface's other input hears. Empty for
+        // silence there. The loopback and the hum are not added to it
+        std::vector<float> otherInput;
+
         // Start the input clock at the first audible output sample
         // instead of at resume. With inputDelay equal to the reported
         // round trip, this is a singer who is exactly on time.
@@ -148,9 +154,14 @@ public:
         m_source->setSystemPlaybackChannelCount(m_config.channels);
         m_source->setSystemPlaybackLatency(m_config.playbackLatency);
 
+        // As PortAudioIO opens its input: as many channels as the
+        // application asks for, and no more than the device has
+        const int asked = m_target->getApplicationChannelCount();
+        m_inputs = asked > 0 ? std::min(asked, inputChannelCount())
+                             : inputChannelCount();
         m_target->setSystemRecordBlockSize(m_config.blockSize);
         m_target->setSystemRecordSampleRate(m_config.sampleRate);
-        m_target->setSystemRecordChannelCount(inputChannelCount());
+        m_target->setSystemRecordChannelCount(m_inputs);
         m_target->setSystemRecordLatency(m_config.recordLatency);
         m_reportedRecordLatency = m_config.recordLatency;
 
@@ -213,6 +224,19 @@ public:
     }
 
     /**
+     * Everything the application has played on one output channel (0
+     * is the left), from the same frame as getCapturedOutput(): which
+     * ear a sound was played to.
+     */
+    std::vector<float> getCapturedOutput(int channel) const {
+        std::lock_guard<std::mutex> guard(m_mutex);
+        if (channel < 0 || channel >= int(m_capturedChannels.size())) {
+            return {};
+        }
+        return m_capturedChannels[size_t(channel)];
+    }
+
+    /**
      * Index into the captured output of the first audible sample
      * since the last resume, or -1 if there has been none.
      */
@@ -244,8 +268,10 @@ private:
     long m_framesBeforePlayStart;
     int m_resumeCount;
     int m_reportedRecordLatency = 0;
+    int m_inputs = 1;
     int m_loopbackDelay;
     std::vector<float> m_captured;
+    std::vector<std::vector<float>> m_capturedChannels;
 
     // Where the loopback lands after the given number of starts, against
     // inputDelay: on time at the first, then -, +, 0 times the shift
@@ -297,6 +323,18 @@ private:
         return m_config.input[size_t(i)];
     }
 
+    // The other input's, likewise
+    float otherInputAt(long frame) const {
+        long origin = m_resumeFrame;
+        if (m_config.inputFollowsPlayback) {
+            if (m_playStartFrame < 0) return 0.f;
+            origin = m_playStartFrame;
+        }
+        long i = frame - origin - m_config.inputDelay;
+        if (i < 0 || i >= long(m_config.otherInput.size())) return 0.f;
+        return m_config.otherInput[size_t(i)];
+    }
+
     void process() {
         const int n = m_config.blockSize;
         const int ch = m_config.channels;
@@ -326,12 +364,15 @@ private:
         bool kept = !m_config.inputIsKept || m_config.inputIsKept();
         long keptBefore = m_sinceResume;
 
-        const int inCh = inputChannelCount();
-        std::vector<float> silence(n, 0.f);
+        const int inCh = m_inputs;
+        std::vector<float> other(n, 0.f);
+        if (m_config.inputChannel >= 0 && !m_config.otherInput.empty()) {
+            for (int i = 0; i < n; ++i) other[i] = otherInputAt(base + i);
+        }
         std::vector<const float *> inPtrs(inCh, in.data());
         if (m_config.inputChannel >= 0) {
             for (int c = 0; c < inCh; ++c) {
-                if (c != m_config.inputChannel) inPtrs[c] = silence.data();
+                if (c != m_config.inputChannel) inPtrs[c] = other.data();
             }
         }
         m_target->putSamples(inPtrs.data(), inCh, n);
@@ -348,6 +389,14 @@ private:
         if (m_config.reportLevels) {
             m_source->setOutputLevels(peak(outPtrs[0], got),
                                       peak(outPtrs[ch > 1 ? 1 : 0], got));
+        }
+
+        m_capturedChannels.resize(size_t(ch));
+        for (int c = 0; c < ch; ++c) {
+            for (int i = 0; i < n; ++i) {
+                m_capturedChannels[size_t(c)].push_back
+                    (i < got ? out[size_t(c)][size_t(i)] : 0.f);
+            }
         }
 
         for (int i = 0; i < n; ++i) {

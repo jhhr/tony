@@ -284,7 +284,10 @@ for new buffers at every take. So on a route the fingerprint is how each stream 
 **opened** (the audio API, MMAP or not, rate, channels, format, performance and sharing
 mode, burst, buffer and capacity, and the input's preset), stored with the figure: it is
 stale when a stream it describes opened otherwise, never because the reported pair moved,
-and a stream not open (the input before the first take) is not compared. For the same
+and a stream not open (the input before the first take) is not compared. An input opened
+at the device's own channels, for one input chosen under Input Channel, is opened
+otherwise: a figure kept with the mono input is out of date after the choice, and the
+other way round ([recording.md](recording.md#input-channels)). For the same
 reason the check counts each punch-in as if placed with the first one's round trip
 (`LatencyCheck::PunchIn::placedWith`), so that a reported pair that moved between
 punch-ins does not read as spread.
@@ -553,8 +556,8 @@ What it rests on:
   While Recording and Pre-roll write QSettings when toggled, so the runner sets an override
   (`m_audioCheckTakes`, with the plan's pre-roll and round trip) that `record()`,
   `recordingStarted()` and `wantedPreRollFrames()` read, and clears it when the take stops
-  or the run ends. It also records them with the voice threshold Off, whatever the setting
-  ([recording.md](recording.md#the-audio-checks-takes)).
+  or the run ends. It also records them with the voice threshold Off and with both
+  inputs, whatever the settings ([recording.md](recording.md#the-audio-checks-takes)).
 - **Record during a check.** The Record action goes to `recordPressed()`, which ignores a
   press while a check runs: `record()` itself cannot tell a press from the runner's calls or
   `pollTakeProgress()`'s, and a press would stop the check's take or record one of the

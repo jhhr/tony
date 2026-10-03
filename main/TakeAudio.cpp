@@ -47,6 +47,7 @@ struct Patch {
     sv_frame_t end;
     WavFileReader *source;
     sv_frame_t sourceOffset; // source frame that lands on "start"
+    int sourceChannel;       // the one channel of the source used, or -1
 };
 
 std::unique_ptr<WavFileReader> openWav(QString path, QString &error)
@@ -65,9 +66,10 @@ std::unique_ptr<WavFileReader> openWav(QString path, QString &error)
 }
 
 // count frames from "start" on, interleaved in "channels" channels,
-// silent where the file has nothing (start may be past its end)
+// silent where the file has nothing (start may be past its end). Only
+// the file's channel "only" if that is one it has, in every channel
 floatvec_t readFrames(WavFileReader *reader, sv_frame_t start,
-                      sv_frame_t count, int channels)
+                      sv_frame_t count, int channels, int only = -1)
 {
     floatvec_t result(count * channels, 0.f);
     if (!reader || start >= reader->getFrameCount()) return result;
@@ -75,10 +77,13 @@ floatvec_t readFrames(WavFileReader *reader, sv_frame_t start,
     int have = reader->getChannelCount();
     floatvec_t data = reader->getInterleavedFrames(start, count);
     sv_frame_t got = sv_frame_t(data.size()) / have;
+    if (only >= have) only = -1;
 
     for (sv_frame_t i = 0; i < got; ++i) {
         for (int c = 0; c < channels; ++c) {
-            if (have == channels) {
+            if (only >= 0) {
+                result[i * channels + c] = data[i * have + only];
+            } else if (have == channels) {
                 result[i * channels + c] = data[i * have + c];
             } else if (channels == 1) {
                 float sum = 0.f;
@@ -135,7 +140,7 @@ QString write(WavFileReader *old, sv_samplerate_t rate, int channels,
 
                 floatvec_t replacement = readFrames
                     (patch.source, patch.sourceOffset + (from - patch.start),
-                     to - from, channels);
+                     to - from, channels, patch.sourceChannel);
 
                 for (sv_frame_t i = from; i < to; ++i) {
                     float w = weightAt(i, patch, patchFade);
@@ -204,7 +209,8 @@ QString
 TakeAudio::splice(QString oldPath, QString recordingPath,
                   sv_frame_t recordingOffset, sv_frame_t position,
                   sv_frame_t length, QString outPath,
-                  Coverage::Range *placed, sv_frame_t fadeFrames)
+                  Coverage::Range *placed, sv_frame_t fadeFrames,
+                  int recordingChannel)
 {
     QString error = checkOutPath(outPath, oldPath);
     if (error != "") return error;
@@ -237,13 +243,18 @@ TakeAudio::splice(QString oldPath, QString recordingPath,
         return tr("The recording is too short to use");
     }
 
+    if (recordingChannel >= recording->getChannelCount()) {
+        recordingChannel = -1;
+    }
+
     Patch patch { position, position + length,
-                  recording.get(), recordingOffset };
+                  recording.get(), recordingOffset, recordingChannel };
 
     sv_frame_t total = patch.end;
     if (old) total = std::max(total, old->getFrameCount());
 
-    int channels = old ? old->getChannelCount() : recording->getChannelCount();
+    int channels = old ? old->getChannelCount() :
+        recordingChannel >= 0 ? 1 : recording->getChannelCount();
 
     error = write(old.get(), recording->getSampleRate(), channels, total,
                   { patch }, fadeFrames, outPath);
@@ -275,7 +286,7 @@ TakeAudio::erase(QString oldPath, const Coverage::Ranges &ranges,
 
     std::vector<Patch> patches;
     for (const Coverage::Range &r : tidy.getRanges()) {
-        patches.push_back({ r.start, r.end, nullptr, 0 });
+        patches.push_back({ r.start, r.end, nullptr, 0, -1 });
     }
 
     return write(old.get(), old->getSampleRate(), old->getChannelCount(),

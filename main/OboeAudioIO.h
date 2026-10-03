@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -66,6 +67,15 @@ enum class Result : int32_t;
  * of how far behind the reading was, not of the device, and is not
  * used: the figures stay as they were.
  *
+ * The input is mono, as Android makes it of the device's channels,
+ * unless the application has chosen one input of the device it opens
+ * (InputChannel): Android averages a stereo device's two (on its legacy
+ * path; docs/recording.md, "Input channels"), which takes a microphone
+ * on one input 6 dB down and costs the input its fast path. Then the
+ * input is opened again at the device's own channel count, as
+ * AudioDeviceInfo gives it, and the application takes the input it
+ * wants from those.
+ *
  * The route, the devices Android opened (the speaker and the phone's
  * microphone, a headset, Bluetooth) and how their streams were opened,
  * is looked up once, when they are, and logged: a round trip measured
@@ -85,12 +95,21 @@ class OboeAudioIO : public breakfastquay::SystemAudioIO,
 {
 public:
     /**
+     * The input chosen for an input device, as InputChannel counts it
+     * (-1 for both), by the device Android opened. Asked on the GUI
+     * thread each time the input is opened
+     */
+    typedef std::function<int(const AudioRoute::Device &input)>
+        InputChannelFor;
+
+    /**
      * Open the output and, if target is not null, the input. Check
      * isOK() afterwards: without the input it is false, and the caller
      * is expected to try again without a target, for playback only.
      */
     OboeAudioIO(breakfastquay::ApplicationRecordTarget *target,
-                breakfastquay::ApplicationPlaybackSource *source);
+                breakfastquay::ApplicationPlaybackSource *source,
+                InputChannelFor inputChannelFor = {});
     ~OboeAudioIO() override;
 
     bool isSourceOK() const override;
@@ -118,6 +137,8 @@ public:
 private:
     class Engine;
     class ErrorFlag;
+
+    InputChannelFor m_inputChannelFor;
 
     std::shared_ptr<oboe::AudioStream> m_output;
     std::shared_ptr<oboe::AudioStream> m_input;
