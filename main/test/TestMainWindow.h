@@ -179,6 +179,8 @@ public:
 
     // The Record button, as the user presses it
     QAction *recordAction() { return m_recordAction; }
+    // Play / Pause, as Space presses it
+    QAction *playAction() { return m_playAction; }
 
 #ifdef TONY_DEV_CHECKS
     // The development checks; deleted as the window's destructor deletes

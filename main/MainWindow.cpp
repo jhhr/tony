@@ -5213,6 +5213,22 @@ MainWindow::restorePlaySelectionAfterTake()
 }
 
 void
+MainWindow::stopReferenceAfterTake()
+{
+    // Stop reference playback that was started for the singer's benefit,
+    // and suspend the audio IO where Stop does (suspendAudioOnStop()):
+    // the application keeps the stream running for the next take
+    if (m_playSource && m_playSource->isPlaying()) {
+        cerr << "MainWindow::stopReferenceAfterTake: stopping reference playback" << endl;
+        m_playSource->stop();
+        if (suspendAudioOnStop()) {
+            if (m_audioIO) m_audioIO->suspend();
+            else if (m_playTarget) m_playTarget->suspend();
+        }
+    }
+}
+
+void
 MainWindow::teardownSingingTrackAnalyser()
 {
     // m_singingAudioMutedForTake is deliberately not cleared here: the
@@ -6518,17 +6534,8 @@ MainWindow::recordingFinishedFull(Analyser *analysing)
         teardownRealtimePitchLayer();
     }
 
-    // Stop reference playback that was started for the singer's benefit,
-    // and suspend the audio IO where Stop does (suspendAudioOnStop()):
-    // the application keeps the stream running for the next take
-    if (m_playSource && m_playSource->isPlaying()) {
-        cerr << "MainWindow::recordingFinishedFull: stopping reference playback" << endl;
-        m_playSource->stop();
-        if (suspendAudioOnStop()) {
-            if (m_audioIO) m_audioIO->suspend();
-            else if (m_playTarget) m_playTarget->suspend();
-        }
-    }
+    // A singing take's has been stopped already, in finishSingingTake()
+    stopReferenceAfterTake();
     restorePlaySelectionAfterTake();
 
     updateLayerStatuses();
@@ -6576,7 +6583,12 @@ MainWindow::finishSingingTake()
     // The playhead goes back to where the take started: Play then hears
     // what was just sung, and Record again records the same part.  (While
     // recording, ViewManager keeps the playback frame at the duration of
-    // the take, so it is somewhere else by now.)
+    // the take, so it is somewhere else by now.)  The reference that
+    // played for the take stops first: a playhead moved while it plays
+    // sends the playback there too (ViewManager::setPlaybackFrame()), and
+    // the reference would be heard from the take's position for as long
+    // as the splice below takes, with the cursor left somewhere past it
+    stopReferenceAfterTake();
     if (m_viewManager) m_viewManager->setPlaybackFrame(position);
 
     // A take stopped the moment it was started, or one no longer than the

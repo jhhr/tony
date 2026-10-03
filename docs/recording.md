@@ -115,15 +115,21 @@ that handler may wait for it.
    model is never released under it. `stopRecording()` has already called
    `writeComplete()`; releasing the model closes the reader too, so the WAV is whole and
    closed before the splice reads it.
-3. Playhead back to P, so Play hears what was sung and Record records the same part again.
+3. **Stop the reference, then** playhead back to P, so Play hears what was sung and Record
+   records the same part again. Moved while the reference plays, the playhead would send
+   the playback there too (`ViewManager::setPlaybackFrame()` seeks a playing source): the
+   reference would be heard again from P for as long as the splice takes, the longer the
+   longer the take, and the cursor would be left past P. `stopReferenceAfterTake()` also
+   suspends the device where Stop does (`suspendAudioOnStop()`, which says no; see
+   [Latency](#latency)).
 4. `m_takes->spliceRecording(...)` — see [takes.md](takes.md). A recording no longer than
    L + R is dropped quietly; a real failure is a dialog and leaves the track as it was.
 5. The undo command is made, the audio swapped, the ranged analysis started (gated by the
    take's voice threshold: [takes.md](takes.md#the-voice-threshold)), the command pushed,
    and `syncCoverageStrip()` called **after** the swap.
 6. `recordingFinishedFull(analysing ? m_analyser2 : nullptr)` clears flags, restores
-   audibility, stops reference playback, and suspends the device only where Stop does
-   (`suspendAudioOnStop()`, which says no; see [Latency](#latency)). With an
+   audibility, and stops reference playback if nothing has yet
+   (`stopReferenceAfterTake()`; a take's was stopped at step 3). With an
    analyser, the live dots stay until it emits `initialAnalysisCompleted`
    (`m_realtimeLayerTeardownConnection`); without one they go at once.
 
@@ -185,7 +191,7 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
   one alignment and one measured round trip places them all.
   `MainWindow::suspendAudioOnStop()` (a virtual of the svapp fork's `MainWindowBase`,
   which `stop()` asks before it suspends the device) says no, and
-  `recordingFinishedFull()` follows it, on every platform. `record()` still resumes the
+  `stopReferenceAfterTake()` follows it, on every platform. `record()` still resumes the
   device at every take, which does nothing to a running stream. On the user's phone,
   through Bluetooth, takes with a restart before each landed up to 8.5 ms apart. What
   still moves the alignment is **opening the device again**: choosing a driver, a latency

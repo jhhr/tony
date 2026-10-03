@@ -245,6 +245,85 @@ class TestRecordWorkflow : public QObject
         stopTake();
     }
 
+    // A take stopped while the reference plays for it, with Play / Pause
+    // (as Space presses it) or with Record: after Stop nothing more is
+    // heard, and the cursor is back at the take's position, from where
+    // Record records the same part again.  The GUI thread is held in the
+    // middle of Stop, at the push of the take's command, as long as the
+    // splice of a long take holds it; the device runs on after Stop, as
+    // the application's does, so that anything the play source hands it
+    // meanwhile is in its output.  The reference sounds only for a moment
+    // from the take's position and is silent where the take stops, so
+    // that what the output has after Stop can only be the reference
+    // played again from there
+    void verifyStopWhileTheReferencePlays(bool withSpace) {
+        const sv::sv_frame_t P = sv::sv_frame_t(1.0 * rate);
+        std::vector<float> reference(size_t(P), 0.f);
+        auto sound = tone(lowHz, 0.3);
+        reference.insert(reference.end(), sound.begin(), sound.end());
+        reference.resize(size_t(6.0 * rate), 0.f);
+
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        m_window->keepAudioRunning(true);
+        m_window->setPlayReferenceWhileRecording(true);
+        openReference(writeWav(reference));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(P);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->playSource()->isPlaying(), 2000);
+        QTest::qWait(1000);
+        QVERIFY2(m_window->fake()->getPlayStartFrame() >= 0,
+                 "the reference was not heard during the take");
+
+        bool held = false;
+        auto hold = connect(sv::CommandHistory::getInstance(),
+                            qOverload<>(&sv::CommandHistory::commandExecuted),
+                            this, [&held]() {
+                                if (held) return;
+                                held = true;
+                                QThread::msleep(500);
+                            });
+
+        QAction *stop = withSpace ? m_window->playAction()
+            : m_window->recordAction();
+        QVERIFY(stop && stop->isEnabled());
+        size_t pressed = m_window->fake()->getCapturedOutput().size();
+        stop->trigger();
+        disconnect(hold);
+
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        QVERIFY2(held, "no command was pushed at Stop, so the GUI thread "
+                 "was not held in the middle of it");
+        QVERIFY2(!m_window->playSource()->isPlaying(),
+                 "the reference plays on after Stop");
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser2()), 30000);
+
+        auto output = m_window->fake()->getCapturedOutput();
+        QVERIFY2(output.size() > pressed + size_t(0.5 * rate),
+                 qPrintable(QString("only %1 frames were played after Stop")
+                            .arg(qint64(output.size()) - qint64(pressed))));
+        float peak = 0.f;
+        size_t loudest = pressed;
+        for (size_t i = pressed; i < output.size(); ++i) {
+            if (std::fabs(output[i]) > peak) {
+                peak = std::fabs(output[i]);
+                loudest = i;
+            }
+        }
+        QVERIFY2(peak < 1e-4f,
+                 qPrintable(QString("%1 s after Stop the output reached %2: "
+                                    "the reference was played again from "
+                                    "the take's position")
+                            .arg(double(loudest - pressed) / rate)
+                            .arg(peak)));
+
+        QCOMPARE(m_window->playbackFrame(), P);
+    }
+
     // A round trip as the audio check would have kept it for the fake
     // device (the default devices, the Preferences naming none) recording
     // at deviceRate, 44.1 kHz unless given, measured while the device
@@ -2398,6 +2477,19 @@ private slots:
                                     "frame %1 the cursor was at frame %2")
                             .arg(P).arg(during)));
         QCOMPARE(m_window->playbackFrame(), P);
+    }
+
+    // The cursor goes back to the take's position while the reference
+    // still plays: moved so, a playing source is sent there too
+    // (ViewManager::setPlaybackFrame()), and it played the reference from
+    // the take's position for as long as the splice took, the longer the
+    // longer the take, and left the cursor somewhere past the position
+    void stop_with_space_plays_nothing_more() {
+        verifyStopWhileTheReferencePlays(true);
+    }
+
+    void stop_with_record_plays_nothing_more() {
+        verifyStopWhileTheReferencePlays(false);
     }
 
     void take_at_playback_position() {

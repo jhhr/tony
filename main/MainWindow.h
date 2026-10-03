@@ -1041,6 +1041,10 @@ protected:
     void liftPlaySelectionForTake();
     void restorePlaySelectionAfterTake();
 
+    // The reference that played for a take is stopped when the take is
+    // over, before the playhead goes back to the take's position
+    void stopReferenceAfterTake();
+
     // The main model last handed to m_analyser by analyseNewMainModel().
     // audioFileLoaded() is emitted for additional models too (a singing
     // track, background music), and the reference must not be set up again
