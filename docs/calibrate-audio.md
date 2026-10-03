@@ -222,14 +222,24 @@ and 28 dB over it); none has been tuned on a real device yet.
 
 ## 4. The result page
 
-The verdict in one sentence and its fix; the echo, if one was heard; then a table: the
-round trip measured (not for NoSignal) against the driver's, output plus input; what the
-takes were placed with (measured before, or the driver's figure); where each punch-in
-landed (+ is late); the spread; sweeps found of those judged; both rates ("recorded at
-48000 Hz, converted to the reference's 44100 Hz" where they differ); the input peak in
-dBFS; the echo; the driver and the devices; on a phone, how each stream was opened
-("Streams:"), which a kept figure is checked against (§5). A failed run shows why it
-ended instead.
+The verdict in one sentence and its fix; the echo, if one was heard; on a device with two
+inputs, the one the microphone is on, when it is on one alone; then a table: the round
+trip measured (not for NoSignal) against the driver's, output plus input; what the takes
+were placed with (measured before, or the driver's figure); where each punch-in landed (+
+is late); the spread; sweeps found of those judged; both rates ("recorded at 48000 Hz,
+converted to the reference's 44100 Hz" where they differ); the input peak in dBFS; each
+input's peak ("Inputs:"); the echo; the driver and the devices; on a phone, how each
+stream was opened ("Streams:"), which a kept figure is checked against (§5). A failed run
+shows why it ended instead.
+
+**Use Input N** is offered where the microphone was on one input of two alone (within 20
+dB of the louder, as the dev checks' item 5 judges it) and Input Channel has another for
+the input device the first punch-in recorded from: it chooses that input for that device,
+as the menu does ([recording.md](recording.md#input-channels)). The peaks are each
+input's in what the punch-ins kept, from the scan every take's raw recording gets at Stop
+(`MainWindow::reportTakeLevel()`): nothing is read twice. The check's takes are made of
+both inputs whatever is chosen, so that a microphone on the input not chosen is heard and
+found.
 
 **Use this latency** keeps the calibrated round trip for the devices the check started on,
 not for those the Preferences name when it is pressed (the result stays on show for as long
@@ -661,8 +671,9 @@ below).
 - Items 3 and 5 judge stage 2's punch-ins only. Item 14 cannot see an overwrite question:
   `record()` would ask it before the observer starts. The check's takes record into a
   selection, where none is asked, so "no question" is watched for, not arranged.
-- The calibration's result page does not give the microphone's channel or the noise floor:
-  nothing in the calibration measures them (item 5 of the dev run finds the channel).
+- The calibration's result page does not give the noise floor: its silences hold the room
+  as the earcup-to-microphone loop has it. Check Input Level gives it
+  ([recording.md](recording.md#the-input-level)).
 - Windows' audio enhancements, echo cancellation or noise suppression can take the sweeps
   out, and Tony does not ask for raw capture (MME has no raw mode, and the bqaudioio
   fork does not ask WASAPI for its own): NoSignal and Fading tell the user to turn them
@@ -758,7 +769,9 @@ below).
   ([audio-drivers.md](audio-drivers.md), §6). On a fake whose loopback moves 10 ms at each
   restart, a check whose window suspends at Stop lands its punch-ins 10 ms apart
   (Unsteady), and one kept running, as the application keeps it, lands them alike (Ok),
-  the fake resumed once. Its runs are two punch-ins of two sweeps on the first 11 s of the
+  the fake resumed once. With the loopback on input 2 of two and Input 1 chosen, the check
+  hears the sweeps all the same, its result names input 2, and Use Input 2 chooses it for
+  the device. Its runs are two punch-ins of two sweeps on the first 11 s of the
   calibration reference, about 13 s each.
 - **`TestDevChecks`** (`test-tony-dev`, development builds only): whole dev runs on the
   loopback fake. Passing, with the fake's true round trip and a long song of 60 s (240 s

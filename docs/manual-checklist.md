@@ -454,10 +454,11 @@ yet.
 
 **On Windows**, with the AI-Micro chosen under Playback > Audio Input Device:
 
-1. **Which input the HS2 is on.** Calibrate Audio with the dev checks, an earcup held to
-   the HS2: item 5's "the mic is on" names the input (with the HS2 on input 1, item 5 reads
-   Measured, "not on input 2 alone"). If it names both inputs, the AI-Micro feeds the
-   one microphone to both, and Both Inputs is right as it is.
+1. **Which input the HS2 is on.** Calibrate Audio, an earcup held to the HS2: the result
+   page says "The microphone is on input 1 alone" and offers **Use Input 1**; its
+   "Inputs:" line gives each input's peak (with the dev checks, item 5's "the mic is on"
+   says the same). If it names neither, the AI-Micro feeds the one microphone to both
+   inputs, and Both Inputs is right as it is.
 2. **Input Channel** (Playback > Input Channel): its first line names the AI-Micro (or
    "(System Default)" if that is what Audio Input Device has ticked). Choose Input 1,
    record a short take and play it back: the voice in both ears, equally. Then a take with

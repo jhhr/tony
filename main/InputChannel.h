@@ -98,6 +98,14 @@ namespace InputChannel
      * louder of the two.  A device with one input reports it as both
      */
     float peakOf(int channel, float left, float right);
+
+    /**
+     * The inputs that carry the microphone, of the peaks of each input
+     * of what was recorded (full scale 1): those within withinDb of the
+     * loudest, as the dev checks' item 5 has it.  None if all are silent
+     */
+    std::vector<int> carrying(const std::vector<float> &peaks,
+                              double withinDb = 20.0);
 }
 
 #endif

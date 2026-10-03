@@ -167,6 +167,11 @@ public:
     // The input channel chosen for that device now (InputChannel)
     int currentInputChannel() const;
 
+    // Choose the input channel for the input device given, as the menu
+    // chooses it for the device in use (Calibrate Audio's result page
+    // offers the one its check heard the microphone on)
+    void chooseInputChannel(const InputChannel::Key &key, int channel);
+
 #ifdef Q_OS_ANDROID
     // The microphone is asked for when it is first needed: Record starts
     // the take once it is given, Calibrate Audio the check.  granted is
@@ -931,6 +936,10 @@ protected:
     // take, playback or a selection: the view moves back to the take's
     // position after Stop, which would write the visible range over it
     mutable QString m_takeLevelMessage;
+
+    // The peak of each input in what went into the last take, as its
+    // scan found them; empty if it was not scanned
+    std::vector<float> m_takeInputPeaks;
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;

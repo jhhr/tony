@@ -5858,6 +5858,7 @@ MainWindow::record()
     // The meters show that input, and their clip light is the take's
     updateInputMeterChannel();
     m_takeLevelMessage = "";
+    m_takeInputPeaks.clear();
     if (m_inputLevels && m_recordTarget && m_recordTarget->isRecording()) {
         m_inputLevels->setClipped(false);
     }
@@ -6371,6 +6372,18 @@ MainWindow::currentInputChannel() const
 }
 
 void
+MainWindow::chooseInputChannel(const InputChannel::Key &key, int channel)
+{
+    QSettings settings;
+    if (InputChannel::channel(settings, key) == channel) return;
+    InputChannel::setChannel(settings, key, channel);
+    const InputChannel::Key now = inputChannelKey();
+    if (now.driver == key.driver && now.recordDevice == key.recordDevice) {
+        inputChannelChosen(channel);
+    }
+}
+
+void
 MainWindow::updateInputMeterChannel()
 {
     if (!m_inputLevels) return;
@@ -6480,6 +6493,7 @@ MainWindow::reportTakeLevel(QString recordingPath, const TakeTiming &timing)
         cerr << "MainWindow::reportTakeLevel: " << error << endl;
         return;
     }
+    m_takeInputPeaks = scan.channelPeaks;
 
     const auto levelText = [](double db) {
         QString number = QString::number(std::fabs(db), 'f', 1);

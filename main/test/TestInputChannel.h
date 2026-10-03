@@ -159,6 +159,21 @@ private slots:
                  QString("USB device AI-Micro"));
     }
 
+    // The inputs that carry the microphone: within 20 dB of the loudest
+    void the_inputs_that_carry_the_microphone() {
+        QCOMPARE(InputChannel::carrying({}), std::vector<int>());
+        QCOMPARE(InputChannel::carrying({ 0.f, 0.f }), std::vector<int>());
+        QCOMPARE(InputChannel::carrying({ 0.5f }), std::vector<int>{ 0 });
+        QCOMPARE(InputChannel::carrying({ 0.5f, 0.001f }),
+                 std::vector<int>{ 0 });
+        QCOMPARE(InputChannel::carrying({ 0.0005f, 0.25f }),
+                 std::vector<int>{ 1 });
+        QCOMPARE(InputChannel::carrying({ 0.5f, 0.06f }),
+                 (std::vector<int>{ 0, 1 }));
+        QCOMPARE(InputChannel::carrying({ 0.5f, 0.04f }),
+                 std::vector<int>{ 0 });
+    }
+
     // The channel of a recording a take is made from: the one chosen if
     // it has it, else all of them
     void the_channel_of_a_recording() {

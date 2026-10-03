@@ -271,8 +271,8 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   two stages).
 - Every take logs "No such signal sv::WritableWaveFileModel::aboutToBeDeleted()", from the
   svapp fork ([forks.md](forks.md), known defects).
-- The calibration's result page does not give the microphone's channel or the noise
-  floor, which nothing in it measures.
+- The calibration's result page does not give the noise floor (Check Input Level does);
+  it gives the microphone's input, and offers to choose it.
 
 ### The voice threshold
 

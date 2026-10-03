@@ -18,6 +18,7 @@
 #include <QSettings>
 
 #include <algorithm>
+#include <cmath>
 
 namespace InputChannel {
 namespace {
@@ -130,6 +131,22 @@ peakOf(int channel, float left, float right)
     if (channel == 0) return left;
     if (channel == 1) return right;
     return std::max(left, right);
+}
+
+std::vector<int>
+carrying(const std::vector<float> &peaks, double withinDb)
+{
+    float top = 0.f;
+    for (float peak : peaks) top = std::max(top, peak);
+    std::vector<int> inputs;
+    if (!(top > 0.f)) return inputs;
+    for (size_t c = 0; c < peaks.size(); ++c) {
+        if (peaks[c] > 0.f &&
+            20.0 * std::log10(double(peaks[c]) / double(top)) >= -withinDb) {
+            inputs.push_back(int(c));
+        }
+    }
+    return inputs;
 }
 
 }
