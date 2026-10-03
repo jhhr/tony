@@ -26,6 +26,9 @@
 #include "../SingingTakes.h"
 #include "../VoiceThresholdMenu.h"
 #include "../InputChannelMenu.h"
+#include "../InputLevelFeed.h"
+#include "../InputLevelMeter.h"
+#include "../CheckInputLevelDialog.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -223,6 +226,14 @@ public:
     // Playback > Input Channel, likewise, and the device it is kept for
     InputChannelMenu *inputChannelMenu() { return m_inputChannelMenu; }
     InputChannel::Key doInputChannelKey() const { return inputChannelKey(); }
+    // The input meters' levels, the meter beside Record, and Playback >
+    // Check Input Level with its dialog (made the first time it opens)
+    InputLevelFeed *inputLevels() { return m_inputLevels; }
+    InputLevelMeterAction *inputMeterAction() { return m_inputMeterAction; }
+    QAction *checkInputLevelAction() { return m_checkInputLevelAction; }
+    CheckInputLevelDialog *checkInputLevelDialog() {
+        return m_checkInputLevelDialog;
+    }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as

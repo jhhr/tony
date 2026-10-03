@@ -91,6 +91,13 @@ namespace InputChannel
      * the one channel Android would make of them
      */
     inline bool isSingle(int channel) { return channel >= 0; }
+
+    /**
+     * The peak a meter shows of the peaks a device reports for its first
+     * two inputs, left and right, for a choice: the input chosen, or the
+     * louder of the two.  A device with one input reports it as both
+     */
+    float peakOf(int channel, float left, float right);
 }
 
 #endif

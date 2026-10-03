@@ -66,11 +66,14 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   the amount in the status bar (the dialog's) or by the words stopping (the drag's).
 - **TTML and LRC only**: no SRT or Moises JSON. Another format is another parser that
   `parseLyrics()` chooses.
-- **No level meter for the voice threshold**: the user chooses it blind, by recording the
-  music alone and raising it until the music gives no dots (the README says how). A meter
-  of the input beside the menu, or Calibrate Audio suggesting a threshold
-  ([calibrate-audio.md](calibrate-audio.md), §10), would show where the music and the
-  voice are.
+- **A take's clipped places are not marked on the coverage strip**: the strip's model is
+  the stored coverage, read back from it as it is, so marks there would read as coverage.
+  They would need a model and a layer of their own for each take (saved with the session,
+  or not), and a style of the svgui fork's to draw them; the status bar says where
+  instead ([recording.md](recording.md#the-input-level)).
+- **The meter shows peaks, the voice threshold compares a level** (RMS) that a voice's
+  peaks stand some 10 dB over: a second bar of that level would show the two on one scale,
+  but only the live tracker measures it, and only during a take.
 
 ## Weak spots
 

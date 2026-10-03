@@ -372,6 +372,112 @@ as android.googlesource.com cannot be reached from a cloud session):
   a round trip kept for the route with a mono input is out of date
   ([calibrate-audio.md](calibrate-audio.md), §5): calibrate again after choosing.
 
+## The input level
+
+**The meter** (`InputLevelMeter`, beside Record in the Playback toolbar and in the compact
+layout's toolbar; `InputLevelFeed` behind every meter shown): the input's peak in dBFS, on
+a scale from −60 to 0, green up to −6 dBFS (where a singer's peaks belong), amber to
+−1, red over it; a hold at the highest peak; a tick at the voice threshold, when it is on;
+and a clip light.
+
+- **No work in the audio callback.** The devices measure each block's peak already, for
+  the level meters (`PortAudioIO`, `OboeAudioIO`, and the fake with `reportLevels`), and the
+  record target keeps the highest since it was last read. A read takes those and clears
+  them, so they have **one reader**: during a take, lead-in included, the view manager
+  (`checkPlayStatus()`, every 20 ms, for its `monitoringLevelsChanged` signal), which the
+  feed listens to; at other times the feed reads them itself. The view manager says only
+  when the levels change, so a steady tone, or an input held at full scale, reads as what
+  it said last, not as silence. Outside a take there are levels only while the device runs
+  with its input: from the first take on (or Check Input Level, or a check), until it is
+  opened again or, on a phone, idles.
+- **20 readings a second** (`kIntervalMs`), each the peak since the one before, and drawn
+  only when the bar or the hold has moved by half a dB or the light changed: a phone's
+  GUI thread has little to spare during a take ([open-points.md](open-points.md)), and a
+  quiet input between takes draws nothing.
+- **The input shown** is the take's (Input Channel's choice, or the louder of the two
+  inputs), as the device reports its first two inputs left and right.
+- **Hold and fall** (`InputLevel::Meter`, `tony_core`): the bar is the latest peak and
+  falls from it at 20 dB a second; the hold is the highest peak, stays 1.5 s, then falls as
+  fast. Between two readings the bar falls up to 1 dB, which a steady sound's next reading
+  puts back.
+- **The tick is the voice threshold**, but the meter shows peaks, and the threshold
+  compares the level (RMS) of a half window, which a voice's peaks stand some 10 dB over
+  (a sine's, 3 dB): a voice whose peaks only reach the tick is under the threshold. Said in
+  the meter's tooltip and the README. Not built: a second bar of that level, which only the
+  live tracker measures, and only during a take.
+- **The clip light** is lit by a reading at full scale (`InputLevel::kFullScale`) or by
+  the take's scan, and put out by the next take's start and by a click anywhere on the
+  meter (a finger is wider than the light).
+
+**The take's scan** (`InputLevel::scanFile()`, `Scanner`; `MainWindow::reportTakeLevel()`):
+once a take is spliced, what of the raw recording went into it (from L + R on, to the
+punch-out if there is one), of the take's input, is read again a block at a time and
+scanned for its peak and for runs of samples at full scale.
+
+- A sample at full scale is one within 0.01 dB of it (0.999): a converter that clips holds
+  its largest code, which a 24-bit one gives as 1 − 2⁻²³ and a 16-bit one as 1 − 2⁻¹⁵,
+  both well over that. A clip is a run of **3** or more (Audacity's Find Clipping's
+  default): a sibilant's crest or a click that touches full scale is one sample there; a
+  clipped waveform is flat for as long as it is over. A smooth crest that reaches full
+  scale exactly is a run too (a 100 Hz sine at 48 kHz holds 7 samples within 0.01 dB of its
+  top) and is counted: it came that near clipping, and wants the gain down as much.
+- The raw recording, not the take's file: the take is converted to the reference's rate
+  when the device runs at another, which smooths a flat top into ripples, and normalised as
+  it is read.
+- Runs within 0.5 s of each other are one place. The status bar says the take's peak, or
+  "Take: clipped at 1:02.5, 1:05.0, 1:10.2 and 2 more" on the song's timeline (placed as
+  the dots are), and a clip lights the light. The message stays until the next take,
+  playback or a selection (`m_takeLevelMessage`): the view moves back to the take's
+  position after Stop, which would write the visible range over it at once.
+- The scan runs on the GUI thread at Stop, after the splice, which reads and writes the
+  whole take already: a 4-minute stereo recording at 48 kHz is 23 million samples.
+- **Not on the coverage strip.** The strip's model is the take's stored coverage, saved and
+  read back as it is (`Coverage::fromEvents()`): marks there would be read as coverage.
+  They would need a model and a layer of their own per take, and a style in the svgui fork
+  to draw them ([open-points.md](open-points.md)).
+
+**Playback > Check Input Level** (`CheckInputLevelDialog`): the meter, large, with the input
+open and nothing recorded. Two seconds of silence are read first, as the noise floor (with
+the music playing, for a singer who has it on speakers); then the singer sings their
+loudest phrase and presses Done. The result (`InputLevel`, `tony_core`):
+
+- **The loudest peak, and the gain change** that puts it at −10 dBFS, to a whole dB, "right"
+  within 2 dB. −10 dBFS leaves 10 dB for a take sung louder than the phrase tried, and a
+  24-bit converter's own noise is still over 100 dB under it. A phrase that clipped cannot
+  say how loud it was: turn down by 10 dB or more, and check again.
+- **The noise floor**: the median of the readings in the silence, so that a click or a
+  breath does not move it. Readings are peaks, over 50 ms each.
+- **A voice threshold**: the lowest of the menu's that is 5 dB or more over the noise
+  floor; Off where that is still 5 dB under the live tracker's own −60 dBFS floor. The
+  threshold compares a half window's RMS, which a noise's peaks stand over by about 12 dB
+  for a hiss and 3 dB for a steady hum or a fan's lines, so the noise's level is 8 dB or
+  more under it. A button sets it, as the menu does. Where it is within 25 dB of the
+  loudest peak the page says soft singing may fall under it.
+- **No conflict with the stream kept running between takes.** Opening the input is what the
+  first take's start does (`MainWindowBase::record()`: the device opened again with its
+  input if it was for playback only, then resumed), and moves the alignment as that would;
+  once a take or a check has opened it, the input is open and running already and nothing
+  is opened again. The dialog resumes the device and leaves it running when it closes, as
+  a take does: suspending it would move the alignment the takes after it share. While it
+  is open, the device counts as busy, so that a phone does not suspend it as idle. It is
+  shut during a take and a check, asks for the microphone on a phone first, and runs no
+  event loop of its own (`open()`).
+
+**Only digital clipping can be seen**, by the meter, the scan and the check alike: samples
+held at the converter's largest value. A microphone that distorts in its own electronics
+(a capsule or preamplifier driven past what it takes, as a headset's can be at full voice)
+gives a waveform under full scale that looks like any other, and has to be heard. So does a
+converter's clipping scaled down after it, by an operating system's input volume under
+100 %: set the gain on the interface.
+
+**No monitoring through Tony** (the user's decision, 2026-10-03): the microphone is not
+played back to the headphones. Tony's round trip is tens of ms at best (about 90 ms
+measured through WASAPI at 20 ms on the user's PC, 276 ms through Bluetooth on the phone;
+about 20 ms is Google's best case for a phone), and a singer hears their own voice through
+the bones of the head at once: the voice in the headphones would come as an echo of it. An
+interface with zero-latency monitoring mixes the microphone into the headphones before its
+converter, which is the fix (README, "Microphone and levels").
+
 ## Pre-roll and Record into Selection
 
 - **Pre-roll**: R = `MainWindow/prerollseconds` (3 s, no UI on purpose) clipped to the
@@ -444,8 +550,8 @@ is:
   level, unless that input is chosen, which the tracker then reads alone.
 
 A microphone whose noise is louder than −60 dBFS still gives such dots, unless the voice
-threshold below is set over it; Calibrate Audio could measure that noise and suggest one
-([calibrate-audio.md](calibrate-audio.md), §10).
+threshold below is set over it; Playback > Check Input Level measures that noise and
+suggests one ([The input level](#the-input-level)).
 
 **The voice threshold** (Playback > Voice Threshold; `VoiceThreshold`) raises the floor for
 a singer with the music on speakers, which the microphone hears as well: set over the level

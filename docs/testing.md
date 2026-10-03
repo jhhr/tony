@@ -6,7 +6,7 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestVoiceThreshold`, `TestInputChannel`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestVoiceThreshold`, `TestInputChannel`, `TestInputLevel`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`, and Tony's icons (`tony.qrc`: without them every toolbar button is as wide as its text, and `TestCompactLayout` needs the real sizes). | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestPlotSize`, `TestRecordWorkflow`, `TestTouchGestures`, `TestUiChecks`, `TestCompactLayout`, `TestTouchMenuStyle`, `TestAudioCheck` | on Linux about 10.5 minutes in one process, under two in eight; on Windows about 12 in one process, measured before the touch and compact-layout suites came. Nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`, then `TestTouchGestures`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`, without the icons; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 7.5 minutes in one process, two in eight (Linux): each test records a dev run's takes, or part of them, in real time |
 
@@ -186,7 +186,9 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   Playback menu's actions). The voice threshold the take started with is
   `takeVoiceThreshold()`, and Playback > Voice Threshold is `voiceThresholdMenu()`; the
   input channel likewise `takeInputChannel()` and `inputChannelMenu()`, with the device a
-  choice is kept for (`doInputChannelKey()`);
+  choice is kept for (`doInputChannelKey()`); the input meters' levels `inputLevels()`,
+  the meter's action `inputMeterAction()`, and Playback > Check Input Level
+  `checkInputLevelAction()` and `checkInputLevelDialog()`;
   `setAudioCheckTakes()` sets the check's override by hand, as the runner does before each
   of its takes, and the test that sets it clears it again, as the runner does. It
   installs the fake device through `openAudioIO()`, which `MainWindow::createAudioIO()`
@@ -236,6 +238,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   suites of the process, which record too. Another suite that sets it has to do the same.
   So with the input channel (group `InputChannel`, removed in both), which
   `chooseInputChannel()` chooses through the menu.
+- For the input level: `toolbarMeter()` (the meter in the window's toolbar),
+  `meterBar()` and `meterHold()` (the feed's meter now; judge a steady sound by its hold,
+  as the bar falls up to 1 dB between two readings), `drawnMeter()` (a meter of the
+  window's levels drawn at a size of the test's own: the window is never shown, and its
+  toolbar's meter has no size of its own) and `clippedAt()` (where the status bar says a
+  take clipped). The meters read nothing unless the fake has `reportLevels` on.
 - For what is kept between launches (`TestRecordWorkflow`): `relaunch(config)` is a new
   window reading the settings the old one left (the session closed as `cleanup()` closes
   it). `turnWheel()` turns a level control's level or pan with real wheel events, and
@@ -245,7 +253,8 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   the `FileFinder/` keys every Open writes. `storeRoundTrip()` keeps a measured figure at
   a device rate, and `latencyLine()` reads the Playback menu's line as the menu shows it.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
-  `cleanup()` fails the test for one that was not expected. `dialogsMatching()` is for the
+  `cleanup()` fails the test for one that was not expected. Check Input Level's dialog is
+  the exception: its tests open it, drive it and close it. `dialogsMatching()` is for the
   dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
   title macOS does not keep, so that there its text alone must tell it apart.
 - `analysed()` waits for analysis completion, no running transformers **and** no ranged

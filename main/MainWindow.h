@@ -57,6 +57,9 @@ struct AudioCheckResult;
 class AudioDriverMenus;
 class VoiceThresholdMenu;
 class InputChannelMenu;
+class InputLevelFeed;
+class InputLevelMeterAction;
+class CheckInputLevelDialog;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -377,6 +380,10 @@ protected slots:
     // Playback > Input Channel chosen, and written to the settings: a
     // phone opens its device again if the input is open otherwise
     void inputChannelChosen(int channel);
+
+    // Playback > Check Input Level: the input opened and run as a take's
+    // is, nothing recorded, and the meter shown large
+    void checkInputLevel();
 
     // Playback > Calibrate Audio: the audio check's dialog, not modal
     virtual void calibrateAudio();
@@ -895,6 +902,35 @@ protected:
     // Playback > Voice Threshold and Input Channel, after Record
     VoiceThresholdMenu *m_voiceThresholdMenu;
     InputChannelMenu *m_inputChannelMenu;
+
+    // The input meters' levels, the meter beside Record (in the compact
+    // layout's toolbar too), and Playback > Check Input Level, its dialog
+    // and whether it is open (the device then counts as busy)
+    InputLevelFeed *m_inputLevels;
+    InputLevelMeterAction *m_inputMeterAction;
+    QAction *m_checkInputLevelAction;
+    CheckInputLevelDialog *m_checkInputLevelDialog;
+    bool m_checkingInputLevel;
+
+    // The input the meters show: the take's while one is recorded, else
+    // the one chosen for the device
+    void updateInputMeterChannel();
+
+    // Open the device with its input and run it, as a take's start does,
+    // for the input level to be read without recording.  False if there
+    // is no input to be had (said in a box), or on a phone the microphone
+    // has yet to be allowed (then asked for, and the check started again
+    // once it is)
+    bool openInputForLevels();
+
+    // Scan what of the recording at path went into the take, and say
+    // its peak, and where it clipped, in the status bar
+    void reportTakeLevel(QString recordingPath, const TakeTiming &timing);
+
+    // What reportTakeLevel() said, kept in the status bar until the next
+    // take, playback or a selection: the view moves back to the take's
+    // position after Stop, which would write the visible range over it
+    mutable QString m_takeLevelMessage;
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;

@@ -17,6 +17,8 @@
 #include <QCoreApplication>
 #include <QSettings>
 
+#include <algorithm>
+
 namespace InputChannel {
 namespace {
 
@@ -120,6 +122,14 @@ effectiveChannel(int chosen, int channels)
 {
     if (chosen < 0 || chosen >= channels) return kBoth;
     return chosen;
+}
+
+float
+peakOf(int channel, float left, float right)
+{
+    if (channel == 0) return left;
+    if (channel == 1) return right;
+    return std::max(left, right);
 }
 
 }

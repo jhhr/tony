@@ -39,6 +39,9 @@
 #include "../VoiceThreshold.h"
 #include "../InputChannel.h"
 #include "../InputChannelMenu.h"
+#include "../InputLevelFeed.h"
+#include "../InputLevelMeter.h"
+#include "../CheckInputLevelDialog.h"
 
 #include "version.h"
 
@@ -85,7 +88,10 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
+#include <QToolBar>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
@@ -1659,6 +1665,43 @@ class TestRecordWorkflow : public QObject
         return model ? model->getEventCount() : -1;
     }
 
+    // The meter beside Record, in the window's own toolbar
+    InputLevelMeter *toolbarMeter() {
+        for (InputLevelMeter *meter : m_window->findChildren<InputLevelMeter *>()) {
+            if (qobject_cast<QToolBar *>(meter->parentWidget())) return meter;
+        }
+        return nullptr;
+    }
+
+    // The meter's bar now, in dBFS: under the last peak read by as much
+    // as it has fallen since, up to 1 dB between two readings
+    double meterBar() {
+        InputLevelFeed *levels = m_window->inputLevels();
+        return levels ? levels->meter().bar(levels->now()) : -1000.0;
+    }
+
+    // The meter's hold now: the highest peak in the last 1.5 s
+    double meterHold() {
+        InputLevelFeed *levels = m_window->inputLevels();
+        return levels ? levels->meter().hold(levels->now()) : -1000.0;
+    }
+
+    // A meter of the window's levels, drawn, as a toolbar's is
+    QImage drawnMeter(QSize size) {
+        InputLevelMeter meter(m_window->inputLevels());
+        meter.resize(size);
+        return meter.grab().toImage();
+    }
+
+    // The seconds of the first place a status message says the take
+    // clipped at, "m:ss.s", or -1
+    static double clippedAt(QString status) {
+        QRegularExpression re("clipped at (\\d+):(\\d+\\.\\d)");
+        auto m = re.match(status);
+        if (!m.hasMatch()) return -1.0;
+        return m.captured(1).toDouble() * 60.0 + m.captured(2).toDouble();
+    }
+
     // Playback > Input Channel, as the user chooses from it
     void chooseInputChannel(int channel) {
         InputChannelMenu *menu = m_window->inputChannelMenu();
@@ -1795,6 +1838,9 @@ class TestRecordWorkflow : public QObject
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
         if (!modal) return;
+        // Check Input Level is opened, driven and closed by its tests,
+        // and runs no event loop of its own
+        if (qobject_cast<CheckInputLevelDialog *>(modal)) return;
         QString description = modal->windowTitle();
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
@@ -2278,6 +2324,207 @@ private slots:
         take(700);
         if (QTest::currentTestFailed()) return;
         QCOMPARE(takeFile().channels, 2);
+    }
+
+    // The meter beside Record shows the take's input as it is recorded,
+    // its peak in dBFS: the louder of the two inputs, or the one chosen
+    // alone. After the take, the take's peak is in the status bar
+    void the_input_meter_shows_the_takes_input() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.reportLevels = true;
+        config.inputChannel = 0;
+        // -6.0 dBFS on input 1, -20 dBFS on input 2
+        config.input = TestSignals::sine(highHz, rate, int(3.0 * rate), 0.5);
+        config.otherInput = TestSignals::sine(lowHz, rate, int(3.0 * rate),
+                                              0.1);
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->inputLevels());
+        QVERIFY2(toolbarMeter(), "no input meter in the toolbar");
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(800);
+        QVERIFY2(std::fabs(meterHold() + 6.02) < 0.3 &&
+                 meterBar() > -7.2,
+                 qPrintable(QString("both inputs: the meter reads %1 dBFS, "
+                                    "held at %2").arg(meterBar())
+                            .arg(meterHold())));
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->statusText(),
+                 QString("Take: peak %1").arg(QChar(0x2212)) + "6.0 dBFS");
+
+        chooseInputChannel(1);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(0);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->inputLevels()->getChannel(), 1);
+        // Past the hold of the first take's louder input
+        QTest::qWait(1800);
+        QVERIFY2(std::fabs(meterHold() + 20.0) < 0.3 &&
+                 meterBar() > -21.2,
+                 qPrintable(QString("input 2: the meter reads %1 dBFS, "
+                                    "held at %2").arg(meterBar())
+                            .arg(meterHold())));
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->statusText(),
+                 QString("Take: peak %1").arg(QChar(0x2212)) + "20.0 dBFS");
+    }
+
+    // A take that clipped says where in the status bar and lights the
+    // clip light, which a click on the meter puts out, and the next take's
+    // start too
+    void a_clipped_take_says_where() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        // Overdriven from 1.5 s to 1.8 s, held at full scale as a
+        // converter holds it
+        config.input = TestSignals::sine(highHz, rate, int(2.5 * rate), 0.3);
+        for (int i = int(1.5 * rate); i < int(1.8 * rate); ++i) {
+            float &v = config.input[size_t(i)];
+            v = std::max(-1.f, std::min(1.f, v * 6.f));
+        }
+        makeWindow(config);
+        openReference(writeWav(silence(4.0)));
+        if (QTest::currentTestFailed()) return;
+        InputLevelFeed *levels = m_window->inputLevels();
+        QVERIFY(!levels->isClipped());
+
+        take(2300);
+        if (QTest::currentTestFailed()) return;
+        const QString status = m_window->statusText();
+        const double at = clippedAt(status);
+        QVERIFY2(at >= 1.3 && at <= 1.6,
+                 qPrintable("the status bar says: " + status));
+        QVERIFY(levels->isClipped());
+
+        const QSize size(240, 30);
+        InputLevelMeter probe(levels);
+        probe.resize(size);
+        const QPoint light = probe.clipLightRect().center();
+        QCOMPARE(drawnMeter(size).pixelColor(light),
+                 InputLevelMeter::clipColour());
+
+        InputLevelMeter *meter = toolbarMeter();
+        QVERIFY(meter);
+        QTest::mouseClick(meter, Qt::LeftButton);
+        QVERIFY(!levels->isClipped());
+        QVERIFY(drawnMeter(size).pixelColor(light) !=
+                InputLevelMeter::clipColour());
+
+        levels->setClipped(true);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!levels->isClipped());
+        waitForSomethingRecorded();
+        stopTake();
+    }
+
+    // The voice threshold, as it is chosen, is the meters' tick
+    void the_input_meter_ticks_the_voice_threshold() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 1.0);
+        makeWindow(config);
+        InputLevelFeed *levels = m_window->inputLevels();
+        QVERIFY(levels);
+        QCOMPARE(levels->getThreshold(), VoiceThreshold::kOff);
+
+        const QSize size(240, 30);
+        InputLevelMeter probe(levels);
+        probe.resize(size);
+        const QPoint at(probe.xFor(-30.0), 4);
+        QVERIFY(drawnMeter(size).pixelColor(at) !=
+                InputLevelMeter::thresholdColour());
+
+        chooseVoiceThreshold(-30.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(levels->getThreshold(), -30.0);
+        QCOMPARE(drawnMeter(size).pixelColor(at),
+                 InputLevelMeter::thresholdColour());
+
+        chooseVoiceThreshold(VoiceThreshold::kOff);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(drawnMeter(size).pixelColor(at) !=
+                InputLevelMeter::thresholdColour());
+    }
+
+    // Playback > Check Input Level: the input opened and run with nothing
+    // recorded, two seconds of silence read as the noise floor, then the
+    // loudest phrase; Done gives the peak, the gain to change, the noise
+    // floor and a voice threshold, which a button sets. The device is
+    // left running, as after a take
+    void check_input_level() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        // -50.5 dBFS of hiss for 2.6 s, then a phrase peaking at -3.1
+        config.input = TestSignals::whiteNoise(int(2.6 * rate), 7, 0.003);
+        auto loud = TestSignals::sine(highHz, rate, int(3.0 * rate), 0.7);
+        config.input.insert(config.input.end(), loud.begin(), loud.end());
+        makeWindow(config);
+        openReference(writeWav(silence(2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QAction *action = m_window->checkInputLevelAction();
+        QVERIFY(action && action->isEnabled());
+        action->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog && dialog->isVisible());
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        QVERIFY(!dialog->doneButton()->isEnabled());
+        QVERIFY(!m_window->fake()->isSuspended());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
+        QVERIFY(dialog->doneButton()->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(meterBar() > -4.0, 5000);
+        QTest::qWait(300);
+        dialog->doneButton()->click();
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Result);
+
+        QVERIFY2(std::fabs(dialog->peakDbfs() + 3.1) < 0.3,
+                 qPrintable(QString("peak %1").arg(dialog->peakDbfs())));
+        QVERIFY(!dialog->clipped());
+        QVERIFY2(std::fabs(dialog->noiseFloorDbfs() + 50.5) < 1.5,
+                 qPrintable(QString("noise floor %1")
+                            .arg(dialog->noiseFloorDbfs())));
+        QCOMPARE(dialog->suggestedThreshold(), -45.0);
+        QVERIFY2(dialog->text().contains("down by about 7 dB"),
+                 qPrintable(dialog->text()));
+
+        QVERIFY(dialog->useThresholdButton()->isVisible());
+        dialog->useThresholdButton()->click();
+        QCOMPARE(storedVoiceThreshold(), -45.0);
+        QCOMPARE(m_window->inputLevels()->getThreshold(), -45.0);
+
+        dialog->reject();
+        QVERIFY(!dialog->isVisible());
+        QVERIFY(!m_window->fake()->isSuspended());
+        QVERIFY(action->isEnabled());
+    }
+
+    // A device that delivers nothing is said to, and Check Again starts
+    // from the silence once it does
+    void check_input_level_with_no_input() {
+        FakeAudioIO::Config config;
+        config.neverCallsBack = true;
+        config.reportLevels = true;
+        makeWindow(config);
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::NoInput, 6000);
+        QVERIFY(dialog->againButton()->isVisible());
+        QVERIFY(dialog->text().contains("delivered nothing"));
+        dialog->reject();
     }
 
     // Playback > Input Channel is kept for the input device the

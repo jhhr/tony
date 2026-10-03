@@ -573,7 +573,8 @@ What it rests on:
   peak since the previous call and reset it. While recording, lead-in included,
   `ViewManager::checkPlayStatus()` reads the input levels only, for the meter's signal; the
   observer then reads the output levels, and only then, and takes the input levels from
-  that signal.
+  that signal, as the input meters' feed does (`InputLevelFeed`), which reads the input
+  levels itself only outside a take ([recording.md](recording.md#the-input-level)).
 - **A take's audio is read from its file**, never from its model (§2).
 
 ## 10. Known limitations and open points
@@ -687,15 +688,11 @@ below).
 
 **Later candidates:**
 
-- A measured noise floor, and a suggested voice threshold: `RealtimePitchTracker`'s own
-  floor is a fixed −60 dBFS ([recording.md](recording.md#the-live-tracker)), which kept
-  out the room noise that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS). A
-  microphone noisier than that still gives dots in silence, unless the user raises
-  Playback > Voice Threshold over it; and a singer with the music on speakers chooses
-  that threshold blind, by recording the music alone. Calibrate Audio could measure the
-  microphone's floor in the silence between its sounds and, played through the speakers
-  as they are sung with, the level they reach the microphone at, put both on the result
-  page with the microphone's channel, and suggest a threshold over them.
+- A measured noise floor, and a suggested voice threshold, on the result page: Playback >
+  Check Input Level measures the floor (with the music playing, if the singer plays it on
+  speakers) and suggests a threshold ([recording.md](recording.md#the-input-level)), but
+  Calibrate Audio does not: its silences between the sweeps hold the room as the
+  earcup-to-microphone loop has it, not as the singer sings.
 - A quick re-measure after the device is opened or resumed again (a Bluetooth reconnect;
   on a phone, a resume after two idle minutes), without a test session.
 - A getter for the rate the record target records at (svapp fork), so that on a desktop
