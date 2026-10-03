@@ -2510,6 +2510,38 @@ private slots:
         QVERIFY(action->isEnabled());
     }
 
+    // In the application's audio mode the device is open for playback
+    // only until recording is asked for. Check Input Level opens it again
+    // with its input, as the first take would, and the first take after
+    // it opens nothing again: the takes share the alignment the check's
+    // opening made
+    void check_input_level_opens_the_input_as_the_first_take_would() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.input = TestSignals::sine(highHz, rate, int(4.0 * rate), 0.5);
+        delete m_window;
+        m_window = new TestMainWindow(config, true, true,
+                                      MainWindow::AUDIO_PLAYBACK_NOW_RECORD_LATER);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        const int opened = m_window->audioIOOpened();
+        QVERIFY(opened >= 1);
+
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog && dialog->isVisible());
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QTRY_VERIFY_WITH_TIMEOUT(meterHold() > -7.0, 5000);
+        dialog->reject();
+
+        m_window->keepAudioRunning(true);
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+    }
+
     // A device that delivers nothing is said to, and Check Again starts
     // from the silence once it does
     void check_input_level_with_no_input() {

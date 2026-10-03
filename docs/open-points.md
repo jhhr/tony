@@ -274,6 +274,28 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
 - The calibration's result page does not give the noise floor (Check Input Level does);
   it gives the microphone's input, and offers to choose it.
 
+### Input channel and input level
+
+The design is in [recording.md](recording.md#input-channels) and
+[recording.md](recording.md#the-input-level).
+
+- **The numbers are starting values**, chosen without the user's devices: a clip is 3
+  samples in a row within 0.01 dB of full scale; the meter's bar and hold fall at 20 dB a
+  second, the hold after 1.5 s; Check Input Level reads 2 s of silence, aims peaks at
+  −10 dBFS, calls a gain within 2 dB right, and suggests a threshold 5 dB over the noise's
+  peaks; an input carries the microphone within 20 dB of the louder. Each is argued for
+  there; none has met the HS2 and the AI-Micro yet (the checklist's section 7).
+- **The take's scan runs on the GUI thread at Stop**, after the splice: a read of what went
+  into the take, a block at a time. Not timed on the phone.
+- **On a phone, before its input is open**, Input Channel applies to the input the driver
+  last recorded from: a guess, as `LatencyCalibration::onlyRecordDevice()` is for a
+  measured round trip. The menu's first line names it.
+- **Choosing an input on a phone opens the device again** while its input is open, which
+  moves the alignment, and the input then opens with the device's channels, which puts a
+  kept round trip out of date: calibrate again after choosing.
+- Untested anywhere but on the phone: `OboeAudioIO` opening its input at the device's own
+  channels, and Check Input Level asking for the microphone first.
+
 ### The voice threshold
 
 The design is in [recording.md](recording.md#the-live-tracker) and

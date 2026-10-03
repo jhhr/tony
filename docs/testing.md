@@ -190,7 +190,10 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   the meter's action `inputMeterAction()`, and Playback > Check Input Level
   `checkInputLevelAction()` and `checkInputLevelDialog()`;
   `setAudioCheckTakes()` sets the check's override by hand, as the runner does before each
-  of its takes, and the test that sets it clears it again, as the runner does. It
+  of its takes, and the test that sets it clears it again, as the runner does. Made with the application's audio mode
+  (`AUDIO_PLAYBACK_NOW_RECORD_LATER`; the default is duplex from the start), the window
+  opens the device again when recording is first asked for, which `audioIOOpened()` counts,
+  though the fake is duplex either way. It
   installs the fake device through `openAudioIO()`, which `MainWindow::createAudioIO()`
   calls once it has named the driver and applied its latency, or no device at all when
   made with `installDevice` false, and keeps what the Preferences named for the last

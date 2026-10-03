@@ -59,9 +59,13 @@ class TestMainWindow : public MainWindow
 public:
     // Without the spectrogram, as every test window is; without the
     // sonification as well, as --no-sonification has it, when asked
+    // In the application's own audio mode when asked (playback now,
+    // recording once asked for), which opens the device again for the
+    // first take; the fake is duplex either way
     TestMainWindow(FakeAudioIO::Config config, bool installDevice = true,
-                   bool withSonification = true) :
-        MainWindow(AUDIO_PLAYBACK_AND_RECORD, withSonification, false),
+                   bool withSonification = true,
+                   AudioMode audioMode = AUDIO_PLAYBACK_AND_RECORD) :
+        MainWindow(audioMode, withSonification, false),
         m_fakeConfig(config),
         m_installDevice(installDevice) { }
 
