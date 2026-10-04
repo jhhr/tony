@@ -12,6 +12,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# ccache keeps the compiled objects from one run to the next; meson uses
+# it by itself when it is installed
+env:
+  CCACHE_DIR: ${{ github.workspace }}/ccache
+  CCACHE_MAXSIZE: 500M
+
 jobs:
   build:
 
@@ -22,7 +28,7 @@ jobs:
     - name: install-packages
       run: |
         sudo apt-get update
-        sudo apt-get install build-essential libbz2-dev libfftw3-dev libfishsound1-dev libid3tag0-dev liblo-dev liblrdf0-dev libmad0-dev liboggz2-dev libopus-dev libopusfile-dev libpulse-dev libsamplerate0-dev libsndfile1-dev libsord-dev libxml2-utils portaudio19-dev qt6-base-dev qt6-pdf-dev qt6-base-dev-tools qt6-svg-dev raptor2-utils git mercurial autoconf automake libtool smlnj capnproto libcapnp-dev ninja-build libglib2.0-dev libboost-all-dev
+        sudo apt-get install build-essential libbz2-dev libfftw3-dev libfishsound1-dev libid3tag0-dev liblo-dev liblrdf0-dev libmad0-dev liboggz2-dev libopus-dev libopusfile-dev libpulse-dev libsamplerate0-dev libsndfile1-dev libsord-dev libxml2-utils portaudio19-dev qt6-base-dev qt6-pdf-dev qt6-base-dev-tools qt6-svg-dev raptor2-utils git mercurial autoconf automake libtool smlnj capnproto libcapnp-dev ninja-build libglib2.0-dev libboost-all-dev ccache
     - name: install-meson
       run: |
         mkdir -p tmp/meson
@@ -42,10 +48,30 @@ jobs:
         sudo ninja -C build install
     - name: repoint
       run: ./repoint install
+    # The libraries, about two thirds of the build, rarely change. A pull
+    # request's run starts from its own last run's cache, or else from
+    # default's last one
+    - name: restore-ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ccache
+        key: ccache-linux-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ccache-linux-
     - name: configure
-      run: meson setup build --buildtype release
+      run: |
+        meson setup build --buildtype release
+        ccache -z
     - name: make
-      run: ninja -C build
+      run: |
+        ninja -C build
+        ccache -s
+    # Saved as soon as the build is done, so that a failing test does not
+    # lose it
+    - name: save-ccache
+      uses: actions/cache/save@v4
+      with:
+        path: ccache
+        key: ccache-linux-${{ github.run_id }}-${{ github.run_attempt }}
     - name: test
       id: test
       run: meson test -C build --print-errorlogs --num-processes 1

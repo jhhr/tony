@@ -15,6 +15,15 @@ concurrency:
 # Built as it is on the development machine (docs/building.md): MSYS2's
 # mingw64 toolchain, Qt and libraries, with meson and ninja
 
+# ccache keeps the compiled objects from one run to the next; meson uses
+# it by itself when it is installed. The toolchain is installed afresh
+# at each run, so its files' times say nothing: ccache compares the
+# compiler's contents instead
+env:
+  CCACHE_DIR: ${{ github.workspace }}/ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 500M
+
 jobs:
   build:
 
@@ -39,6 +48,7 @@ jobs:
         update: true
         install: >-
           mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-ccache
           mingw-w64-x86_64-meson
           mingw-w64-x86_64-ninja
           mingw-w64-x86_64-pkgconf
@@ -62,6 +72,16 @@ jobs:
           mingw-w64-x86_64-serd
           mingw-w64-x86_64-sord
 
+    # The libraries, about two thirds of the build, rarely change. A pull
+    # request's run starts from its own last run's cache, or else from
+    # default's last one
+    - name: restore-ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ccache
+        key: ccache-windows-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ccache-windows-
+
     # meson.build reads MINGW_PREFIX, which an MSYS2 shell sets to the
     # POSIX path /mingw64: gcc wants the Windows one. Every step sets it,
     # as ninja may run meson again
@@ -70,12 +90,22 @@ jobs:
       run: |
         export MINGW_PREFIX=$(cygpath -m /mingw64)
         meson setup build --buildtype release
+        ccache -z
 
     - name: make
       shell: msys2 {0}
       run: |
         export MINGW_PREFIX=$(cygpath -m /mingw64)
         ninja -C build
+        ccache -s
+
+    # Saved as soon as the build is done, so that a failing test does not
+    # lose it
+    - name: save-ccache
+      uses: actions/cache/save@v4
+      with:
+        path: ccache
+        key: ccache-windows-${{ github.run_id }}-${{ github.run_attempt }}
 
     # Tony's suites also write their results to files: here QTest's
     # output to stdout does not reach meson's log
