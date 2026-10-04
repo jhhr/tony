@@ -1,8 +1,9 @@
 # Sharded test runs on Windows: plan
 
-Built and proven on Linux; the last section is left for the Windows machine. When that is
-done, what lasts goes into [testing.md](testing.md) and [AGENTS.md](../AGENTS.md), and
-this file and its row in [README.md](README.md) are deleted.
+Built and proven on Linux and on CI's Windows runner; the last section is left for the
+Windows machine. When that is done, what lasts goes into [testing.md](testing.md) and
+[AGENTS.md](../AGENTS.md), and this file and its row in [README.md](README.md) are
+deleted.
 
 ## Goal
 
@@ -103,6 +104,18 @@ application name can keep shards apart.
   `QStandardPaths`' test mode put theirs under `~/.qttest/`, named the same way. One set
   per `i` and `n`, so their number stays bounded. A one-process run adds only the base
   name's.
+
+## Proven on CI's Windows runner
+
+CI's Windows job (`windows-2022`, four cores, MSYS2's `mingw64`, a `release` build) runs
+the app suite through `run-tests.sh -j 4` from MSYS2's bash. Its first run, on
+2026-10-04: 205 s, every suite's counts in the summary and nothing failed, against 1166
+and 1240 s in one process the same day. So on Windows too each shard's results land in
+`tmp/tl/test-tony-app.exe/<i>/`, `TONY_TEST_LOG_DIR` going through MSYS2's conversion of a
+`/d/...` path, and the shards' settings stayed apart as far as the suites can tell. The
+registry keys and folders each shard leaves were not looked at there. Git for Windows
+checks text out with CRLF by default, which bash cannot run: `.gitattributes` keeps the
+shell scripts LF.
 
 ## On the Windows machine, after the merge
 
