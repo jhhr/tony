@@ -1683,6 +1683,9 @@ if system != 'android'
   test('tony-app', tony_app_test_exe,
        depends: pyin_plugin,
        timeout: 1800,
+       # A suite of its own, which the Windows CI job leaves out of
+       # meson test (--no-suite app) and runs as shards instead
+       suite: 'app',
        env: [ 'QT_QPA_PLATFORM=offscreen' ])
 
   # The development checks' suite, only where the checks are built. Its

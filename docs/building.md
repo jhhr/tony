@@ -8,8 +8,11 @@ cloud session or on CI, into `build-android/`: see
 [Building for Android](#building-for-android) at the end. The Windows CI workflow in
 `.github/workflows/` builds as the development machine does, from MSYS2's packages; the
 Linux and macOS ones build the upstream way. All three run the test suites
-([testing.md](testing.md)). The Android one builds the APK with the scripts a cloud
-session uses, and runs no tests.
+([testing.md](testing.md)), and keep their compiled objects in ccache from one run to the
+next (`actions/cache`): the libraries, about two thirds of the build, rarely change. The
+Android one builds the APK with the scripts a cloud session uses, and runs no tests. The
+workflows run on pull requests, and on `default` once one is merged into it; a branch with
+no pull request is not built.
 
 # Building on Windows (MSYS2 MinGW-w64)
 

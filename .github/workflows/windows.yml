@@ -1,9 +1,28 @@
 name: Windows CI
 
-on: [push, pull_request]
+# On pull requests, and on default once they are merged into it. A
+# branch with no pull request is not built
+on:
+  push:
+    branches: [default]
+  pull_request:
+
+# A newer push to a pull request cancels the run it supersedes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Built as it is on the development machine (docs/building.md): MSYS2's
 # mingw64 toolchain, Qt and libraries, with meson and ninja
+
+# ccache keeps the compiled objects from one run to the next; meson uses
+# it by itself when it is installed. The toolchain is installed afresh
+# at each run, so its files' times say nothing: ccache compares the
+# compiler's contents instead
+env:
+  CCACHE_DIR: ${{ github.workspace }}/ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 500M
 
 jobs:
   build:
@@ -29,6 +48,7 @@ jobs:
         update: true
         install: >-
           mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-ccache
           mingw-w64-x86_64-meson
           mingw-w64-x86_64-ninja
           mingw-w64-x86_64-pkgconf
@@ -52,6 +72,16 @@ jobs:
           mingw-w64-x86_64-serd
           mingw-w64-x86_64-sord
 
+    # The libraries, about two thirds of the build, rarely change. A pull
+    # request's run starts from its own last run's cache, or else from
+    # default's last one
+    - name: restore-ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ccache
+        key: ccache-windows-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ccache-windows-
+
     # meson.build reads MINGW_PREFIX, which an MSYS2 shell sets to the
     # POSIX path /mingw64: gcc wants the Windows one. Every step sets it,
     # as ninja may run meson again
@@ -60,15 +90,26 @@ jobs:
       run: |
         export MINGW_PREFIX=$(cygpath -m /mingw64)
         meson setup build --buildtype release
+        ccache -z
 
     - name: make
       shell: msys2 {0}
       run: |
         export MINGW_PREFIX=$(cygpath -m /mingw64)
         ninja -C build
+        ccache -s
 
-    # Tony's suites also write their results to files: here QTest's
-    # output to stdout does not reach meson's log
+    # Saved as soon as the build is done, so that a failing test does not
+    # lose it
+    - name: save-ccache
+      uses: actions/cache/save@v4
+      with:
+        path: ccache
+        key: ccache-windows-${{ github.run_id }}-${{ github.run_attempt }}
+
+    # Every suite but the app suite, in one process. Tony's suites also
+    # write their results to files: here QTest's output to stdout does
+    # not reach meson's log
     - name: test
       id: test
       shell: msys2 {0}
@@ -76,13 +117,23 @@ jobs:
         export MINGW_PREFIX=$(cygpath -m /mingw64)
         mkdir -p build/test-results
         export TONY_TEST_LOG_DIR=$(cygpath -m "$PWD/build/test-results")
-        meson test -C build --print-errorlogs --num-processes 1
+        meson test -C build --print-errorlogs --num-processes 1 --no-suite app
+    # The app suite as four processes at once, each running a shard of
+    # every suite (docs/testing.md, "Running"). It waits nearly all the
+    # time on the fake device's real-time clock: in one process it took
+    # 20 minutes here. The script gives the counts of each suite and every
+    # failure; each shard's results are in tmp/tl/test-tony-app.exe/
+    - name: test-app
+      id: test-app
+      if: success() || steps.test.outcome == 'failure'
+      shell: msys2 {0}
+      run: bash deploy/linux/run-tests.sh -j 4 build test-tony-app.exe
     # meson shows at most the last 100 lines of a failing log, and one
     # test executable runs several QTest suites: name every failed test,
     # with the lines QTest indents under it (compared values, where it
     # failed) and the totals of each suite that failed
     - name: test-failures
-      if: failure() && steps.test.outcome == 'failure'
+      if: failure() && (steps.test.outcome == 'failure' || steps.test-app.outcome == 'failure')
       shell: msys2 {0}
       run: |
         awk '/^test:/ { print; next }
@@ -98,4 +149,5 @@ jobs:
              /^Totals:/ { if ($0 !~ /, 0 failed/) show($0); next }
              /^(FAIL!|XPASS|QFATAL)/ { show($0); fail = 1; next }
              /^[A-Z!]+ *: / { fail = 0 }
-             fail && /^   / { show($0) }' build/test-results/*.txt
+             fail && /^   / { show($0) }' build/test-results/*.txt \
+                 tmp/tl/test-tony-app.exe/*/*.txt
