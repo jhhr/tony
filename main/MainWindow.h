@@ -30,6 +30,7 @@
 #include "LatencyCalibration.h"
 #include "LiveDotsFeed.h"
 #include "InputChannel.h"
+#include "TakeRecordingSearch.h"
 
 #include <vector>
 #include <string>
@@ -271,6 +272,13 @@ protected slots:
     // selected to erase a whole recording (spec 5.2)
     virtual void eraseSingingInSelection();
     virtual void selectRecordingAtPlayhead();
+
+    // Takes > Replace Take Audio from Recording: the take's audio over
+    // its coverage from a longer recording of the same singing (a
+    // wireless transmitter's own, whole where the radio dropped out),
+    // found in it (RecordingAlignment) on a thread of its own, then
+    // spliced in and analysed as a recording is, as one undoable step
+    virtual void replaceTakeAudioFromRecording();
 
     // The Takes menu and the "Take:" combo box (spec 5.3)
     virtual void takeChosenInCombo(int index);
@@ -960,6 +968,21 @@ protected:
     // The peak of each input in what went into the last take, as its
     // scan found them; empty if it was not scanned
     std::vector<float> m_takeInputPeaks;
+
+    // Replace Take Audio from Recording (replaceTakeAudioFromRecording()):
+    // the action; the file searched, asked for with the file dialog,
+    // which the tests answer; the search while it runs; and what it
+    // found put into the take, as one undoable step, with a report for
+    // the user, or a message if that could not be done
+    QAction *m_replaceTakeAudioAction = nullptr;
+    virtual QString askForTakeRecordingFile();
+    TakeRecordingSearch *m_takeRecordingSearch = nullptr;
+    void takeRecordingSearchDone();
+    QString replaceTakeAudio(const TakeRecordingSearch::Result &result,
+                             QString &report);
+    bool takeAudioSearchRunning() const {
+        return m_takeRecordingSearch != nullptr;
+    }
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;

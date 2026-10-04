@@ -41,6 +41,7 @@
 #include "TestVoiceThreshold.h"
 #include "TestInputChannel.h"
 #include "TestInputDevice.h"
+#include "TestRecordingAlignment.h"
 #include "TestInputLevel.h"
 #include "TestVoiceGate.h"
 #include "TestRunSuite.h"
@@ -247,6 +248,12 @@ int main(int argc, char *argv[])
 
     {
         TestInputDevice t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestRecordingAlignment t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

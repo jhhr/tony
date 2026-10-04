@@ -94,6 +94,13 @@ public:
         m_phoneChoice = phoneChoice;
     }
     QMenu *audioInputDeviceMenu() { return m_audioInputDeviceMenu; }
+
+    // Takes > Replace Take Audio from Recording, the file it asks for
+    // answered from here; true while its search runs
+    void setTakeRecordingAnswer(QString path) { m_takeRecordingAnswer = path; }
+    void doReplaceTakeAudioFromRecording() { replaceTakeAudioFromRecording(); }
+    QAction *replaceTakeAudioAction() { return m_replaceTakeAudioAction; }
+    bool searchingTakeAudio() const { return takeAudioSearchRunning(); }
     LatencyCalibration::Key doLatencyKey() { return latencyKey(44100); }
 
     void doRecord() { record(); }
@@ -455,6 +462,10 @@ protected:
         return m_implementations;
     }
 
+    QString askForTakeRecordingFile() override {
+        return m_takeRecordingAnswer;
+    }
+
     bool listsInputDevices() const override {
         return !m_listedInputs.empty();
     }
@@ -561,6 +572,7 @@ private:
     int m_audioIdleSuspendMillis = 0;
     int m_audioIOOpened = 0;
     std::vector<AudioRoute::Device> m_listedInputs;
+    QString m_takeRecordingAnswer;
     AudioRoute::Device m_phoneChoice;
     LatencyCalibration::Key m_audioIOOpenedFor;
     int m_liveDotsDelayMs = 0;

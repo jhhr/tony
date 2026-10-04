@@ -33,18 +33,20 @@ of the SV libraries this leans on are in [architecture.md](architecture.md).
 | The channels of a take's file | Those of its first recording, or one with one input chosen (Playback > Input Channel): then the take is made of that input alone. A recording into a stereo take with one input chosen goes into both of its channels, as a mono recording does ([recording.md](recording.md#input-channels)). A take plays centred, whatever its channels. |
 | Sessions from before takes | No migration: they open without their singing track, silently. |
 | Editing | One operation, Erase Singing in Selection, covers remove, trim and split. No hand-editing of singing pitch or notes exists, so replacing a range loses nothing the user made. |
-| Undo | Recordings and erases are undoable to any depth. Take operations (new, duplicate, delete, switch, Load Singing Track) are not, and **clear the undo history** without a prompt; Rename does not. |
+| Undo | Recordings, erases and Replace Take Audio from Recording are undoable to any depth. Take operations (new, duplicate, delete, switch, Load Singing Track) are not, and **clear the undo history** without a prompt; Rename does not. |
 
 ## The pieces
 
 `tony_core` (no window, unit-tested): `Coverage`, `TakeAudio` (`splice()` / `erase()`,
 streaming, ~5 ms edge fades, refuse to overwrite a file, refuse mismatched sample rates;
-`resample()`), `TakeEvents` (what an erase does to pitch and note events), `SingingTakes`
-(the list: name, audio path, coverage, active index; and the bookkeeping of files),
-`TakesFile` (the `<takes>` element and the folder), `TakeTiming`.
+`resample()`, `extract()`), `TakeEvents` (what an erase does to pitch and note events),
+`SingingTakes` (the list: name, audio path, coverage, active index; and the bookkeeping of
+files), `TakesFile` (the `<takes>` element and the folder), `TakeTiming`,
+`RecordingAlignment` (where a take's audio is in a longer recording).
 
 App side: `TakeLayers` (layers by name, `raise()`), `CoverageStrip`, `TakeCommands`
-(`SingingTakeCommand`), and the wiring in `MainWindow`.
+(`SingingTakeCommand`), `TakeRecordingSearch` (the search, on a thread of its own), and
+the wiring in `MainWindow`.
 
 `SingingTakes` knows nothing of layers or models on purpose. Keep it that way.
 
@@ -247,6 +249,86 @@ The strip takes no mouse input of its own. The Edit tool acts on the take's note
 time under the pointer, at any height in the pane, and that includes the band: decided so,
 rather than keeping the tools off the notes there (`strip_ignores_the_mouse`).
 
+## Replace Take Audio from Recording
+
+**Takes > Replace Take Audio from Recording...** puts a take's singing back from a longer
+recording of it made elsewhere. The case it is for: a wireless microphone's radio dropped
+out during the take, leaving gaps of digital silence, while the transmitter recorded the
+singing whole on its own (a RØDE Wireless PRO or GO records 32-bit float WAV at 48 kHz,
+from whenever its recording was started, for as long as it was left running).
+
+1. A WAV is picked: `getOpenFileName()`, so on a phone Tony's own picker, the file
+   copied into `imported/` where it has no path Tony may open
+   ([port-android.md](port-android.md)).
+2. **The search** (`TakeRecordingSearch`) runs on a thread of its own, with a progress
+   dialog that can cancel it. The dialog is shown, never `exec()`'d, and is modal to the
+   window, so the take cannot change meanwhile; a window closed during a search cancels it
+   and waits for its thread. All of the recording is read once, for its level every
+   10 ms, and each range of the take's coverage is looked for in that
+   (`RecordingAlignment::findSegments()`):
+   - **Coarse**: the take's level against the recording's, a correlation at every
+     offset, through the FFT; the 16 best offsets at least 0.1 s apart are the
+     candidates. Several, as the recording may hold other singings of the same song,
+     whose levels rise and fall as the take's do.
+   - **Fine**: the take's loudest half second against the recording's samples within
+     25 ms of each candidate. The best is the anchor.
+   - **The walk**: quarter seconds end to end over the range, each against the recording
+     within 0.5 ms of the offset of the last that matched, out from the anchor both ways.
+     So a drift between two clocks is followed. After pieces that did not match the reach
+     grows by what two clocks 100 ppm apart drift meanwhile, to at most 2 ms. The
+     **confidence** is the median of how alike the pieces are (a correlation
+     coefficient, 1 for the same waveform at any gain). Below **0.5** the range is not
+     found.
+   - The samples are **pre-emphasised** (a first difference): a held note of another
+     singing finds a match within half a period anywhere, and the waveform's detail is
+     what only the same singing has.
+   - **Dropout gaps** (runs of 5 ms or more under −100 dBFS) are left out of every
+     comparison: the recording has singing there, which the take does not, and counting
+     it would read a take with many gaps as unlike its own recording.
+   - **More than one recording session in a range**: a punch-in over an earlier take
+     merges into one coverage range, but the transmitter recorded it at another time.
+     Two or more of the walk's pieces in a row unlike the recording at the offset found
+     are another session. The switch is found in 20 ms windows, at the offset of the piece
+     beside it, and the stretch is looked for on its own, the same way, four deep at most.
+     A range not found as a whole may be mostly punch-ins: its longest run of four or more
+     pieces alike in a row is a session of its own, and the rest is looked for.
+3. **Refused** unless every stretch at least 0.5 s long is found. The message names the
+   first that was not, and how alike its best match was. A stretch under 0.5 s is left as
+   it was, and the report says so.
+4. **The replacement**: for each stretch, its span of the recording, from the frame
+   before to the frame after, is written to a file of its own (`TakeAudio::extract()`) in
+   a temporary folder beside the take's files. It is **scaled to the take's level** by
+   the RMS ratio over the pieces that matched. Then it is spliced in as a recording is
+   (`SingingTakes::spliceRecording()`, converted to the take's rate, 5 ms fades at each
+   end). The fraction of a frame by which the span begins early is left off its front.
+   The coverage does not change. A splice that fails puts the take back as it was.
+5. **One undoable step**, as a recording is: a `SingingTakeCommand` named "Replace Take
+   Audio", open until the analysis merges. The analysis is one ranged run from the first
+   stretch to the last, as Analyse Now's, gated by the voice threshold as it is set now.
+   Undo puts back the take's file and its pitch and notes; redo analyses again.
+6. **The report** says, for each stretch, where it was found in the recording and how
+   alike it was. It gives how far apart its two ends lie (the offsets near the first
+   three and the last three pieces that matched, if a second or more apart), and by how
+   much the level was brought to the take's.
+
+**Two clocks.** The transmitter's clock and the receiver's are not the same clock: their
+two ends may lie apart. More than **2 ms** apart is reported as such, and the audio is
+**not stretched**. The offset used is halfway between the two ends', so each end is at
+most half of that from where the take had it.
+
+**Decided, by the lead:** the level is matched to the take's, which the request did not
+ask for. The voice threshold, the input meter's figures and the take's scan read the
+take's file as recorded. A transmitter's recording at another level (a 32-bit float file
+has no gain of its own) would otherwise move every one of them, and a quieter one would
+lose its pitch to the threshold.
+
+Measured on the tests' synthetic singing: the same singing reads 0.997 to 0.9999 alike;
+the same singing 22 dB down under −66 dBFS of noise, 0.93; another singing of the same
+song, the same notes 30 ms or so apart, 0.20; anything else, 0.02 to 0.08. A take with a
+fifth of it in dropouts reads 0.997 (0.887 with the gaps counted). A 100 ppm drift over
+30 s reads 2.9 ms, the end pieces a little inside the ends. Nothing has been measured on
+a real transmitter's recording yet ([manual-checklist.md](manual-checklist.md)).
+
 ## Files on disk
 
 `SingingTakes` tracks three sets: **superseded** paths (kept until the session closes, for
@@ -367,3 +449,12 @@ Things to know, none of which stops the feature being used. See also
   between the two.
 - A note the voice threshold trims keeps the value pYIN gave it, over its whole length,
   the quiet ends included.
+- **Replace Take Audio from Recording** takes a dropout to be digital silence, as the
+  tests make it. A receiver that hides a dropout some other way (repeating, or fading)
+  leaves a piece that is less alike, not left out.
+- Its search reads all of the recording, and holds the take's range in memory: a long
+  recording on a phone takes a while, with the progress dialog up.
+- Two stretches it puts in that meet each fade over 5 ms against what the take held there,
+  as two recordings that meet do (above): where that is a dropout, a 10 ms dip.
+- A punch-in shorter than half a second, two of the walk's pieces, is not told apart from
+  the singing around it, and is replaced with the transmitter's audio of that.

@@ -39,6 +39,8 @@
 #include "VoiceThresholdMenu.h"
 #include "InputChannelMenu.h"
 #include "InputDevice.h"
+#include "RecordingAlignment.h"
+#include "TakeAudio.h"
 #include "InputLevel.h"
 #include "InputLevelFeed.h"
 #include "InputLevelMeter.h"
@@ -151,6 +153,7 @@
 #include <QTimer>
 #include <QEventLoop>
 #include <QTextStream>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <iostream>
@@ -1369,6 +1372,19 @@ MainWindow::setupTakesMenu()
             m_deleteTakeAction, SLOT(setEnabled(bool)));
     m_deleteTakeAction->setEnabled(false);
     m_takesMenu->addAction(m_deleteTakeAction);
+
+    m_takesMenu->addSeparator();
+
+    m_replaceTakeAudioAction =
+        new QAction(tr("Replace Take Audio from Re&cording..."), this);
+    m_replaceTakeAudioAction->setStatusTip
+        (tr("Put the take's singing back from a recording of it made "
+            "elsewhere, such as a wireless transmitter's own, where the "
+            "radio dropped out"));
+    connect(m_replaceTakeAudioAction, &QAction::triggered,
+            this, &MainWindow::replaceTakeAudioFromRecording);
+    m_replaceTakeAudioAction->setEnabled(false);
+    m_takesMenu->addAction(m_replaceTakeAudioAction);
 }
 
 void
@@ -2815,6 +2831,14 @@ MainWindow::updateMenuStates()
     emit canSelectRecording(haveCoverage && !inTake);
     emit canEraseSinging(haveCoverage && !inTake && haveSelection &&
                          !analysingRange);
+
+    // As an erase: it swaps the take's audio.  Not while a check records
+    // takes of its own, nor while a search for it runs
+    if (m_replaceTakeAudioAction) {
+        m_replaceTakeAudioAction->setEnabled
+            (haveCoverage && !inTake && !analysingRange &&
+             !audioCheckRunning() && !takeAudioSearchRunning());
+    }
 
     // Nor can playback be constrained to the selection during a take:
     // see liftPlaySelectionForTake()
@@ -8124,6 +8148,248 @@ MainWindow::applyTakeState(SingingTakeCommand *command, const TakeState &state)
                   .arg(state.path == "" ? tr("(none)") : state.path));
 
     return error == "";
+}
+
+namespace {
+
+// A time on the reference's timeline as the user reads it: 1:02.5
+QString minutesAndSeconds(double seconds)
+{
+    const int minutes = int(seconds / 60.0);
+    return QString("%1:%2").arg(minutes)
+        .arg(seconds - 60.0 * minutes, 4, 'f', 1, QChar('0'));
+}
+
+}
+
+QString
+MainWindow::askForTakeRecordingFile()
+{
+    return getOpenFileName(FileFinder::AudioFile);
+}
+
+void
+MainWindow::replaceTakeAudioFromRecording()
+{
+    // The action is disabled unless all of this holds, but a shortcut or
+    // a script can still reach it
+    if (!m_takes->haveTake() || m_takes->getCoverage().isEmpty()) return;
+    if (m_recordTarget && m_recordTarget->isRecording()) return;
+    if (m_analyser2 && m_analyser2->isAnalysingRange()) return;
+    if (audioCheckRunning() || takeAudioSearchRunning()) return;
+
+    const QString path = askForTakeRecordingFile();
+    if (path == "") return;
+
+    cerr << "MainWindow::replaceTakeAudioFromRecording: looking for the "
+         << m_takes->getCoverage().getRanges().size() << " range(s) of "
+         << m_takes->getAudioPath() << " in " << path << endl;
+    m_takeRecordingSearch = new TakeRecordingSearch
+        (m_takes->getAudioPath(), m_takes->getCoverage(), path, this);
+    connect(m_takeRecordingSearch, &TakeRecordingSearch::finished,
+            this, &MainWindow::takeRecordingSearchDone);
+    m_takeRecordingSearch->start();
+    updateMenuStates();
+}
+
+void
+MainWindow::takeRecordingSearchDone()
+{
+    TakeRecordingSearch *search = m_takeRecordingSearch;
+    m_takeRecordingSearch = nullptr;
+    if (!search) return;
+    search->deleteLater();
+    updateMenuStates();
+    const TakeRecordingSearch::Result &result = search->result();
+
+    const QString name = QFileInfo(result.recordingPath).fileName();
+    if (result.cancelled) {
+        cerr << "MainWindow::takeRecordingSearchDone: cancelled" << endl;
+        emit activity(tr("Replace Take Audio from Recording cancelled"));
+        return;
+    }
+
+    // Every stretch long enough to be looked for has to have been found:
+    // half a take from the recording and half as it was is no rescue
+    QString error = result.error;
+    for (const RecordingAlignment::Segment &segment : result.segments) {
+        const RecordingAlignment::Match &m = segment.match;
+        cerr << "MainWindow::takeRecordingSearchDone: [" << segment.start
+             << "," << segment.end << "): found " << m.found
+             << ", offset " << m.offset << ", confidence " << m.confidence
+             << " over " << m.pieces << " pieces, ends " << m.startOffset
+             << " and " << m.endOffset << ", gain " << m.gain << ": "
+             << m.error << endl;
+        if (error == "" && !m.found && result.lookedFor(segment)) {
+            error = tr("At %1: %2")
+                .arg(minutesAndSeconds(double(segment.start) /
+                                       result.takeRate), m.error);
+        }
+    }
+    if (error != "") {
+        QMessageBox::warning
+            (this, tr("Take audio not replaced"),
+             tr("<b>The take's singing was not found in \"%1\"</b><p>%2</p>"
+                "<p>The take is as it was.</p>")
+             .arg(name.toHtmlEscaped(), error.toHtmlEscaped()));
+        return;
+    }
+
+    // Nothing can have changed it, the dialog being modal, but a take
+    // that has would be written over with what was found for another
+    if (m_takes->getAudioPath() != result.takePath ||
+        m_takes->getCoverage() != result.coverage) {
+        QMessageBox::warning
+            (this, tr("Take audio not replaced"),
+             tr("<b>The take changed while its singing was being looked "
+                "for</b><p>Nothing was replaced.</p>"));
+        return;
+    }
+
+    QString report;
+    error = replaceTakeAudio(result, report);
+    if (error != "") {
+        QMessageBox::warning
+            (this, tr("Take audio not replaced"),
+             tr("<b>The take's singing could not be replaced</b><p>%1</p>"
+                "<p>The take is as it was.</p>").arg(error.toHtmlEscaped()));
+        return;
+    }
+    QMessageBox::information(this, tr("Take audio replaced"), report);
+}
+
+QString
+MainWindow::replaceTakeAudio(const TakeRecordingSearch::Result &search,
+                             QString &report)
+{
+    const QString directory = takeAudioDirectory();
+    if (directory == "") {
+        return tr("Could not find a directory to write the singing track "
+                  "into");
+    }
+    // The stretches of the recording go in through files of their own,
+    // as a recording does, which go again with the folder
+    QTemporaryDir scratch(QDir(directory).filePath("replacing-XXXXXX"));
+    if (!scratch.isValid()) {
+        return tr("Could not make a folder to work in, in \"%1\"")
+            .arg(directory);
+    }
+
+    // What an undo has to put back, and what a failure part of the way
+    // through does
+    const QString pathBefore = m_takes->getAudioPath();
+    const Coverage coverageBefore = m_takes->getCoverage();
+    const double rate = search.takeRate;
+    const double ratio = search.recordingRate / rate;
+
+    Coverage::Range whole;
+    bool any = false;
+    QStringList lines;
+    for (size_t i = 0; i < search.segments.size(); ++i) {
+        const Coverage::Range r(search.segments[i].start,
+                                search.segments[i].end);
+        const RecordingAlignment::Match &m = search.segments[i].match;
+        const QString when = tr("%1 to %2")
+            .arg(minutesAndSeconds(double(r.start) / rate),
+                 minutesAndSeconds(double(r.end) / rate));
+        if (!m.found) {
+            // Not looked for: anything else not found refused the lot
+            lines << tr("%1: too short to look for, left as it was").arg(when);
+            continue;
+        }
+
+        // The recording's frames that hold the range, at the recording's
+        // rate, brought to the take's level and converted to its rate by
+        // the splice.  They begin up to a frame early, which is left off
+        // the front in the take's frames
+        const double first = (double(r.start) + m.offset) * ratio;
+        const sv_frame_t from = sv_frame_t(std::floor(first));
+        const sv_frame_t count =
+            sv_frame_t(std::ceil((double(r.end) + m.offset) * ratio)) -
+            from + 1;
+        const sv_frame_t lead =
+            sv_frame_t(std::llround((first - double(from)) / ratio));
+        const QString part =
+            scratch.filePath(QString("part-%1.wav").arg(int(i)));
+        QString error = TakeAudio::extract(search.recordingPath, from, count,
+                                           float(m.gain), part);
+        Coverage::Range placed;
+        if (error == "") {
+            error = m_takes->spliceRecording(part, lead, r.start,
+                                             r.end - r.start, directory,
+                                             &placed, rate);
+        }
+        if (error != "") {
+            // The files written so far are superseded, and go when the
+            // session closes, as an undone recording's do
+            m_takes->restoreTake(pathBefore, coverageBefore);
+            return error;
+        }
+        whole = any ? Coverage::Range(std::min(whole.start, placed.start),
+                                      std::max(whole.end, placed.end))
+            : placed;
+        any = true;
+
+        QString line = tr("%1: at %2 in the recording, %3 alike")
+            .arg(when, minutesAndSeconds((double(r.start) + m.offset) / rate))
+            .arg(m.confidence, 0, 'f', 2);
+        const double drift = m.drift(rate);
+        if (m.endsMeasured &&
+            std::fabs(drift) > RecordingAlignment::kDriftSeconds) {
+            line += tr("; <b>its two ends lie %1 ms apart</b>: the "
+                       "transmitter's clock and the receiver's differ. The "
+                       "singing was not stretched to fit, and its ends are "
+                       "up to %2 ms from where the take had them")
+                .arg(std::fabs(drift) * 1000.0, 0, 'f', 1)
+                .arg(std::fabs(drift) * 500.0, 0, 'f', 1);
+        } else if (m.endsMeasured) {
+            line += tr("; its two ends %1 ms apart")
+                .arg(std::fabs(drift) * 1000.0, 0, 'f', 1);
+        }
+        const double gainDb = 20.0 * std::log10(std::max(m.gain, 1e-9));
+        if (std::fabs(gainDb) >= 0.5) {
+            line += tr("; brought %1 by %2 dB to the take's level")
+                .arg(gainDb > 0 ? tr("up") : tr("down"))
+                .arg(std::fabs(gainDb), 0, 'f', 1);
+        }
+        lines << line;
+    }
+
+    if (!any) {
+        return tr("Nothing in the take is long enough to be looked for: "
+                  "at least %1 s is needed")
+            .arg(RecordingAlignment::kMinRangeSeconds, 0, 'f', 1);
+    }
+
+    cerr << "MainWindow::replaceTakeAudio: [" << whole.start << ","
+         << whole.end << ") of the take from " << search.recordingPath
+         << " into " << m_takes->getAudioPath() << endl;
+
+    // One undoable step, as a recording is: the command is made before
+    // the audio is shown and analysed, and closed by the merge.  The
+    // analysis is one run over all of it, as Analyse Now's, gated by the
+    // voice threshold as it is set now
+    closeOpenTakeCommand(false);
+    SingingTakeCommand *command =
+        new SingingTakeCommand(this, tr("Replace Take Audio"),
+                               pathBefore, coverageBefore,
+                               m_takes->getAudioPath(), m_takes->getCoverage());
+    m_openTakeCommand = command;
+    m_takeVoiceThreshold = currentVoiceThreshold();
+    const bool analysing = rebuildSingingTrackFromTake(whole);
+    if (analysing) {
+        command->setPendingAnalysis(m_takeAnalysisRange);
+    } else if (m_openTakeCommand == command) {
+        m_openTakeCommand = nullptr;
+    }
+    addTakeCommand(command);
+    syncCoverageStrip();
+
+    report = tr("<b>The take's singing was replaced from \"%1\"</b>")
+        .arg(QFileInfo(search.recordingPath).fileName().toHtmlEscaped()) +
+        "<ul><li>" + lines.join("</li><li>") + "</li></ul>" +
+        tr("<p>Undo puts the take back as it was.</p>");
+    return "";
 }
 
 void

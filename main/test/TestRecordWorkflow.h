@@ -75,6 +75,7 @@
 #include "widgets/InteractiveFileFinder.h"
 #include "widgets/LevelPanToolButton.h"
 
+#include <QProgressDialog>
 #include <QObject>
 #include <QtTest>
 #include <QAbstractButton>
@@ -135,6 +136,56 @@ class TestRecordWorkflow : public QObject
         auto high = tone(highHz, secondsPerNote);
         m.insert(m.end(), high.begin(), high.end());
         return m;
+    }
+
+    // Singing as a function of time, so that the same singing can be had
+    // at any rate: six notes of a few harmonics over 3 s, and a little
+    // breath, from a bank of sinusoids
+    static double singingAt(double t) {
+        if (t < 0.0 || t >= 3.0) return 0.0;
+        const double pi = 3.14159265358979323846;
+        const double hz[] = { 220.0, 262.0, 294.0, 330.0, 262.0, 196.0 };
+        const double amp[] = { 0.3, 0.45, 0.35, 0.5, 0.4, 0.3 };
+        double v = 0.0;
+        const int note = int(t / 0.5);
+        const double tau = t - 0.5 * note;
+        if (tau < 0.45) {
+            const double env = std::min({ 1.0, tau / 0.02, (0.45 - tau) / 0.04 });
+            for (int h = 1; h <= 4; ++h) {
+                v += amp[note] * env * std::sin(2 * pi * h * hz[note] * tau +
+                                                0.7 * h * note) / h;
+            }
+        }
+        unsigned seed = 12345;
+        for (int k = 0; k < 12; ++k) {
+            seed = seed * 1103515245u + 12345u;
+            const double f = 400.0 + double(seed % 6000);
+            v += 0.004 * std::sin(2 * pi * f * t + 0.37 * k);
+        }
+        return v;
+    }
+
+    static std::vector<float> singing(double seconds, double atRate,
+                                      double from = 0.0, float gain = 1.f) {
+        std::vector<float> v(size_t(seconds * atRate));
+        for (size_t i = 0; i < v.size(); ++i) {
+            v[i] = gain * float(singingAt(double(i) / atRate - from));
+        }
+        return v;
+    }
+
+    QString writeWav(const std::vector<float> &data, double atRate) {
+        QString path = m_dir.filePath
+            (QString("audio-%1.wav").arg(++m_fileCounter));
+        sv::WavFileWriter writer(path, atRate, 1,
+                                 sv::WavFileWriter::WriteToTarget);
+        const float *ptr = data.data();
+        if (!writer.isOK() ||
+            !writer.writeSamples(&ptr, sv::sv_frame_t(data.size())) ||
+            !writer.close()) {
+            return {};
+        }
+        return path;
     }
 
     QString writeWav(const std::vector<float> &data) {
@@ -1896,8 +1947,10 @@ class TestRecordWorkflow : public QObject
         QWidget *modal = QApplication::activeModalWidget();
         if (!modal) return;
         // Check Input Level is opened, driven and closed by its tests,
-        // and runs no event loop of its own
+        // and runs no event loop of its own; nor does the progress of
+        // Replace Take Audio from Recording, which its search closes
         if (qobject_cast<CheckInputLevelDialog *>(modal)) return;
+        if (qobject_cast<QProgressDialog *>(modal)) return;
         QString description = modal->windowTitle();
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
@@ -2886,6 +2939,159 @@ private slots:
                  AudioRoute::deviceName(usb));
         QCOMPARE(m_window->doInputChannelKey().recordDevice,
                  AudioRoute::deviceName(usb));
+    }
+
+    // The take's runs of digital silence of 5 ms or more between its
+    // first sound and its last, as a radio's dropouts leave, and the
+    // first sound's frame
+    static int dropoutsIn(const TakeFile &file, sv::sv_frame_t &first) {
+        const auto &c = file.samples[0];
+        size_t a = 0, b = c.size();
+        while (a < b && c[a] == 0.f) ++a;
+        while (b > a && c[b - 1] == 0.f) --b;
+        first = sv::sv_frame_t(a);
+        int runs = 0;
+        size_t run = 0;
+        for (size_t i = a; i < b; ++i) {
+            if (c[i] == 0.f) {
+                if (++run == size_t(0.005 * rate)) ++runs;
+            } else {
+                run = 0;
+            }
+        }
+        return runs;
+    }
+
+    // Takes > Replace Take Audio from Recording: a take whose radio
+    // dropped out five times, and the transmitter's own recording of the
+    // singing, at 48 kHz, half as loud, 4.3 s into it. The take's audio
+    // is the recording's over its coverage, at the take's level, with no
+    // gaps; its pitch is analysed in again where the gaps were; one undo
+    // puts it back as it was, and a redo replaces it again
+    void replace_take_audio_from_a_transmitters_recording() {
+        std::vector<float> input = singing(3.0, rate);
+        for (auto gap : { std::make_pair(0.40, 0.50), { 0.90, 0.95 },
+                          { 1.30, 1.60 }, { 2.00, 2.05 }, { 2.40, 2.60 } }) {
+            for (size_t i = size_t(gap.first * rate);
+                 i < size_t(gap.second * rate); ++i) input[i] = 0.f;
+        }
+        FakeAudioIO::Config config;
+        config.input = input;
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+        take(3300);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+
+        const QString pathBefore = m_window->takes()->getAudioPath();
+        const auto coverageBefore = m_window->takes()->getCoverage();
+        const TakeFile before = takeFile();
+        sv::sv_frame_t start = 0;
+        QCOMPARE(dropoutsIn(before, start), 5);
+        const double sungAt = double(start) / rate;
+        const auto inGap = [&](Analyser *a) {
+            return eventsBetween(pitchEvents(a),
+                                 sv::sv_frame_t((sungAt + 1.35) * rate),
+                                 sv::sv_frame_t((sungAt + 1.55) * rate)).size();
+        };
+        QCOMPARE(int(inGap(m_window->analyser2())), 0);
+        QVERIFY(m_window->replaceTakeAudioAction()->isEnabled());
+
+        const QString recording =
+            writeWav(singing(12.0, 48000.0, 4.3, 0.5f), 48000.0);
+        m_window->setTakeRecordingAnswer(recording);
+        m_window->doReplaceTakeAudioFromRecording();
+        QVERIFY(m_window->searchingTakeAudio());
+        QVERIFY(!m_window->replaceTakeAudioAction()->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->searchingTakeAudio(), 30000);
+        const QStringList reports =
+            messagesMatching("Take audio replaced", "was replaced from");
+        QCOMPARE(reports.size(), 1);
+        QVERIFY2(reports[0].contains("alike") &&
+                 reports[0].contains("brought up by 6.0 dB"),
+                 qPrintable(reports[0]));
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+
+        const QString replaced = m_window->takes()->getAudioPath();
+        QVERIFY(replaced != pathBefore);
+        QCOMPARE(m_window->takes()->getCoverage(), coverageBefore);
+        const TakeFile after = takeFile();
+        sv::sv_frame_t startAfter = 0;
+        QCOMPARE(dropoutsIn(after, startAfter), 0);
+        // The singing where it was, at its level: the first note alike
+        const double level = before.rms(0, sungAt + 0.05, sungAt + 0.35);
+        const double levelAfter = after.rms(0, sungAt + 0.05, sungAt + 0.35);
+        QVERIFY2(std::fabs(20.0 * std::log10(levelAfter / level)) < 0.5,
+                 qPrintable(QString("%1 then %2").arg(level).arg(levelAfter)));
+        QVERIFY(after.rms(0, sungAt + 1.35, sungAt + 1.55) > 0.05);
+        QVERIFY2(inGap(m_window->analyser2()) > 5,
+                 qPrintable(QString::number(inGap(m_window->analyser2()))));
+
+        QCOMPARE(undoOnce(), QString("Replace Take Audio"));
+        QCOMPARE(m_window->takes()->getAudioPath(), pathBefore);
+        QCOMPARE(int(inGap(m_window->analyser2())), 0);
+        QCOMPARE(redoOnce(), QString("Replace Take Audio"));
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+        QCOMPARE(m_window->takes()->getAudioPath(), replaced);
+        QVERIFY(inGap(m_window->analyser2()) > 5);
+    }
+
+    // Cancelled from its dialog, the take is as it was; and a window
+    // closed while it searches waits for the search to stop
+    void replace_take_audio_can_be_cancelled() {
+        FakeAudioIO::Config config;
+        config.input = singing(3.0, rate);
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+        take(3300);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+        const QString pathBefore = m_window->takes()->getAudioPath();
+        const QString recording =
+            writeWav(singing(60.0, 48000.0, 40.0, 0.5f), 48000.0);
+
+        m_window->setTakeRecordingAnswer(recording);
+        m_window->doReplaceTakeAudioFromRecording();
+        auto *progress = m_window->findChild<QProgressDialog *>();
+        QVERIFY(progress);
+        QVERIFY(progress->isVisible());
+        auto *cancel = progress->findChild<QPushButton *>();
+        QVERIFY(cancel);
+        cancel->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->searchingTakeAudio(), 30000);
+        QCOMPARE(m_window->takes()->getAudioPath(), pathBefore);
+        QVERIFY(takeDialogs().isEmpty());
+        QVERIFY(m_window->replaceTakeAudioAction()->isEnabled());
+
+        m_window->doReplaceTakeAudioFromRecording();
+        QVERIFY(m_window->searchingTakeAudio());
+        m_window->doCloseSession();
+        makeWindow(config);
+    }
+
+    // A recording that does not hold the take's singing: refused, the
+    // take as it was, nothing to undo but the take itself
+    void replace_take_audio_refuses_another_recording() {
+        FakeAudioIO::Config config;
+        config.input = singing(3.0, rate);
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+        take(3300);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+        const QString pathBefore = m_window->takes()->getAudioPath();
+
+        const QString other = writeWav(melody(2.0));
+        m_window->setTakeRecordingAnswer(other);
+        m_window->doReplaceTakeAudioFromRecording();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->searchingTakeAudio(), 30000);
+        QCOMPARE(messagesMatching("Take audio not replaced",
+                                  "was not found in").size(), 1);
+        QCOMPARE(m_window->takes()->getAudioPath(), pathBefore);
+        QCOMPARE(undoOnce(), QString("Record Singing"));
     }
 
     void live_dots_removed() {

@@ -97,6 +97,17 @@ namespace TakeAudio
                      sv::sv_samplerate_t rate,
                      QString outPath);
 
+    /**
+     * Write to outPath count frames of the audio in inPath from its
+     * frame "from" on, every sample times gain, with its channels and
+     * at its rate; silence where it has nothing (before its frame 0,
+     * past its end). A stretch of a long recording made elsewhere (a
+     * wireless transmitter's own), to go into a take as a recording
+     * does.
+     */
+    QString extract(QString inPath, sv::sv_frame_t from,
+                    sv::sv_frame_t count, float gain, QString outPath);
+
     /// The sample rate of the audio file at path, or 0 if it cannot be read
     sv::sv_samplerate_t sampleRate(QString path);
 }

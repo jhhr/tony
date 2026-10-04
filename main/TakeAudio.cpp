@@ -394,6 +394,63 @@ TakeAudio::resample(QString inPath, sv_samplerate_t rate, QString outPath)
     return "";
 }
 
+QString
+TakeAudio::extract(QString inPath, sv_frame_t from, sv_frame_t count,
+                   float gain, QString outPath)
+{
+    QString error = checkOutPath(outPath, inPath);
+    if (error != "") return error;
+    if (count <= 0) {
+        return tr("Nothing to take out of \"%1\"").arg(inPath);
+    }
+
+    auto in = openWav(inPath, error);
+    if (!in) return error;
+    const int channels = in->getChannelCount();
+
+    {
+        // To a temporary file that is moved into place on close
+        WavFileWriter writer(outPath, in->getSampleRate(), channels,
+                             WavFileWriter::WriteToTemporary);
+        if (!writer.isOK()) {
+            error = writer.getError();
+        }
+
+        for (sv_frame_t b = 0; b < count && error == ""; b += blockFrames) {
+            const sv_frame_t n = std::min(blockFrames, count - b);
+            floatvec_t block(size_t(n * channels), 0.f);
+            // Silence before the file's frame 0
+            const sv_frame_t start = from + b;
+            const sv_frame_t skip =
+                std::min(n, std::max<sv_frame_t>(0, -start));
+            if (skip < n) {
+                const floatvec_t data = readFrames
+                    (in.get(), start + skip, n - skip, channels);
+                for (size_t i = 0; i < data.size(); ++i) {
+                    block[size_t(skip * channels) + i] = data[i] * gain;
+                }
+            }
+            if (!writer.putInterleavedFrames(block)) {
+                error = writer.getError();
+                if (error == "") error = tr("Failed to write audio data");
+            }
+        }
+
+        if (error == "" && !writer.close()) {
+            error = writer.getError();
+            if (error == "") error = tr("Failed to finish writing audio file");
+        }
+    }
+
+    // The writer puts its file in place even when it is abandoned
+    if (error != "") {
+        QFile::remove(outPath);
+        return tr("Failed to take audio out of \"%1\": %2")
+            .arg(inPath, error);
+    }
+    return "";
+}
+
 sv_samplerate_t
 TakeAudio::sampleRate(QString path)
 {

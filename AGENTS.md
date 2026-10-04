@@ -17,7 +17,7 @@ code.
 | [docs/testing.md](docs/testing.md) | running or writing tests |
 | [docs/architecture.md](docs/architecture.md) | touching layers, models, the document, commands, playback, the bottom bar's remembered settings or the session file |
 | [docs/recording.md](docs/recording.md) | touching `record()`, the Stop path, latency, pre-roll, the live tracker, the input channel, the input meter and level check |
-| [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore |
+| [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore, Replace Take Audio from Recording |
 | [docs/calibrate-audio.md](docs/calibrate-audio.md) | touching Calibrate Audio (`AudioCheckRunner`, `CalibrateAudioDialog`), the dev checks (`main/dev/`) or the measured latency (`LatencyCheck`, `LatencyCalibration`) |
 | [docs/audio-drivers.md](docs/audio-drivers.md) | touching the Audio Driver or Audio Latency menus (`AudioDriverSettings`, `AudioDriverMenus`), how the device is opened (`MainWindow::createAudioIO()`), or the bqaudioio fork |
 | [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/`, `bqaudioio/` |

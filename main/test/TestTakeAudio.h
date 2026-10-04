@@ -518,6 +518,48 @@ private slots:
         QVERIFY(allNearly(read(old), 0, 3000, 0.5f));
     }
 
+    // A stretch of a longer recording, scaled: its channels, its rate,
+    // the frames asked for, silence where it has none; the file as it
+    // was, and nothing written over
+    void extract_takes_a_stretch_out() {
+        Signal stereo;
+        const frame_t n = 50000;
+        for (frame_t i = 0; i < n; ++i) {
+            stereo.push_back(rampValue(i, n));
+            stereo.push_back(-rampValue(i, n));
+        }
+        const QString in = writeWav(stereo, 2, 48000.0);
+        QString out = newPath();
+        QCOMPARE(TakeAudio::extract(in, 20000, 25000, 2.f, out), QString());
+        QCOMPARE(TakeAudio::sampleRate(out), 48000.0);
+        Audio a = read(out);
+        QVERIFY(a.ok);
+        QCOMPARE(a.channels, 2);
+        QCOMPARE(a.frames, frame_t(25000));
+        for (frame_t i : { frame_t(0), frame_t(16000), frame_t(24999) }) {
+            QVERIFY(nearly(a.at(i, 0), 2.f * rampValue(20000 + i, n)));
+            QVERIFY(nearly(a.at(i, 1), -2.f * rampValue(20000 + i, n)));
+        }
+
+        // Before the start and past the end, silence
+        out = newPath();
+        QCOMPARE(TakeAudio::extract(in, -100, 300, 1.f, out), QString());
+        a = read(out);
+        QCOMPARE(a.frames, frame_t(300));
+        QVERIFY(allNearly(a, 0, 100, 0.f, 0));
+        QVERIFY(nearly(a.at(100, 0), rampValue(0, n)));
+        QVERIFY(nearly(a.at(299, 0), rampValue(199, n)));
+        out = newPath();
+        QCOMPARE(TakeAudio::extract(in, n - 10, 100, 1.f, out), QString());
+        a = read(out);
+        QCOMPARE(a.frames, frame_t(100));
+        QVERIFY(allNearly(a, 10, 100, 0.f, 1));
+
+        QCOMPARE(read(in).frames, n);
+        QVERIFY(TakeAudio::extract(in, 0, 10, 1.f, out) != QString());
+        QVERIFY(TakeAudio::extract(in, 0, 0, 1.f, newPath()) != QString());
+    }
+
     // Converting a recording from a device that does not run at the
     // reference's rate. As long as it was in seconds, to the frame, in
     // as many channels, kept apart
