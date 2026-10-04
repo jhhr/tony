@@ -514,13 +514,13 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
     for (size_t i : order) {
         if (int(candidates.size()) >= candidateCount) break;
         if (!(coarse[i] > 0.0)) break;
-        bool near = false;
+        bool tooClose = false;
         for (sv_frame_t c : candidates) {
             if (std::llabs(c - sv_frame_t(i)) < candidateSpacingHops) {
-                near = true;
+                tooClose = true;
             }
         }
-        if (!near) candidates.push_back(sv_frame_t(i));
+        if (!tooClose) candidates.push_back(sv_frame_t(i));
     }
     if (candidates.empty()) {
         match.error = tr("Nothing in the recording rises and falls as the "
