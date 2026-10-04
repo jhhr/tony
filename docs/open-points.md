@@ -16,6 +16,11 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **The editing constants** were defaults taken without the user: the 20 ms shortest
   word, the 0.5 s new word, the 6 px grab on each side of an edge, the menu's wording,
   and Edit Lyrics living in the Edit menu.
+- **Replace Take Audio from Recording brings the recording to the take's level**, which
+  was not asked for: the voice threshold, the meter's figures and the take's scan read the
+  take's file as recorded, and a transmitter's file at another level would move them all
+  ([takes.md](takes.md#replace-take-audio-from-recording)). The other way, the take
+  would sound as the transmitter recorded it.
 - **The alternate pitch track at ±3 octaves** of a 220 Hz reference (28 Hz, 1.8 kHz) is
   outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
 - Of the [manual checklist](manual-checklist.md), the device check (Calibrate Audio with
@@ -202,6 +207,16 @@ The platform's own limits are in [port-android.md](port-android.md#known-limitat
   from CI (a session's clone is shallow), so it installs over one from CI only after
   uninstalling it, which loses Tony's settings and log
   ([building.md](building.md#building-for-android)).
+- **Audio Input Device on the phone has not been tried**
+  ([port-android.md](port-android.md#choosing-the-input)): whether an input opened by its
+  id (`setDeviceId()`) keeps the low-latency path, whether the Pixel lists several built-in
+  microphones (the menu offers the first), whether a USB receiver keeps MMAP (AOSP's
+  generic USB policy has none), and what unplugging the receiver during a take does (its
+  stream is disconnected; the take should stop as Stop does, and the device open again
+  on the phone's choice with a notice). Whether the Pixel runs the default audio policy
+  engine is not known either.
+- **The phone's notice that the input chosen is not plugged in** holds the status bar for
+  8 s, over a take's time and notes. A longer take hears of it only at its start.
 - **Input Channel on the phone has not been tried**: whether the Pixel's audio HAL
   averages a two-input USB interface into the mono input Tony asks for (likely, from
   Android's source, but the HAL is not public), and whether the input opened at the
@@ -287,14 +302,36 @@ The design is in [recording.md](recording.md#input-channels) and
   there; none has met the HS2 and the AI-Micro yet (the checklist's section 7).
 - **The take's scan runs on the GUI thread at Stop**, after the splice: a read of what went
   into the take, a block at a time. Not timed on the phone.
-- **On a phone, before its input is open**, Input Channel applies to the input the driver
-  last recorded from: a guess, as `LatencyCalibration::onlyRecordDevice()` is for a
-  measured round trip. The menu's first line names it.
+- **On a phone, before its input is open**, Input Channel applies to the input device
+  chosen, if it is plugged in, else to the input the driver last recorded from: a guess,
+  as `LatencyCalibration::onlyRecordDevice()` is for a measured round trip. The menu's
+  first line names it.
 - **Choosing an input on a phone opens the device again** while its input is open, which
   moves the alignment, and the input then opens with the device's channels, which puts a
   kept round trip out of date: calibrate again after choosing.
 - Untested anywhere but on the phone: `OboeAudioIO` opening its input at the device's own
   channels, and Check Input Level asking for the microphone first.
+
+### Replace Take Audio from Recording
+
+The design is in [takes.md](takes.md#replace-take-audio-from-recording).
+
+- **Not tried on a real transmitter's recording.** The figures are the tests' synthetic
+  singing: the same singing reads 0.997 to 0.9999 alike, another singing of the song 0.20.
+  Whether a receiver's audio and its transmitter's own recording read as alike (the
+  receiver may process what it sends on: a high-pass, GainAssist), and where 0.5 sits
+  between them, is for the checklist's section 8. So are the other numbers: a dropout is
+  5 ms or more under −100 dBFS; another session is two quarter seconds in a row unlike;
+  where a range is not found as a whole, a session of its own is four in a row alike.
+- **A dropout the receiver hides** other than with silence (repeating, fading) is not
+  left out of the comparison, and reads as less alike.
+- **The two ends drifting apart is reported, not put right**: the audio is not
+  stretched, as asked, so a take whose ends lie 4 ms apart keeps each end up to 2 ms off.
+- **A punch-in shorter than half a second** is not told apart from the singing around it.
+- **The whole recording is read** for its level, and the take's range is held in memory:
+  how long a long recording takes on the phone has not been timed.
+- **A punch-in is tested only in the core**, on synthetic takes: the app's test records
+  a take of one session.
 
 ### The voice threshold
 

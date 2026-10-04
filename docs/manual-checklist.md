@@ -516,3 +516,71 @@ yet.
     the log's live dots lines during a take, the GUI thread's share of a core
     ("GUI thread ...% of a core") is no higher than before the meter (about 70 %).
 
+
+## 8. A wireless microphone: the input device, its channels, and Replace Take Audio
+
+For a Rode HS2 on a RØDE Wireless PRO (or Wireless GO Gen 3) transmitter, its receiver
+plugged in by USB-C as a USB microphone: on the Windows desktop, on the Surface Pro on its
+stand with the singer up to a few metres away, and on the phone. At home, possibly the
+receiver's analog output into the AI-Micro instead. The designs:
+[port-android.md](port-android.md#choosing-the-input),
+[recording.md](recording.md#input-channels),
+[takes.md](takes.md#replace-take-audio-from-recording).
+
+**The receiver as a USB microphone, on Windows (the desktop and the Surface)**:
+
+1. Playback > Audio Input Device lists the receiver under WASAPI. Choose it, and the
+   headphones' device as the output. In merged mode with no safety channel, Both Inputs:
+   the take plays in both ears, and Check Input Level reads your voice. Then split mode
+   with one transmitter: with Both, the take plays in one ear and reads 6 dB low;
+   Input 1 (or 2, whichever the transmitter is on) puts it right. Then merged with the
+   safety channel: with Both the take leans to one ear and reads about 3.6 dB low;
+   Input 1 puts it right. Does Calibrate Audio's result page say which input the
+   microphone is on?
+2. GainAssist off and any high-pass at its lowest (in RØDE Central or the receiver's
+   menu): sing your lowest note; the dots and the take's pitch follow it down to about
+   80 Hz.
+3. Calibrate Audio for the wireless chain, the earcup against the HS2 (off your ears):
+   the round trip, against the one through the AI-Micro (with the radio's latency on top,
+   it should be longer). Note both.
+4. **Two clocks**: the receiver as the input and the headphones on another device. A dev
+   run, or a take of five minutes or more against the reference: do the takes drift
+   (Calibrate Audio's punch-ins, or the take's pitch against the reference at its end)?
+   Then the receiver's analog output into the AI-Micro, headphones on the AI-Micro too,
+   for comparison.
+5. **On the Surface, a few metres away**: sing with the transmitter at the front of your
+   body, then on your back, or turn away from the Surface. Are there dropouts (gaps of
+   silence in the take, the status bar's take report, the waveform)? Note the distance
+   and position where they start.
+
+**Replace Take Audio from Recording**, on Windows:
+
+6. With the transmitter recording on its own, record a take with some dropouts (turn
+   away, as in 5). Copy the transmitter's WAV over (RØDE Central), then Takes > Replace
+   Take Audio from Recording... and pick it. Note how long the search took for the
+   file's length, the confidence the report gives (0.9 or more is expected), and how far
+   apart the ends are said to lie over the take's length. Play the take: no gaps, the
+   voice at the level it had, no click or dip where the gaps were; the pitch is there
+   now. Undo puts the gaps back; Redo replaces them again.
+7. A take with a punch-in (Record into Selection over part of it), the transmitter
+   recording through both: the report lists the parts, each found at its own place in
+   the recording; the punch-in sounds as sung, not as the take under it was.
+8. Pick a transmitter file of another day: refused, "not found", and the take as it was.
+
+**On the phone**:
+
+9. Plug the receiver in, with Bluetooth earphones on, then with the speaker: Playback >
+   Audio Input Device's first line ("In use:") names the receiver once a take has
+   started (Android's choice, as the research says). Choose the phone's microphone: the
+   next take records from it (the log's route line), the receiver plugged in or not.
+   Choose the receiver again.
+10. Unplug the receiver, then Record: the status bar says it is not plugged in and that
+    the phone's microphone records instead, for about 8 s; the menu shows the receiver
+    "(not connected)", ticked. Plug it in again: the next take records from it. Unplug
+    it during a take: the take stops as Stop would, and Tony goes on with the phone's
+    microphone.
+11. With the receiver chosen: the log's input stream line (MMAP or not, its burst and
+    buffer), and the round trip Calibrate Audio measures, Bluetooth out and receiver in.
+    In split mode, Input 1 opens the input at the receiver's own channels (the log).
+12. Replace Take Audio from Recording on the phone, with the transmitter's file copied to
+    the phone: the picker, the time the search takes, and the result as in 6.

@@ -43,7 +43,13 @@ Recording
    recording starts and stops at the ends of the selection by itself. This
    and the pre-roll are buttons in the toolbar, after "While recording:"
  * the microphone and the output are chosen in Playback -> Audio Input Device
-   and Playback -> Audio Output Device
+   and Playback -> Audio Output Device. On a phone, Audio Input Device lists the
+   phone's microphone, a wired headset and a USB microphone (a wireless
+   receiver, say), and the output is the phone's own choice. Android records
+   from a USB or wired microphone by itself when one is plugged in; the menu
+   is for choosing the phone's microphone instead, or one of two. A choice
+   that is not plugged in records from the phone's choice, and the status bar
+   says so
  * a microphone on one input of an interface with two: Playback -> Input
    Channel -> Input 1 (or Input 2) makes each take from that input alone, so
    that it plays back in both ears and the live dots, the analysis and the
@@ -112,6 +118,31 @@ Microphone and levels
    microphone and the headphones both at telephone quality
  * after changing the microphone, the interface, the headphones or the driver,
    run Playback -> Calibrate Audio... again: each has its own latency
+ * a wireless microphone, such as a headset on a RØDE Wireless PRO or GO
+   transmitter, its receiver plugged in as a USB microphone or into an
+   interface's input:
+    * set the receiver to merged mode with no safety channel, so that the voice
+      is on both channels at its own level. In split mode, or with the safety
+      channel (a copy 10 dB quieter on the second channel), choose its channel
+      in Playback -> Input Channel: Both Inputs would average it with the other
+      channel and read it 6 or 3.6 dB low
+    * turn GainAssist, or any automatic level, off: it changes the take's level
+      as you sing, and the level the voice threshold reads
+    * keep any high-pass filter off, or at its lowest: low sung notes are near
+      80 Hz
+    * wear the transmitter at the front of your body, in sight of the receiver:
+      its 2.4 GHz radio does not pass through a person, and a dropout is a gap
+      of silence in the take
+    * run Playback -> Calibrate Audio... again for the wireless chain: the
+      radio adds its own latency
+    * use one device for both the input and the headphones (the receiver's
+      analog output into an interface, say). With the receiver as the input and
+      the headphones on another device, the two run on two clocks, and takes
+      drift against the reference by a few milliseconds over a long session
+    * let the transmitter record on its own as well, as a backup: where the
+      radio dropped out during a take, Takes -> Replace Take Audio from
+      Recording... finds the take's singing in the transmitter's file and puts
+      it in the take's place (below)
 
 
 Takes and editing
@@ -124,6 +155,16 @@ Takes and editing
    (Ctrl+D) remove, trim or split what has been recorded. A range is selected by
    dragging in the thin ruler strip below the pane
  * recordings and erases can be undone and redone
+ * Takes -> Replace Take Audio from Recording... puts the take's singing back
+   from a recording of it made elsewhere, such as a wireless transmitter's own
+   backup, where the radio dropped out during the take. Pick the transmitter's
+   WAV file: Tony finds where in it each part of the take was sung (a
+   punch-in was sung at another time, and is found on its own), refuses if
+   any part is not there, and otherwise puts the file's audio in place of the
+   take's, at the take's level, and analyses it again. It says where each part
+   was found and how alike it was, and whether the transmitter's clock and
+   the receiver's drifted apart over the take (the audio is not stretched to
+   fit). One Undo puts the take back as it was
  * several takes of a song in one session (the Takes menu and the "Take:" box in
    the toolbar): each keeps its own audio, pitch track and notes, and switching
    between them needs no re-analysis. The audio of a session's takes is kept in
