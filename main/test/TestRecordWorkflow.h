@@ -1680,6 +1680,22 @@ class TestRecordWorkflow : public QObject
         return levels ? levels->meter().bar(levels->now()) : -1000.0;
     }
 
+    // The meter's bar at its highest over the next ms, read every 5 ms.
+    // It falls at 20 dB a second between the levels the device reports,
+    // 20 times a second or less, so that one read can fall between two
+    // of them, and a slow machine makes that fall longer; right after a
+    // report it is the level reported
+    double meterBarAtMost(int ms) {
+        double most = -1000.0;
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < ms) {
+            most = std::max(most, meterBar());
+            QTest::qWait(5);
+        }
+        return most;
+    }
+
     // The meter's hold now: the highest peak in the last 1.5 s
     double meterHold() {
         InputLevelFeed *levels = m_window->inputLevels();
@@ -2334,9 +2350,10 @@ private slots:
         config.channels = 2;
         config.reportLevels = true;
         config.inputChannel = 0;
-        // -6.0 dBFS on input 1, -20 dBFS on input 2
-        config.input = TestSignals::sine(highHz, rate, int(3.0 * rate), 0.5);
-        config.otherInput = TestSignals::sine(lowHz, rate, int(3.0 * rate),
+        // -6.0 dBFS on input 1, -20 dBFS on input 2, for as long as the
+        // second take may wait for the meter
+        config.input = TestSignals::sine(highHz, rate, int(6.0 * rate), 0.5);
+        config.otherInput = TestSignals::sine(lowHz, rate, int(6.0 * rate),
                                               0.1);
         makeWindow(config);
         openReference(writeWav(silence(3.0)));
@@ -2347,10 +2364,11 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         QTest::qWait(800);
+        double bar = meterBarAtMost(300);
         QVERIFY2(std::fabs(meterHold() + 6.02) < 0.3 &&
-                 meterBar() > -7.2,
-                 qPrintable(QString("both inputs: the meter reads %1 dBFS, "
-                                    "held at %2").arg(meterBar())
+                 std::fabs(bar + 6.02) < 0.5,
+                 qPrintable(QString("both inputs: the meter reads at most "
+                                    "%1 dBFS, held at %2").arg(bar)
                             .arg(meterHold())));
         stopTake();
         if (QTest::currentTestFailed()) return;
@@ -2363,12 +2381,14 @@ private slots:
         startTake();
         if (QTest::currentTestFailed()) return;
         QCOMPARE(m_window->inputLevels()->getChannel(), 1);
-        // Past the hold of the first take's louder input
-        QTest::qWait(1800);
+        // Past the hold of the first take's louder input, its last level
+        // reported late on a slow machine
+        QTRY_VERIFY_WITH_TIMEOUT(std::fabs(meterHold() + 20.0) < 0.3, 5000);
+        bar = meterBarAtMost(300);
         QVERIFY2(std::fabs(meterHold() + 20.0) < 0.3 &&
-                 meterBar() > -21.2,
-                 qPrintable(QString("input 2: the meter reads %1 dBFS, "
-                                    "held at %2").arg(meterBar())
+                 std::fabs(bar + 20.0) < 0.5,
+                 qPrintable(QString("input 2: the meter reads at most %1 "
+                                    "dBFS, held at %2").arg(bar)
                             .arg(meterHold())));
         stopTake();
         if (QTest::currentTestFailed()) return;
@@ -2484,7 +2504,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT
             (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
         QVERIFY(dialog->doneButton()->isEnabled());
-        QTRY_VERIFY_WITH_TIMEOUT(meterBar() > -4.0, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(meterBarAtMost(200) > -4.0, 5000);
         QTest::qWait(300);
         dialog->doneButton()->click();
         QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Result);

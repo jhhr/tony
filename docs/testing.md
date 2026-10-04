@@ -243,10 +243,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `chooseInputChannel()` chooses through the menu.
 - For the input level: `toolbarMeter()` (the meter in the window's toolbar),
   `meterBar()` and `meterHold()` (the feed's meter now; judge a steady sound by its hold,
-  as the bar falls up to 1 dB between two readings), `drawnMeter()` (a meter of the
-  window's levels drawn at a size of the test's own: the window is never shown, and its
-  toolbar's meter has no size of its own) and `clippedAt()` (where the status bar says a
-  take clipped). The meters read nothing unless the fake has `reportLevels` on.
+  or by `meterBarAtMost()`, the bar's highest over a short while: it falls 1 dB between
+  two readings, more on a slow machine, where CI's runners failed a single read),
+  `drawnMeter()` (a meter of the window's levels drawn at a size of the test's own: the
+  window is never shown, and its toolbar's meter has no size of its own) and `clippedAt()`
+  (where the status bar says a take clipped). The meters read nothing unless the fake has
+  `reportLevels` on.
 - For what is kept between launches (`TestRecordWorkflow`): `relaunch(config)` is a new
   window reading the settings the old one left (the session closed as `cleanup()` closes
   it). `turnWheel()` turns a level control's level or pan with real wheel events, and
