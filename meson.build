@@ -1697,7 +1697,8 @@ if system != 'android'
     win_subsystem: 'console'
   )
 
-  test('tony-core', tony_core_test_exe)
+  test('tony-core', tony_core_test_exe,
+       timeout: 300)
   test('tony-app', tony_app_test_exe,
        depends: pyin_plugin,
        timeout: 1800,

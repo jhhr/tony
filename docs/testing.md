@@ -18,13 +18,15 @@ development checks (section 1 of the [manual checklist](manual-checklist.md)).
 it when a change touches what the development checks drive (see
 [AGENTS.md](../AGENTS.md)).
 
-- The `tony-app` meson test has `timeout: 1800` and `tony-dev` `timeout: 900`. The app
-  suite took about 277 s unloaded when 900 was set. On 2026-09-26 it took 628 s on Linux
-  and 743 s on the Windows machine, before the touch and compact-layout suites came, which
-  add about half a minute; on CI's Windows 863 s that day, and more than 900 the next.
-  Every workflow test adds real time, so if a suite comes near its limit, raise it in
-  `meson.build`: `meson test` reports a timeout even when every test passes. Running the
-  executable by hand has no timeout.
+- The `tony-app` meson test has `timeout: 1800`, `tony-dev` `timeout: 900` and
+  `tony-core` `timeout: 300`. The core suite outgrew meson's own 30 s on 2026-10-04:
+  37 s in one process on Linux, 15 s of it `TestRecordingAlignment`, mostly rendering
+  its synthetic singing. The app suite took about 277 s unloaded when 900 was set. On
+  2026-09-26 it took 628 s on Linux and 743 s on the Windows machine, before the touch
+  and compact-layout suites came, which add about half a minute; on CI's Windows 863 s
+  that day, and more than 900 the next. Every workflow test adds real time, so if a
+  suite comes near its limit, raise it in `meson.build`: `meson test` reports a timeout
+  even when every test passes. Running the executable by hand has no timeout.
 - `main()` of the app and dev suites replaces `VAMP_PATH` with the executable's directory,
   so an installed pYIN is never the one tested; their meson tests `depends:` on
   `pyin_plugin` because nothing else builds `pyin.dll`. Build `pyin.dll` (`pyin.so` on
