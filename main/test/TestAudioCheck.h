@@ -27,6 +27,7 @@
 
 #include "TestSignals.h"
 #include "TestMainWindow.h"
+#include "../InputDevice.h"
 #include "../InputChannel.h"
 
 #include "../AudioCheckRunner.h"
@@ -802,8 +803,9 @@ private slots:
         // the waits below return early when they fail
         QSettings().remove("LatencyCalibration");
         forgetDriverPreferences();
-        // Nor an input channel a test chose
+        // Nor an input channel or a phone's input device a test chose
         QSettings().remove("InputChannel");
+        QSettings().remove("InputDevice");
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -2170,6 +2172,35 @@ private slots:
         QVERIFY2(words.contains("echo cancellation or noise suppression"),
                  qPrintable(words));
         QVERIFY2(!words.contains("Windows"), qPrintable(words));
+    }
+
+    // A phone open for playback only, an input device chosen and plugged
+    // in: the instructions name it, not the input calibrated before
+    void calibrate_audio_names_the_input_device_chosen() {
+        FakeAudioIO::Config config = loopback();
+        config.route = phoneRoute();
+        config.route.hasInput = false;
+        AudioRoute::Device usb;
+        usb.id = 40;
+        usb.type = 11;
+        usb.productName = "Wireless PRO RX";
+        makeWindow(config);
+        m_window->setFakeListedInputs({ phoneRoute().input, usb },
+                                      phoneRoute().input);
+        {
+            QSettings settings;
+            InputDevice::choose(settings, "oboe", usb);
+        }
+        openSong();
+        if (QTest::currentTestFailed()) return;
+
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        const QString words = dialog->pageText();
+        const QString input = "USB device (Wireless PRO RX), chosen under "
+            "Playback > Audio Input Device";
+        QVERIFY2(words.contains(input), qPrintable(words));
     }
 
     // Not while an ordinary take is being recorded: the check records

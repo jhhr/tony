@@ -41,7 +41,7 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputLevel`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
 | `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
@@ -418,6 +418,17 @@ and a check. Kept per input device, as `LatencyCalibration` keys its figures (gr
 the base call, as a phone's input is known only then; the audio check's takes are made of
 both inputs. A choice on a phone opens the device again, as its input is opened otherwise
 for one input than for both (`OboeAudioIO`).
+
+**A phone's input device** (`InputDevice`;
+[port-android.md](port-android.md#choosing-the-input)): Playback > Audio Input Device,
+which on the desktop lists the driver's devices, lists on a phone the inputs Android's
+`AudioManager` lists (`MainWindow::listsInputDevices()`, `listedInputDevices()`, which
+the tests give a phone's). The choice is kept by type and product name (group
+`InputDevice`), and `OboeAudioIO` asks for the id to open it by each time it opens its
+input. Before the first take, the measured round trip and the input channel are looked
+up for the input chosen if it is plugged in. One chosen but not plugged in, or not
+opened, is said in the status bar for 8 s (`setAudioNotice()`), over the take's time and
+notes, as the countdown is.
 
 **The input level** (`InputLevel`, `InputLevelFeed`, `InputLevelMeter`,
 `CheckInputLevelDialog`; [recording.md](recording.md#the-input-level)): a meter beside

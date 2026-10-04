@@ -276,17 +276,20 @@ differs by more than 1 ms from the one the duplex stream reported at the check, 
 says "out of date" until the first take. Whether a real device does so is not known yet
 ([manual checklist](manual-checklist.md), 2.6).
 
-**On Android** there are no device settings: `OboeAudioIO` opens whatever route the phone
-has and reports it (`AudioRoute`, through `AudioRouteReporter`): each device's type and
+**On Android** there are no device settings but the input device chosen, if any
+(Playback > Audio Input Device, [port-android.md](port-android.md#choosing-the-input)):
+`OboeAudioIO` opens whatever route the phone has, with that input, and reports it (`AudioRoute`, through `AudioRouteReporter`): each device's type and
 product name from `AudioManager`, the rate, and how each stream was opened. The key is
 then the driver `oboe` and the two devices' type and product name, never their ids, which
 a headset changes each time it is plugged in; so the speaker, a wired headset and a
 Bluetooth one each keep a figure. The device is opened again when its streams are
 disconnected, as they are when the route changes, and the menu line follows the new
-route. Until the first take the device is open for output only, and the key takes the one
-input a figure is kept with for that output, if there is exactly one. That is a guess: the
-menu line and the instructions may show the figure of an input the first take does not
-open, though the take itself looks its figure up with the input it got.
+route. Until the first take the device is open for output only, and the key takes the
+input device chosen if it is plugged in, which the first take opens, and the instructions
+name it so. With none chosen, it takes the one input a figure is kept with for that
+output, if there is exactly one. That is a guess: the menu line and the instructions may
+show the figure of an input the first take does not open, though the take itself looks
+its figure up with the input it got.
 
 Oboe's latencies come from timestamps and move by several ms between starts of the same
 streams (5.2, 8.4 and 4.4 ms out on the first phone tried), which the 1 ms rule would take

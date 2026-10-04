@@ -36,6 +36,8 @@
 #include <atomic>
 #include <functional>
 
+#include <QElapsedTimer>
+
 #include "data/model/SparseTimeValueModel.h"
 
 #ifdef Q_OS_ANDROID
@@ -171,6 +173,15 @@ public:
     // chooses it for the device in use (Calibrate Audio's result page
     // offers the one its check heard the microphone on)
     void chooseInputChannel(const InputChannel::Key &key, int channel);
+
+    // Whether the input device is chosen from the inputs the driver
+    // lists (Android's AudioManager), as on a phone, rather than from
+    // the Preferences' device names (Playback > Audio Input Device)
+    virtual bool listsInputDevices() const;
+
+    // The input device chosen, as it is listed now (with its id), if one
+    // is chosen and plugged in (InputDevice)
+    bool chosenInputDevice(AudioRoute::Device &device) const;
 
 #ifdef Q_OS_ANDROID
     // The microphone is asked for when it is first needed: Record starts
@@ -830,6 +841,15 @@ protected:
     // writes the status bar while a take runs asks this first.
     bool showTakeCountdown() const;
 
+    // Put a notice about the audio device in the status bar, over what
+    // shows there, for a few seconds, as the countdown is: the input
+    // device chosen that is not plugged in.  showAudioNotice() shows it,
+    // and says so, while it lasts
+    void setAudioNotice(QString message);
+    bool showAudioNotice() const;
+    mutable QString m_audioNotice;
+    QElapsedTimer m_audioNoticeTimer;
+
     // Ask before recording over singing that is already there, unless
     // the user has said not to.  Overridden by the tests, which cannot
     // answer a dialog.  Returns true to go ahead with the recording.
@@ -994,6 +1014,30 @@ protected:
                                       QActionGroup *group,
                                       const std::vector<std::string> &names,
                                       QString settingKey);
+
+    // The input devices the driver lists now (Android's AudioManager);
+    // none where listsInputDevices() is false.  Virtual so that the
+    // tests can list a phone's
+    virtual std::vector<AudioRoute::Device> listedInputDevices() const;
+
+    // The driver whose inputs are listed, as its route names it: the
+    // input device chosen is kept under it
+    static QString listingDriver() { return "oboe"; }
+
+    // Playback > Audio Input Device from listedInputDevices(): the input
+    // in use, the system's default, and those InputDevice offers
+    void buildListedInputDeviceMenu();
+    void listedInputDeviceChosen(QAction *action);
+
+    // The id to open the input device chosen by, as it is listed now: 0
+    // for the driver's own choice, as for one chosen that is not plugged
+    // in.  Asked each time the input is opened
+    int inputDeviceIdToOpen() const;
+
+    // Once the device is open with its input: if that is not the input
+    // device chosen (not plugged in, or it could not be opened), say so
+    // in the status bar
+    void reportInputDevice();
 
     // The implementations bqaudioio has, of which the drivers are offered
     // in Playback > Audio Driver.  Virtual so that the tests can give

@@ -140,6 +140,64 @@ only in search results.
   (`NetResultsIT/portaudio-oboe`, and `croissanne/portaudio_opensles` on the deprecated
   OpenSL ES). Not taken: it depends on unmerged code.
 
+### Choosing the input
+
+Researched 2026-10-04 for a USB microphone (a RØDE Wireless PRO or GO receiver) on the
+user's Pixel 9a. android.googlesource.com and cs.android.com cannot be reached from a cloud
+session: the code is GrapheneOS's mirror of android16-qpr2, whose input selection is the
+same as LineageOS 23.1's; Oboe is 1.11.0. RØDE's pages were seen only in search excerpts.
+
+- **Which input Android gives `VoicePerformance`** (`Engine::getDeviceForInputSource()`,
+  the default engine): the first that is attached of a wired headset, a USB headset, a
+  USB device, a Bluetooth remote's microphone, the phone's microphone. **The output plays
+  no part** for this source: only the call, recognition and hotword sources look at the
+  output. So with a USB input-only device attached, Android records from it **with the
+  output on Bluetooth A2DP and with it on the speaker alike**. The plain `MIC` source
+  chooses the same in both cases.
+- What can override that list: a call in progress (the source becomes
+  `VOICE_COMMUNICATION`), a preferred or disabled device for the capture preset (set only
+  by a system app: `setPreferredDeviceForCapturePreset()` needs `MODIFY_AUDIO_ROUTING`), a
+  dynamic policy mix, and **an explicit device id**, which `getInputForAttr()` honours for
+  any source. The "last connected device first" rule is for outputs only.
+- Whether the Pixel runs the default engine or the configurable one is the vendor HAL's
+  choice and not public; the phone's log says it (`loading APM engine`, at audioserver's
+  start).
+- **A USB device that only records is `TYPE_USB_DEVICE` (11)**: `UsbDescriptorParser`
+  counts a device as a headset only if it also has an output. One with an output too may
+  be `TYPE_USB_HEADSET` (22); both come before the phone's microphone.
+- **If the USB device also plays**, media goes to whichever of it and Bluetooth was
+  connected last (`LastRemovableMediaDevices`), either before the speaker. Whether either
+  RØDE receiver has a USB output is unconfirmed: the phone's `getDevices()` outputs say.
+- **An explicit input id does not move the output**, which follows its own strategy. If
+  the device goes (unplugged), its stream is disconnected, stopped or not; the same
+  happens without an id when plugging a USB microphone in moves the default input.
+- **Several built-in microphones** are listed as `TYPE_BUILTIN_MIC`, each with its own id
+  (addresses `bottom`, `back`), and each can be opened by its id. Whether a Pixel 9a lists
+  several, and whether its HAL then switches capsule, is unconfirmed.
+- `getDevices(GET_DEVICES_INPUTS)` lists every available input but a few internal ones,
+  with no permission filter: the phone's microphones, wired, USB, `TYPE_BLUETOOTH_SCO`
+  once a headset's call profile connects, `TYPE_BLE_HEADSET`, the telephony line, the
+  remote submix, tuners.
+- **A Bluetooth headset's microphone** is only to be had through a call's link (SCO, or LE
+  Audio's headset profile), which neither list above includes: an app has to start it
+  (`setCommunicationDevice()`), which moves the output to the same link, at call quality
+  both ways (8 or 16 kHz mono through SCO). So Tony offers no Bluetooth input.
+- **Input and output on two devices** run together: nothing in AOSP or Oboe forbids it,
+  and the phone already did so with Bluetooth out and its own microphone in. Oboe's
+  `FullDuplexStream` has no drift correction; `OboeAudioIO` reads all the input there is
+  each callback, so two clocks show as takes that drift against the reference
+  ([audio-drivers.md](audio-drivers.md), §7), not as lost input.
+- **The USB input's path**: AOSP's generic USB policy has no MMAP input, so AAudio falls
+  back to the legacy path, which is shared only. Whether the Pixel's own USB HAL has one
+  is unconfirmed; the log line of each stream says ("AAudio (MMAP)" or not). A mono
+  request on a stereo device, or another rate, also costs the FAST track.
+- Oboe 1.11.0 resamples a low-latency stream itself when a rate is asked for
+  (`SampleRateConversionQuality::Medium` by default): the device opens at its own rate.
+- **RØDE's receiver modes**, from its user guide (search excerpts only): merged puts the
+  transmitters, summed, on both channels; split puts each on its own channel, left and
+  right; the safety channel (merged only) puts a copy 10 dB lower on the right. Its USB
+  format (48 kHz, 24-bit, stereo is likely) is unconfirmed.
+
 ### Files, storage and cloud apps
 
 - **The file dialog is the Storage Access Framework** (`qandroidplatformfiledialoghelper.cpp`):
@@ -282,6 +340,19 @@ A `breakfastquay::SystemAudioIO`, as `PortAudioIO` is on the desktop, which
   to the record target before it asks for output (the start gap, as above), and reads
   **all** the input waiting, not only what the output asks for. Before any take the output
   runs alone; after one the device stays duplex (svapp), so Play opens the microphone too.
+- **The input device**: Android's choice ([above](#choosing-the-input)) unless one is chosen under **Playback >
+  Audio Input Device**, which on a phone lists `AudioManager`'s inputs: "(System
+  Default)", then each of the phone's microphone, a wired headset and a USB device or
+  headset, each type and name once (the first of several built-in microphones), with the
+  one in use named on the menu's first line. No Bluetooth input. A choice is kept
+  by the device's type and product name (`InputDevice`), never its id, and opened with
+  `setDeviceId()` by the id the device is listed under at that open. A device chosen that
+  is not plugged in, or cannot be opened, leaves the input to Android, and the status bar
+  says so for 8 s, over a take's notes and time; the menu shows it "(not connected)",
+  still ticked. Choosing opens the device again if its input is open; not during a take.
+  The output is always Android's choice. A round trip is kept per route, and before the
+  first take the route's input is the one chosen, if plugged in
+  ([calibrate-audio.md](calibrate-audio.md), §5).
 - **Low latency**: both streams ask for low-latency performance mode and exclusive
   sharing, which AAudio gives as an MMAP stream where the phone has one (the user's phone
   does) and turns into a shared one where not. The input uses the VoicePerformance preset:
@@ -387,7 +458,11 @@ More, with their reasons, in [open-points.md](open-points.md).
 
 - **A Bluetooth microphone only through SCO**: Android gives a Bluetooth headset's
   microphone only through a call's link, at call quality both ways, which Tony does not
-  ask for. With Bluetooth output Tony records from the phone's microphone.
+  ask for. With Bluetooth output Tony records from the phone's microphone, or a USB or
+  wired one if attached ([above](#choosing-the-input)).
+- **A USB microphone with another output** (Bluetooth or the speaker) runs on two clocks:
+  takes drift against the reference, as on two sound cards
+  ([audio-drivers.md](audio-drivers.md), §7). One device for both is better.
 - **The GUI thread is at about 70 % of a core during takes** on the user's phone (the live
   dots' log line, "GUI thread ...% of a core"). The dots keep up, but there is little
   room left.
@@ -441,6 +516,14 @@ More, with their reasons, in [open-points.md](open-points.md).
   - https://github.com/google/oboe/releases
   - https://github.com/PortAudio/portaudio/pull/1084
   - https://github.com/NetResultsIT/portaudio-oboe
+- Choosing the input (2026-10-04):
+  - https://github.com/GrapheneOS/platform_frameworks_av/blob/16-qpr2/services/audiopolicy/enginedefault/src/Engine.cpp
+  - https://github.com/GrapheneOS/platform_frameworks_av/blob/16-qpr2/services/audiopolicy/managerdefault/AudioPolicyManager.cpp
+  - https://github.com/GrapheneOS/platform_frameworks_base/blob/16-qpr2/services/usb/java/com/android/server/usb/descriptors/UsbDescriptorParser.java
+  - https://github.com/GrapheneOS/platform_frameworks_base/blob/16-qpr2/media/java/android/media/AudioDeviceInfo.java
+  - https://github.com/google/oboe/blob/1.11.0/include/oboe/FullDuplexStream.h
+  - https://developer.android.com/ndk/guides/audio/aaudio/aaudio
+  - https://rode.com/en-us/user-guides/wireless-pro/routing-modes (search excerpts only)
 - Files and sync:
   - https://github.com/Kunzisoft/KeePassDX/issues/1594
   - https://github.com/Kunzisoft/KeePassDX/issues/1487

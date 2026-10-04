@@ -83,6 +83,19 @@ public:
     }
     void doRecreateAudioIO() { recreateAudioIO(); }
 
+    // The inputs the driver lists, as a phone's AudioManager does, and
+    // the one of them the phone chooses where none is chosen (or the one
+    // chosen is not listed). The fake's route then records from the one
+    // opened, as OboeAudioIO's reports the device Android opened. A list
+    // changed is a device plugged in or out, seen at the next opening
+    void setFakeListedInputs(const std::vector<AudioRoute::Device> &listed,
+                             const AudioRoute::Device &phoneChoice) {
+        m_listedInputs = listed;
+        m_phoneChoice = phoneChoice;
+    }
+    QMenu *audioInputDeviceMenu() { return m_audioInputDeviceMenu; }
+    LatencyCalibration::Key doLatencyKey() { return latencyKey(44100); }
+
     void doRecord() { record(); }
     void doPlay() { play(); } // and again to stop
     void doAnalyseNow() { analyseNow(); }
@@ -425,6 +438,13 @@ protected:
         m_fakeConfig.inputIsKept = [this]() {
             return m_recordTarget->isRecording();
         };
+        if (!m_listedInputs.empty() && m_fakeConfig.route.hasInput) {
+            m_fakeConfig.route.input = m_phoneChoice;
+            const int id = inputDeviceIdToOpen();
+            for (const AudioRoute::Device &d : m_listedInputs) {
+                if (id > 0 && d.id == id) m_fakeConfig.route.input = d;
+            }
+        }
         m_audioIO = new FakeAudioIO
             (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
              m_fakeConfig);
@@ -433,6 +453,14 @@ protected:
 
     QStringList audioImplementationNames() const override {
         return m_implementations;
+    }
+
+    bool listsInputDevices() const override {
+        return !m_listedInputs.empty();
+    }
+
+    std::vector<AudioRoute::Device> listedInputDevices() const override {
+        return m_listedInputs;
     }
 
     bool suspendAudioOnStop() const override {
@@ -532,6 +560,8 @@ private:
     bool m_keepAudioRunning = false;
     int m_audioIdleSuspendMillis = 0;
     int m_audioIOOpened = 0;
+    std::vector<AudioRoute::Device> m_listedInputs;
+    AudioRoute::Device m_phoneChoice;
     LatencyCalibration::Key m_audioIOOpenedFor;
     int m_liveDotsDelayMs = 0;
     bool m_recordOverAnswer = true;

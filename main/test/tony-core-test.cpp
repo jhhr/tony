@@ -40,6 +40,7 @@
 #include "TestLiveDotsFeed.h"
 #include "TestVoiceThreshold.h"
 #include "TestInputChannel.h"
+#include "TestInputDevice.h"
 #include "TestInputLevel.h"
 #include "TestVoiceGate.h"
 #include "TestRunSuite.h"
@@ -240,6 +241,12 @@ int main(int argc, char *argv[])
 
     {
         TestInputChannel t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestInputDevice t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace oboe {
 class AudioStream;
@@ -76,6 +77,12 @@ enum class Result : int32_t;
  * AudioDeviceInfo gives it, and the application takes the input it
  * wants from those.
  *
+ * The input is opened on the device the application chose for it
+ * (InputDevice), by the id Android lists it under at that open; where
+ * none is chosen, or the one chosen cannot be opened, on the one
+ * Android chooses for the input's preset (docs/port-android.md,
+ * "Choosing the input"). The output is always Android's choice.
+ *
  * The route, the devices Android opened (the speaker and the phone's
  * microphone, a headset, Bluetooth) and how their streams were opened,
  * is looked up once, when they are, and logged: a round trip measured
@@ -103,13 +110,22 @@ public:
         InputChannelFor;
 
     /**
+     * The id of the input device to open, as Android lists it now: the
+     * one chosen (InputDevice), or 0 for Android's choice. Asked on the
+     * GUI thread each time the input is opened, as an id changes when a
+     * device is plugged in again
+     */
+    typedef std::function<int()> InputDeviceFor;
+
+    /**
      * Open the output and, if target is not null, the input. Check
      * isOK() afterwards: without the input it is false, and the caller
      * is expected to try again without a target, for playback only.
      */
     OboeAudioIO(breakfastquay::ApplicationRecordTarget *target,
                 breakfastquay::ApplicationPlaybackSource *source,
-                InputChannelFor inputChannelFor = {});
+                InputChannelFor inputChannelFor = {},
+                InputDeviceFor inputDeviceFor = {});
     ~OboeAudioIO() override;
 
     bool isSourceOK() const override;
@@ -134,11 +150,16 @@ public:
     /// sharing and performance mode, burst, buffer, input preset)
     AudioRoute::Route getAudioRoute() const override { return m_route; }
 
+    /// The input devices Android's AudioManager lists now, with their
+    /// ids, types and product names. On the GUI thread
+    static std::vector<AudioRoute::Device> listInputDevices();
+
 private:
     class Engine;
     class ErrorFlag;
 
     InputChannelFor m_inputChannelFor;
+    InputDeviceFor m_inputDeviceFor;
 
     std::shared_ptr<oboe::AudioStream> m_output;
     std::shared_ptr<oboe::AudioStream> m_input;

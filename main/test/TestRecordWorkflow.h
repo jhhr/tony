@@ -38,6 +38,7 @@
 #include "../TakesFile.h"
 #include "../VoiceThreshold.h"
 #include "../InputChannel.h"
+#include "../InputDevice.h"
 #include "../InputChannelMenu.h"
 #include "../InputLevelFeed.h"
 #include "../InputLevelMeter.h"
@@ -1746,6 +1747,46 @@ class TestRecordWorkflow : public QObject
         return -2;
     }
 
+    // Playback > Audio Input Device, as a phone lists it: its entries
+    QStringList inputDeviceEntries() {
+        m_window->doRescanAudioDevices();
+        QStringList texts;
+        for (QAction *a : m_window->audioInputDeviceMenu()->actions()) {
+            if (!a->isSeparator()) texts << a->text();
+        }
+        return texts;
+    }
+
+    // Its entry that is ticked, "" for none
+    QString inputDeviceTicked() {
+        m_window->doRescanAudioDevices();
+        for (QAction *a : m_window->audioInputDeviceMenu()->actions()) {
+            if (a->isCheckable() && a->isChecked()) return a->text();
+        }
+        return {};
+    }
+
+    // An entry chosen, as the user chooses it
+    void chooseInputDevice(QString text) {
+        m_window->doRescanAudioDevices();
+        for (QAction *a : m_window->audioInputDeviceMenu()->actions()) {
+            if (a->isCheckable() && a->text() == text) {
+                QVERIFY(a->isEnabled());
+                a->trigger();
+                return;
+            }
+        }
+        QFAIL(qPrintable(QString("no entry \"%1\"").arg(text)));
+    }
+
+    static AudioRoute::Device phoneDevice(int id, int type, QString name) {
+        AudioRoute::Device d;
+        d.id = id;
+        d.type = type;
+        d.productName = name;
+        return d;
+    }
+
     // The menu's line naming the device the choice is kept for
     QString inputChannelDeviceLine() {
         InputChannelMenu *menu = m_window->inputChannelMenu();
@@ -1928,8 +1969,10 @@ private slots:
 
         // No voice threshold, whatever a test that set one left behind
         VoiceThreshold::setThreshold(settings, VoiceThreshold::kOff);
-        // Nor an input channel: takes are made of both inputs
+        // Nor an input channel: takes are made of both inputs. Nor a
+        // phone's input device
         settings.remove("InputChannel");
+        settings.remove("InputDevice");
 
         // The toggles of the reference's tracks and the singing track's;
         // a test that failed half way must not leave the next one's
@@ -1952,8 +1995,9 @@ private slots:
         QSettings().remove("LatencyCalibration");
         // Nor a voice threshold: the other suites of this process record
         setVoiceThreshold(VoiceThreshold::kOff);
-        // Nor an input channel, for the same reason
+        // Nor an input channel, for the same reason, nor input device
         QSettings().remove("InputChannel");
+        QSettings().remove("InputDevice");
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -2663,6 +2707,131 @@ private slots:
         QCOMPARE(m_window->doInputChannelKey().recordDevice, name);
         QCOMPARE(inputChannelTicked(), 0);
         QCOMPARE(inputChannelDeviceLine(), QString("For: %1").arg(name));
+    }
+
+    // A phone's Playback > Audio Input Device: the inputs Android lists
+    // that a singer records from (not a Bluetooth call microphone), each
+    // name once, the one in use named. A choice is kept by type and name
+    // and opened by the id the device has now; unplugged, the phone's
+    // choice is opened, and the status bar says so through the take that
+    // starts then. The measured round trip and the input channel are
+    // kept for the input chosen
+    void a_phone_records_from_the_input_device_chosen() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device mic2 = phoneDevice(13, 15, "Pixel 9a");
+        AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        const AudioRoute::Device sco = phoneDevice(51, 7, "WF-1000XM6");
+        const QString micName = "Built-in microphone (Pixel 9a)";
+        const QString usbName = "USB device (Wireless PRO RX)";
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = true;
+        route.input = usb;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        m_window->setFakeListedInputs({ mic, mic2, usb, sco }, usb);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(inputDeviceEntries(),
+                 QStringList({ "In use: " + usbName, "(System Default)",
+                               micName, usbName }));
+        QCOMPARE(inputDeviceTicked(), QString("(System Default)"));
+
+        const int opened = m_window->audioIOOpened();
+        chooseInputDevice(micName);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QCOMPARE(m_window->audioRoute().input.id, 12);
+        QCOMPARE(inputDeviceTicked(), micName);
+        QCOMPARE(m_window->doLatencyKey().recordDevice, micName);
+        QCOMPARE(m_window->doInputChannelKey().recordDevice, micName);
+        {
+            QSettings settings;
+            AudioRoute::Device kept;
+            QVERIFY(InputDevice::chosen(settings, "oboe", kept));
+            QCOMPARE(AudioRoute::deviceName(kept), micName);
+        }
+
+        // Plugged in again, the receiver has another id, and is opened
+        // by that
+        usb.id = 77;
+        m_window->setFakeListedInputs({ mic, mic2, usb }, usb);
+        chooseInputDevice(usbName);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioRoute().input.id, 77);
+        QCOMPARE(inputDeviceTicked(), usbName);
+        QVERIFY(!m_window->statusText().contains("not plugged in"));
+
+        // Unplugged, the phone's choice records, the choice stays, and
+        // the status bar says so, a take's notes and time held off
+        m_window->setFakeListedInputs({ mic, mic2 }, mic);
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->audioRoute().input.id, 12);
+        const QString notice = usbName + " is not plugged in: recording "
+            "from " + micName + ", the phone's choice";
+        QCOMPARE(m_window->statusText(), notice);
+        QCOMPARE(inputDeviceTicked(), usbName + " (not connected)");
+        QCOMPARE(m_window->doLatencyKey().recordDevice, micName);
+        m_window->seekTo(0);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        // Read often: the recorded time is written every 10 ms and the
+        // sung note with each batch of dots, and either would replace it
+        for (int i = 0; i < 100; ++i) {
+            QTest::qWait(5);
+            QCOMPARE(m_window->statusText(), notice);
+        }
+        QVERIFY(liveDots() > 10);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        chooseInputDevice("(System Default)");
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        AudioRoute::Device kept;
+        QVERIFY(!InputDevice::chosen(settings, "oboe", kept));
+    }
+
+    // Open for playback only, as a phone's device is until its first
+    // take, the device a round trip is looked up for is the input chosen,
+    // not the one a figure was kept with for the output
+    void the_latency_key_before_a_take_is_the_input_chosen() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = true;
+        route.input = mic;
+        {
+            QSettings settings;
+            LatencyCalibration::Figure figure;
+            figure.roundTrip = 0.05;
+            figure.date = QDateTime::currentDateTime();
+            LatencyCalibration::store
+                (settings, LatencyCalibration::routeKey(route, 44100), figure);
+        }
+        route.hasInput = false;
+        FakeAudioIO::Config config;
+        config.route = route;
+        makeWindow(config);
+        m_window->setFakeListedInputs({ mic, usb }, usb);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(m_window->doLatencyKey().recordDevice,
+                 AudioRoute::deviceName(mic));
+        chooseInputDevice(AudioRoute::deviceName(usb));
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->doLatencyKey().recordDevice,
+                 AudioRoute::deviceName(usb));
+        QCOMPARE(m_window->doInputChannelKey().recordDevice,
+                 AudioRoute::deviceName(usb));
     }
 
     void live_dots_removed() {

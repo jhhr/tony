@@ -994,19 +994,25 @@ CalibrateAudioDialog::instructionsHtml() const
             "</li></ul>";
     }
     // Open for playback only, a phone says which input it records from
-    // only when it records: the one calibrated with this output before,
-    // if there is one, else the phone's choice.  With no device open, it
-    // says nothing yet
+    // only when it records: the input device chosen, if it is plugged in,
+    // else the one calibrated with this output before, if there is one,
+    // else the phone's choice.  With no device open, it says nothing yet
     QString output = deviceName(devices.playbackDevice);
     QString input = deviceName(devices.recordDevice);
     if (phone && route.driver == "") {
         output = tr("the phone chooses when the check starts");
         input = output;
     } else if (phone && !route.hasInput) {
-        input = (devices.recordDevice != "" ?
-                 tr("%1, as when it was calibrated; the phone chooses when "
-                    "recording starts").arg(devices.recordDevice) :
-                 tr("the phone chooses when recording starts"));
+        AudioRoute::Device chosen;
+        if (m_window->chosenInputDevice(chosen)) {
+            input = tr("%1, chosen under Playback > Audio Input Device")
+                .arg(AudioRoute::deviceName(chosen));
+        } else {
+            input = (devices.recordDevice != "" ?
+                     tr("%1, as when it was calibrated; the phone chooses "
+                        "when recording starts").arg(devices.recordDevice) :
+                     tr("the phone chooses when recording starts"));
+        }
     }
     html += "<table cellspacing=\"4\">";
     html += "<tr><td>" + tr("Driver:") + "</td><td>" +

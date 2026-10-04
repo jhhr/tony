@@ -38,6 +38,7 @@
 #include "VoiceThreshold.h"
 #include "VoiceThresholdMenu.h"
 #include "InputChannelMenu.h"
+#include "InputDevice.h"
 #include "InputLevel.h"
 #include "InputLevelFeed.h"
 #include "InputLevelMeter.h"
@@ -1692,6 +1693,13 @@ MainWindow::rescanAudioDevices()
 {
     if (!m_audioDeviceMenu || !m_audioInputDeviceMenu) return;
 
+    // A phone lists its inputs as they are now, and opens nothing to do
+    // so; its output is Android's choice, and has no menu
+    if (listsInputDevices()) {
+        buildListedInputDeviceMenu();
+        return;
+    }
+
     // PortAudio enumerates the system's devices once, when it is
     // initialised, and bqaudioio keeps it initialised for as long as an
     // audio IO object exists. So a device that appeared after Tony started
@@ -1740,6 +1748,12 @@ void
 MainWindow::audioDeviceSelected(QAction *action)
 {
     if (!action) return;
+
+    if (listsInputDevices() &&
+        m_audioInputDeviceGroup->actions().contains(action)) {
+        listedInputDeviceChosen(action);
+        return;
+    }
 
     QString key = audioDeviceSettingKey
         (m_audioInputDeviceGroup->actions().contains(action) ?
@@ -1905,6 +1919,9 @@ MainWindow::createAudioIO()
 
     // Another device may have another input chosen
     updateInputMeterChannel();
+
+    // Where the driver lists its inputs, as the tests' can
+    reportInputDevice();
 }
 
 void
@@ -2579,10 +2596,13 @@ MainWindow::setupCompactLayout()
 
     parts.panel = { m_playbackControlsToolBar, m_showAndPlayToolBar };
 
-    // Notes are edited on the desktop; a phone has no device to choose
+    // Notes are edited on the desktop.  A phone has no output device to
+    // choose, Android's being the one; its input devices it lists
     parts.hiddenActions = { m_navigateToolAction, m_noteEditToolAction };
     for (QMenu *menu: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
-        if (menu) parts.hiddenActions.push_back(menu->menuAction());
+        if (!menu) continue;
+        if (menu == m_audioInputDeviceMenu && listsInputDevices()) continue;
+        parts.hiddenActions.push_back(menu->menuAction());
     }
     if (m_audioDriverMenus) {
         for (QMenu *menu: { m_audioDriverMenus->driverMenu(),
@@ -2866,6 +2886,11 @@ MainWindow::updateMenuStates()
     }
     for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (m) m->menuAction()->setEnabled(!checking);
+    }
+    // A phone's input device is chosen between takes: the take records
+    // from the one it opened
+    if (m_audioInputDeviceMenu && listsInputDevices() && inTake) {
+        m_audioInputDeviceMenu->menuAction()->setEnabled(false);
     }
     updateLatencyMenuLine();
 
@@ -3880,14 +3905,16 @@ MainWindow::createAudioIO()
         microphoneAllowed()) {
         // Input Channel, as inputChannelKey() keys it once the route has
         // its input, which is the device asked about: its driver is
-        // "oboe" (OboeAudioIO::findRoute())
+        // "oboe" (OboeAudioIO::findRoute()).  The input device chosen by
+        // the id it is listed under at each open
         OboeAudioIO *io = new OboeAudioIO
             (m_recordTarget, source,
              [](const AudioRoute::Device &input) {
                  QSettings settings;
                  return InputChannel::channel
                      (settings, { "oboe", AudioRoute::deviceName(input) });
-             });
+             },
+             [this]() { return inputDeviceIdToOpen(); });
         if (io->isOK()) {
             m_audioIO = io;
         } else {
@@ -3909,6 +3936,7 @@ MainWindow::createAudioIO()
     // At the fader's volume, as the desktop's createAudioIO() has it
     applyMasterVolume(m_fader->getValue());
     updateInputMeterChannel();
+    reportInputDevice();
 
     if (m_audioIO) {
         m_audioIO->suspend();
@@ -6044,9 +6072,35 @@ MainWindow::showTakeCountdown() const
 }
 
 void
+MainWindow::setAudioNotice(QString message)
+{
+    m_audioNotice = message;
+    m_audioNoticeTimer.start();
+    showAudioNotice();
+}
+
+bool
+MainWindow::showAudioNotice() const
+{
+    // Long enough to be read at the start of a take, whose duration and
+    // position take the status bar back after it
+    const qint64 noticeMs = 8000;
+    if (m_audioNotice == "") return false;
+    if (!m_audioNoticeTimer.isValid() ||
+        m_audioNoticeTimer.elapsed() > noticeMs) {
+        m_audioNotice = "";
+        return false;
+    }
+    if (showTakeCountdown()) return true;
+    m_myStatusMessage = m_audioNotice;
+    getStatusLabel()->setText(m_audioNotice);
+    return true;
+}
+
+void
 MainWindow::recordDurationChanged(sv_frame_t frame, sv_samplerate_t rate)
 {
-    if (showTakeCountdown()) return;
+    if (showTakeCountdown() || showAudioNotice()) return;
     MainWindowBase::recordDurationChanged(frame, rate);
 }
 
@@ -6058,7 +6112,7 @@ MainWindow::playbackFrameChanged(sv_frame_t frame)
     // playing, while recording, and for a seek with playback stopped
     if (m_lyrics) m_lyrics->setPlaybackFrame(frame);
 
-    if (showTakeCountdown()) return;
+    if (showTakeCountdown() || showAudioNotice()) return;
     MainWindowBase::playbackFrameChanged(frame);
 }
 
@@ -6333,12 +6387,19 @@ MainWindow::latencyKey(sv_samplerate_t rate) const
     }
 
     // Opened for playback only, as the device is on a phone until the
-    // first take, it cannot say which input it will record from: the one
-    // a figure is kept with for this output, if only one is.  How the
-    // input will open is not known either, and is not compared
+    // first take, it cannot say which input it will record from: the
+    // input device chosen, if it is plugged in, else the one a figure is
+    // kept with for this output, if only one is.  How the input will
+    // open is not known either, and is not compared
     LatencyCalibration::Key key = LatencyCalibration::routeKey(route, rate);
     if (!route.hasInput) {
-        LatencyCalibration::onlyRecordDevice(settings, key, key.recordDevice);
+        AudioRoute::Device chosen;
+        if (chosenInputDevice(chosen)) {
+            key.recordDevice = AudioRoute::deviceName(chosen);
+        } else {
+            LatencyCalibration::onlyRecordDevice(settings, key,
+                                                 key.recordDevice);
+        }
     }
     return key;
 }
@@ -6355,13 +6416,176 @@ MainWindow::inputChannelKey() const
     }
 
     // A phone names no devices: its input is the route's, once it is open
-    // for recording, and until then the one it recorded from last
+    // for recording, and until then the input device chosen, if it is
+    // plugged in, else the one it recorded from last
     if (route.hasInput) {
         const QString input = AudioRoute::deviceName(route.input);
         InputChannel::setLastInput(settings, route.driver, input);
         return { route.driver, input };
     }
+    AudioRoute::Device chosen;
+    if (chosenInputDevice(chosen)) {
+        return { route.driver, AudioRoute::deviceName(chosen) };
+    }
     return { route.driver, InputChannel::lastInput(settings, route.driver) };
+}
+
+bool
+MainWindow::listsInputDevices() const
+{
+#ifdef Q_OS_ANDROID
+    return true;
+#else
+    return false;
+#endif
+}
+
+std::vector<AudioRoute::Device>
+MainWindow::listedInputDevices() const
+{
+#ifdef Q_OS_ANDROID
+    return OboeAudioIO::listInputDevices();
+#else
+    return {};
+#endif
+}
+
+bool
+MainWindow::chosenInputDevice(AudioRoute::Device &device) const
+{
+    device = AudioRoute::Device();
+    if (!listsInputDevices()) return false;
+    QSettings settings;
+    AudioRoute::Device chosen;
+    if (!InputDevice::chosen(settings, listingDriver(), chosen)) return false;
+    const std::vector<AudioRoute::Device> listed = listedInputDevices();
+    const int id = InputDevice::idToOpen(listed, chosen);
+    for (const AudioRoute::Device &d : listed) {
+        if (id > 0 && d.id == id) {
+            device = d;
+            return true;
+        }
+    }
+    return false;
+}
+
+int
+MainWindow::inputDeviceIdToOpen() const
+{
+    AudioRoute::Device chosen;
+    if (!chosenInputDevice(chosen)) return 0;
+    return chosen.id;
+}
+
+void
+MainWindow::reportInputDevice()
+{
+    if (!listsInputDevices()) return;
+    AudioRoute::Route route;
+    if (!deviceRoute(route) || !route.hasInput) return;
+    QSettings settings;
+    AudioRoute::Device chosen;
+    if (!InputDevice::chosen(settings, listingDriver(), chosen)) return;
+    if (InputDevice::same(route.input, chosen)) return;
+
+    AudioRoute::Device listed;
+    const QString name = AudioRoute::deviceName(chosen);
+    const QString input = AudioRoute::deviceName(route.input);
+    const QString message = chosenInputDevice(listed) ?
+        tr("%1 could not be opened: recording from %2, the phone's choice")
+        .arg(name, input) :
+        tr("%1 is not plugged in: recording from %2, the phone's choice")
+        .arg(name, input);
+    cerr << "MainWindow::reportInputDevice: " << message << endl;
+    setAudioNotice(message);
+}
+
+void
+MainWindow::buildListedInputDeviceMenu()
+{
+    QMenu *menu = m_audioInputDeviceMenu;
+    QActionGroup *group = m_audioInputDeviceGroup;
+    for (QAction *a : group->actions()) {
+        group->removeAction(a);
+    }
+    menu->clear();
+
+    QSettings settings;
+    AudioRoute::Device chosen;
+    const bool haveChoice =
+        InputDevice::chosen(settings, listingDriver(), chosen);
+
+    // The input recording now, which with nothing chosen is the one the
+    // phone chose: it is open only once recording has been asked for
+    AudioRoute::Route route;
+    const QString inUse = (deviceRoute(route) && route.hasInput) ?
+        AudioRoute::deviceName(route.input) :
+        tr("chosen when recording starts");
+    menu->addAction(tr("In use: %1").arg(inUse))->setEnabled(false);
+    menu->addSeparator();
+
+    QAction *defaultAction = menu->addAction(tr("(System Default)"));
+    defaultAction->setCheckable(true);
+    defaultAction->setChecked(!haveChoice);
+    defaultAction->setData(QStringList());
+    group->addAction(defaultAction);
+    menu->addSeparator();
+
+    bool haveCurrent = false;
+    for (const AudioRoute::Device &device :
+             InputDevice::choices(listedInputDevices())) {
+        QAction *action = menu->addAction(AudioRoute::deviceName(device));
+        action->setCheckable(true);
+        action->setData(QStringList({ QString::number(device.type),
+                                      device.productName }));
+        if (haveChoice && InputDevice::same(device, chosen)) {
+            action->setChecked(true);
+            haveCurrent = true;
+        }
+        group->addAction(action);
+    }
+
+    // As the desktop's menu: a device chosen that is unplugged is shown,
+    // ticked, as the choice still in force when it is plugged in again
+    if (haveChoice && !haveCurrent) {
+        menu->addSeparator();
+        QAction *missing = menu->addAction
+            (tr("%1 (not connected)").arg(AudioRoute::deviceName(chosen)));
+        missing->setCheckable(true);
+        missing->setChecked(true);
+        missing->setData(QStringList({ QString::number(chosen.type),
+                                       chosen.productName }));
+        group->addAction(missing);
+    }
+}
+
+void
+MainWindow::listedInputDeviceChosen(QAction *action)
+{
+    AudioRoute::Device device;
+    const QStringList data = action->data().toStringList();
+    if (data.size() == 2) {
+        device.type = data[0].toInt();
+        device.productName = data[1];
+    }
+
+    QSettings settings;
+    AudioRoute::Device before;
+    const bool had = InputDevice::chosen(settings, listingDriver(), before);
+    if (had ? InputDevice::same(before, device) : device.type <= 0) return;
+    InputDevice::choose(settings, listingDriver(), device);
+
+    // A device open for recording opens again, on the input chosen, as
+    // for a route that changes; one open for playback only opens its
+    // input on it at the next take.  Another input may have another
+    // channel chosen
+    if (m_audioIO && !(m_recordTarget && m_recordTarget->isRecording())) {
+        if (m_playSource && m_playSource->isPlaying()) {
+            stop();
+        }
+        recreateAudioIO();
+    }
+    updateInputMeterChannel();
 }
 
 int
@@ -6751,8 +6975,10 @@ MainWindow::onRealtimePitchDetected
     }
 
     // The status bar says what is being sung just now: the newest
-    // estimate of the batch.  Convert Hz to MIDI note number and cents
-    // deviation.  MIDI note 69 = A4 = 440 Hz.
+    // estimate of the batch, once a notice about the device has been
+    // read.  Convert Hz to MIDI note number and cents deviation.  MIDI
+    // note 69 = A4 = 440 Hz.
+    if (showAudioNotice()) return;
     double hz = newest->hz;
     double midiNote = 12.0 * std::log2(hz / 440.0) + 69.0;
     int nearestNote = int(std::round(midiNote));
@@ -9706,8 +9932,9 @@ MainWindow::updateVisibleRangeDisplay(Pane *p) const
         return;
     }
 
-    // The countdown of a pre-roll's lead-in has the status bar to itself
-    if (showTakeCountdown()) return;
+    // The countdown of a pre-roll's lead-in has the status bar to itself,
+    // and a notice about the device has it for a while
+    if (showTakeCountdown() || showAudioNotice()) return;
 
     bool haveSelection = false;
     sv_frame_t startFrame = 0, endFrame = 0;
