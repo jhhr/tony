@@ -248,8 +248,10 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `chooseInputChannel()` chooses through the menu.
 - For the input level: `toolbarMeter()` (the meter in the window's toolbar),
   `meterBar()` and `meterHold()` (the feed's meter now; judge a steady sound by its hold,
-  or by `meterBarAtMost()`, the bar's highest over a short while: it falls 1 dB between
-  two readings, more on a slow machine, where CI's runners failed a single read),
+  or by `meterBarAtMost()`, the bar's highest over a short while, taken as each of the
+  feed's readings lands: it falls 1 dB between two, and CI's runners failed a single read
+  of it, and on macOS a read every 5 ms as well; that Check Input Level has heard a phrase
+  is judged by the dialog's `peakDbfs()`, the loudest it has read, which only rises),
   `drawnMeter()` (a meter of the window's levels drawn at a size of the test's own: the
   window is never shown, and its toolbar's meter has no size of its own) and `clippedAt()`
   (where the status bar says a take clipped). The meters read nothing unless the fake has

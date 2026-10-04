@@ -1732,19 +1732,20 @@ class TestRecordWorkflow : public QObject
         return levels ? levels->meter().bar(levels->now()) : -1000.0;
     }
 
-    // The meter's bar at its highest over the next ms, read every 5 ms.
-    // It falls at 20 dB a second between the levels the device reports,
-    // 20 times a second or less, so that one read can fall between two
-    // of them, and a slow machine makes that fall longer; right after a
-    // report it is the level reported
+    // The meter's bar at its highest over the next ms, read as each of
+    // the feed's readings lands, when it is the level read. It falls at
+    // 20 dB a second between them, 20 a second or fewer, and a read
+    // waiting its turn came 26 ms after one on CI's macOS runner
     double meterBarAtMost(int ms) {
+        InputLevelFeed *levels = m_window->inputLevels();
+        if (!levels) return -1000.0;
         double most = -1000.0;
-        QElapsedTimer timer;
-        timer.start();
-        while (timer.elapsed() < ms) {
-            most = std::max(most, meterBar());
-            QTest::qWait(5);
-        }
+        const auto connection = connect
+            (levels, &InputLevelFeed::levelRead, this, [&]() {
+                most = std::max(most, levels->meter().bar(levels->now()));
+            });
+        QTest::qWait(ms);
+        disconnect(connection);
         return most;
     }
 
@@ -2652,10 +2653,23 @@ private slots:
         QVERIFY(!m_window->fake()->isSuspended());
         QVERIFY(!m_window->recordTarget()->isRecording());
 
+        QElapsedTimer sinceCheck;
+        sinceCheck.start();
+        const double ranBefore = m_window->fake()->getCurrentTime();
         QTRY_VERIFY_WITH_TIMEOUT
             (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
         QVERIFY(dialog->doneButton()->isEnabled());
-        QTRY_VERIFY_WITH_TIMEOUT(meterBarAtMost(200) > -4.0, 5000);
+
+        // The phrase heard, by the loudest the dialog has read, which only
+        // rises: the meter's bar falls between the device's reports, and a
+        // read of it can miss them on a slow runner
+        QTRY_VERIFY2_WITH_TIMEOUT
+            (dialog->peakDbfs() > -4.0, qPrintable
+             (QString("loudest %1 dBFS; the device ran %2 s of the %3 s "
+                      "since the check began")
+              .arg(dialog->peakDbfs())
+              .arg(m_window->fake()->getCurrentTime() - ranBefore)
+              .arg(sinceCheck.elapsed() / 1000.0)), 30000);
         QTest::qWait(300);
         dialog->doneButton()->click();
         QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Result);
