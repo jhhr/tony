@@ -304,6 +304,23 @@ source, as no test can run it.
   which pYIN scales down how likely a frame is to be voiced in proportion to its level, so
   soft singing on one input of two loses half its weight there.
 
+**A wireless receiver** used as a USB microphone (a RØDE Wireless PRO or GO) gives two
+channels in each of its modes. Found on the fake, as above:
+
+- **Merged** (one transmitter on both channels): two equal inputs. The take is stereo,
+  both channels the same, at the microphone's own level. Nothing needs choosing.
+- **Split, with one transmitter**: the voice on one channel, the other silent. This is a
+  microphone on one input of two, as above: 6 dB down, and Input 1 or Input 2 brings it
+  back.
+- **Safety channel** (merged mode only): the second channel is the first, 10 dB quieter
+  in RØDE's description. With Both the take is stereo, its second channel 10 dB down
+  (heard more in the left ear). Every level is the average, 0.66 of input 1's: **3.6 dB
+  down**. Singing at −17 dBFS RMS on input 1 got no dots and no pitch events with the
+  threshold at −19 dBFS; with it at −22 dBFS it got 193 dots and 202 events. With Input 1
+  chosen it got both at −19 dBFS, and the take was mono. The safety copy is there for a
+  peak that clips the first channel; Tony does not switch to it. A clipped take shows on
+  the meter's clip light and in the take's scan ([below](#the-input-level)).
+
 **Input 1 or Input 2** makes the take from that input alone:
 
 - `record()` reads the choice for the device it records from **after** the base call

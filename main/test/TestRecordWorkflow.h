@@ -2361,6 +2361,60 @@ private slots:
                                                     highHz)) < 10.0);
     }
 
+    // A wireless receiver with a safety channel: the microphone on input
+    // 1, a copy of it 10 dB quieter on input 2 (RØDE's figure). With
+    // both inputs the take is stereo, its second channel 10 dB down, and
+    // the levels are the channels' average, 3.6 dB under input 1's:
+    // singing 2 dB over the voice threshold on input 1 gets no dots and
+    // no pitch. With input 1 chosen it is heard at its own level
+    void a_safety_channel_reads_low_with_both_inputs() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 0;
+        // -17 dBFS RMS, and its safety copy at -27
+        config.input = TestSignals::sawtooth(highHz, rate, int(3.0 * rate),
+                                             0.2447);
+        config.otherInput = config.input;
+        for (float &s : config.otherInput) s *= 0.3162f;
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        setVoiceThreshold(-19.0);
+
+        for (int channel : { InputChannel::kBoth, 0 }) {
+            chooseInputChannel(channel);
+            if (QTest::currentTestFailed()) return;
+            m_window->doNewEmptyTake();
+            m_window->seekTo(0);
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QTest::qWait(1200);
+            const int dots = liveDots();
+            stopTake();
+            if (QTest::currentTestFailed()) return;
+            const TakeFile file = takeFile();
+            const auto pitch = pitchEvents(m_window->analyser2());
+            if (channel == InputChannel::kBoth) {
+                QCOMPARE(file.channels, 2);
+                const double ratio = file.rms(1, 0.2, 0.9) /
+                    file.rms(0, 0.2, 0.9);
+                QVERIFY2(std::fabs(ratio - 0.3162) < 0.002,
+                         qPrintable(QString("the second channel is %1 of "
+                                            "the first").arg(ratio)));
+                QVERIFY2(dots == 0 && pitch.empty(),
+                         qPrintable(QString("both inputs: %1 dots and %2 "
+                                            "pitch events")
+                                    .arg(dots).arg(pitch.size())));
+            } else {
+                QCOMPARE(file.channels, 1);
+                QVERIFY2(dots > 20 && pitch.size() > 20,
+                         qPrintable(QString("input 1: %1 dots and %2 pitch "
+                                            "events")
+                                    .arg(dots).arg(pitch.size())));
+            }
+        }
+    }
+
     // A device with two inputs opened after one with one input gives
     // both: the device is asked for two whatever the last one gave
     // (svapp's record target), else the second input of an interface
