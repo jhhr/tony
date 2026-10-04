@@ -78,8 +78,9 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   folders, which no environment variable moves), so every process shares the user's
   `HOME`; each shard leaves a settings file and a data folder of its own, one per `i` and
   `n`. The script is written to run from Git Bash on Windows too, with the environment
-  AGENTS.md gives and executable names with `.exe`. It has not run there yet, and how many
-  processes suit that machine is not measured
+  AGENTS.md gives and executable names with `.exe`. CI's Windows job runs the app suite
+  through it in four processes, from MSYS2's bash; on the Windows machine it has not run
+  yet, and how many processes suit that machine is not measured
   ([windows-shards.md](windows-shards.md#on-the-windows-machine-after-the-merge)). Do not
   combine shards with test names on the command line.
 - A sharded run is a whole run of the suites, but the tests that share a process are other
@@ -112,12 +113,15 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   finger a double click, and the pane opened an item's edit dialog. `TestTouchGestures`'
   `openWindow()` moves the mouse away first on that Qt; a new suite that touches needs
   the same.
-- CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4), macOS and Windows (MSYS2), one
-  suite at a time; the Android job runs none. When a run fails, its `test-failures` step
-  lists each failed test with the lines QTest indents under it, from meson's full log. In a
-  cloud session `deploy/linux/ci-local.sh` runs the Linux and Android jobs
+- CI runs every suite on Linux (Ubuntu 24.04, Qt 6.4) and macOS one suite at a time, in
+  one process; the Android job runs none. On Windows (MSYS2) the app suite took 20 minutes
+  so, and runs instead as four shards through `run-tests.sh`, the other suites as on the
+  other two: the one-process run of the app suite on CI is Linux's and macOS's. When a run
+  fails, its `test-failures` step lists each failed test with the lines QTest indents under
+  it, from meson's full log, and on Windows from the suites' result files. In a cloud
+  session `deploy/linux/ci-local.sh` runs the Linux and Android jobs
   ([building.md](building.md#the-ci-jobs-in-a-cloud-session)), and on the Windows machine
-  `build.bat test` runs what the Windows job does.
+  `build.bat test` runs the Windows job's suites, the app suite in one process.
 - **With Ubuntu's Qt 6.4 the live dots trail the cursor by about 200 ms more** than with
   Qt 6.11: `live_dots_under_the_cursor` measured 333 to 357 ms in a cloud session, alone
   and unloaded, against its 300 ms, where Qt 6.11 gives 114 to 125 ms in a release build

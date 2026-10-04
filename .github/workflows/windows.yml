@@ -107,8 +107,9 @@ jobs:
         path: ccache
         key: ccache-windows-${{ github.run_id }}-${{ github.run_attempt }}
 
-    # Tony's suites also write their results to files: here QTest's
-    # output to stdout does not reach meson's log
+    # Every suite but the app suite, in one process. Tony's suites also
+    # write their results to files: here QTest's output to stdout does
+    # not reach meson's log
     - name: test
       id: test
       shell: msys2 {0}
@@ -116,13 +117,23 @@ jobs:
         export MINGW_PREFIX=$(cygpath -m /mingw64)
         mkdir -p build/test-results
         export TONY_TEST_LOG_DIR=$(cygpath -m "$PWD/build/test-results")
-        meson test -C build --print-errorlogs --num-processes 1
+        meson test -C build --print-errorlogs --num-processes 1 --no-suite app
+    # The app suite as four processes at once, each running a shard of
+    # every suite (docs/testing.md, "Running"). It waits nearly all the
+    # time on the fake device's real-time clock: in one process it took
+    # 20 minutes here. The script gives the counts of each suite and every
+    # failure; each shard's results are in tmp/tl/test-tony-app.exe/
+    - name: test-app
+      id: test-app
+      if: success() || steps.test.outcome == 'failure'
+      shell: msys2 {0}
+      run: bash deploy/linux/run-tests.sh -j 4 build test-tony-app.exe
     # meson shows at most the last 100 lines of a failing log, and one
     # test executable runs several QTest suites: name every failed test,
     # with the lines QTest indents under it (compared values, where it
     # failed) and the totals of each suite that failed
     - name: test-failures
-      if: failure() && steps.test.outcome == 'failure'
+      if: failure() && (steps.test.outcome == 'failure' || steps.test-app.outcome == 'failure')
       shell: msys2 {0}
       run: |
         awk '/^test:/ { print; next }
@@ -138,4 +149,5 @@ jobs:
              /^Totals:/ { if ($0 !~ /, 0 failed/) show($0); next }
              /^(FAIL!|XPASS|QFATAL)/ { show($0); fail = 1; next }
              /^[A-Z!]+ *: / { fail = 0 }
-             fail && /^   / { show($0) }' build/test-results/*.txt
+             fail && /^   / { show($0) }' build/test-results/*.txt \
+                 tmp/tl/test-tony-app.exe/*/*.txt

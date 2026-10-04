@@ -1,0 +1,4 @@
+# Shell scripts keep LF line endings on every checkout. Git for Windows
+# checks text out with CRLF by default, and bash cannot run a script so:
+# CI's Windows job runs deploy/linux/run-tests.sh
+*.sh text eol=lf
