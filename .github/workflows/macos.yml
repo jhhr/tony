@@ -1,6 +1,16 @@
 name: macOS CI
 
-on: [push, pull_request]
+# On pull requests, and on default once they are merged into it. A
+# branch with no pull request is not built
+on:
+  push:
+    branches: [default]
+  pull_request:
+
+# A newer push to a pull request cancels the run it supersedes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
