@@ -141,6 +141,14 @@ levelText(double level)
     return QString("%1 dBFS").arg(20.0 * std::log10(level), 0, 'f', 1);
 }
 
+// A level in dBFS; exact silence, -200, in words
+QString
+dbfsText(double dbfs)
+{
+    if (dbfs <= -200.0) return "silence";
+    return QString("%1 dBFS").arg(dbfs, 0, 'f', 1);
+}
+
 // The peak of each channel of an audio file, full scale 1: the file as
 // it is, not normalised as the session's models are read
 vector<float>
@@ -809,6 +817,33 @@ DevChecks::freshPunchInsDone()
     for (Watched &w : m_freshWatched) {
         w.channelPeaks = channelPeaks(w.seen.recordingPath, w.channelError);
     }
+
+    // The levels the live tracker met on the reference's tones and in
+    // its silence, from the take while it holds these punch-ins alone: a
+    // microphone that hears the speakers too quietly has the tones under
+    // the tracker's own floor (the checks' takes have no voice
+    // threshold).  The take is at the reference's rate, the tracker's
+    // windows at the device's: their levels are the same
+    vector<float> take;
+    sv_samplerate_t takeRate = 0;
+    QString takeError = AudioCheckRunner::readTakeFile
+        (m_window->m_takes->getAudioPath(), take, takeRate);
+    if (takeError == "" && takeRate != m_layout.rate) {
+        takeError = tr("the take is at %1 Hz, the reference at %2 Hz")
+            .arg(takeRate).arg(m_layout.rate);
+    }
+    const vector<LatencyCheck::PunchIn> ranges = freshPunchIns();
+    for (Watched &w : m_freshWatched) {
+        if (w.punchIn < 0 || w.punchIn >= int(ranges.size())) continue;
+        if (takeError != "") {
+            w.dotLevelsError = takeError;
+            continue;
+        }
+        const LatencyCheck::PunchIn &range = ranges[size_t(w.punchIn)];
+        w.dotLevels = TakeDiff::dotLevels
+            (m_layout, take.data(), sv_frame_t(take.size()),
+             range.start, range.end, RealtimePitchTracker::kMinLevel);
+    }
     return true;
 }
 
@@ -1305,6 +1340,7 @@ DevChecks::liveDotsCheck(QString reason) const
     QStringList problems;
     vector<double> behind;
     int atEdges = 0;
+    bool quiet = false;
     for (int i = 0; i < int(s.punchIns.size()); ++i) {
         const LatencyCheck::PunchInResult &p = s.punchIns[i];
         const Watched *w = freshWatched(i);
@@ -1365,6 +1401,34 @@ DevChecks::liveDotsCheck(QString reason) const
                .arg(dots.size())
                .arg(int(dots.size()) - onSweeps - edges - off)
                .arg(edges).arg(onSweeps).arg(off) });
+
+        // Whether the microphone heard the tones loudly enough for the
+        // tracker to draw them at all.  A headset's microphone held to an
+        // earcup had them at its floor, on the user's PC and phone alike:
+        // no dots, or a few and half of those off the tones
+        const TakeDiff::DotLevels &levels = w->dotLevels;
+        const double floor = RealtimePitchTracker::kMinLevel;
+        if (w->dotLevelsError != "") {
+            c.numbers.push_back
+                ({ tr("levels the live tracker met, punch-in %1").arg(i + 1),
+                   tr("not measured: %1").arg(w->dotLevelsError) });
+            continue;
+        }
+        c.numbers.push_back
+            ({ tr("levels the live tracker met, punch-in %1").arg(i + 1),
+               tr("the tones %1, %2 of their %3 windows under its floor "
+                  "of %4; the silence between the sounds %5")
+               .arg(dbfsText(levels.tonesMedian)).arg(levels.underFloor)
+               .arg(levels.toneWindows).arg(dbfsText(floor))
+               .arg(dbfsText(levels.silenceMedian)) });
+        const bool failed = (int(dots.size()) <= kMinDots || off > 0);
+        if (failed && levels.toneWindows > 0 && levels.tonesMedian < floor) {
+            problems << tr("punch-in %1's tones reached the microphone at "
+                           "%2, under the live tracker's floor of %3")
+                .arg(i + 1).arg(dbfsText(levels.tonesMedian))
+                .arg(dbfsText(floor));
+            quiet = true;
+        }
     }
     if (s.punchIns.empty()) problems << tr("no punch-in was judged");
 
@@ -1389,6 +1453,13 @@ DevChecks::liveDotsCheck(QString reason) const
     } else {
         c.verdict = CheckResult::Verdict::Fail;
         c.message = problems.join("; ") + ".";
+    }
+    if (quiet) {
+        c.message += tr(" The microphone heard the reference too quietly "
+                        "for the live tracker: turn the volume up, hold "
+                        "the earcup or speaker right against the "
+                        "microphone, or raise its input gain, and run the "
+                        "checks again.");
     }
     // A window that straddles a start or a tone's end wanders off pitch
     // through a real speaker and mic, so what the dots there did is only

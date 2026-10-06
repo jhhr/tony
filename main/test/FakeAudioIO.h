@@ -97,6 +97,10 @@ public:
         // must be at least a block
         bool loopback = false;
 
+        // What the loopback is multiplied by: below 1 for a microphone
+        // that hears the speakers quietly (its echo is made from it)
+        float loopbackGain = 1.f;
+
         // A second arrival of the loopback, echoDelay frames after the
         // first, at echoGain times its level: the input played back out
         // somewhere (Windows' "Listen to this device") and heard again.
@@ -350,12 +354,14 @@ private:
                      m_config.sampleRate));
             }
             if (m_config.loopback) {
+                const float g = m_config.loopbackGain;
                 long j = base + i - m_loopbackDelay;
-                if (j >= 0 && j < base) in[i] += m_captured[size_t(j)];
+                if (j >= 0 && j < base) in[i] += g * m_captured[size_t(j)];
                 if (m_config.echoGain != 0.f) {
                     j -= m_config.echoDelay;
                     if (j >= 0 && j < base) {
-                        in[i] += m_config.echoGain * m_captured[size_t(j)];
+                        in[i] += g * m_config.echoGain *
+                            m_captured[size_t(j)];
                     }
                 }
             }

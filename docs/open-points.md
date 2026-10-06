@@ -278,7 +278,9 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   dot on a tone). A microphone noisier than −60 dBFS still gives dots in silence, unless
   the user sets the voice threshold over its noise
   ([recording.md](recording.md#the-live-tracker)). The checks' takes record with the
-  threshold Off.
+  threshold Off. A microphone that hears the speakers quietly, as a headset's held to an
+  earcup did, has the dev reference's tones under the floor: item 3 then draws no dots,
+  and says so ([calibrate-audio.md](calibrate-audio.md), §7).
 - Items 3 and 5 judge the fresh punch-ins only. Item 14 cannot see an overwrite question,
   which `record()` would ask before the observer starts.
 - Not in the dev run, of what the retired `test-tony-device` did: a take with no lead-in

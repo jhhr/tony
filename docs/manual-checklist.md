@@ -38,7 +38,10 @@ file, and compares the take before and after each punch-in.
    Device** and **Audio Input Device**, which list that driver's (or leave the system
    default): the run records with them, as any take does.
 3. With wired headphones, hold one earcup against the microphone, off your ears; with
-   speakers, a moderate volume and the microphone where it hears them. A quiet room.
+   speakers, a moderate volume and the microphone where it hears them. A quiet room. A
+   headset's microphone needs the earcup right against it: item 3 needs the tones over
+   the live tracker's floor (−60 dBFS) where they reach the microphone, and when they
+   were under it, it says so and gives their level.
 4. **Playback > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
    is by default), then **Start**. A few minutes; leave the window alone meanwhile (Cancel
    stops the run). The dev checks run only after a calibration that can be used (verdict
@@ -143,6 +146,14 @@ tracker's level floor (−60 dBFS) now keeps out; its third passed item 3, and f
 tried: a run with the microphone and the headphones on one sound card, which should
 neither drift nor slip; and, on two cards, whether the playback's gap at a slip (about
 every 100 s once a take has been made) is heard.
+
+With the HS2 on the AI-Micro (section 7), on 2026-10-06, the PC's run and the phone's
+passed every item but 3, which drew no dots on the PC and a few on the phone, more than
+half of them off the tones (the first of each an octave low): the tones reached the HS2
+at about the tracker's floor ([calibrate-audio.md](calibrate-audio.md), §14). **To
+try**: the run again with the earcup right against the HS2 and the volume up, or the
+AI-Micro's gain raised (in RØDE's software). Item 3 now gives the levels the tracker met,
+and should pass once the tones are well over −60 dBFS.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and
@@ -449,8 +460,11 @@ decisions above, are in [open-points.md](open-points.md).
 For a headset microphone on one input of a two-input interface: the user's Rode HS2 on
 input 1 of a Rode AI-Micro, on Windows (WASAPI) and on the phone. The design is in
 [recording.md](recording.md#input-channels) and
-[recording.md](recording.md#the-input-level). None of it has been tried on a device
-yet.
+[recording.md](recording.md#the-input-level). The dev runs of 2026-10-06
+([calibrate-audio.md](calibrate-audio.md), §14) answered part of steps 1 and 4: on Windows
+the AI-Micro gives the HS2 to both inputs at the same level, so Both Inputs is right
+there; on the phone its input opened mono, through AAudio's MMAP path. The rest has not
+been tried on a device yet.
 
 **On Windows**, with the AI-Micro chosen under Playback > Audio Input Device:
 
