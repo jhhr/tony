@@ -130,6 +130,23 @@ class TestUiChecks : public QObject
         QVERIFY(QTest::qWaitForWindowActive(m_window));
     }
 
+    // The window closed and opened again, as quitting and starting Tony
+    // do (main() restores what the close kept, then shows the window)
+    void reopenWindow() {
+        QVERIFY(m_window->close());
+        delete m_window;
+        m_window = nullptr;
+        QSettings settings;
+        QVERIFY(settings.contains("MainWindow/geometry"));
+        QVERIFY(!settings.contains("MainWindow/size"));
+        QVERIFY(!settings.contains("MainWindow/position"));
+
+        m_window = new TestMainWindow(FakeAudioIO::Config());
+        QVERIFY(m_window->restoreWindowGeometry());
+        m_window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(m_window));
+    }
+
     static bool analysed(Analyser *a) {
         return a && a->getLayer(Analyser::PitchTrack) &&
             a->getLayer(Analyser::Notes) &&
@@ -546,6 +563,8 @@ private slots:
         settings.remove("backgroundmusicmix");
         settings.remove("backgroundmusicgain");
         settings.remove("backgroundmusicpan");
+        // A window closed by a test before keeps where it was
+        settings.remove("geometry");
         settings.endGroup();
         settings.beginGroup("Analyser");
         settings.remove("");
@@ -1687,6 +1706,61 @@ private slots:
                  qPrintable(asked[0]));
         QVERIFY2(m_window->isVisible(), "Cancel did not keep the window open");
         QVERIFY(m_window->takes()->haveTake());
+    }
+
+    // Closed maximised, the window comes back maximised, within the
+    // screen, and Restore gives it the size it had before. Kept as its
+    // size and position, it came back as large as the screen but not
+    // maximised, and on Windows a little off the screen
+    void window_comes_back_maximised() {
+        {
+            TestMainWindow first{FakeAudioIO::Config()};
+            QVERIFY2(!first.restoreWindowGeometry(),
+                     "a window was restored with nothing kept");
+        }
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        // Within the offscreen platform's screen, 800 x 600
+        const QSize normal(640, 420);
+        m_window->resize(normal);
+        QTRY_COMPARE(m_window->size(), normal);
+        m_window->showMaximized();
+        QTRY_VERIFY(m_window->isMaximized());
+
+        reopenWindow();
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY2(m_window->isMaximized(),
+                     "the window was closed maximised and came back not");
+        const QRect screen = m_window->screen()->availableGeometry();
+        QVERIFY2(screen.contains(m_window->frameGeometry()),
+                 qPrintable(QString("the window is at (%1, %2) %3 x %4, "
+                                    "past the screen's %5 x %6")
+                            .arg(m_window->frameGeometry().x())
+                            .arg(m_window->frameGeometry().y())
+                            .arg(m_window->frameGeometry().width())
+                            .arg(m_window->frameGeometry().height())
+                            .arg(screen.width()).arg(screen.height())));
+
+        m_window->showNormal();
+        QTRY_COMPARE(m_window->size(), normal);
+    }
+
+    // Closed as it was, the window comes back where it was and as large
+    void window_comes_back_where_it_was() {
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        const QSize size(640, 420);
+        const QPoint at(60, 40);
+        m_window->resize(size);
+        m_window->move(at);
+        QTRY_COMPARE(m_window->size(), size);
+        QTRY_COMPARE(m_window->pos(), at);
+
+        reopenWindow();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->isMaximized());
+        QTRY_COMPARE(m_window->size(), size);
+        QTRY_COMPARE(m_window->pos(), at);
     }
 
     // Checklist: stop a take and close the window at once: no crash.

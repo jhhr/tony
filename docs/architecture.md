@@ -361,6 +361,12 @@ volume and the background music in `MainWindow`.
   of a recording in progress poll and wait.
 - The MinGW build force-includes `main/mingw_byte_fix.h` to resolve the C++17
   `std::byte` / `byte` clash; do not remove it.
+- The window's place is kept at close as Qt's own record of it (`saveGeometry()`,
+  `MainWindow/geometry`), which says whether it was maximised: its size and position
+  alone brought a maximised window back as large as the screen but not maximised, and on
+  Windows a little off it. `main()` puts it back (`restoreWindowGeometry()`) before it
+  shows the window, never the constructor: every test window would then come back where
+  the one closed before it was.
 - A path, a URI or a name the user typed goes into a message in one `arg()` call with
   all the arguments (`arg(a, b)`), or the last of a chain: a `%1` or `%3A` in it (a take
   called "a %1", a `content://` URI) is taken for a placeholder by the `arg()` after it.

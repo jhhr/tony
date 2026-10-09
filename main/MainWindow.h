@@ -131,6 +131,12 @@ public:
     // Compact Layout does: main() switches it on at start on Android and
     // with --compact
     void setCompactLayout(bool on);
+
+    // The window put back as it was when it was last closed, before main()
+    // shows it: maximised if it was, on the screen it was on, and within
+    // that screen. False if nothing was kept, and the window left as it is
+    bool restoreWindowGeometry();
+
     // The round trip takes are placed with (see LatencyCalibration).
     // Keep the one an audio check measured, for the devices it started
     // on and the rate it recorded at (AudioCheckResult::key); false, with

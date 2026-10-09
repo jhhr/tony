@@ -275,6 +275,11 @@ Not tried yet.
    track on; with the Edit tool (2) only the take's notes are lit. With a long take in
    view, does the pane keep up with the pointer on a note of the reference, while
    stopped and while playing?
+12. **The window after a restart** (Windows). Maximise Tony, quit and start it again: it
+   comes back maximised, all of it on the screen. Restore it to a smaller size, move it,
+   quit and start: it comes back there, as large. With two screens, closed on the second
+   it comes back on the second. The first start of a build with this has nothing kept,
+   and opens at its first-time size once.
 
 ## 4. Lyrics
 

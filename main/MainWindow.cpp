@@ -9122,10 +9122,17 @@ MainWindow::closeEvent(QCloseEvent *e)
         return;
     }
 
+    // Qt's own record of the window, which says whether it is maximised
+    // as well as where it is. The size and position alone, kept for a
+    // maximised window, brought it back as large as the screen but not
+    // maximised, and on Windows a little off the screen's top left, where
+    // a maximised window's frame reaches past the edges
     QSettings settings;
     settings.beginGroup("MainWindow");
-    settings.setValue("size", size());
-    settings.setValue("position", pos());
+    settings.setValue("geometry", saveGeometry());
+    // What was kept before, which nothing reads now
+    settings.remove("size");
+    settings.remove("position");
     settings.endGroup();
 
     delete m_keyReference;
@@ -9135,6 +9142,16 @@ MainWindow::closeEvent(QCloseEvent *e)
 
     e->accept();
     return;
+}
+
+bool
+MainWindow::restoreWindowGeometry()
+{
+    QSettings settings;
+    settings.beginGroup("MainWindow");
+    QByteArray geometry = settings.value("geometry").toByteArray();
+    settings.endGroup();
+    return !geometry.isEmpty() && restoreGeometry(geometry);
 }
 
 bool
