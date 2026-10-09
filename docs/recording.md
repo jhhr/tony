@@ -27,7 +27,13 @@ and the splice reads from there.
 
 1. **A Stop click returns early** into `MainWindowBase::record()` at the top of `record()`.
    Everything below is for a Start. The latency fields are zeroed only on Start: the
-   splice on Stop still needs them.
+   splice on Stop still needs them. **A Start stops playback first**, if Record was
+   pressed while it played, as Play / Pause does, the playhead left where it stopped:
+   every take starts from a standstill, and is the take Record would start from there.
+   Left playing, the reference would play on under the take, and the deferred lambda
+   (step 9), which starts it only when nothing plays, would neither start it at S nor
+   measure the start gap ([Latency](#latency)). It comes before the microphone and the
+   overwrite question, so that neither is asked over the music, and before P is read.
 2. **On Android the microphone is asked for first.** Without it `record()` asks
    (`QMicrophonePermission`) and returns; a yes calls `record()` again, from the top, and a
    no gets a box that says where to allow it. Until it is allowed, `createAudioIO()` opens

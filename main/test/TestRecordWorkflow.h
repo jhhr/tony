@@ -384,6 +384,56 @@ class TestRecordWorkflow : public QObject
         QCOMPARE(m_window->playbackFrame(), P);
     }
 
+    // Record pressed while the reference plays, as Ctrl+Space presses it
+    // during playback, the device kept running as the application keeps
+    // it. Playback runs from a second in for a while first, so that where
+    // it stops is not where it started. Gives the frame playback had
+    // reached just before the press, and where the output was then
+    void recordDuringPlayback(bool playReference, sv::sv_frame_t &reached,
+                              size_t &pressed) {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        m_window->keepAudioRunning(true);
+        m_window->setPlayReferenceWhileRecording(playReference);
+        openReference(writeWav(tone(lowHz, 8.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t from = sv::sv_frame_t(1.0 * rate);
+        m_window->seekTo(from);
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        QTest::qWait(700);
+        QVERIFY(m_window->playSource()->isPlaying());
+
+        reached = m_window->playbackFrame();
+        QVERIFY2(reached > from + sv::sv_frame_t(0.3 * rate),
+                 qPrintable(QString("playback from frame %1 was only at %2")
+                            .arg(from).arg(reached)));
+
+        QAction *record = m_window->recordAction();
+        QVERIFY(record && record->isEnabled());
+        pressed = m_window->fake()->getCapturedOutput().size();
+        record->trigger();
+        QVERIFY(m_window->recordTarget()->isRecording());
+        QVERIFY2(!m_window->playAction()->isChecked(),
+                 "Play / Pause still shows playback after Record");
+    }
+
+    // The take started during playback starts where playback stopped, as
+    // it would from there with playback stopped first
+    void verifyTakeFromWherePlaybackStopped(sv::sv_frame_t reached) {
+        const sv::sv_frame_t P = m_window->takePosition();
+        QVERIFY2(P >= reached && P < reached + sv::sv_frame_t(0.3 * rate),
+                 qPrintable(QString("playback was at frame %1 just before "
+                                    "Record, and the take starts at %2")
+                            .arg(reached).arg(P)));
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
+        QCOMPARE(m_window->playbackFrame(), P);
+    }
+
     // A round trip as the audio check would have kept it for the fake
     // device (the default devices, the Preferences naming none) recording
     // at deviceRate, 44.1 kHz unless given, measured while the device
@@ -3617,6 +3667,60 @@ private slots:
 
     void stop_with_record_plays_nothing_more() {
         verifyStopWhileTheReferencePlays(false);
+    }
+
+    // Record pressed during playback stops it first: with Play Reference
+    // off nothing is heard during the take, and the take starts where
+    // playback stopped
+    void record_during_playback_stops_it() {
+        sv::sv_frame_t reached = -1;
+        size_t pressed = 0;
+        recordDuringPlayback(false, reached, pressed);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(!m_window->playSource()->isPlaying(),
+                 "the reference plays on under the take");
+        QTest::qWait(1000);
+        QVERIFY2(!m_window->playSource()->isPlaying(),
+                 "the reference plays during a take without Play Reference");
+
+        // The play source reads ahead, and what it had handed the device
+        // before the press may still come out just after it
+        auto output = m_window->fake()->getCapturedOutput();
+        const size_t settled = pressed + size_t(0.1 * rate);
+        QVERIFY(output.size() > settled + size_t(0.5 * rate));
+        float peak = 0.f;
+        for (size_t i = settled; i < output.size(); ++i) {
+            peak = std::max(peak, std::fabs(output[i]));
+        }
+        QVERIFY2(peak < 1e-4f,
+                 qPrintable(QString("the output reached %1 during the take: "
+                                    "the reference played on").arg(peak)));
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        verifyTakeFromWherePlaybackStopped(reached);
+    }
+
+    // With Play Reference on, the take plays the reference itself, from
+    // where playback stopped, as it does from a standstill: so it measures
+    // the start gap it is placed with
+    void record_during_playback_plays_the_reference_for_the_take() {
+        sv::sv_frame_t reached = -1;
+        size_t pressed = 0;
+        recordDuringPlayback(true, reached, pressed);
+        if (QTest::currentTestFailed()) return;
+
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->playSource()->isPlaying(), 2000);
+        QTest::qWait(1000);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency latency = m_window->takeLatency();
+        QVERIFY2(latency.recordingRate > 0 && latency.startGapMeasured,
+                 "the take did not start the reference itself: its start "
+                 "gap was not measured");
+        verifyTakeFromWherePlaybackStopped(reached);
     }
 
     void take_at_playback_position() {

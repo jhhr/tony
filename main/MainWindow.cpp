@@ -5741,6 +5741,22 @@ MainWindow::record()
         return;
     }
 
+    // A take starts from a standstill.  Record pressed during playback
+    // stops it first, as Play / Pause does, and the take is the one
+    // Record would start from there.  Left playing, the reference would
+    // play on under the take, and recordingStarted(), which starts it
+    // only when nothing plays, would neither start it from the take's
+    // lead-in nor measure the start gap the take is placed with
+    if (m_playSource && m_playSource->isPlaying()) {
+        cerr << "MainWindow::record: stopping playback before the take" << endl;
+        // Where it is now, not where the view manager last looked: the
+        // playhead is left there, and the take starts from it
+        sv_frame_t stoppedAt =
+            m_viewManager ? m_viewManager->getPlaybackFrame() : 0;
+        stop();
+        if (m_viewManager) m_viewManager->setPlaybackFrame(stoppedAt);
+    }
+
 #ifdef Q_OS_ANDROID
     // The microphone is asked for when it is first needed, and the
     // answer comes later: the take is started then, from the top
