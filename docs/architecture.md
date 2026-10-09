@@ -292,6 +292,17 @@ volume and the background music in `MainWindow`.
   always null and **`Analyser::stackLayers()` / `PaneStack::setCurrentLayer()` do nothing**.
   A tool acts on the topmost layer of its kind (`Pane::getTopFlexiNoteLayer()`, which
   skips dormant layers in the svgui fork). Layer order is changed with `TakeLayers::raise()`.
+- **The hover readout is not the top layer's.** The top of pane 0 is seldom the layer
+  pointed at: the coverage strip after a take, which describes nothing; the alternate
+  pitch track; and, after any selection, the reference's pitch candidates, hidden, which
+  stay there until the next re-analysis. The box at the top right and the note lit up
+  are therefore of the note under the pointer, in whichever note layer on show it is,
+  the reference's or the take's; off the notes, of the topmost layer on show that
+  describes anything there; and with the Edit tool, of the notes it edits
+  (`Pane::getIdentifyLayer()`, svgui fork). While the pointer is on a note low in the
+  pane, every layer above that one is drawn at every paint, as the lit layer is kept out
+  of the view's cache: about 13 ms a paint on the cloud machine with a 15 s take in view,
+  against 2 ms on a note of the take.
 - Making any selection starts `Analyser::reAnalyseSelection()` on the reference, so a
   transformer is usually running afterwards. Tests cannot assert
   `!haveRunningTransformers()` after selecting.
@@ -482,9 +493,10 @@ pane just above the coverage strip, because a session restores only layers
 name `"Lyrics"`, in `analyseNewMainModel()` after the alternate pitch track. Its model is
 taken out of the play source after an import and again after a load: a word past the end
 of the reference would hold playback open. It is **never the pane's top layer**, because
-the pane takes its hover readout and vertical scale from the top layer and this one has
-neither. `show()` raises the layer that was on top before; `adopt()` raises the one under
-the lyrics if the session was saved with them on top; and when any other layer is deleted
+the pane takes its vertical scale from the top layer and this one has none (the hover
+readout passes over it: see [Selection and tools](#selection-and-tools)). `show()`
+raises the layer that was on top before; `adopt()` raises the one under the lyrics if
+the session was saved with them on top; and when any other layer is deleted
 (the alternate pitch track turned off, a take deleted) a zero-time timer does the same,
 because that layer is still in the pane when `layerAboutToBeDeleted` arrives. Not tied to
 takes: the take code finds layers by take name, source model or extra pane, so it never

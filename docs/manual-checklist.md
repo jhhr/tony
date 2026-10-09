@@ -267,6 +267,14 @@ Not tried yet.
    plays what was recorded, the music included. The menu cannot be opened during a take.
    Then Playback > Check Input Level with the music playing in its silence: is the
    threshold it suggests over the music, and under soft singing?
+11. **Hovering over notes.** Open a song, drag a selection and click away from it, then
+   hover over the reference's notes inside and outside where it was: the box at the top
+   right gives each note's time, pitch and duration, and the note is lit up with its
+   frequency and duration beside it. Record a take and do the same over the reference's
+   notes and the take's, where one lies above the other, and with the alternate pitch
+   track on; with the Edit tool (2) only the take's notes are lit. With a long take in
+   view, does the pane keep up with the pointer on a note of the reference, while
+   stopped and while playing?
 
 ## 4. Lyrics
 
