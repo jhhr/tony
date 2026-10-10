@@ -65,13 +65,19 @@ InputChannelMenu::~InputChannelMenu()
 void
 InputChannelMenu::tick()
 {
+    // Until a phone's first take it cannot say which input it will
+    // record from, and a choice kept then would be read for none
     const InputChannel::Key key = m_key();
-    m_deviceLine->setText(tr("For: %1").arg(m_name(key)));
+    m_deviceLine->setText(key.known ?
+                          tr("For: %1").arg(m_name(key)) :
+                          tr("For: the input, known once a take has "
+                             "started"));
 
     QSettings settings;
     const int current = InputChannel::channel(settings, key);
     for (QAction *action : m_group->actions()) {
         action->setChecked(action->data().toInt() == current);
+        action->setEnabled(key.known);
     }
 }
 
@@ -86,6 +92,7 @@ InputChannelMenu::chosen(int channel)
 {
     QSettings settings;
     const InputChannel::Key key = m_key();
+    if (!key.known) return;
     if (InputChannel::channel(settings, key) == channel) return;
     InputChannel::setChannel(settings, key, channel);
     emit channelChosen(channel);

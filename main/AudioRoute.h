@@ -43,7 +43,11 @@ namespace AudioRoute
         /// microphone, a headset's name for a Bluetooth one
         QString productName;
 
-        Device() : id(0), type(0) { }
+        /// The most channels it can be opened with, as it lists them
+        /// (AudioDeviceInfo.getChannelCounts()); 0 for any, or not known
+        int channels;
+
+        Device() : id(0), type(0), channels(0) { }
     };
 
     struct Route {

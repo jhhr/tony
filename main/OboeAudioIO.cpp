@@ -88,8 +88,9 @@ describeStream(oboe::AudioStream *stream)
 }
 
 // The devices Android's AudioManager lists, inputs or outputs: their
-// ids, types and product names. On the GUI thread, as QJniObject clears
-// and logs any exception a call throws
+// ids, types, product names and channel counts. Each call asks Android
+// again, so an open asks once for each and passes the list on. On the
+// GUI thread, as QJniObject clears and logs any exception a call throws
 std::vector<AudioRoute::Device>
 listDevices(bool input)
 {
@@ -124,65 +125,33 @@ listDevices(bool input)
             device.productName = name.callObjectMethod
                 ("toString", "()Ljava/lang/String;").toString();
         }
+        QJniObject counts = info.callObjectMethod("getChannelCounts", "()[I");
+        if (counts.isValid()) {
+            jintArray ints = counts.object<jintArray>();
+            const jsize n = env->GetArrayLength(ints);
+            std::vector<jint> values(size_t(std::max<jsize>(n, 0)));
+            if (n > 0) env->GetIntArrayRegion(ints, 0, n, values.data());
+            for (jint v : values) {
+                device.channels = std::max(device.channels, int(v));
+            }
+        }
         result.push_back(device);
     }
     return result;
 }
 
-// The device AAudio opened a stream on, as Android's AudioManager lists
-// it. Only the id if it is not listed, or the stream cannot say
-// (OpenSL ES: 0)
+// The device AAudio opened a stream on, of those listed. Only the id if
+// it is not listed, or the stream cannot say (OpenSL ES: 0)
 AudioRoute::Device
-lookUpDevice(int id, bool input)
+lookUpDevice(int id, const std::vector<AudioRoute::Device> &listed)
 {
     AudioRoute::Device device;
     device.id = id;
     if (id <= 0) return device;
-    for (const AudioRoute::Device &listed : listDevices(input)) {
-        if (listed.id == id) return listed;
+    for (const AudioRoute::Device &d : listed) {
+        if (d.id == id) return d;
     }
     return device;
-}
-
-// The most channels the input device of that id can be opened with,
-// as AudioDeviceInfo.getChannelCounts() lists them; 0 if it is not
-// listed, or lists none (any count). On the GUI thread, as lookUpDevice()
-int
-deviceChannelCount(int id)
-{
-    if (id <= 0) return 0;
-
-    QJniObject context = QNativeInterface::QAndroidApplication::context();
-    if (!context.isValid()) return 0;
-    QJniObject manager = context.callObjectMethod
-        ("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;",
-         QJniObject::fromString("audio").object<jstring>());
-    if (!manager.isValid()) return 0;
-
-    // AudioManager.GET_DEVICES_INPUTS
-    QJniObject devices = manager.callObjectMethod
-        ("getDevices", "(I)[Landroid/media/AudioDeviceInfo;", jint(1));
-    if (!devices.isValid()) return 0;
-
-    QJniEnvironment env;
-    jobjectArray array = devices.object<jobjectArray>();
-    const jsize count = env->GetArrayLength(array);
-    for (jsize i = 0; i < count; ++i) {
-        QJniObject info = QJniObject::fromLocalRef
-            (env->GetObjectArrayElement(array, i));
-        if (!info.isValid()) continue;
-        if (info.callMethod<jint>("getId", "()I") != id) continue;
-        QJniObject counts = info.callObjectMethod("getChannelCounts", "()[I");
-        if (!counts.isValid()) return 0;
-        jintArray ints = counts.object<jintArray>();
-        const jsize n = env->GetArrayLength(ints);
-        std::vector<jint> values(size_t(std::max<jsize>(n, 0)));
-        if (n > 0) env->GetIntArrayRegion(ints, 0, n, values.data());
-        int most = 0;
-        for (jint v : values) most = std::max(most, int(v));
-        return most;
-    }
-    return 0;
 }
 
 std::string
@@ -439,6 +408,8 @@ OboeAudioIO::openStreams()
     m_rate = m_output->getSampleRate();
     m_outputChannels = m_output->getChannelCount();
 
+    // The inputs as Android lists them, once for the whole open
+    std::vector<AudioRoute::Device> inputs;
     if (m_target) {
         oboe::AudioStreamBuilder inBuilder;
         inBuilder.setDirection(oboe::Direction::Input)
@@ -480,7 +451,9 @@ OboeAudioIO::openStreams()
         // The input device chosen (Playback > Audio Input Device), by the
         // id it has now: 0 is Android's choice, as is one that cannot be
         // opened
-        const int chosenId = (m_inputDeviceFor ? m_inputDeviceFor() : 0);
+        inputs = listDevices(true);
+        const int chosenId =
+            (m_inputDeviceFor ? m_inputDeviceFor(inputs) : 0);
         if (chosenId > 0) inBuilder.setDeviceId(chosenId);
         result = openInput(0);
         if (result != oboe::Result::OK && chosenId > 0) {
@@ -509,10 +482,10 @@ OboeAudioIO::openStreams()
         // first, as an exclusive one holds the device. A device that
         // cannot be opened so keeps the mono input
         const int id = m_input->getDeviceId();
-        const int own = deviceChannelCount(id);
+        const AudioRoute::Device opened = lookUpDevice(id, inputs);
+        const int own = opened.channels;
         if (m_inputChannelFor && own > 1 &&
-            InputChannel::isSingle
-            (m_inputChannelFor(lookUpDevice(id, true)))) {
+            InputChannel::isSingle(m_inputChannelFor(opened))) {
             m_input->close();
             m_input.reset();
             inBuilder.setChannelCount(own)
@@ -591,7 +564,7 @@ OboeAudioIO::openStreams()
 
     logStream("output", m_output.get());
     if (m_input) logStream("input", m_input.get());
-    findRoute();
+    findRoute(inputs);
     return true;
 }
 
@@ -995,7 +968,7 @@ OboeAudioIO::logStream(std::string name, oboe::AudioStream *stream) const
 }
 
 void
-OboeAudioIO::findRoute()
+OboeAudioIO::findRoute(const std::vector<AudioRoute::Device> &inputs)
 {
     // The devices AAudio chose: for an unspecified device, those of the
     // route Android has now, which is what a measured round trip belongs
@@ -1004,12 +977,13 @@ OboeAudioIO::findRoute()
     m_route = AudioRoute::Route();
     m_route.driver = "oboe";
     m_route.rate = m_rate;
-    m_route.output = lookUpDevice(m_output->getDeviceId(), false);
+    m_route.output = lookUpDevice
+        (m_output->getDeviceId(), listDevices(false));
     m_route.outputStreams = QString::fromStdString
         (describeStream(m_output.get()));
     if (m_input) {
         m_route.hasInput = true;
-        m_route.input = lookUpDevice(m_input->getDeviceId(), true);
+        m_route.input = lookUpDevice(m_input->getDeviceId(), inputs);
         m_route.inputStreams = QString::fromStdString
             (describeStream(m_input.get()));
     }

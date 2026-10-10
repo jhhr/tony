@@ -449,7 +449,7 @@ protected:
         };
         if (!m_listedInputs.empty() && m_fakeConfig.route.hasInput) {
             m_fakeConfig.route.input = m_phoneChoice;
-            const int id = inputDeviceIdToOpen();
+            const int id = inputDeviceIdToOpen(m_listedInputs);
             for (const AudioRoute::Device &d : m_listedInputs) {
                 if (id > 0 && d.id == id) m_fakeConfig.route.input = d;
             }

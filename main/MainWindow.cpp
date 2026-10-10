@@ -38,6 +38,7 @@
 #include "VoiceThreshold.h"
 #include "VoiceThresholdMenu.h"
 #include "InputChannelMenu.h"
+#include "InputDeviceMenu.h"
 #include "InputDevice.h"
 #include "RecordingAlignment.h"
 #include "TakeAudio.h"
@@ -269,6 +270,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_selectionAnchor(0),
     m_withSonification(withSonification),
     m_withSpectrogram(withSpectrogram),
+    m_inputDeviceMenu(nullptr),
     m_recordingInProgress(false),
     m_recordingAsSingingTrack(false),
     m_singingAudioMutedForTake(false),
@@ -1720,7 +1722,20 @@ MainWindow::rescanAudioDevices()
     // A phone lists its inputs as they are now, and opens nothing to do
     // so; its output is Android's choice, and has no menu
     if (listsInputDevices()) {
-        buildListedInputDeviceMenu();
+        if (!m_inputDeviceMenu) {
+            m_inputDeviceMenu = new InputDeviceMenu
+                (m_audioInputDeviceMenu, listingDriver(),
+                 [this]() { return listedInputDevices(); },
+                 [this]() {
+                     AudioRoute::Route route;
+                     return (deviceRoute(route) && route.hasInput) ?
+                         AudioRoute::deviceName(route.input) : QString();
+                 }, this);
+            connect(m_inputDeviceMenu, &InputDeviceMenu::deviceChosen,
+                    this, &MainWindow::listedInputDeviceChosen);
+        } else {
+            m_inputDeviceMenu->build();
+        }
         return;
     }
 
@@ -1772,12 +1787,6 @@ void
 MainWindow::audioDeviceSelected(QAction *action)
 {
     if (!action) return;
-
-    if (listsInputDevices() &&
-        m_audioInputDeviceGroup->actions().contains(action)) {
-        listedInputDeviceChosen(action);
-        return;
-    }
 
     QString key = audioDeviceSettingKey
         (m_audioInputDeviceGroup->actions().contains(action) ?
@@ -3972,7 +3981,9 @@ MainWindow::createAudioIO()
                  return InputChannel::channel
                      (settings, { "oboe", AudioRoute::deviceName(input) });
              },
-             [this]() { return inputDeviceIdToOpen(); });
+             [this](const std::vector<AudioRoute::Device> &listed) {
+                 return inputDeviceIdToOpen(listed);
+             });
         if (io->isOK()) {
             m_audioIO = io;
         } else {
@@ -6489,7 +6500,10 @@ MainWindow::inputChannelKey() const
     if (chosenInputDevice(chosen)) {
         return { route.driver, AudioRoute::deviceName(chosen) };
     }
-    return { route.driver, InputChannel::lastInput(settings, route.driver) };
+    InputChannel::Key key
+        { route.driver, InputChannel::lastInput(settings, route.driver) };
+    key.known = (key.recordDevice != "");
+    return key;
 }
 
 bool
@@ -6532,11 +6546,14 @@ MainWindow::chosenInputDevice(AudioRoute::Device &device) const
 }
 
 int
-MainWindow::inputDeviceIdToOpen() const
+MainWindow::inputDeviceIdToOpen
+(const std::vector<AudioRoute::Device> &listed) const
 {
+    if (!listsInputDevices()) return 0;
+    QSettings settings;
     AudioRoute::Device chosen;
-    if (!chosenInputDevice(chosen)) return 0;
-    return chosen.id;
+    if (!InputDevice::chosen(settings, listingDriver(), chosen)) return 0;
+    return InputDevice::idToOpen(listed, chosen);
 }
 
 void
@@ -6564,80 +6581,8 @@ MainWindow::reportInputDevice()
 }
 
 void
-MainWindow::buildListedInputDeviceMenu()
+MainWindow::listedInputDeviceChosen()
 {
-    QMenu *menu = m_audioInputDeviceMenu;
-    QActionGroup *group = m_audioInputDeviceGroup;
-    for (QAction *a : group->actions()) {
-        group->removeAction(a);
-    }
-    menu->clear();
-
-    QSettings settings;
-    AudioRoute::Device chosen;
-    const bool haveChoice =
-        InputDevice::chosen(settings, listingDriver(), chosen);
-
-    // The input recording now, which with nothing chosen is the one the
-    // phone chose: it is open only once recording has been asked for
-    AudioRoute::Route route;
-    const QString inUse = (deviceRoute(route) && route.hasInput) ?
-        AudioRoute::deviceName(route.input) :
-        tr("chosen when recording starts");
-    menu->addAction(tr("In use: %1").arg(inUse))->setEnabled(false);
-    menu->addSeparator();
-
-    QAction *defaultAction = menu->addAction(tr("(System Default)"));
-    defaultAction->setCheckable(true);
-    defaultAction->setChecked(!haveChoice);
-    defaultAction->setData(QStringList());
-    group->addAction(defaultAction);
-    menu->addSeparator();
-
-    bool haveCurrent = false;
-    for (const AudioRoute::Device &device :
-             InputDevice::choices(listedInputDevices())) {
-        QAction *action = menu->addAction(AudioRoute::deviceName(device));
-        action->setCheckable(true);
-        action->setData(QStringList({ QString::number(device.type),
-                                      device.productName }));
-        if (haveChoice && InputDevice::same(device, chosen)) {
-            action->setChecked(true);
-            haveCurrent = true;
-        }
-        group->addAction(action);
-    }
-
-    // As the desktop's menu: a device chosen that is unplugged is shown,
-    // ticked, as the choice still in force when it is plugged in again
-    if (haveChoice && !haveCurrent) {
-        menu->addSeparator();
-        QAction *missing = menu->addAction
-            (tr("%1 (not connected)").arg(AudioRoute::deviceName(chosen)));
-        missing->setCheckable(true);
-        missing->setChecked(true);
-        missing->setData(QStringList({ QString::number(chosen.type),
-                                       chosen.productName }));
-        group->addAction(missing);
-    }
-}
-
-void
-MainWindow::listedInputDeviceChosen(QAction *action)
-{
-    AudioRoute::Device device;
-    const QStringList data = action->data().toStringList();
-    if (data.size() == 2) {
-        device.type = data[0].toInt();
-        device.productName = data[1];
-    }
-
-    QSettings settings;
-    AudioRoute::Device before;
-    const bool had = InputDevice::chosen(settings, listingDriver(), before);
-    if (had ? InputDevice::same(before, device) : device.type <= 0) return;
-    InputDevice::choose(settings, listingDriver(), device);
-
     // A device open for recording opens again, on the input chosen, as
     // for a route that changes; one open for playback only opens its
     // input on it at the next take.  Another input may have another

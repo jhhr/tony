@@ -440,11 +440,14 @@ for one input than for both (`OboeAudioIO`).
 [port-android.md](port-android.md#choosing-the-input)): Playback > Audio Input Device,
 which on the desktop lists the driver's devices, lists on a phone the inputs Android's
 `AudioManager` lists (`MainWindow::listsInputDevices()`, `listedInputDevices()`, which
-the tests give a phone's). The choice is kept by type and product name (group
-`InputDevice`), and `OboeAudioIO` asks for the id to open it by each time it opens its
-input. Before the first take, the measured round trip and the input channel are looked
-up for the input chosen if it is plugged in. One chosen but not plugged in, or not
-opened, is said in the status bar for 8 s, over the take's time and notes.
+the tests give a phone's), through `InputDeviceMenu`, made the first time the menu is
+listed. The choice is kept by type and product name (group `InputDevice`), and
+`OboeAudioIO` asks for the id to open it by each time it opens its input, of the inputs it
+lists once for that open. Before the first take, the measured round trip and the input
+channel are looked up for the input chosen if it is plugged in; with none chosen and none
+recorded from, Input Channel cannot say which input the take will open, and its entries
+are shut until one has (`InputChannel::Key::known`). One chosen but not plugged in, or
+not opened, is said in the status bar for 8 s, over the take's time and notes.
 
 **The status bar** (`StatusLine`): over what the views write there (the visible range,
 playback's position, a take's time, the note sung), first the countdown of a lead-in,

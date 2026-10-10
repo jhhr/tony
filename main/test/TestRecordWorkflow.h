@@ -2996,6 +2996,92 @@ private slots:
         QCOMPARE(inputChannelDeviceLine(), QString("For: %1").arg(name));
     }
 
+    // A phone before its first take, with no input chosen and none
+    // recorded from, cannot say which input the take will open: Input
+    // Channel waits for it, its entries shut, and says so. The first
+    // take names the input, and a choice is kept for that
+    void a_phone_offers_input_channels_once_its_input_is_known() {
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = false;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        delete m_window;
+        m_window = new TestMainWindow(config, true, true,
+                                      MainWindow::AUDIO_PLAYBACK_NOW_RECORD_LATER);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(inputChannelDeviceLine(),
+                 QString("For: the input, known once a take has started"));
+        int entries = 0;
+        for (QAction *action :
+                 m_window->inputChannelMenu()->menu()->actions()) {
+            if (!action->isCheckable()) continue;
+            QVERIFY(!action->isEnabled());
+            ++entries;
+        }
+        QCOMPARE(entries, 3);
+
+        // The take opens the route's input
+        route.hasInput = true;
+        route.input = phoneDevice(4, 22, "AI-Micro");
+        m_window->setFakeRoute(route);
+        m_window->keepAudioRunning(true);
+        take(500);
+        if (QTest::currentTestFailed()) return;
+        const QString name = AudioRoute::deviceName(route.input);
+        QCOMPARE(inputChannelDeviceLine(), QString("For: %1").arg(name));
+        chooseInputChannel(0);
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        QCOMPARE(InputChannel::channel(settings, { "oboe", name }), 0);
+        QCOMPARE(InputChannel::channel(settings, { "oboe", "" }),
+                 InputChannel::kBoth);
+    }
+
+    // Open for playback only, as a phone's device is until its first
+    // take, a device chosen opens nothing again: the music plays on, and
+    // the take opens its input on the device chosen
+    void an_input_chosen_leaves_playback_alone() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        const QString usbName = "USB device (Wireless PRO RX)";
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = false;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        delete m_window;
+        m_window = new TestMainWindow(config, true, true,
+                                      MainWindow::AUDIO_PLAYBACK_NOW_RECORD_LATER);
+        m_window->setFakeListedInputs({ mic, usb }, mic);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const int opened = m_window->audioIOOpened();
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        chooseInputDevice(usbName);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioIOOpened(), opened);
+        QVERIFY(m_window->playSource()->isPlaying());
+        m_window->doPlay();
+
+        route.hasInput = true;
+        m_window->setFakeRoute(route);
+        m_window->keepAudioRunning(true);
+        take(300);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioRoute().input.id, 40);
+    }
+
     // A phone's Playback > Audio Input Device: the inputs Android lists
     // that a singer records from (not a Bluetooth call microphone), each
     // name once, the one in use named. A choice is kept by type and name

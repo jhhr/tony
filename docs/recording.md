@@ -350,8 +350,11 @@ channels in each of its modes. Found on the fake, as above:
 - **Kept per input device** (`InputChannel`, group `InputChannel`): under the driver and
   the record device as `LatencyCalibration` names them, the Preferences' names on a
   desktop and the route's input on a phone. A phone's device open for playback only
-  cannot say which input it will record from, and takes the one its driver last recorded
-  from. The menu's first line names the device a choice is for.
+  cannot say which input it will record from, and takes the input device chosen, or the
+  one its driver last recorded from. With neither (a phone's first take after a fresh
+  install) the menu says the input is known once a take has started, and its entries
+  are shut until then: a choice kept for no device would never be read. The menu's first
+  line names the device a choice is for.
 
 **Every take plays centred.** `Analyser::addWaveform()` pans the reference's waveform
 hard left, upstream Tony's arrangement (its audio left, the pitch and notes played as

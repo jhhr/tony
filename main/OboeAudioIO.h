@@ -110,12 +110,13 @@ public:
         InputChannelFor;
 
     /**
-     * The id of the input device to open, as Android lists it now: the
-     * one chosen (InputDevice), or 0 for Android's choice. Asked on the
-     * GUI thread each time the input is opened, as an id changes when a
-     * device is plugged in again
+     * The id of the input device to open, of those Android lists now
+     * (listed): the one chosen (InputDevice), or 0 for Android's choice.
+     * Asked on the GUI thread each time the input is opened, as an id
+     * changes when a device is plugged in again
      */
-    typedef std::function<int()> InputDeviceFor;
+    typedef std::function<int(const std::vector<AudioRoute::Device> &listed)>
+        InputDeviceFor;
 
     /**
      * Open the output and, if target is not null, the input. Check
@@ -212,7 +213,7 @@ private:
     bool keptUp(int waiting) const;
     void report(StreamLatency::Estimate latency, bool withInput);
     void logStream(std::string name, oboe::AudioStream *stream) const;
-    void findRoute();
+    void findRoute(const std::vector<AudioRoute::Device> &inputs);
 
     OboeAudioIO(const OboeAudioIO &) = delete;
     OboeAudioIO &operator=(const OboeAudioIO &) = delete;

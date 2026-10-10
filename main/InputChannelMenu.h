@@ -33,6 +33,10 @@ class QMenu;
  * then one entry for each of InputChannel::choices(), with the one kept
  * for that device ticked.
  *
+ * A phone before its first take may not know which input it will
+ * record from (InputChannel::Key::known): the line says so, and the
+ * entries are shut until a take has opened it.
+ *
  * A choice is written to the settings, for the device the line names,
  * then signalled: record() reads the settings as each take starts, and
  * a phone, whose input is opened otherwise for one input than for both,

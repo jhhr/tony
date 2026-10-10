@@ -60,6 +60,7 @@ struct AudioCheckResult;
 class AudioDriverMenus;
 class VoiceThresholdMenu;
 class InputChannelMenu;
+class InputDeviceMenu;
 class InputLevelFeed;
 class InputLevelMeterAction;
 class CheckInputLevelDialog;
@@ -1057,15 +1058,18 @@ protected:
     // input device chosen is kept under it
     static QString listingDriver() { return "oboe"; }
 
-    // Playback > Audio Input Device from listedInputDevices(): the input
-    // in use, the system's default, and those InputDevice offers
-    void buildListedInputDeviceMenu();
-    void listedInputDeviceChosen(QAction *action);
+    // Playback > Audio Input Device from listedInputDevices()
+    // (InputDeviceMenu), made the first time it is listed; and what a
+    // choice there opens
+    InputDeviceMenu *m_inputDeviceMenu;
+    void listedInputDeviceChosen();
 
-    // The id to open the input device chosen by, as it is listed now: 0
-    // for the driver's own choice, as for one chosen that is not plugged
-    // in.  Asked each time the input is opened
-    int inputDeviceIdToOpen() const;
+    // The id to open the input device chosen by, of those listed now
+    // (the open lists them once for all it asks): 0 for the driver's own
+    // choice, as for one chosen that is not plugged in.  Asked each time
+    // the input is opened
+    int inputDeviceIdToOpen
+    (const std::vector<AudioRoute::Device> &listed) const;
 
     // Once the device is open with its input: if that is not the input
     // device chosen (not plugged in, or it could not be opened), say so

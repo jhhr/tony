@@ -54,6 +54,12 @@ namespace InputChannel
         /// The record device, as the Preferences or the route name it;
         /// "" for the default device, or one not known
         QString recordDevice;
+
+        /// False where the input a take will record from cannot be
+        /// told: a phone before its first take, open for playback only,
+        /// with no input chosen and none recorded from.  No choice is
+        /// kept for it: none would ever be read
+        bool known = true;
     };
 
     /// The choices offered: Both, Input 1, Input 2
