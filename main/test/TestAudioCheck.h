@@ -27,6 +27,8 @@
 
 #include "TestSignals.h"
 #include "TestMainWindow.h"
+#include "../InputDevice.h"
+#include "../InputChannel.h"
 
 #include "../AudioCheckRunner.h"
 #include "../CalibrateAudioDialog.h"
@@ -801,6 +803,9 @@ private slots:
         // the waits below return early when they fail
         QSettings().remove("LatencyCalibration");
         forgetDriverPreferences();
+        // Nor an input channel or a phone's input device a test chose
+        QSettings().remove("InputChannel");
+        QSettings().remove("InputDevice");
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -2063,6 +2068,56 @@ private slots:
         }
     }
 
+    // A microphone on input 2 of two, Input 1 chosen: the check's takes
+    // are made of both inputs whatever is chosen, so that it hears the
+    // sounds; its result says which input the microphone is on, and Use
+    // Input 2 chooses that for the device the check ran on
+    void calibrate_audio_finds_the_microphones_input() {
+        FakeAudioIO::Config config = loopback();
+        config.channels = 2;
+        config.inputChannel = 1;
+        makeWindow(config);
+        QSettings settings;
+        const InputChannel::Key key { "", "" };
+        InputChannel::setChannel(settings, key, 0);
+
+        runCheck();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(m_result.calibrationUsable(), qPrintable(m_result.failure));
+        QCOMPARE(int(m_result.inputPeaks.size()), 2);
+        QCOMPARE(m_result.inputPeaks[0], 0.f);
+        QVERIFY(m_result.inputPeaks[1] > 0.1f);
+        QCOMPARE(m_result.inputKey.driver, key.driver);
+        QCOMPARE(m_result.inputKey.recordDevice, key.recordDevice);
+
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        dialog->showResult(m_result);
+        QCOMPARE(dialog->offeredInput(), 1);
+        QVERIFY(!dialog->inputButton()->isHidden());
+        QCOMPARE(dialog->inputButton()->text(), QString("Use Input 2"));
+        QString words = dialog->pageText();
+        for (QString w : { "The microphone is on input 2 alone: input 1 was "
+                           "silent.", "Press Use Input 2", "input 1 silent, "
+                           "input 2 " }) {
+            QVERIFY2(words.contains(w), qPrintable(w + " not in: " + words));
+        }
+
+        dialog->inputButton()->click();
+        QCOMPARE(InputChannel::channel(settings, key), 1);
+        QVERIFY(dialog->inputButton()->isHidden());
+        QCOMPARE(dialog->offeredInput(), -1);
+        words = dialog->pageText();
+        QVERIFY2(words.contains("Takes from this device are now made from "
+                                "input 2 alone"), qPrintable(words));
+
+        // With it chosen, nothing more is offered
+        dialog->showResult(m_result);
+        QVERIFY(dialog->inputButton()->isHidden());
+        QVERIFY(!dialog->pageText().contains("Press Use Input"));
+    }
+
     // On a phone the instructions name the route the device has open and
     // the phone's loopback, and the result's advice is a phone's, with
     // the streams the figure is checked against
@@ -2117,6 +2172,35 @@ private slots:
         QVERIFY2(words.contains("echo cancellation or noise suppression"),
                  qPrintable(words));
         QVERIFY2(!words.contains("Windows"), qPrintable(words));
+    }
+
+    // A phone open for playback only, an input device chosen and plugged
+    // in: the instructions name it, not the input calibrated before
+    void calibrate_audio_names_the_input_device_chosen() {
+        FakeAudioIO::Config config = loopback();
+        config.route = phoneRoute();
+        config.route.hasInput = false;
+        AudioRoute::Device usb;
+        usb.id = 40;
+        usb.type = 11;
+        usb.productName = "Wireless PRO RX";
+        makeWindow(config);
+        m_window->setFakeListedInputs({ phoneRoute().input, usb },
+                                      phoneRoute().input);
+        {
+            QSettings settings;
+            InputDevice::choose(settings, "oboe", usb);
+        }
+        openSong();
+        if (QTest::currentTestFailed()) return;
+
+        m_window->calibrateAudioAction()->trigger();
+        CalibrateAudioDialog *dialog = m_window->calibrateAudioDialog();
+        QVERIFY(dialog);
+        const QString words = dialog->pageText();
+        const QString input = "USB device (Wireless PRO RX), chosen under "
+            "Playback > Audio Input Device";
+        QVERIFY2(words.contains(input), qPrintable(words));
     }
 
     // Not while an ordinary take is being recorded: the check records

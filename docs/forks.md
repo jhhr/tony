@@ -89,7 +89,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   deleted, so the history had to be cleared before every take (undo depth one).
 - `AudioCallbackRecordTarget`: `recordUpdateTimeout` 10 ms (upstream ~200 ms) so the live
   tracker sees audio promptly; `setSystemRecordLatency()` actually stores its value
-  (upstream: a no-op); `getSystemRecordLatency()`; `getFramesReceived()`.
+  (upstream: a no-op); `getSystemRecordLatency()`; `getFramesReceived()`;
+  `getApplicationChannelCount()` is always two, where upstream it was the channels the
+  device opened last gave, so that after a one-input device every device was opened with
+  one, and an interface's second input could not be had (Input Channel,
+  [recording.md](recording.md#input-channels)).
 - `AudioCallbackPlaySource`: `setPlayStartCallback(std::function<void(int)>)`, run from
   the audio callback with the first block after `play()` (start-gap measurement);
   `getModels()` for tests; `removeModel()` tolerates a model already gone.
@@ -161,6 +165,15 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   out again from the pane.
 - `Pane::getTopFlexiNoteLayer()` skips dormant layers, so note tools cannot edit the
   notes of a take that is put away.
+- `Pane::getIdentifyLayer()`: the layer whose feature under the mouse the pane describes
+  (the box at top right) and illuminates, which upstream is always the top layer, dormant
+  or not, and describing something or not. Now: the selected layer, or the one the tool
+  in hand acts on; else the topmost layer on show with a note under the mouse
+  (`FlexiNoteLayer::getNoteAt()`); else the topmost layer on show whose description is not
+  empty. Without it, Tony's readout was the hidden pitch candidates' after any selection
+  ("No local points" everywhere outside it) and the coverage strip's after a take
+  (nothing at all). `FlexiNoteLayer`'s readout names a note over the box drawn for it;
+  it used to from 4 px below its top to 8 px below its bottom.
 - `FlexiNoteLayer::getAssociatedPitchModel()`, which the note tools set a note's pitch
   from, takes the pitch track with the same source model as the notes, and the first in
   the view only when there is none. With the reference first in the pane, an edited

@@ -39,7 +39,15 @@
 #include "TestTakeDiff.h"
 #include "TestLiveDotsFeed.h"
 #include "TestVoiceThreshold.h"
+#include "TestInputChannel.h"
+#include "TestInputDevice.h"
+#include "TestRecordingAlignment.h"
+#include "TestInputLevel.h"
 #include "TestVoiceGate.h"
+#include "TestUserText.h"
+#include "TestTakeReplacement.h"
+#include "TestSettingsKey.h"
+#include "TestStatusLine.h"
 #include "TestRunSuite.h"
 
 #include "RunSuite.h"
@@ -237,7 +245,55 @@ int main(int argc, char *argv[])
     }
 
     {
+        TestInputChannel t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestInputDevice t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestRecordingAlignment t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestInputLevel t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestVoiceGate t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestUserText t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeReplacement t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestSettingsKey t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestStatusLine t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

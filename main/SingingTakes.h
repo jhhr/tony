@@ -185,6 +185,10 @@ public:
      * count frames of it as converted.  With a rate of 0 the recording
      * goes in at its own rate.
      *
+     * With a recordingChannel the recording has, that input alone goes
+     * in, as from a mono recording (InputChannel; TakeAudio::splice());
+     * -1 for all of them.
+     *
      * On success returns "" and the take's audio is the new file, its
      * coverage takes in what was recorded, and the file before is
      * remembered as superseded.  Otherwise the take is as it was and
@@ -196,7 +200,8 @@ public:
                             sv::sv_frame_t length,
                             QString directory,
                             Coverage::Range *placed = nullptr,
-                            sv::sv_samplerate_t rate = 0);
+                            sv::sv_samplerate_t rate = 0,
+                            int recordingChannel = -1);
 
     /**
      * Write the next audio file of the take with the given ranges made
@@ -253,6 +258,14 @@ public:
      * file may be wanted again by undo.
      */
     QStringList removeUnusedFiles();
+
+    /**
+     * Delete a file this run wrote that nothing will want again, and
+     * forget it: a step on the way of an operation that undo knows only as
+     * a whole, the take before it and after it.  Not a take's file, a
+     * protected one or one the user brought.  True if it went.
+     */
+    bool discardWritten(QString path);
 
     /// Recording from this frame on would record over material that is there
     bool coversPosition(sv::sv_frame_t position) const;

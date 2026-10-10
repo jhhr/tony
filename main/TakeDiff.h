@@ -373,6 +373,36 @@ namespace TakeDiff
      */
     LiveDot placeLiveDot(const LatencyCheck::Layout &layout,
                          double punchInStart, double seconds, double hz);
+
+    /**
+     * The levels the live tracker met in one punch-in of a take of the
+     * layout's reference, in dBFS: at each hop, the level of the first
+     * half of its window (RealtimePitchTracker::level()), which is what
+     * its level floor is held against.  On the tones, the windows whose
+     * first half lies on one and whose dot placeLiveDot() would judge; in
+     * the silence, those whose dot would lie on none of the reference's
+     * sounds.  The median of each,
+     * -200 with no window, and how many of the tones' windows were under
+     * the floor: the tracker gives those no dot.
+     */
+    struct DotLevels {
+        int toneWindows;
+        int underFloor;
+        double tonesMedian;
+        int silenceWindows;
+        double silenceMedian;
+        DotLevels() : toneWindows(0), underFloor(0), tonesMedian(-200),
+                      silenceWindows(0), silenceMedian(-200) { }
+    };
+
+    /**
+     * \a audio is the channels' average, \a count frames at the layout's
+     * rate on the reference's timeline (a take's file); the punch-in runs
+     * from \a start to \a end seconds.
+     */
+    DotLevels dotLevels(const LatencyCheck::Layout &layout,
+                        const float *audio, sv::sv_frame_t count,
+                        double start, double end, double floor);
 }
 
 #endif

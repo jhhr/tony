@@ -853,6 +853,61 @@ private slots:
                           TakeDiff::DotPlace::OnPitch, message),
                  qPrintable(message));
     }
+
+    // The levels the live tracker meets in a punch-in, as item 3 of the
+    // dev checks gives them: the dev reference as a take of it, then
+    // the same 50 dB down, under the tracker's floor, and with a noise
+    // between the sounds
+    void live_dot_levels_of_a_punch_in() {
+        const LatencyCheck::Layout layout = LatencyCheck::devLayout();
+        const std::vector<float> reference = LatencyCheck::generate(layout);
+        const double start = 6.3, end = 10.2;
+        const double floor = RealtimePitchTracker::kMinLevel;
+
+        const TakeDiff::DotLevels loud = TakeDiff::dotLevels
+            (layout, reference.data(), sv::sv_frame_t(reference.size()),
+             start, end, floor);
+        // Two tones of 0.8 s, less their edges, at a hop apart
+        QVERIFY2(loud.toneWindows > 200, qPrintable
+                 (QString::number(loud.toneWindows)));
+        QVERIFY2(loud.tonesMedian > -25.0 && loud.tonesMedian < -15.0,
+                 qPrintable(QString::number(loud.tonesMedian)));
+        // Not one window counted on a tone reaches past it into the
+        // silence, and not one in the silence reaches a sound
+        QCOMPARE(loud.underFloor, 0);
+        QVERIFY(loud.silenceWindows > 50);
+        QCOMPARE(loud.silenceMedian, -200.0);
+        // Over one event, whose silence is the pause between its sweep
+        // and its tone, the sounds outnumber it
+        const TakeDiff::DotLevels event = TakeDiff::dotLevels
+            (layout, reference.data(), sv::sv_frame_t(reference.size()),
+             7.15, 8.35, floor);
+        QVERIFY(event.silenceWindows > 0);
+        QCOMPARE(event.silenceMedian, -200.0);
+
+        std::vector<float> quiet(reference);
+        const double down = std::pow(10.0, -50.0 / 20.0);
+        for (float &x : quiet) x = float(x * down);
+        const TakeDiff::DotLevels under = TakeDiff::dotLevels
+            (layout, quiet.data(), sv::sv_frame_t(quiet.size()),
+             start, end, floor);
+        QCOMPARE(under.toneWindows, loud.toneWindows);
+        QVERIFY2(std::fabs(under.tonesMedian - (loud.tonesMedian - 50.0))
+                 < 0.01, qPrintable(QString::number(under.tonesMedian)));
+        QCOMPARE(under.underFloor, under.toneWindows);
+
+        // Uniform noise of 0.01 is 10^-2 / sqrt(3) RMS, -44.8 dBFS
+        std::vector<float> noisy(quiet);
+        const std::vector<float> noise = TestSignals::whiteNoise
+            (int(noisy.size()), 7, 0.01);
+        for (size_t i = 0; i < noisy.size(); ++i) noisy[i] += noise[i];
+        const TakeDiff::DotLevels inNoise = TakeDiff::dotLevels
+            (layout, noisy.data(), sv::sv_frame_t(noisy.size()),
+             start, end, floor);
+        QCOMPARE(inNoise.silenceWindows, loud.silenceWindows);
+        QVERIFY2(std::fabs(inNoise.silenceMedian + 44.8) < 0.3,
+                 qPrintable(QString::number(inNoise.silenceMedian)));
+    }
 };
 
 #endif

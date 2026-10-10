@@ -524,6 +524,19 @@ AudioCheckRunner::takeStopped()
     clearOverride();
     m_result.takes.push_back(m_window->m_takeLatency);
 
+    // Which input carries the microphone: each input's peak in what the
+    // take kept, as its scan found them
+    const std::vector<float> &peaks = m_window->m_takeInputPeaks;
+    if (m_result.inputPeaks.size() < peaks.size()) {
+        m_result.inputPeaks.resize(peaks.size(), 0.f);
+    }
+    for (size_t c = 0; c < peaks.size(); ++c) {
+        m_result.inputPeaks[c] = std::max(m_result.inputPeaks[c], peaks[c]);
+    }
+    if (m_result.takes.size() == 1) {
+        m_result.inputKey = m_window->inputChannelKey();
+    }
+
     // The splice went wrong (the window has said so), or the recording
     // was too short to hold anything
     const SingingTakes *takes = m_window->m_takes;

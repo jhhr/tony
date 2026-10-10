@@ -12,6 +12,7 @@
 */
 
 #include "LatencyCalibration.h"
+#include "SettingsKey.h"
 
 #include <QSettings>
 
@@ -26,36 +27,11 @@ namespace {
 
 const char *const settingsGroup = "LatencyCalibration";
 
-// A device name as part of a group name.  QSettings takes "/" and "\"
-// as the start of a subgroup, so they are percent-encoded, and so is
-// "%" itself, and the "|" that separates the names.  Nothing else is:
-// every settings format keeps any other character, non-ASCII ones
-// included, and the Windows registry allows a key name 255 characters
-// at most, which a name encoded whole could run past
-QString encoded(QString name)
-{
-    name.replace("%", "%25");
-    name.replace("/", "%2F");
-    name.replace("\\", "%5C");
-    name.replace("|", "%7C");
-    return name;
-}
-
-// The other way
-QString decoded(QString name)
-{
-    name.replace("%7C", "|");
-    name.replace("%5C", "\\");
-    name.replace("%2F", "/");
-    name.replace("%25", "%");
-    return name;
-}
-
 QString devicesGroup(const Key &key)
 {
-    return encoded(key.implementation) + "|" +
-        encoded(key.playbackDevice) + "|" +
-        encoded(key.recordDevice);
+    return SettingsKey::encoded(key.implementation) + "|" +
+        SettingsKey::encoded(key.playbackDevice) + "|" +
+        SettingsKey::encoded(key.recordDevice);
 }
 
 QString rateGroup(const Key &key)
@@ -112,8 +88,8 @@ onlyRecordDevice(QSettings &settings, const Key &key, QString &recordDevice)
     // The groups of the driver and playback device, whatever the record
     // device: their names as devicesGroup() makes them, up to the record
     // device's, which is encoded and so holds no "|"
-    const QString prefix = encoded(key.implementation) + "|" +
-        encoded(key.playbackDevice) + "|";
+    const QString prefix = SettingsKey::encoded(key.implementation) + "|" +
+        SettingsKey::encoded(key.playbackDevice) + "|";
     QStringList found;
     settings.beginGroup(settingsGroup);
     for (const QString &group : settings.childGroups()) {
@@ -121,7 +97,9 @@ onlyRecordDevice(QSettings &settings, const Key &key, QString &recordDevice)
         settings.beginGroup(group);
         const bool atRate = settings.childGroups().contains(rateGroup(key));
         settings.endGroup();
-        if (atRate) found.push_back(decoded(group.mid(prefix.size())));
+        if (atRate) {
+            found.push_back(SettingsKey::decoded(group.mid(prefix.size())));
+        }
     }
     settings.endGroup();
     if (found.size() != 1) return false;

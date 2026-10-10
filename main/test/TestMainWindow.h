@@ -25,6 +25,11 @@
 #include "../CoverageStrip.h"
 #include "../SingingTakes.h"
 #include "../VoiceThresholdMenu.h"
+#include "../InputChannelMenu.h"
+#include "../InputLevelFeed.h"
+#include "../InputLevelMeter.h"
+#include "../CheckInputLevelDialog.h"
+#include "../StatusLine.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -55,9 +60,13 @@ class TestMainWindow : public MainWindow
 public:
     // Without the spectrogram, as every test window is; without the
     // sonification as well, as --no-sonification has it, when asked
+    // In the application's own audio mode when asked (playback now,
+    // recording once asked for), which opens the device again for the
+    // first take; the fake is duplex either way
     TestMainWindow(FakeAudioIO::Config config, bool installDevice = true,
-                   bool withSonification = true) :
-        MainWindow(AUDIO_PLAYBACK_AND_RECORD, withSonification, false),
+                   bool withSonification = true,
+                   AudioMode audioMode = AUDIO_PLAYBACK_AND_RECORD) :
+        MainWindow(audioMode, withSonification, false),
         m_fakeConfig(config),
         m_installDevice(installDevice) { }
 
@@ -68,7 +77,32 @@ public:
     void setFakeRoute(const AudioRoute::Route &route) {
         m_fakeConfig.route = route;
     }
+    // The inputs the fake has from the next time it is opened, as
+    // another device chosen has others
+    void setFakeInputChannels(int channels) {
+        m_fakeConfig.inputChannels = channels;
+    }
     void doRecreateAudioIO() { recreateAudioIO(); }
+
+    // The inputs the driver lists, as a phone's AudioManager does, and
+    // the one of them the phone chooses where none is chosen (or the one
+    // chosen is not listed). The fake's route then records from the one
+    // opened, as OboeAudioIO's reports the device Android opened. A list
+    // changed is a device plugged in or out, seen at the next opening
+    void setFakeListedInputs(const std::vector<AudioRoute::Device> &listed,
+                             const AudioRoute::Device &phoneChoice) {
+        m_listedInputs = listed;
+        m_phoneChoice = phoneChoice;
+    }
+    QMenu *audioInputDeviceMenu() { return m_audioInputDeviceMenu; }
+
+    // Takes > Replace Take Audio from Recording, the file it asks for
+    // answered from here; true while its search runs
+    void setTakeRecordingAnswer(QString path) { m_takeRecordingAnswer = path; }
+    void doReplaceTakeAudioFromRecording() { replaceTakeAudioFromRecording(); }
+    QAction *replaceTakeAudioAction() { return m_replaceTakeAudioAction; }
+    bool searchingTakeAudio() const { return takeAudioSearchRunning(); }
+    LatencyCalibration::Key doLatencyKey() { return latencyKey(44100); }
 
     void doRecord() { record(); }
     void doPlay() { play(); } // and again to stop
@@ -214,6 +248,17 @@ public:
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
     // Playback > Voice Threshold, which is always shown
     VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
+    // Playback > Input Channel, likewise, and the device it is kept for
+    InputChannelMenu *inputChannelMenu() { return m_inputChannelMenu; }
+    InputChannel::Key doInputChannelKey() const { return inputChannelKey(); }
+    // The input meters' levels, the meter beside Record, and Playback >
+    // Check Input Level with its dialog (made the first time it opens)
+    InputLevelFeed *inputLevels() { return m_inputLevels; }
+    InputLevelMeterAction *inputMeterAction() { return m_inputMeterAction; }
+    QAction *checkInputLevelAction() { return m_checkInputLevelAction; }
+    CheckInputLevelDialog *checkInputLevelDialog() {
+        return m_checkInputLevelDialog;
+    }
     void doRescanAudioDevices() { rescanAudioDevices(); }
 
     // Whether Stop, and the end of a take, leave the device running, as
@@ -274,6 +319,7 @@ public:
     sv::sv_frame_t takePreRoll() { return m_takePreRoll; }
     sv::sv_frame_t takeEnd() { return m_takeEnd; }
     double takeVoiceThreshold() { return m_takeVoiceThreshold; }
+    int takeInputChannel() { return m_takeInputChannel; }
     bool takeTimerRunning() { return m_takeTimer && m_takeTimer->isActive(); }
 
     void seekTo(sv::sv_frame_t frame) {
@@ -375,6 +421,7 @@ public:
     // than the machine the tests run on
     void setLiveDotsDelay(int ms) { m_liveDotsDelayMs = ms; }
     QString statusText() { return getStatusLabel()->text(); }
+    StatusLine *statusLine() { return m_statusLine; }
     void setStatusText(QString text) { getStatusLabel()->setText(text); }
 
 protected:
@@ -400,14 +447,42 @@ protected:
         m_fakeConfig.inputIsKept = [this]() {
             return m_recordTarget->isRecording();
         };
-        m_audioIO = new FakeAudioIO
-            (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
-             m_fakeConfig);
-        m_playSource->setSystemPlaybackTarget(m_audioIO);
+        if (!m_listedInputs.empty() && m_fakeConfig.route.hasInput) {
+            m_fakeConfig.route.input = m_phoneChoice;
+            const int id = inputDeviceIdToOpen(m_listedInputs);
+            for (const AudioRoute::Device &d : m_listedInputs) {
+                if (id > 0 && d.id == id) m_fakeConfig.route.input = d;
+            }
+        }
+        // As svapp opens it: with its input once recording has been
+        // asked for, else for playback only
+        if (m_audioMode == AUDIO_PLAYBACK_AND_RECORD) {
+            m_audioIO = new FakeAudioIO
+                (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
+                 m_fakeConfig);
+            m_playSource->setSystemPlaybackTarget(m_audioIO);
+        } else {
+            m_playTarget = new FakeAudioIO
+                (nullptr, m_playSource->getApplicationPlaybackSource(),
+                 m_fakeConfig);
+            m_playSource->setSystemPlaybackTarget(m_playTarget);
+        }
     }
 
     QStringList audioImplementationNames() const override {
         return m_implementations;
+    }
+
+    QString askForTakeRecordingFile() override {
+        return m_takeRecordingAnswer;
+    }
+
+    bool listsInputDevices() const override {
+        return !m_listedInputs.empty();
+    }
+
+    std::vector<AudioRoute::Device> listedInputDevices() const override {
+        return m_listedInputs;
     }
 
     bool suspendAudioOnStop() const override {
@@ -497,8 +572,8 @@ protected:
         return true;
     }
 
-    // The base class deleteAudioIO() deletes m_audioIO, which is right
-    // for the fake as well
+    // The base class deleteAudioIO() deletes m_audioIO or m_playTarget,
+    // which is right for the fake as well
 
 private:
     FakeAudioIO::Config m_fakeConfig;
@@ -507,6 +582,9 @@ private:
     bool m_keepAudioRunning = false;
     int m_audioIdleSuspendMillis = 0;
     int m_audioIOOpened = 0;
+    std::vector<AudioRoute::Device> m_listedInputs;
+    QString m_takeRecordingAnswer;
+    AudioRoute::Device m_phoneChoice;
     LatencyCalibration::Key m_audioIOOpenedFor;
     int m_liveDotsDelayMs = 0;
     bool m_recordOverAnswer = true;

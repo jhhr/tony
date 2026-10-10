@@ -38,7 +38,10 @@ file, and compares the take before and after each punch-in.
    Device** and **Audio Input Device**, which list that driver's (or leave the system
    default): the run records with them, as any take does.
 3. With wired headphones, hold one earcup against the microphone, off your ears; with
-   speakers, a moderate volume and the microphone where it hears them. A quiet room.
+   speakers, a moderate volume and the microphone where it hears them. A quiet room. A
+   headset's microphone needs the earcup right against it: item 3 needs the tones over
+   the live tracker's floor (−60 dBFS) where they reach the microphone, and when they
+   were under it, it says so and gives their level.
 4. **Playback > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
    is by default), then **Start**. A few minutes; leave the window alone meanwhile (Cancel
    stops the run). The dev checks run only after a calibration that can be used (verdict
@@ -143,6 +146,14 @@ tracker's level floor (−60 dBFS) now keeps out; its third passed item 3, and f
 tried: a run with the microphone and the headphones on one sound card, which should
 neither drift nor slip; and, on two cards, whether the playback's gap at a slip (about
 every 100 s once a take has been made) is heard.
+
+With the HS2 on the AI-Micro (section 7), on 2026-10-06, the PC's run and the phone's
+passed every item but 3, which drew no dots on the PC and a few on the phone, more than
+half of them off the tones (the first of each an octave low): the tones reached the HS2
+at about the tracker's floor ([calibrate-audio.md](calibrate-audio.md), §14). **To
+try**: the run again with the earcup right against the HS2 and the volume up, or the
+AI-Micro's gain raised (in RØDE's software). Item 3 now gives the levels the tracker met,
+and should pass once the tones are well over −60 dBFS.
 
 A device that opens but delivers nothing ends the run with "The audio device delivered no
 input" once the take's lead-in and range and 2 s more have gone by without one frame, and
@@ -254,7 +265,21 @@ Not tried yet.
    with this microphone, and is soft singing kept? Then lower or raise it and choose
    Analysis > Analyse Now!: the take's pitch and notes change to match, and Play still
    plays what was recorded, the music included. The menu cannot be opened during a take.
-   Is choosing blind, without a level meter, workable?
+   Then Playback > Check Input Level with the music playing in its silence: is the
+   threshold it suggests over the music, and under soft singing?
+11. **Hovering over notes.** Open a song, drag a selection and click away from it, then
+   hover over the reference's notes inside and outside where it was: the box at the top
+   right gives each note's time, pitch and duration, and the note is lit up with its
+   frequency and duration beside it. Record a take and do the same over the reference's
+   notes and the take's, where one lies above the other, and with the alternate pitch
+   track on; with the Edit tool (2) only the take's notes are lit. With a long take in
+   view, does the pane keep up with the pointer on a note of the reference, while
+   stopped and while playing?
+12. **The window after a restart** (Windows). Maximise Tony, quit and start it again: it
+   comes back maximised, all of it on the screen. Restore it to a smaller size, move it,
+   quit and start: it comes back there, as large. With two screens, closed on the second
+   it comes back on the second. The first start of a build with this has nothing kept,
+   and opens at its first-time size once.
 
 ## 4. Lyrics
 
@@ -442,3 +467,158 @@ touches, and its own right click from a press and hold.
 
 The questions the automated checks raised, and the facts they established for the
 decisions above, are in [open-points.md](open-points.md).
+
+## 7. A headset on an interface: input channel and levels
+
+For a headset microphone on one input of a two-input interface: the user's Rode HS2 on
+input 1 of a Rode AI-Micro, on Windows (WASAPI) and on the phone. The design is in
+[recording.md](recording.md#input-channels) and
+[recording.md](recording.md#the-input-level). The dev runs of 2026-10-06
+([calibrate-audio.md](calibrate-audio.md), §14) answered part of steps 1 and 4: on Windows
+the AI-Micro gives the HS2 to both inputs at the same level, so Both Inputs is right
+there; on the phone its input opened mono, through AAudio's MMAP path. The rest has not
+been tried on a device yet.
+
+**On Windows**, with the AI-Micro chosen under Playback > Audio Input Device:
+
+1. **Which input the HS2 is on.** Calibrate Audio, an earcup held to the HS2: the result
+   page says "The microphone is on input 1 alone" and offers **Use Input 1**; its
+   "Inputs:" line gives each input's peak (with the dev checks, item 5's "the mic is on"
+   says the same). If it names neither, the AI-Micro feeds the one microphone to both
+   inputs, and Both Inputs is right as it is.
+2. **Input Channel** (Playback > Input Channel): its first line names the AI-Micro (or
+   "(System Default)" if that is what Audio Input Device has ticked). Choose Input 1,
+   record a short take and play it back: the voice in both ears, equally. Then a take with
+   Both Inputs into a new take: the voice in the left ear only.
+3. **The level.** With Input 1, sing at the volume you practise at: the live dots come
+   through with the voice threshold at the same setting they did before with Both, or one
+   step (5 dB) higher. Choosing another input device and coming back keeps Input 1 for
+   the AI-Micro.
+
+**On the phone**, with the AI-Micro plugged in:
+
+4. Record a take with Both Inputs, then **Help > Save Log...**: the line "OboeAudioIO:
+   input: 1 channel(s), the hardware N, ..." says whether Android averaged the AI-Micro's
+   two inputs (the hardware 2) or opened it with one (the hardware 1, or not said before
+   Android 14), and the "input" stream line before it whether it got the low-latency
+   path ("MMAP", "LowLatency").
+5. Playback > Input Channel names the AI-Micro (after a take, or as the input recorded
+   from last). Choose Input 1: the log says "the input opened at the device's own 2
+   channels" (or why not). Record and play back: the voice in both ears; the dots as above.
+   The latency line then says the measured figure is out of date: run Calibrate Audio
+   again on this route.
+6. Unplug the AI-Micro: the phone's own microphone keeps Both Inputs, and records as
+   before.
+7. After a fresh install (or with Tony's data cleared), before the first take: Playback >
+   Input Channel says the input is known once a take has started, its entries shut. After
+   a take it names the input, and a choice made then is kept for it.
+
+**The input level, on Windows** (the design: [recording.md](recording.md#the-input-level)):
+
+8. **Check Input Level** (Playback menu) before the first take of a launch: the meter in
+   the dialog moves with the room in the two quiet seconds, and with your loudest phrase
+   after them. Set the AI-Micro's gain as it says (in RØDE's own software, with Windows'
+   input volume for it at 100) and check again until it says the gain is right. Is the
+   noise floor it gives plausible, and the threshold it suggests (Off, likely, for a
+   headset in a quiet room)? Then a take at full voice: the status bar's "Take: peak"
+   near −10 dBFS. With the music on speakers: press Play in the dialog during the two
+   seconds: they start again, the button says Stop, and the threshold suggested is over
+   the music's level at the microphone.
+9. **The meter beside Record** during a take follows the voice without lag you can see,
+   and shows input 1 with Input 1 chosen; between takes it shows the input as well. The
+   tick sits at the voice threshold when one is set: are the voice's peaks well over it
+   where dots come, as the tooltip says?
+10. **Clipping**: turn the gain up until full voice clips. The light turns red, the status
+    bar says "clipped at" with the times, and playing those places back the distortion is
+    heard there. A click on the meter puts the light out, and so does the next take. Then
+    sing at full voice with the gain right: if the take sounds distorted with nothing
+    reported, the HS2 itself is overloading (it is rated to about 122 dB SPL), which no
+    meter can see; move it a little further from the mouth.
+11. **The interface's processing**: in RØDE's software and in Windows' sound settings, no
+    automatic gain, noise reduction or enhancements for the AI-Micro; the noise floor
+    Check Input Level gives stays the same with them off.
+
+**On the phone**:
+
+12. Check Input Level from the compact layout's menu button, before any take: the
+    microphone is asked for if it has not been allowed, and the dialog fits the screen,
+    its buttons in reach. Leave it open past two minutes: the device is not suspended
+    under it. After Close, Record starts at once.
+13. The meter in the compact toolbar fits beside Record and reads as on the desktop. In
+    the log's live dots lines during a take, the GUI thread's share of a core
+    ("GUI thread ...% of a core") is no higher than before the meter (about 70 %).
+
+
+## 8. A wireless microphone: the input device, its channels, and Replace Take Audio
+
+For a Rode HS2 on a RØDE Wireless PRO (or Wireless GO Gen 3) transmitter, its receiver
+plugged in by USB-C as a USB microphone: on the Windows desktop, on the Surface Pro on its
+stand with the singer up to a few metres away, and on the phone. At home, possibly the
+receiver's analog output into the AI-Micro instead. The designs:
+[port-android.md](port-android.md#choosing-the-input),
+[recording.md](recording.md#input-channels),
+[takes.md](takes.md#replace-take-audio-from-recording).
+
+**The receiver as a USB microphone, on Windows (the desktop and the Surface)**:
+
+1. Playback > Audio Input Device lists the receiver under WASAPI. Choose it, and the
+   headphones' device as the output. In merged mode with no safety channel, Both Inputs:
+   the take plays in both ears, and Check Input Level reads your voice. Then split mode
+   with one transmitter: with Both, the take plays in one ear and reads 6 dB low;
+   Input 1 (or 2, whichever the transmitter is on) puts it right. Then merged with the
+   safety channel: with Both the take leans to one ear and reads about 3.6 dB low;
+   Input 1 puts it right. Does Calibrate Audio's result page say which input the
+   microphone is on?
+2. GainAssist off and any high-pass at its lowest (in RØDE Central or the receiver's
+   menu): sing your lowest note; the dots and the take's pitch follow it down to about
+   80 Hz.
+3. Calibrate Audio for the wireless chain, the earcup against the HS2 (off your ears):
+   the round trip, against the one through the AI-Micro (with the radio's latency on top,
+   it should be longer). Note both.
+4. **Two clocks**: the receiver as the input and the headphones on another device. A dev
+   run, or a take of five minutes or more against the reference: do the takes drift
+   (Calibrate Audio's punch-ins, or the take's pitch against the reference at its end)?
+   Then the receiver's analog output into the AI-Micro, headphones on the AI-Micro too,
+   for comparison.
+5. **On the Surface, a few metres away**: sing with the transmitter at the front of your
+   body, then on your back, or turn away from the Surface. Are there dropouts (gaps of
+   silence in the take, the status bar's take report, the waveform)? Note the distance
+   and position where they start.
+
+**Replace Take Audio from Recording**, on Windows:
+
+6. With the transmitter recording on its own, record a take with some dropouts (turn
+   away, as in 5). Copy the transmitter's WAV over (RØDE Central), then Takes > Replace
+   Take Audio from Recording... and pick it. Note how long the search took for the
+   file's length, the confidence the report gives (0.9 or more is expected), and how far
+   apart the ends are said to lie over the take's length. Play the take: no gaps, the
+   voice at the level it had, no click or dip where the gaps were; the pitch is there
+   now. Undo puts the gaps back; Redo replaces them again.
+7. A take with a punch-in (Record into Selection over part of it), the transmitter
+   recording through both: the report lists the parts, each found at its own place in
+   the recording; the punch-in sounds as sung, not as the take under it was. Then a
+   punch-in of under a second: the report says it was "sung at another time, too short
+   to look for, left as it was", and the take sounds as it was there, the rest replaced.
+8. Pick a transmitter file of another day: refused, "not found", and the take as it was.
+9. Start the transmitter's recording a few seconds after Record, or stop it a few
+   seconds before the take ends: the report says the stretch outside it is "not in the
+   recording, which began later or ended sooner, left as it was", and the rest is
+   replaced; no click at either edge of the replaced part.
+
+**On the phone**:
+
+10. Plug the receiver in, with Bluetooth earphones on, then with the speaker: Playback >
+    Audio Input Device's first line ("In use:") names the receiver once a take has
+    started (Android's choice, as the research says). Choose the phone's microphone: the
+    next take records from it (the log's route line), the receiver plugged in or not.
+    Choose the receiver again.
+11. Unplug the receiver, then Record: the status bar says it is not plugged in and that
+    the phone's microphone records instead, for about 8 s; the menu shows the receiver
+    "(not connected)", ticked. Plug it in again: the next take records from it. Unplug
+    it during a take: the take stops as Stop would, and Tony goes on with the phone's
+    microphone.
+12. With the receiver chosen: the log's input stream line (MMAP or not, its burst and
+    buffer), and the round trip Calibrate Audio measures, Bluetooth out and receiver in.
+    In split mode, Input 1 opens the input at the receiver's own channels (the log).
+13. Replace Take Audio from Recording on the phone, with the transmitter's file copied to
+    the phone: the picker, the time the search takes, and the result as in 6.

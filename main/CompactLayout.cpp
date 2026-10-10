@@ -94,7 +94,8 @@ CompactLayout::makeToolBar()
     m_toolBar->addSeparator();
 
     for (QAction *action: { m_parts.play, m_parts.record,
-                            m_parts.recordIntoSelection }) {
+                            m_parts.recordIntoSelection,
+                            m_parts.inputMeter }) {
         if (action) m_toolBar->addAction(action);
     }
 

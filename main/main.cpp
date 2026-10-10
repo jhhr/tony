@@ -473,23 +473,16 @@ main(int argc, char **argv)
     }
 #endif
 
-    int width = (available.width() * 2) / 3;
-    int height = available.height() / 2;
-    if (height < 450) height = (available.height() * 2) / 3;
-    if (width > height * 2) width = height * 2;
-
-    QSettings settings;
-    settings.beginGroup("MainWindow");
-    QSize size = settings.value("size", QSize(width, height)).toSize();
-    gui->resizeConstrained(size);
-    if (settings.contains("position")) {
-        QRect prevrect(settings.value("position").toPoint(), size);
-        if (!(available & prevrect).isEmpty()) {
-            gui->move(prevrect.topLeft());
-        }
+    // As it was last closed, maximised or not; the first time, a size of
+    // its own and where the window manager puts it
+    if (!gui->restoreWindowGeometry()) {
+        int width = (available.width() * 2) / 3;
+        int height = available.height() / 2;
+        if (height < 450) height = (available.height() * 2) / 3;
+        if (width > height * 2) width = height * 2;
+        gui->resizeConstrained(QSize(width, height));
     }
-    settings.endGroup();
-    
+
     gui->show();
 
 #ifdef Q_OS_ANDROID

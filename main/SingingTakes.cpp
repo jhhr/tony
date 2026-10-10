@@ -296,6 +296,20 @@ SingingTakes::removeUnusedFiles()
     return gone;
 }
 
+bool
+SingingTakes::discardWritten(QString path)
+{
+    if (path == "" || !m_written.contains(path)) return false;
+    if (m_protected.contains(path)) return false;
+    for (const Take &take : m_takes) {
+        if (take.audioPath == path) return false;
+    }
+    if (!QFile::remove(path) && QFile::exists(path)) return false;
+    m_written.removeAll(path);
+    m_superseded.removeAll(path);
+    return true;
+}
+
 void
 SingingTakes::setWholeFileTake(QString path, sv_frame_t frames)
 {
@@ -311,7 +325,8 @@ SingingTakes::spliceRecording(QString recordingPath,
                               sv_frame_t length,
                               QString directory,
                               Coverage::Range *placed,
-                              sv_samplerate_t rate)
+                              sv_samplerate_t rate,
+                              int recordingChannel)
 {
     QString outPath = nextAudioPath(directory);
     if (outPath == "") {
@@ -341,7 +356,7 @@ SingingTakes::spliceRecording(QString recordingPath,
     Coverage::Range range;
     QString error = TakeAudio::splice(take.audioPath, source,
                                       recordingOffset, position, length,
-                                      outPath, &range);
+                                      outPath, &range, -1, recordingChannel);
     if (error != "") return error;
 
     if (take.audioPath != "") m_superseded.push_back(take.audioPath);

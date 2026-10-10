@@ -42,6 +42,7 @@
 #include <QSettings>
 
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -266,15 +267,16 @@ private slots:
         }
     }
 
-    // The note tool picks a note where it is drawn, in the pane's own
-    // (logical) coordinates, at either ratio and every plot size
-    void note_hit_area_is_what_is_drawn() {
+    // The rows of the note's column that picks says pick the note, in
+    // the pane's own (logical) coordinates, are those drawn, at either
+    // ratio and every plot size
+    void verifyPickedWhereDrawn(std::function<bool(int y)> picks) {
         for (double scale : { 1.0, 1.5, 2.0 }) {
             m_viewManager->setPlotScale(scale);
 
             int hitTop = -1, hitBottom = -1;
             for (int y = 0; y < kHeight; ++y) {
-                if (hitsNote(kNoteX, y)) {
+                if (picks(y)) {
                     if (hitTop < 0) hitTop = y;
                     hitBottom = y;
                 }
@@ -299,6 +301,34 @@ private slots:
                          qPrintable(where));
             }
         }
+    }
+
+    // The note tool picks a note where it is drawn
+    void note_hit_area_is_what_is_drawn() {
+        verifyPickedWhereDrawn([this](int y) { return hitsNote(kNoteX, y); });
+    }
+
+    // The readout at top right names a note where it is drawn, as the
+    // note tool picks it: it used to name it from 4 pixels below the
+    // top of the note to 8 below its bottom
+    void note_readout_area_is_what_is_drawn() {
+        // getNoteAt(), by which the pane picks the layer it describes,
+        // must say the same as the readout
+        QStringList disagreements;
+        verifyPickedWhereDrawn([&](int y) {
+            QPoint pos(kNoteX, y);
+            QString text = m_notes->getFeatureDescription(m_pane, pos);
+            bool named = text.startsWith("Time:");
+            sv::Event note(0);
+            if (m_notes->getNoteAt(m_pane, kNoteX, y, note) != named) {
+                disagreements << QString("at y = %1 the readout says \"%2\"")
+                    .arg(y).arg(text.replace('\n', ' '));
+            }
+            return named;
+        });
+        QVERIFY2(disagreements.isEmpty(),
+                 qPrintable("getNoteAt() differs from the readout: " +
+                            disagreements.join("; ")));
     }
 
     // --- View > Plot Size -------------------------------------------------

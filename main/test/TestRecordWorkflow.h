@@ -37,6 +37,12 @@
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
 #include "../VoiceThreshold.h"
+#include "../InputChannel.h"
+#include "../InputDevice.h"
+#include "../InputChannelMenu.h"
+#include "../InputLevelFeed.h"
+#include "../InputLevelMeter.h"
+#include "../CheckInputLevelDialog.h"
 
 #include "version.h"
 
@@ -69,6 +75,7 @@
 #include "widgets/InteractiveFileFinder.h"
 #include "widgets/LevelPanToolButton.h"
 
+#include <QProgressDialog>
 #include <QObject>
 #include <QtTest>
 #include <QAbstractButton>
@@ -83,7 +90,10 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
+#include <QToolBar>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
@@ -126,6 +136,56 @@ class TestRecordWorkflow : public QObject
         auto high = tone(highHz, secondsPerNote);
         m.insert(m.end(), high.begin(), high.end());
         return m;
+    }
+
+    // Singing as a function of time, so that the same singing can be had
+    // at any rate: six notes of a few harmonics over 3 s, and a little
+    // breath, from a bank of sinusoids
+    static double singingAt(double t) {
+        if (t < 0.0 || t >= 3.0) return 0.0;
+        const double pi = 3.14159265358979323846;
+        const double hz[] = { 220.0, 262.0, 294.0, 330.0, 262.0, 196.0 };
+        const double amp[] = { 0.3, 0.45, 0.35, 0.5, 0.4, 0.3 };
+        double v = 0.0;
+        const int note = int(t / 0.5);
+        const double tau = t - 0.5 * note;
+        if (tau < 0.45) {
+            const double env = std::min({ 1.0, tau / 0.02, (0.45 - tau) / 0.04 });
+            for (int h = 1; h <= 4; ++h) {
+                v += amp[note] * env * std::sin(2 * pi * h * hz[note] * tau +
+                                                0.7 * h * note) / h;
+            }
+        }
+        unsigned seed = 12345;
+        for (int k = 0; k < 12; ++k) {
+            seed = seed * 1103515245u + 12345u;
+            const double f = 400.0 + double(seed % 6000);
+            v += 0.004 * std::sin(2 * pi * f * t + 0.37 * k);
+        }
+        return v;
+    }
+
+    static std::vector<float> singing(double seconds, double atRate,
+                                      double from = 0.0, float gain = 1.f) {
+        std::vector<float> v(size_t(seconds * atRate));
+        for (size_t i = 0; i < v.size(); ++i) {
+            v[i] = gain * float(singingAt(double(i) / atRate - from));
+        }
+        return v;
+    }
+
+    QString writeWav(const std::vector<float> &data, double atRate) {
+        QString path = m_dir.filePath
+            (QString("audio-%1.wav").arg(++m_fileCounter));
+        sv::WavFileWriter writer(path, atRate, 1,
+                                 sv::WavFileWriter::WriteToTarget);
+        const float *ptr = data.data();
+        if (!writer.isOK() ||
+            !writer.writeSamples(&ptr, sv::sv_frame_t(data.size())) ||
+            !writer.close()) {
+            return {};
+        }
+        return path;
     }
 
     QString writeWav(const std::vector<float> &data) {
@@ -321,6 +381,56 @@ class TestRecordWorkflow : public QObject
                             .arg(double(loudest - pressed) / rate)
                             .arg(peak)));
 
+        QCOMPARE(m_window->playbackFrame(), P);
+    }
+
+    // Record pressed while the reference plays, as Ctrl+Space presses it
+    // during playback, the device kept running as the application keeps
+    // it. Playback runs from a second in for a while first, so that where
+    // it stops is not where it started. Gives the frame playback had
+    // reached just before the press, and where the output was then
+    void recordDuringPlayback(bool playReference, sv::sv_frame_t &reached,
+                              size_t &pressed) {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        m_window->keepAudioRunning(true);
+        m_window->setPlayReferenceWhileRecording(playReference);
+        openReference(writeWav(tone(lowHz, 8.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t from = sv::sv_frame_t(1.0 * rate);
+        m_window->seekTo(from);
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        QTest::qWait(700);
+        QVERIFY(m_window->playSource()->isPlaying());
+
+        reached = m_window->playbackFrame();
+        QVERIFY2(reached > from + sv::sv_frame_t(0.3 * rate),
+                 qPrintable(QString("playback from frame %1 was only at %2")
+                            .arg(from).arg(reached)));
+
+        QAction *record = m_window->recordAction();
+        QVERIFY(record && record->isEnabled());
+        pressed = m_window->fake()->getCapturedOutput().size();
+        record->trigger();
+        QVERIFY(m_window->recordTarget()->isRecording());
+        QVERIFY2(!m_window->playAction()->isChecked(),
+                 "Play / Pause still shows playback after Record");
+    }
+
+    // The take started during playback starts where playback stopped, as
+    // it would from there with playback stopped first
+    void verifyTakeFromWherePlaybackStopped(sv::sv_frame_t reached) {
+        const sv::sv_frame_t P = m_window->takePosition();
+        QVERIFY2(P >= reached && P < reached + sv::sv_frame_t(0.3 * rate),
+                 qPrintable(QString("playback was at frame %1 just before "
+                                    "Record, and the take starts at %2")
+                            .arg(reached).arg(P)));
+        auto ranges = m_window->takes()->getCoverage().getRanges();
+        QCOMPARE(int(ranges.size()), 1);
+        QCOMPARE(ranges[0].start, P);
         QCOMPARE(m_window->playbackFrame(), P);
     }
 
@@ -1657,6 +1767,204 @@ class TestRecordWorkflow : public QObject
         return model ? model->getEventCount() : -1;
     }
 
+    // The meter beside Record, in the window's own toolbar
+    InputLevelMeter *toolbarMeter() {
+        for (InputLevelMeter *meter : m_window->findChildren<InputLevelMeter *>()) {
+            if (qobject_cast<QToolBar *>(meter->parentWidget())) return meter;
+        }
+        return nullptr;
+    }
+
+    // The meter's bar now, in dBFS: under the last peak read by as much
+    // as it has fallen since, up to 1 dB between two readings
+    double meterBar() {
+        InputLevelFeed *levels = m_window->inputLevels();
+        return levels ? levels->meter().bar(levels->now()) : -1000.0;
+    }
+
+    // The meter's bar at its highest over the next ms, read as each of
+    // the feed's readings lands, when it is the level read. It falls at
+    // 20 dB a second between them, 20 a second or fewer, and a read
+    // waiting its turn came 26 ms after one on CI's macOS runner
+    double meterBarAtMost(int ms) {
+        InputLevelFeed *levels = m_window->inputLevels();
+        if (!levels) return -1000.0;
+        double most = -1000.0;
+        const auto connection = connect
+            (levels, &InputLevelFeed::levelRead, this, [&]() {
+                most = std::max(most, levels->meter().bar(levels->now()));
+            });
+        QTest::qWait(ms);
+        disconnect(connection);
+        return most;
+    }
+
+    // The meter's hold now: the highest peak in the last 1.5 s
+    double meterHold() {
+        InputLevelFeed *levels = m_window->inputLevels();
+        return levels ? levels->meter().hold(levels->now()) : -1000.0;
+    }
+
+    // A meter of the window's levels, drawn, as a toolbar's is
+    QImage drawnMeter(QSize size) {
+        InputLevelMeter meter(m_window->inputLevels());
+        meter.resize(size);
+        return meter.grab().toImage();
+    }
+
+    // The seconds of the first place a status message says the take
+    // clipped at, "m:ss.s", or -1
+    static double clippedAt(QString status) {
+        QRegularExpression re("clipped at (\\d+):(\\d+\\.\\d)");
+        auto m = re.match(status);
+        if (!m.hasMatch()) return -1.0;
+        return m.captured(1).toDouble() * 60.0 + m.captured(2).toDouble();
+    }
+
+    // Playback > Input Channel, as the user chooses from it
+    void chooseInputChannel(int channel) {
+        InputChannelMenu *menu = m_window->inputChannelMenu();
+        QVERIFY(menu);
+        menu->tick();
+        for (QAction *action : menu->menu()->actions()) {
+            if (action->isCheckable() && action->data().toInt() == channel) {
+                QVERIFY(action->isEnabled());
+                action->trigger();
+                return;
+            }
+        }
+        QFAIL(qPrintable(QString("no entry for input %1").arg(channel)));
+    }
+
+    // The entry of Playback > Input Channel that is ticked, or -2 for none
+    int inputChannelTicked() {
+        InputChannelMenu *menu = m_window->inputChannelMenu();
+        if (!menu) return -2;
+        menu->tick();
+        for (QAction *action : menu->menu()->actions()) {
+            if (action->isCheckable() && action->isChecked()) {
+                return action->data().toInt();
+            }
+        }
+        return -2;
+    }
+
+    // Playback > Audio Input Device, as a phone lists it: its entries
+    QStringList inputDeviceEntries() {
+        m_window->doRescanAudioDevices();
+        QStringList texts;
+        for (QAction *a : m_window->audioInputDeviceMenu()->actions()) {
+            if (!a->isSeparator()) texts << a->text();
+        }
+        return texts;
+    }
+
+    // Its entry that is ticked, "" for none
+    QString inputDeviceTicked() {
+        m_window->doRescanAudioDevices();
+        for (QAction *a : m_window->audioInputDeviceMenu()->actions()) {
+            if (a->isCheckable() && a->isChecked()) return a->text();
+        }
+        return {};
+    }
+
+    // An entry chosen, as the user chooses it
+    void chooseInputDevice(QString text) {
+        m_window->doRescanAudioDevices();
+        for (QAction *a : m_window->audioInputDeviceMenu()->actions()) {
+            if (a->isCheckable() && a->text() == text) {
+                QVERIFY(a->isEnabled());
+                a->trigger();
+                return;
+            }
+        }
+        QFAIL(qPrintable(QString("no entry \"%1\"").arg(text)));
+    }
+
+    static AudioRoute::Device phoneDevice(int id, int type, QString name) {
+        AudioRoute::Device d;
+        d.id = id;
+        d.type = type;
+        d.productName = name;
+        return d;
+    }
+
+    // The menu's line naming the device the choice is kept for
+    QString inputChannelDeviceLine() {
+        InputChannelMenu *menu = m_window->inputChannelMenu();
+        if (!menu) return {};
+        menu->tick();
+        for (QAction *action : menu->menu()->actions()) {
+            if (!action->isSeparator() && !action->isCheckable()) {
+                return action->text();
+            }
+        }
+        return {};
+    }
+
+    static std::vector<float> silence(double seconds) {
+        return std::vector<float>(size_t(seconds * rate), 0.f);
+    }
+
+    static double energy(const std::vector<float> &data, size_t from) {
+        double sum = 0.0;
+        for (size_t i = from; i < data.size(); ++i) {
+            sum += double(data[i]) * double(data[i]);
+        }
+        return sum;
+    }
+
+    // The take played back from its start, the reference silent: as much
+    // of it in the left ear as in the right
+    void verifyTakePlaysInBothEars() {
+        FakeAudioIO *fake = m_window->fake();
+        QVERIFY(fake);
+        const size_t from = fake->getCapturedOutput(0).size();
+        m_window->seekTo(0);
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        QTest::qWait(1000);
+        m_window->doPlay();
+        const double left = energy(fake->getCapturedOutput(0), from);
+        const double right = energy(fake->getCapturedOutput(1), from);
+        QVERIFY2(left > 10.0 && right > 10.0 &&
+                 std::fabs(left - right) <= 0.01 * std::max(left, right),
+                 qPrintable(QString("the take played with an energy of %1 "
+                                    "in the left ear and %2 in the right")
+                            .arg(left).arg(right)));
+    }
+
+    // The channels of the take's audio file, and the RMS of one of them
+    // over [from, to) in seconds; 0 channels if it cannot be read
+    struct TakeFile {
+        int channels = 0;
+        std::vector<std::vector<float>> samples;
+        double rms(int channel, double from, double to) const {
+            if (channel >= channels) return -1.0;
+            const auto &c = samples[size_t(channel)];
+            size_t a = size_t(from * rate), b = size_t(to * rate);
+            b = std::min(b, c.size());
+            if (b <= a) return -1.0;
+            double sum = 0.0;
+            for (size_t i = a; i < b; ++i) sum += double(c[i]) * double(c[i]);
+            return std::sqrt(sum / double(b - a));
+        }
+    };
+    TakeFile takeFile() {
+        TakeFile f;
+        sv::WavFileReader reader
+            { sv::FileSource(m_window->takes()->getAudioPath()) };
+        if (!reader.isOK()) return f;
+        f.channels = reader.getChannelCount();
+        auto data = reader.getInterleavedFrames(0, reader.getFrameCount());
+        f.samples.resize(size_t(f.channels));
+        for (size_t i = 0; i < data.size(); ++i) {
+            f.samples[i % size_t(f.channels)].push_back(data[i]);
+        }
+        return f;
+    }
+
+
     // Steps between one live dot and the next that are not one hop: the
     // dots missing from a sound that goes on
     int liveDotGaps() {
@@ -1689,6 +1997,11 @@ class TestRecordWorkflow : public QObject
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
         if (!modal) return;
+        // Check Input Level is opened, driven and closed by its tests,
+        // and runs no event loop of its own; nor does the progress of
+        // Replace Take Audio from Recording, which its search closes
+        if (qobject_cast<CheckInputLevelDialog *>(modal)) return;
+        if (qobject_cast<QProgressDialog *>(modal)) return;
         QString description = modal->windowTitle();
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
@@ -1760,6 +2073,10 @@ private slots:
 
         // No voice threshold, whatever a test that set one left behind
         VoiceThreshold::setThreshold(settings, VoiceThreshold::kOff);
+        // Nor an input channel: takes are made of both inputs. Nor a
+        // phone's input device
+        settings.remove("InputChannel");
+        settings.remove("InputDevice");
 
         // The toggles of the reference's tracks and the singing track's;
         // a test that failed half way must not leave the next one's
@@ -1782,6 +2099,9 @@ private slots:
         QSettings().remove("LatencyCalibration");
         // Nor a voice threshold: the other suites of this process record
         setVoiceThreshold(VoiceThreshold::kOff);
+        // Nor an input channel, for the same reason, nor input device
+        QSettings().remove("InputChannel");
+        QSettings().remove("InputDevice");
 
         if (m_window) {
             if (m_window->recordTarget()->isRecording()) {
@@ -1869,7 +2189,8 @@ private slots:
     // device runs on after a take and after playback, and is suspended
     // once it has idled for audioIdleSuspendMillis(): not before, not
     // while it plays however long that is, and the next take resumes
-    // it. The application idles it for ever on desktop
+    // it. The application idles it for ever on desktop. The input meter
+    // reads it only while it runs
     void a_kept_running_device_is_suspended_once_idle() {
         const int idle = 1500;
         FakeAudioIO::Config config;
@@ -1882,9 +2203,12 @@ private slots:
         if (QTest::currentTestFailed()) return;
         FakeAudioIO *fake = m_window->fake();
         QVERIFY(fake);
+        InputLevelFeed *levels = m_window->inputLevels();
+        QVERIFY(!levels->isRunning());
 
         startTake();
         if (QTest::currentTestFailed()) return;
+        QVERIFY(levels->isRunning());
         waitForSomethingRecorded();
         // Timed from before Stop: the take's splice, which Stop runs
         // before it returns, comes after the idle time has started
@@ -1893,8 +2217,10 @@ private slots:
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!fake->isSuspended());
+        QVERIFY(levels->isRunning());
         const int resumes = fake->getResumeCount();
         QTRY_VERIFY_WITH_TIMEOUT(fake->isSuspended(), 10000);
+        QVERIFY(!levels->isRunning());
         QVERIFY2(stopped.elapsed() >= idle * 9 / 10,
                  qPrintable(QString("suspended %1 ms after the take")
                             .arg(stopped.elapsed())));
@@ -1903,6 +2229,7 @@ private slots:
         m_window->doPlay();
         QVERIFY(m_window->playSource()->isPlaying());
         QCOMPARE(fake->getResumeCount(), resumes + 1);
+        QVERIFY(levels->isRunning());
         QTest::qWait(idle + 700);
         QVERIFY(m_window->playSource()->isPlaying());
         QVERIFY(!fake->isSuspended());
@@ -1910,6 +2237,7 @@ private slots:
         QVERIFY(!m_window->playSource()->isPlaying());
         QVERIFY(!fake->isSuspended());
         QTRY_VERIFY_WITH_TIMEOUT(fake->isSuspended(), 10000);
+        QVERIFY(!levels->isRunning());
 
         take(500);
         if (QTest::currentTestFailed()) return;
@@ -1979,6 +2307,1092 @@ private slots:
         QVERIFY2(pitch.size() > 20, "the take of input 2 has no pitch track");
         QVERIFY(std::fabs(TestSignals::centsBetween
                           (medianHz(pitch), highHz)) < 10.0);
+    }
+
+    // A take is listened back to for how the voice sounds: it plays in
+    // both ears alike, mono or stereo. (Panned hard left, as the
+    // reference is, it was heard in the left ear only)
+    void a_take_plays_in_both_ears() {
+        for (int inputs : { 1, 2 }) {
+            FakeAudioIO::Config config;
+            config.channels = 2;
+            config.inputChannels = inputs;
+            config.input = tone(highHz, 3.0);
+            makeWindow(config);
+            openReference(writeWav(silence(3.0)));
+            if (QTest::currentTestFailed()) return;
+            take(1200);
+            if (QTest::currentTestFailed()) return;
+            QCOMPARE(takeFile().channels, inputs);
+            verifyTakePlaysInBothEars();
+            if (QTest::currentTestFailed()) return;
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(), 30000);
+            m_window->doCloseSession();
+        }
+    }
+
+    // A microphone on one input of two, the other input hearing
+    // something else, and that input chosen (Playback > Input Channel):
+    // the take is mono, made of that input alone; the live dots and the
+    // analysis hear it alone; and it plays in both ears. With both
+    // inputs a take of a microphone on input 2 alone played silent
+    void one_input_chosen_makes_a_mono_take_of_it() {
+        for (int channel : { 0, 1 }) {
+            FakeAudioIO::Config config;
+            config.channels = 2;
+            config.inputChannel = channel;
+            config.input = tone(highHz, 3.0);
+            config.otherInput = TestSignals::sawtooth
+                (lowHz, rate, int(3.0 * rate), 0.3);
+            makeWindow(config);
+            openReference(writeWav(silence(3.0)));
+            if (QTest::currentTestFailed()) return;
+            chooseInputChannel(channel);
+            if (QTest::currentTestFailed()) return;
+            QCOMPARE(inputChannelTicked(), channel);
+
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QCOMPARE(m_window->takeInputChannel(), channel);
+            QTest::qWait(1200);
+            auto dots = sv::ModelById::getAs<sv::SparseTimeValueModel>
+                (m_window->realtimeModelId());
+            QVERIFY(dots);
+            const double dotsHz = medianHz(dots->getAllEvents());
+            QVERIFY2(std::fabs(TestSignals::centsBetween(dotsHz, highHz))
+                     < 10.0,
+                     qPrintable(QString("input %1: the live dots are at %2 "
+                                        "Hz, not the microphone's %3 Hz")
+                                .arg(channel + 1).arg(dotsHz).arg(highHz)));
+            stopTake();
+            if (QTest::currentTestFailed()) return;
+
+            const TakeFile file = takeFile();
+            QCOMPARE(file.channels, 1);
+            QVERIFY(file.rms(0, 0.2, 1.0) > 0.2);
+            const auto pitch = pitchEvents(m_window->analyser2());
+            QVERIFY(pitch.size() > 20);
+            QVERIFY2(std::fabs(TestSignals::centsBetween
+                               (medianHz(pitch), highHz)) < 10.0,
+                     qPrintable(QString("input %1: the take's pitch is at "
+                                        "%2 Hz").arg(channel + 1)
+                                .arg(medianHz(pitch))));
+            verifyTakePlaysInBothEars();
+            if (QTest::currentTestFailed()) return;
+            QTRY_VERIFY_WITH_TIMEOUT
+                (!sv::ModelTransformerFactory::getInstance()
+                 ->haveRunningTransformers(), 30000);
+            m_window->doCloseSession();
+        }
+    }
+
+    // A microphone on one input of two, singing 3 dB over the voice
+    // threshold on its input: with both inputs the channels' average
+    // reads it 3 dB under, and it gets no dots and no pitch; with that
+    // input chosen, it is heard at its own level
+    void one_input_chosen_is_heard_at_its_own_level() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 0;
+        // -17 dBFS RMS
+        config.input = TestSignals::sawtooth(highHz, rate, int(3.0 * rate),
+                                             0.2447);
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        setVoiceThreshold(-20.0);
+
+        for (int channel : { InputChannel::kBoth, 0 }) {
+            chooseInputChannel(channel);
+            if (QTest::currentTestFailed()) return;
+            m_window->seekTo(0);
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QTest::qWait(1200);
+            const int dots = liveDots();
+            stopTake();
+            if (QTest::currentTestFailed()) return;
+            const auto pitch = pitchEvents(m_window->analyser2());
+            if (channel == InputChannel::kBoth) {
+                QVERIFY2(dots == 0 && pitch.empty(),
+                         qPrintable(QString("both inputs: %1 dots and %2 "
+                                            "pitch events")
+                                    .arg(dots).arg(pitch.size())));
+            } else {
+                QVERIFY2(dots > 20 && pitch.size() > 20,
+                         qPrintable(QString("input 1: %1 dots and %2 pitch "
+                                            "events")
+                                    .arg(dots).arg(pitch.size())));
+            }
+        }
+    }
+
+    // A take made of both inputs before one was chosen keeps its two
+    // channels: what is recorded into it then goes into both of them,
+    // from the input chosen, and the rest of it stays as it was
+    void a_stereo_take_takes_one_input_into_both_channels() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 0;
+        config.input = tone(highHz, 2.0);
+        config.otherInput = TestSignals::sawtooth
+            (lowHz, rate, int(2.0 * rate), 0.3);
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+
+        take(1200);
+        if (QTest::currentTestFailed()) return;
+        TakeFile before = takeFile();
+        QCOMPARE(before.channels, 2);
+        const double otherBefore = before.rms(1, 0.2, 0.9);
+        QVERIFY(otherBefore > 0.1);
+
+        chooseInputChannel(0);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(sv::sv_frame_t(3.0 * rate));
+        take(1200);
+        if (QTest::currentTestFailed()) return;
+
+        TakeFile after = takeFile();
+        QCOMPARE(after.channels, 2);
+        // The new part: input 1 in both channels
+        const double left = after.rms(0, 3.2, 3.9);
+        QVERIFY(left > 0.2);
+        QCOMPARE(after.rms(1, 3.2, 3.9), left);
+        // The old part as it was, input 2 in its second channel
+        QCOMPARE(after.rms(1, 0.2, 0.9), otherBefore);
+        QCOMPARE(after.rms(0, 0.2, 0.9), before.rms(0, 0.2, 0.9));
+        const auto pitch = pitchEvents(m_window->analyser2());
+        const auto newPart = eventsBetween(pitch, sv::sv_frame_t(3.2 * rate),
+                                           sv::sv_frame_t(3.9 * rate));
+        QVERIFY(newPart.size() > 20);
+        QVERIFY(std::fabs(TestSignals::centsBetween(medianHz(newPart),
+                                                    highHz)) < 10.0);
+    }
+
+    // A wireless receiver with a safety channel: the microphone on input
+    // 1, a copy of it 10 dB quieter on input 2 (RØDE's figure). With
+    // both inputs the take is stereo, its second channel 10 dB down, and
+    // the levels are the channels' average, 3.6 dB under input 1's:
+    // singing 2 dB over the voice threshold on input 1 gets no dots and
+    // no pitch. With input 1 chosen it is heard at its own level
+    void a_safety_channel_reads_low_with_both_inputs() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannel = 0;
+        // -17 dBFS RMS, and its safety copy at -27
+        config.input = TestSignals::sawtooth(highHz, rate, int(3.0 * rate),
+                                             0.2447);
+        config.otherInput = config.input;
+        for (float &s : config.otherInput) s *= 0.3162f;
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        setVoiceThreshold(-19.0);
+
+        for (int channel : { InputChannel::kBoth, 0 }) {
+            chooseInputChannel(channel);
+            if (QTest::currentTestFailed()) return;
+            m_window->doNewEmptyTake();
+            m_window->seekTo(0);
+            startTake();
+            if (QTest::currentTestFailed()) return;
+            QTest::qWait(1200);
+            const int dots = liveDots();
+            stopTake();
+            if (QTest::currentTestFailed()) return;
+            const TakeFile file = takeFile();
+            const auto pitch = pitchEvents(m_window->analyser2());
+            if (channel == InputChannel::kBoth) {
+                QCOMPARE(file.channels, 2);
+                const double ratio = file.rms(1, 0.2, 0.9) /
+                    file.rms(0, 0.2, 0.9);
+                QVERIFY2(std::fabs(ratio - 0.3162) < 0.002,
+                         qPrintable(QString("the second channel is %1 of "
+                                            "the first").arg(ratio)));
+                QVERIFY2(dots == 0 && pitch.empty(),
+                         qPrintable(QString("both inputs: %1 dots and %2 "
+                                            "pitch events")
+                                    .arg(dots).arg(pitch.size())));
+            } else {
+                QCOMPARE(file.channels, 1);
+                QVERIFY2(dots > 20 && pitch.size() > 20,
+                         qPrintable(QString("input 1: %1 dots and %2 pitch "
+                                            "events")
+                                    .arg(dots).arg(pitch.size())));
+            }
+        }
+    }
+
+    // A device with two inputs opened after one with one input gives
+    // both: the device is asked for two whatever the last one gave
+    // (svapp's record target), else the second input of an interface
+    // chosen after a one-input microphone could not be had until Tony
+    // was started again
+    void a_device_after_a_one_input_one_records_both_inputs() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.inputChannels = 1;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(takeFile().channels, 1);
+
+        m_window->setFakeInputChannels(2);
+        m_window->doRecreateAudioIO();
+        m_window->doNewEmptyTake();
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(takeFile().channels, 2);
+    }
+
+    // The meter beside Record shows the take's input as it is recorded,
+    // its peak in dBFS: the louder of the two inputs, or the one chosen
+    // alone. After the take, the take's peak is in the status bar
+    void the_input_meter_shows_the_takes_input() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.reportLevels = true;
+        config.inputChannel = 0;
+        // -6.0 dBFS on input 1, -20 dBFS on input 2, for as long as the
+        // second take may wait for the meter
+        config.input = TestSignals::sine(highHz, rate, int(6.0 * rate), 0.5);
+        config.otherInput = TestSignals::sine(lowHz, rate, int(6.0 * rate),
+                                              0.1);
+        makeWindow(config);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->inputLevels());
+        QVERIFY2(toolbarMeter(), "no input meter in the toolbar");
+
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QTest::qWait(800);
+        double bar = meterBarAtMost(300);
+        QVERIFY2(std::fabs(meterHold() + 6.02) < 0.3 &&
+                 std::fabs(bar + 6.02) < 0.5,
+                 qPrintable(QString("both inputs: the meter reads at most "
+                                    "%1 dBFS, held at %2").arg(bar)
+                            .arg(meterHold())));
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->statusText(),
+                 QString("Take: peak %1").arg(QChar(0x2212)) + "6.0 dBFS");
+
+        chooseInputChannel(1);
+        if (QTest::currentTestFailed()) return;
+        m_window->seekTo(0);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->inputLevels()->getChannel(), 1);
+        // Past the hold of the first take's louder input, its last level
+        // reported late on a slow machine
+        QTRY_VERIFY_WITH_TIMEOUT(std::fabs(meterHold() + 20.0) < 0.3, 5000);
+        bar = meterBarAtMost(300);
+        QVERIFY2(std::fabs(meterHold() + 20.0) < 0.3 &&
+                 std::fabs(bar + 20.0) < 0.5,
+                 qPrintable(QString("input 2: the meter reads at most %1 "
+                                    "dBFS, held at %2").arg(bar)
+                            .arg(meterHold())));
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->statusText(),
+                 QString("Take: peak %1").arg(QChar(0x2212)) + "20.0 dBFS");
+    }
+
+    // A take that clipped says where in the status bar and lights the
+    // clip light, which a click on the meter puts out, and the next take's
+    // start too
+    void a_clipped_take_says_where() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        // Overdriven from 1.5 s to 1.8 s, held at full scale as a
+        // converter holds it
+        config.input = TestSignals::sine(highHz, rate, int(2.5 * rate), 0.3);
+        for (int i = int(1.5 * rate); i < int(1.8 * rate); ++i) {
+            float &v = config.input[size_t(i)];
+            v = std::max(-1.f, std::min(1.f, v * 6.f));
+        }
+        makeWindow(config);
+        openReference(writeWav(silence(4.0)));
+        if (QTest::currentTestFailed()) return;
+        InputLevelFeed *levels = m_window->inputLevels();
+        QVERIFY(!levels->isClipped());
+
+        take(2300);
+        if (QTest::currentTestFailed()) return;
+        const QString status = m_window->statusText();
+        const double at = clippedAt(status);
+        QVERIFY2(at >= 1.3 && at <= 1.6,
+                 qPrintable("the status bar says: " + status));
+        QVERIFY(levels->isClipped());
+
+        const QSize size(240, 30);
+        InputLevelMeter probe(levels);
+        probe.resize(size);
+        const QPoint light = probe.clipLightRect().center();
+        QCOMPARE(drawnMeter(size).pixelColor(light),
+                 InputLevelMeter::clipColour());
+
+        InputLevelMeter *meter = toolbarMeter();
+        QVERIFY(meter);
+        QTest::mouseClick(meter, Qt::LeftButton);
+        QVERIFY(!levels->isClipped());
+        QVERIFY(drawnMeter(size).pixelColor(light) !=
+                InputLevelMeter::clipColour());
+
+        levels->setClipped(true);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!levels->isClipped());
+        waitForSomethingRecorded();
+        stopTake();
+    }
+
+    // The voice threshold, as it is chosen, is the meters' tick
+    void the_input_meter_ticks_the_voice_threshold() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 1.0);
+        makeWindow(config);
+        InputLevelFeed *levels = m_window->inputLevels();
+        QVERIFY(levels);
+        QCOMPARE(levels->getThreshold(), VoiceThreshold::kOff);
+
+        const QSize size(240, 30);
+        InputLevelMeter probe(levels);
+        probe.resize(size);
+        const QPoint at(probe.xFor(-30.0), 4);
+        QVERIFY(drawnMeter(size).pixelColor(at) !=
+                InputLevelMeter::thresholdColour());
+
+        chooseVoiceThreshold(-30.0);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(levels->getThreshold(), -30.0);
+        QCOMPARE(drawnMeter(size).pixelColor(at),
+                 InputLevelMeter::thresholdColour());
+
+        chooseVoiceThreshold(VoiceThreshold::kOff);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(drawnMeter(size).pixelColor(at) !=
+                InputLevelMeter::thresholdColour());
+    }
+
+    // Playback > Check Input Level: the input opened and run with nothing
+    // recorded, two seconds of silence read as the noise floor, then the
+    // loudest phrase; Done gives the peak, the gain to change, the noise
+    // floor and a voice threshold, which a button sets. The device is
+    // left running, as after a take
+    void check_input_level() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        // -50.5 dBFS of hiss for 2.6 s, then a phrase peaking at -3.1
+        config.input = TestSignals::whiteNoise(int(2.6 * rate), 7, 0.003);
+        auto loud = TestSignals::sine(highHz, rate, int(3.0 * rate), 0.7);
+        config.input.insert(config.input.end(), loud.begin(), loud.end());
+        makeWindow(config);
+        openReference(writeWav(silence(2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QAction *action = m_window->checkInputLevelAction();
+        QVERIFY(action && action->isEnabled());
+        action->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog && dialog->isVisible());
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        QVERIFY(!dialog->doneButton()->isEnabled());
+        QVERIFY(!m_window->fake()->isSuspended());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+
+        QElapsedTimer sinceCheck;
+        sinceCheck.start();
+        const double ranBefore = m_window->fake()->getCurrentTime();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
+        QVERIFY(dialog->doneButton()->isEnabled());
+
+        // The phrase heard, by the loudest the dialog has read, which only
+        // rises: the meter's bar falls between the device's reports, and a
+        // read of it can miss them on a slow runner
+        QTRY_VERIFY2_WITH_TIMEOUT
+            (dialog->peakDbfs() > -4.0, qPrintable
+             (QString("loudest %1 dBFS; the device ran %2 s of the %3 s "
+                      "since the check began")
+              .arg(dialog->peakDbfs())
+              .arg(m_window->fake()->getCurrentTime() - ranBefore)
+              .arg(sinceCheck.elapsed() / 1000.0)), 30000);
+        QTest::qWait(300);
+        dialog->doneButton()->click();
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Result);
+
+        QVERIFY2(std::fabs(dialog->peakDbfs() + 3.1) < 0.3,
+                 qPrintable(QString("peak %1").arg(dialog->peakDbfs())));
+        QVERIFY(!dialog->clipped());
+        QVERIFY2(std::fabs(dialog->noiseFloorDbfs() + 50.5) < 1.5,
+                 qPrintable(QString("noise floor %1")
+                            .arg(dialog->noiseFloorDbfs())));
+        QCOMPARE(dialog->suggestedThreshold(), -45.0);
+        QVERIFY2(dialog->text().contains("down by about 7 dB"),
+                 qPrintable(dialog->text()));
+
+        QVERIFY(dialog->useThresholdButton()->isVisible());
+        dialog->useThresholdButton()->click();
+        QCOMPARE(storedVoiceThreshold(), -45.0);
+        QCOMPARE(m_window->inputLevels()->getThreshold(), -45.0);
+
+        dialog->reject();
+        QVERIFY(!dialog->isVisible());
+        QVERIFY(!m_window->fake()->isSuspended());
+        QVERIFY(action->isEnabled());
+    }
+
+    // In the application's audio mode the device is open for playback
+    // only until recording is asked for. Check Input Level opens it again
+    // with its input, as the first take would, and the first take after
+    // it opens nothing again: the takes share the alignment the check's
+    // opening made
+    void check_input_level_opens_the_input_as_the_first_take_would() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.input = TestSignals::sine(highHz, rate, int(4.0 * rate), 0.5);
+        delete m_window;
+        m_window = new TestMainWindow(config, true, true,
+                                      MainWindow::AUDIO_PLAYBACK_NOW_RECORD_LATER);
+        openReference(writeWav(silence(3.0)));
+        if (QTest::currentTestFailed()) return;
+        const int opened = m_window->audioIOOpened();
+        QVERIFY(opened >= 1);
+        // Open for playback only, there is no input to read, playing or
+        // not
+        QVERIFY(!m_window->inputLevels()->isRunning());
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        QVERIFY(!m_window->inputLevels()->isRunning());
+
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog && dialog->isVisible());
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QVERIFY(m_window->inputLevels()->isRunning());
+        QTRY_VERIFY_WITH_TIMEOUT(meterHold() > -7.0, 5000);
+        dialog->reject();
+
+        m_window->keepAudioRunning(true);
+        take(700);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QCOMPARE(m_window->fake()->getResumeCount(), 1);
+    }
+
+    // A device that delivers nothing is said to, and Check Again starts
+    // from the silence once it does
+    void check_input_level_with_no_input() {
+        FakeAudioIO::Config config;
+        config.neverCallsBack = true;
+        config.reportLevels = true;
+        makeWindow(config);
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::NoInput, 6000);
+        QVERIFY(dialog->againButton()->isVisible());
+        QVERIFY(dialog->text().contains("delivered nothing"));
+
+        // Closed during the silence, it waits no more for input that
+        // does not come: its clock stops with it
+        dialog->againButton()->click();
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        dialog->reject();
+        QTest::qWait(CheckInputLevelDialog::kNoInputMs + 300);
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+    }
+
+    // An input that starts after the dialog has said it delivered
+    // nothing: the silence is read for two seconds from when it came, by
+    // the clock started again with it
+    void check_input_level_after_a_late_input() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.firstCallbackMs = CheckInputLevelDialog::kNoInputMs + 500;
+        config.input = TestSignals::whiteNoise(int(10.0 * rate), 7, 0.003);
+        makeWindow(config);
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::NoInput, 6000);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Quiet, 3000);
+        QElapsedTimer quiet;
+        quiet.start();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 8000);
+        QVERIFY2(quiet.elapsed() < CheckInputLevelDialog::kQuietMs + 1000,
+                 qPrintable(QString("the silence was read for %1 ms")
+                            .arg(quiet.elapsed())));
+        dialog->reject();
+    }
+
+    // The window behind is shut while the dialog is open: its Play plays
+    // the music, and the silence is read again, all of it with the music
+    void check_input_level_plays_the_music() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.input = TestSignals::whiteNoise(int(10.0 * rate), 7, 0.003);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 8.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog && dialog->isVisible());
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        QPushButton *play = dialog->playButton();
+        QVERIFY(play->isVisible() && play->isEnabled());
+        QCOMPARE(play->text(), QString("Play"));
+
+        QTest::qWait(1000);
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        play->click();
+        QElapsedTimer quiet;
+        quiet.start();
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->playSource()->isPlaying(), 2000);
+        QCOMPARE(play->text(), QString("Stop"));
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
+        QVERIFY2(quiet.elapsed() >= CheckInputLevelDialog::kQuietMs - 200,
+                 qPrintable(QString("the silence was read for %1 ms with "
+                                    "the music").arg(quiet.elapsed())));
+
+        // Stopped while singing, nothing is read again
+        play->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->playSource()->isPlaying(), 2000);
+        QCOMPARE(play->text(), QString("Play"));
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Singing);
+        dialog->reject();
+    }
+
+    // The device opened again under the check, as a phone's that failed
+    // is: it runs, and the check reads the silence again from it
+    void check_input_level_after_the_device_is_opened_again() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.input = TestSignals::whiteNoise(int(10.0 * rate), 7, 0.003);
+        makeWindow(config);
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
+
+        const int opened = m_window->audioIOOpened();
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        QVERIFY(m_window->fake() && !m_window->fake()->isSuspended());
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
+        dialog->reject();
+    }
+
+    // Playback > Input Channel is kept for the input device the
+    // Preferences name, which its first line names; another device has
+    // its own; it is shut during a take; and the audio check's takes are
+    // made of both inputs whatever is chosen, as the runner sets them
+    void input_channel_is_kept_per_input_device() {
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(inputChannelDeviceLine(), QString("For: (System Default)"));
+        QCOMPARE(inputChannelTicked(), InputChannel::kBoth);
+        chooseInputChannel(1);
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        QCOMPARE(InputChannel::channel(settings, { "", "" }), 1);
+        QCOMPARE(inputChannelTicked(), 1);
+
+        settings.setValue("Preferences/audio-record-device", "Other Mic");
+        QCOMPARE(inputChannelDeviceLine(), QString("For: Other Mic"));
+        QCOMPARE(inputChannelTicked(), InputChannel::kBoth);
+        settings.setValue("Preferences/audio-record-device", "");
+        QCOMPARE(inputChannelTicked(), 1);
+
+        QVERIFY(m_window->inputChannelMenu()->menu()->menuAction()
+                ->isEnabled());
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->takeInputChannel(), 1);
+        QVERIFY(!m_window->inputChannelMenu()->menu()->menuAction()
+                ->isEnabled());
+        waitForSomethingRecorded();
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->inputChannelMenu()->menu()->menuAction()
+                ->isEnabled());
+
+        m_window->setAudioCheckTakes(true);
+        m_window->seekTo(sv::sv_frame_t(2.0 * rate));
+        startTake();
+        QCOMPARE(m_window->takeInputChannel(), InputChannel::kBoth);
+        QCOMPARE(m_window->inputLevels()->getChannel(), InputChannel::kBoth);
+        waitForSomethingRecorded();
+        stopTake();
+        m_window->setAudioCheckTakes(false);
+        // After it the meter shows the input chosen again
+        QCOMPARE(m_window->inputLevels()->getChannel(), 1);
+    }
+
+    // On a phone the input device is the route's (the fake reports one,
+    // as OboeAudioIO does), and while the device is open for playback
+    // only, the input its driver last recorded from
+    void input_channel_of_a_route() {
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output.id = 3;
+        route.output.type = 22;
+        route.output.productName = "AI-Micro";
+        route.hasInput = true;
+        route.input.id = 4;
+        route.input.type = 22;
+        route.input.productName = "AI-Micro";
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const QString name = AudioRoute::deviceName(route.input);
+        QCOMPARE(m_window->doInputChannelKey().driver, QString("oboe"));
+        QCOMPARE(m_window->doInputChannelKey().recordDevice, name);
+        chooseInputChannel(0);
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        QCOMPARE(InputChannel::channel(settings, { "oboe", name }), 0);
+
+        // Opened for playback only, it names the input it had
+        route.hasInput = false;
+        m_window->setFakeRoute(route);
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->doInputChannelKey().recordDevice, name);
+        QCOMPARE(inputChannelTicked(), 0);
+        QCOMPARE(inputChannelDeviceLine(), QString("For: %1").arg(name));
+    }
+
+    // A phone before its first take, with no input chosen and none
+    // recorded from, cannot say which input the take will open: Input
+    // Channel waits for it, its entries shut, and says so. The first
+    // take names the input, and a choice is kept for that
+    void a_phone_offers_input_channels_once_its_input_is_known() {
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = false;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        delete m_window;
+        m_window = new TestMainWindow(config, true, true,
+                                      MainWindow::AUDIO_PLAYBACK_NOW_RECORD_LATER);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(inputChannelDeviceLine(),
+                 QString("For: the input, known once a take has started"));
+        int entries = 0;
+        for (QAction *action :
+                 m_window->inputChannelMenu()->menu()->actions()) {
+            if (!action->isCheckable()) continue;
+            QVERIFY(!action->isEnabled());
+            ++entries;
+        }
+        QCOMPARE(entries, 3);
+
+        // The take opens the route's input
+        route.hasInput = true;
+        route.input = phoneDevice(4, 22, "AI-Micro");
+        m_window->setFakeRoute(route);
+        m_window->keepAudioRunning(true);
+        take(500);
+        if (QTest::currentTestFailed()) return;
+        const QString name = AudioRoute::deviceName(route.input);
+        QCOMPARE(inputChannelDeviceLine(), QString("For: %1").arg(name));
+        chooseInputChannel(0);
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        QCOMPARE(InputChannel::channel(settings, { "oboe", name }), 0);
+        QCOMPARE(InputChannel::channel(settings, { "oboe", "" }),
+                 InputChannel::kBoth);
+    }
+
+    // Open for playback only, as a phone's device is until its first
+    // take, a device chosen opens nothing again: the music plays on, and
+    // the take opens its input on the device chosen
+    void an_input_chosen_leaves_playback_alone() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        const QString usbName = "USB device (Wireless PRO RX)";
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = false;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        delete m_window;
+        m_window = new TestMainWindow(config, true, true,
+                                      MainWindow::AUDIO_PLAYBACK_NOW_RECORD_LATER);
+        m_window->setFakeListedInputs({ mic, usb }, mic);
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        const int opened = m_window->audioIOOpened();
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        chooseInputDevice(usbName);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioIOOpened(), opened);
+        QVERIFY(m_window->playSource()->isPlaying());
+        m_window->doPlay();
+
+        route.hasInput = true;
+        m_window->setFakeRoute(route);
+        m_window->keepAudioRunning(true);
+        take(300);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioRoute().input.id, 40);
+    }
+
+    // A phone's Playback > Audio Input Device: the inputs Android lists
+    // that a singer records from (not a Bluetooth call microphone), each
+    // name once, the one in use named. A choice is kept by type and name
+    // and opened by the id the device has now; unplugged, the phone's
+    // choice is opened, and the status bar says so through the take that
+    // starts then. The measured round trip and the input channel are
+    // kept for the input chosen
+    void a_phone_records_from_the_input_device_chosen() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device mic2 = phoneDevice(13, 15, "Pixel 9a");
+        AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        const AudioRoute::Device sco = phoneDevice(51, 7, "WF-1000XM6");
+        const QString micName = "Built-in microphone (Pixel 9a)";
+        const QString usbName = "USB device (Wireless PRO RX)";
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = true;
+        route.input = usb;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        m_window->setFakeListedInputs({ mic, mic2, usb, sco }, usb);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(inputDeviceEntries(),
+                 QStringList({ "In use: " + usbName, "(System Default)",
+                               micName, usbName }));
+        QCOMPARE(inputDeviceTicked(), QString("(System Default)"));
+
+        const int opened = m_window->audioIOOpened();
+        chooseInputDevice(micName);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QCOMPARE(m_window->audioRoute().input.id, 12);
+        QCOMPARE(inputDeviceTicked(), micName);
+        QCOMPARE(m_window->doLatencyKey().recordDevice, micName);
+        QCOMPARE(m_window->doInputChannelKey().recordDevice, micName);
+        {
+            QSettings settings;
+            AudioRoute::Device kept;
+            QVERIFY(InputDevice::chosen(settings, "oboe", kept));
+            QCOMPARE(AudioRoute::deviceName(kept), micName);
+        }
+
+        // Plugged in again, the receiver has another id, and is opened
+        // by that
+        usb.id = 77;
+        m_window->setFakeListedInputs({ mic, mic2, usb }, usb);
+        chooseInputDevice(usbName);
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->audioRoute().input.id, 77);
+        QCOMPARE(inputDeviceTicked(), usbName);
+        QVERIFY(!m_window->statusText().contains("not plugged in"));
+
+        // Unplugged, the phone's choice records, the choice stays, and
+        // the status bar says so, a take's notes and time held off
+        m_window->setFakeListedInputs({ mic, mic2 }, mic);
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->audioRoute().input.id, 12);
+        const QString notice = usbName + " is not plugged in: recording "
+            "from " + micName + ", the phone's choice";
+        QCOMPARE(m_window->statusText(), notice);
+        QCOMPARE(inputDeviceTicked(), usbName + " (not connected)");
+        QCOMPARE(m_window->doLatencyKey().recordDevice, micName);
+        m_window->seekTo(0);
+        startTake();
+        if (QTest::currentTestFailed()) return;
+        // Read often: the recorded time is written every 10 ms and the
+        // sung note with each batch of dots, and either would replace it
+        for (int i = 0; i < 100; ++i) {
+            QTest::qWait(5);
+            QCOMPARE(m_window->statusText(), notice);
+        }
+        QVERIFY(liveDots() > 10);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        chooseInputDevice("(System Default)");
+        if (QTest::currentTestFailed()) return;
+        QSettings settings;
+        AudioRoute::Device kept;
+        QVERIFY(!InputDevice::chosen(settings, "oboe", kept));
+    }
+
+    // A notice about the device runs out by itself, and what was under
+    // it comes back: the last take's level, held until something the
+    // user does replaces it
+    void a_notice_runs_out_to_the_take_level() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        const QString usbName = "USB device (Wireless PRO RX)";
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = true;
+        route.input = usb;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        m_window->setFakeListedInputs({ mic, usb }, usb);
+        m_window->statusLine()->setNoticeMs(500);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+        chooseInputDevice(usbName);
+        if (QTest::currentTestFailed()) return;
+
+        take(500);
+        if (QTest::currentTestFailed()) return;
+        const QString level = m_window->statusText();
+        QVERIFY2(level.startsWith("Take: peak"), qPrintable(level));
+
+        m_window->setFakeListedInputs({ mic }, mic);
+        m_window->doRecreateAudioIO();
+        QVERIFY(m_window->statusText().contains("not plugged in"));
+        QTRY_COMPARE_WITH_TIMEOUT(m_window->statusText(), level, 3000);
+    }
+
+    // Open for playback only, as a phone's device is until its first
+    // take, the device a round trip is looked up for is the input chosen,
+    // not the one a figure was kept with for the output
+    void the_latency_key_before_a_take_is_the_input_chosen() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = true;
+        route.input = mic;
+        {
+            QSettings settings;
+            LatencyCalibration::Figure figure;
+            figure.roundTrip = 0.05;
+            figure.date = QDateTime::currentDateTime();
+            LatencyCalibration::store
+                (settings, LatencyCalibration::routeKey(route, 44100), figure);
+        }
+        route.hasInput = false;
+        FakeAudioIO::Config config;
+        config.route = route;
+        makeWindow(config);
+        m_window->setFakeListedInputs({ mic, usb }, usb);
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+
+        QCOMPARE(m_window->doLatencyKey().recordDevice,
+                 AudioRoute::deviceName(mic));
+        chooseInputDevice(AudioRoute::deviceName(usb));
+        if (QTest::currentTestFailed()) return;
+        QCOMPARE(m_window->doLatencyKey().recordDevice,
+                 AudioRoute::deviceName(usb));
+        QCOMPARE(m_window->doInputChannelKey().recordDevice,
+                 AudioRoute::deviceName(usb));
+    }
+
+    // The take's runs of digital silence of 5 ms or more between its
+    // first sound and its last, as a radio's dropouts leave, and the
+    // first sound's frame
+    static int dropoutsIn(const TakeFile &file, sv::sv_frame_t &first) {
+        const auto &c = file.samples[0];
+        size_t a = 0, b = c.size();
+        while (a < b && c[a] == 0.f) ++a;
+        while (b > a && c[b - 1] == 0.f) --b;
+        first = sv::sv_frame_t(a);
+        int runs = 0;
+        size_t run = 0;
+        for (size_t i = a; i < b; ++i) {
+            if (c[i] == 0.f) {
+                if (++run == size_t(0.005 * rate)) ++runs;
+            } else {
+                run = 0;
+            }
+        }
+        return runs;
+    }
+
+    // Takes > Replace Take Audio from Recording: a take whose radio
+    // dropped out five times, and the transmitter's own recording of the
+    // singing, at 48 kHz, half as loud, 4.3 s into it. The take's audio
+    // is the recording's over its coverage, at the take's level, with no
+    // gaps; its pitch is analysed in again where the gaps were; one undo
+    // puts it back as it was, and a redo replaces it again
+    void replace_take_audio_from_a_transmitters_recording() {
+        std::vector<float> input = singing(3.0, rate);
+        for (auto gap : { std::make_pair(0.40, 0.50), { 0.90, 0.95 },
+                          { 1.30, 1.60 }, { 2.00, 2.05 }, { 2.40, 2.60 } }) {
+            for (size_t i = size_t(gap.first * rate);
+                 i < size_t(gap.second * rate); ++i) input[i] = 0.f;
+        }
+        FakeAudioIO::Config config;
+        config.input = input;
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+        take(3300);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+
+        const QString pathBefore = m_window->takes()->getAudioPath();
+        const auto coverageBefore = m_window->takes()->getCoverage();
+        const TakeFile before = takeFile();
+        sv::sv_frame_t start = 0;
+        QCOMPARE(dropoutsIn(before, start), 5);
+        const double sungAt = double(start) / rate;
+        const auto inGap = [&](Analyser *a) {
+            return eventsBetween(pitchEvents(a),
+                                 sv::sv_frame_t((sungAt + 1.35) * rate),
+                                 sv::sv_frame_t((sungAt + 1.55) * rate)).size();
+        };
+        QCOMPARE(int(inGap(m_window->analyser2())), 0);
+        QVERIFY(m_window->replaceTakeAudioAction()->isEnabled());
+
+        const QString recording =
+            writeWav(singing(12.0, 48000.0, 4.3, 0.5f), 48000.0);
+        m_window->setTakeRecordingAnswer(recording);
+        m_window->doReplaceTakeAudioFromRecording();
+        QVERIFY(m_window->searchingTakeAudio());
+        QVERIFY(!m_window->replaceTakeAudioAction()->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->searchingTakeAudio(), 30000);
+        const QStringList reports =
+            messagesMatching("Take audio replaced", "was replaced from");
+        QCOMPARE(reports.size(), 1);
+        QVERIFY2(reports[0].contains("alike") &&
+                 reports[0].contains("brought up by 6.0 dB"),
+                 qPrintable(reports[0]));
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+
+        const QString replaced = m_window->takes()->getAudioPath();
+        QVERIFY(replaced != pathBefore);
+        QCOMPARE(m_window->takes()->getCoverage(), coverageBefore);
+        const TakeFile after = takeFile();
+        sv::sv_frame_t startAfter = 0;
+        QCOMPARE(dropoutsIn(after, startAfter), 0);
+        // The singing where it was, at its level: the first note alike
+        const double level = before.rms(0, sungAt + 0.05, sungAt + 0.35);
+        const double levelAfter = after.rms(0, sungAt + 0.05, sungAt + 0.35);
+        QVERIFY2(std::fabs(20.0 * std::log10(levelAfter / level)) < 0.5,
+                 qPrintable(QString("%1 then %2").arg(level).arg(levelAfter)));
+        QVERIFY(after.rms(0, sungAt + 1.35, sungAt + 1.55) > 0.05);
+        QVERIFY2(inGap(m_window->analyser2()) > 5,
+                 qPrintable(QString::number(inGap(m_window->analyser2()))));
+
+        QCOMPARE(undoOnce(), QString("Replace Take Audio"));
+        QCOMPARE(m_window->takes()->getAudioPath(), pathBefore);
+        QCOMPARE(int(inGap(m_window->analyser2())), 0);
+        QCOMPARE(redoOnce(), QString("Replace Take Audio"));
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+        QCOMPARE(m_window->takes()->getAudioPath(), replaced);
+        QVERIFY(inGap(m_window->analyser2()) > 5);
+    }
+
+    // Cancelled from its dialog, the take is as it was; and a window
+    // closed while it searches waits for the search to stop
+    void replace_take_audio_can_be_cancelled() {
+        FakeAudioIO::Config config;
+        config.input = singing(3.0, rate);
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+        take(3300);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+        const QString pathBefore = m_window->takes()->getAudioPath();
+        const QString recording =
+            writeWav(singing(60.0, 48000.0, 40.0, 0.5f), 48000.0);
+
+        m_window->setTakeRecordingAnswer(recording);
+        m_window->doReplaceTakeAudioFromRecording();
+        auto *progress = m_window->findChild<QProgressDialog *>();
+        QVERIFY(progress);
+        QVERIFY(progress->isVisible());
+        auto *cancel = progress->findChild<QPushButton *>();
+        QVERIFY(cancel);
+        cancel->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->searchingTakeAudio(), 30000);
+        QCOMPARE(m_window->takes()->getAudioPath(), pathBefore);
+        QVERIFY(takeDialogs().isEmpty());
+        QVERIFY(m_window->replaceTakeAudioAction()->isEnabled());
+
+        m_window->doReplaceTakeAudioFromRecording();
+        QVERIFY(m_window->searchingTakeAudio());
+        m_window->doCloseSession();
+        makeWindow(config);
+    }
+
+    // A recording that does not hold the take's singing: refused, the
+    // take as it was, nothing to undo but the take itself
+    void replace_take_audio_refuses_another_recording() {
+        FakeAudioIO::Config config;
+        config.input = singing(3.0, rate);
+        makeWindow(config);
+        openReference(writeWav(silence(5.0)));
+        if (QTest::currentTestFailed()) return;
+        take(3300);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->analysingRange(), 30000);
+        const QString pathBefore = m_window->takes()->getAudioPath();
+
+        const QString other = writeWav(melody(2.0));
+        m_window->setTakeRecordingAnswer(other);
+        m_window->doReplaceTakeAudioFromRecording();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->searchingTakeAudio(), 30000);
+        QCOMPARE(messagesMatching("Take audio not replaced",
+                                  "was not found in").size(), 1);
+        QCOMPARE(m_window->takes()->getAudioPath(), pathBefore);
+        QCOMPARE(undoOnce(), QString("Record Singing"));
     }
 
     void live_dots_removed() {
@@ -2490,6 +3904,60 @@ private slots:
 
     void stop_with_record_plays_nothing_more() {
         verifyStopWhileTheReferencePlays(false);
+    }
+
+    // Record pressed during playback stops it first: with Play Reference
+    // off nothing is heard during the take, and the take starts where
+    // playback stopped
+    void record_during_playback_stops_it() {
+        sv::sv_frame_t reached = -1;
+        size_t pressed = 0;
+        recordDuringPlayback(false, reached, pressed);
+        if (QTest::currentTestFailed()) return;
+
+        QVERIFY2(!m_window->playSource()->isPlaying(),
+                 "the reference plays on under the take");
+        QTest::qWait(1000);
+        QVERIFY2(!m_window->playSource()->isPlaying(),
+                 "the reference plays during a take without Play Reference");
+
+        // The play source reads ahead, and what it had handed the device
+        // before the press may still come out just after it
+        auto output = m_window->fake()->getCapturedOutput();
+        const size_t settled = pressed + size_t(0.1 * rate);
+        QVERIFY(output.size() > settled + size_t(0.5 * rate));
+        float peak = 0.f;
+        for (size_t i = settled; i < output.size(); ++i) {
+            peak = std::max(peak, std::fabs(output[i]));
+        }
+        QVERIFY2(peak < 1e-4f,
+                 qPrintable(QString("the output reached %1 during the take: "
+                                    "the reference played on").arg(peak)));
+
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+        verifyTakeFromWherePlaybackStopped(reached);
+    }
+
+    // With Play Reference on, the take plays the reference itself, from
+    // where playback stopped, as it does from a standstill: so it measures
+    // the start gap it is placed with
+    void record_during_playback_plays_the_reference_for_the_take() {
+        sv::sv_frame_t reached = -1;
+        size_t pressed = 0;
+        recordDuringPlayback(true, reached, pressed);
+        if (QTest::currentTestFailed()) return;
+
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->playSource()->isPlaying(), 2000);
+        QTest::qWait(1000);
+        stopTake();
+        if (QTest::currentTestFailed()) return;
+
+        TakeLatency latency = m_window->takeLatency();
+        QVERIFY2(latency.recordingRate > 0 && latency.startGapMeasured,
+                 "the take did not start the reference itself: its start "
+                 "gap was not measured");
+        verifyTakeFromWherePlaybackStopped(reached);
     }
 
     void take_at_playback_position() {

@@ -40,7 +40,8 @@ class QWidget;
  * in Parts: a menu button whose popup holds every menu of the menu bar,
  * so that nothing becomes unreachable (and the menus' shortcuts keep
  * working, which they would not with only the hidden menu bar holding
- * them); Play, Record and Record into Selection; the take box; Undo and
+ * them); Play, Record and Record into Selection; the input meter; the
+ * take box; Undo and
  * Redo; Erase; Zoom In and Zoom Out; and a button that shows and hides
  * the panel, the Show and Play and speed toolbars at the bottom.
  *
@@ -71,6 +72,8 @@ public:
         QAction *play = nullptr;
         QAction *record = nullptr;
         QAction *recordIntoSelection = nullptr;
+        /// The input meter, a widget action, after the recording controls
+        QAction *inputMeter = nullptr;
         QComboBox *takeBox = nullptr;
         QAction *erase = nullptr;
         QAction *zoomIn = nullptr;

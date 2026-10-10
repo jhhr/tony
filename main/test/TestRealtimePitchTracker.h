@@ -516,6 +516,78 @@ private slots:
         }
     }
 
+    // One input chosen (InputChannel): the tracker hears it alone, not
+    // the other input. Two tones, one on each input, each tracked
+    // alone; the mixdown of the two would give neither throughout
+    void one_input_chosen_is_tracked_alone() {
+        const int n = int(kRate) / 2;
+        for (int channel : { 0, 1 }) {
+            auto rec = makeRecording(2);
+            rec->append({ TestSignals::sine(330.0, kRate, n, 0.3f),
+                          TestSignals::sine(440.0, kRate, n, 0.5f) });
+            RealtimePitchTracker tracker(rec->id);
+            tracker.setChannel(channel);
+            PitchCollector spy(&tracker);
+            tracker.start();
+            settle(spy, expectedHops(rec->written));
+            tracker.stop();
+
+            const double hz = (channel == 0 ? 330.0 : 440.0);
+            QCOMPARE(int(spy.count()), expectedHops(rec->written));
+            for (const auto &event : spy.events) {
+                QVERIFY2(std::abs(TestSignals::centsBetween(event.hz, hz))
+                         < 10.0,
+                         qPrintable(QString("input %1: %2 Hz, not %3")
+                                    .arg(channel + 1).arg(event.hz)
+                                    .arg(hz)));
+            }
+        }
+    }
+
+    // ... and at its own level: a microphone on input 1 at -30 dBFS, the
+    // other input silent, is over a floor of -33 dBFS; the channels'
+    // average reads it 6 dB down, under the floor
+    void one_input_chosen_is_heard_at_its_own_level() {
+        const int n = int(kRate) / 2;
+        for (int channel : { 0, -1 }) {
+            auto rec = makeRecording(2);
+            rec->append({ TestSignals::sine(330.0, kRate, n,
+                                            float(peakAt(-30.0))),
+                          std::vector<float>(size_t(n), 0.f) });
+            RealtimePitchTracker tracker(rec->id);
+            tracker.setChannel(channel);
+            tracker.setMinLevel(-33.0);
+            PitchCollector spy(&tracker);
+            tracker.start();
+            const sv::sv_frame_t lastWindowEnd =
+                sv::sv_frame_t(expectedHops(rec->written) - 1) * kHop +
+                kWindow;
+            QTRY_COMPARE_WITH_TIMEOUT(tracker.getFramesAnalysed(),
+                                      lastWindowEnd, 5000);
+            tracker.stop();
+            if (channel == 0) {
+                QCOMPARE(int(spy.count()), expectedHops(rec->written));
+            } else {
+                QCOMPARE(int(spy.count()), 0);
+            }
+        }
+    }
+
+    // An input chosen that the recording does not have, as on a device
+    // with one input: what there is, as without a choice
+    void a_chosen_input_the_recording_lacks_is_the_mixdown() {
+        auto rec = makeRecording(1);
+        const int n = int(kRate) / 2;
+        rec->appendMono(TestSignals::sine(330.0, kRate, n));
+        RealtimePitchTracker tracker(rec->id);
+        tracker.setChannel(1);
+        PitchCollector spy(&tracker);
+        tracker.start();
+        settle(spy, expectedHops(rec->written));
+        tracker.stop();
+        QCOMPARE(int(spy.count()), expectedHops(rec->written));
+    }
+
     // A tone of 220.5 Hz with its harmonics to 4 kHz (as the audio
     // check's, without the vibrato), and 30 ms of its subharmonic under
     // it, faded in and out. In the windows that hold the burst the dip

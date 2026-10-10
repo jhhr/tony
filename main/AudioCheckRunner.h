@@ -15,6 +15,7 @@
 #ifndef TONY_AUDIO_CHECK_RUNNER_H
 #define TONY_AUDIO_CHECK_RUNNER_H
 
+#include "InputChannel.h"
 #include "LatencyCalibration.h"
 #include "LatencyCheck.h"
 #include "LatencyUtils.h"
@@ -76,6 +77,15 @@ struct AudioCheckResult
     /// that reports one (TakeLatency::route): the key names it, and its
     /// streams are the figure's fingerprint.  Its driver is "" otherwise
     AudioRoute::Route route;
+
+    /// The peak of each input over what the punch-ins kept, from their
+    /// raw recordings: which input the microphone is on.  The check's
+    /// takes are made of every input, whatever Input Channel says
+    std::vector<float> inputPeaks;
+
+    /// The input device the first punch-in was recorded from, as Input
+    /// Channel keeps its choice for it
+    InputChannel::Key inputKey;
 
     /// Whether calibratedRoundTrip means anything: the run was judged
     /// Ok or Unsteady

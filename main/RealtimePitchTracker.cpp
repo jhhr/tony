@@ -13,6 +13,7 @@
 */
 
 #include "RealtimePitchTracker.h"
+#include "InputChannel.h"
 #include "OctaveSlips.h"
 
 #include "data/model/WritableWaveFileModel.h"
@@ -38,6 +39,7 @@ RealtimePitchTracker::RealtimePitchTracker(ModelId audioSourceId,
       m_maxFreq(1000.0),
       m_threshold(0.15),
       m_minLevel(kMinLevel),
+      m_channel(-1),
       m_framesAnalysed(0)
 {
 }
@@ -94,7 +96,12 @@ RealtimePitchTracker::run()
         }
 
         double sr = audioModel->getSampleRate();
-        int channels = audioModel->getChannelCount();
+        // The one input the take is made from, as one channel, or the
+        // mixdown of them all
+        const int channel = InputChannel::effectiveChannel
+            (m_channel, audioModel->getChannelCount());
+        const int channels =
+            channel >= 0 ? 1 : audioModel->getChannelCount();
 
         if (!fft) {
             fft = new FFT(kWindowSize);
@@ -108,9 +115,11 @@ RealtimePitchTracker::run()
         while (nextFrameToProcess + kWindowSize <= totalFrames) {
 
             // Channel -1 is the mixdown of all channels, which is also
-            // what the pYIN transform is given: the microphone need not
-            // be on the first input of the interface.
-            floatvec_t rawFv = audioModel->getData(-1, nextFrameToProcess, kWindowSize);
+            // what the pYIN transform is given of a take with them all:
+            // the microphone need not be on the first input of the
+            // interface.
+            floatvec_t rawFv = audioModel->getData
+                (channel, nextFrameToProcess, kWindowSize);
 
             if ((int)rawFv.size() < kWindowSize) break;
 

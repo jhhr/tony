@@ -43,7 +43,19 @@ Recording
    recording starts and stops at the ends of the selection by itself. This
    and the pre-roll are buttons in the toolbar, after "While recording:"
  * the microphone and the output are chosen in Playback -> Audio Input Device
-   and Playback -> Audio Output Device
+   and Playback -> Audio Output Device. On a phone, Audio Input Device lists the
+   phone's microphone, a wired headset and a USB microphone (a wireless
+   receiver, say), and the output is the phone's own choice. Android records
+   from a USB or wired microphone by itself when one is plugged in; the menu
+   is for choosing the phone's microphone instead, or one of two. A choice
+   that is not plugged in records from the phone's choice, and the status bar
+   says so
+ * a microphone on one input of an interface with two: Playback -> Input
+   Channel -> Input 1 (or Input 2) makes each take from that input alone, so
+   that it plays back in both ears and the live dots, the analysis and the
+   voice threshold hear it at its own level. With Both Inputs, the default, a
+   take of a microphone on one input plays in one ear only. The choice is kept
+   for each input device
  * on Windows, Playback -> Audio Driver chooses MME, DirectSound or WASAPI, and
    Playback -> Audio Latency how much latency is asked of it (10 to 200 ms);
    each driver keeps its own devices, latency and measured round trip. WASAPI
@@ -64,13 +76,73 @@ Recording
    while you record, and no pitch or notes when the take is analysed. The
    audio itself is recorded as it is. To choose it, record the music alone
    with the threshold Off, then raise it a step at a time until the music
-   alone gives no dots. Your voice has to be well above that: a microphone of
+   alone gives no dots, or play the music in Playback -> Check Input Level's
+   silence and take the threshold it suggests. Your voice has to be well above that: a microphone of
    low sensitivity, sung into from close by, keeps the music far below it. A
    new threshold applies from the next take on; Analysis -> Analyse Now!
    applies it to what the take on show has recorded already, so a threshold
    set too high is put right by lowering it and analysing again
  * File -> Load Singing Track... (Ctrl+Shift+R) loads a recording made
    elsewhere as the singing track instead
+
+
+Microphone and levels
+---------------------
+
+ * a close microphone: a headset, or a microphone a hand's width from the
+   mouth. It hears the voice far above the room and the music, which the live
+   dots and the voice threshold rely on
+ * an audio interface with zero-latency (direct) monitoring, so that you hear
+   your own voice in the headphones as you sing. Tony does not play the
+   microphone back to you itself: its round trip is tens of milliseconds, and
+   you would hear it as an echo of the voice you hear through your own head
+ * turn off the interface's processing: automatic level, noise reduction,
+   compression. They change the take, and the level the meter and the voice
+   threshold read; Windows' own audio enhancements likewise
+ * a microphone on one input of an interface with two: Playback -> Input
+   Channel (see Recording above)
+ * set the gain on the interface so that your loudest singing peaks around
+   -10 dBFS. Playback -> Check Input Level... listens to two seconds of
+   silence and then your loudest phrase, and says how many dB to turn the gain
+   up or down, the noise floor, and a voice threshold over it. The meter beside
+   Record shows the input's peak as you sing, with a tick at the voice
+   threshold (which compares a level about 10 dB under a voice's peaks: your
+   peaks should be well over the tick) and a light that turns red when the
+   input reaches full scale; a click puts it out, and so does the next take.
+   After each take the status bar gives the take's peak, or where it clipped.
+   Leave Windows' input volume for the interface at 100 and set the gain on
+   the interface: the meter can only see clipping in the converter. A
+   microphone that distorts in its own electronics has to be heard
+ * avoid a Bluetooth headset's microphone (its "Hands-Free" device on
+   Windows): Bluetooth gives it only through a call's link, which puts the
+   microphone and the headphones both at telephone quality
+ * after changing the microphone, the interface, the headphones or the driver,
+   run Playback -> Calibrate Audio... again: each has its own latency
+ * a wireless microphone, such as a headset on a RØDE Wireless PRO or GO
+   transmitter, its receiver plugged in as a USB microphone or into an
+   interface's input:
+    * set the receiver to merged mode with no safety channel, so that the voice
+      is on both channels at its own level. In split mode, or with the safety
+      channel (a copy 10 dB quieter on the second channel), choose its channel
+      in Playback -> Input Channel: Both Inputs would average it with the other
+      channel and read it 6 or 3.6 dB low
+    * turn GainAssist, or any automatic level, off: it changes the take's level
+      as you sing, and the level the voice threshold reads
+    * keep any high-pass filter off, or at its lowest: low sung notes are near
+      80 Hz
+    * wear the transmitter at the front of your body, in sight of the receiver:
+      its 2.4 GHz radio does not pass through a person, and a dropout is a gap
+      of silence in the take
+    * run Playback -> Calibrate Audio... again for the wireless chain: the
+      radio adds its own latency
+    * use one device for both the input and the headphones (the receiver's
+      analog output into an interface, say). With the receiver as the input and
+      the headphones on another device, the two run on two clocks, and takes
+      drift against the reference by a few milliseconds over a long session
+    * let the transmitter record on its own as well, as a backup: where the
+      radio dropped out during a take, Takes -> Replace Take Audio from
+      Recording... finds the take's singing in the transmitter's file and puts
+      it in the take's place (below)
 
 
 Takes and editing
@@ -83,6 +155,16 @@ Takes and editing
    (Ctrl+D) remove, trim or split what has been recorded. A range is selected by
    dragging in the thin ruler strip below the pane
  * recordings and erases can be undone and redone
+ * Takes -> Replace Take Audio from Recording... puts the take's singing back
+   from a recording of it made elsewhere, such as a wireless transmitter's own
+   backup, where the radio dropped out during the take. Pick the transmitter's
+   WAV file: Tony finds where in it each part of the take was sung (a
+   punch-in was sung at another time, and is found on its own), refuses if
+   any part is not there, and otherwise puts the file's audio in place of the
+   take's, at the take's level, and analyses it again. It says where each part
+   was found and how alike it was, and whether the transmitter's clock and
+   the receiver's drifted apart over the take (the audio is not stretched to
+   fit). One Undo puts the take back as it was
  * several takes of a song in one session (the Takes menu and the "Take:" box in
    the toolbar): each keeps its own audio, pitch track and notes, and switching
    between them needs no re-analysis. The audio of a session's takes is kept in
