@@ -484,10 +484,13 @@ Things to know, none of which stops the feature being used. See also
   the quiet ends included.
 - **Replace Take Audio from Recording** takes a dropout to be digital silence, as the
   tests make it. A receiver that hides a dropout some other way (repeating, or fading)
-  leaves a piece that is less alike, not left out.
+  leaves a piece that is less alike, not left out; one of 0.1 s or more reads as another
+  session, and is left as the take has it.
 - Its search reads all of the recording, and holds the take's range in memory: a long
   recording on a phone takes a while, with the progress dialog up.
 - Two stretches it puts in that meet each fade over 5 ms against what the take held there,
   as two recordings that meet do (above): where that is a dropout, a 10 ms dip.
-- A punch-in shorter than half a second, two of the walk's pieces, is not told apart from
-  the singing around it, and is replaced with the transmitter's audio of that.
+- A punch-in shorter than half a second is told apart (from 0.1 s), but cannot be looked
+  for on its own: it is left as the take has it. One that holds a range's loudest half
+  second is where the search starts, and the range is refused unless the punch-in is a
+  second or more ([open-points.md](open-points.md)).
