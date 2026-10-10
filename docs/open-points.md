@@ -16,6 +16,11 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **The editing constants** were defaults taken without the user: the 20 ms shortest
   word, the 0.5 s new word, the 6 px grab on each side of an edge, the menu's wording,
   and Edit Lyrics living in the Edit menu.
+- **Replace Take Audio from Recording brings the recording to the take's level**, which
+  was not asked for: the voice threshold, the meter's figures and the take's scan read the
+  take's file as recorded, and a transmitter's file at another level would move them all
+  ([takes.md](takes.md#replace-take-audio-from-recording)). The other way, the take
+  would sound as the transmitter recorded it.
 - **The alternate pitch track at ±3 octaves** of a 220 Hz reference (28 Hz, 1.8 kHz) is
   outside the range the pane shows, and nothing scrolls to it; ±2 is in view.
 - Of the [manual checklist](manual-checklist.md), the device check (Calibrate Audio with
@@ -66,11 +71,14 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   the amount in the status bar (the dialog's) or by the words stopping (the drag's).
 - **TTML and LRC only**: no SRT or Moises JSON. Another format is another parser that
   `parseLyrics()` chooses.
-- **No level meter for the voice threshold**: the user chooses it blind, by recording the
-  music alone and raising it until the music gives no dots (the README says how). A meter
-  of the input beside the menu, or Calibrate Audio suggesting a threshold
-  ([calibrate-audio.md](calibrate-audio.md), §10), would show where the music and the
-  voice are.
+- **A take's clipped places are not marked on the coverage strip**: the strip's model is
+  the stored coverage, read back from it as it is, so marks there would read as coverage.
+  They would need a model and a layer of their own for each take (saved with the session,
+  or not), and a style of the svgui fork's to draw them; the status bar says where
+  instead ([recording.md](recording.md#the-input-level)).
+- **The meter shows peaks, the voice threshold compares a level** (RMS) that a voice's
+  peaks stand some 10 dB over: a second bar of that level would show the two on one scale,
+  but only the live tracker measures it, and only during a take.
 
 ## Weak spots
 
@@ -199,6 +207,21 @@ The platform's own limits are in [port-android.md](port-android.md#known-limitat
   from CI (a session's clone is shallow), so it installs over one from CI only after
   uninstalling it, which loses Tony's settings and log
   ([building.md](building.md#building-for-android)).
+- **Audio Input Device on the phone has not been tried**
+  ([port-android.md](port-android.md#choosing-the-input)): whether an input opened by its
+  id (`setDeviceId()`) keeps the low-latency path, whether the Pixel lists several built-in
+  microphones (the menu offers the first), whether a USB receiver keeps MMAP (AOSP's
+  generic USB policy has none), and what unplugging the receiver during a take does (its
+  stream is disconnected; the take should stop as Stop does, and the device open again
+  on the phone's choice with a notice). Whether the Pixel runs the default audio policy
+  engine is not known either.
+- **The phone's notice that the input chosen is not plugged in** holds the status bar for
+  8 s, over a take's time and notes. A longer take hears of it only at its start.
+- **Input Channel on the phone has not been tried**: whether the Pixel's audio HAL
+  averages a two-input USB interface into the mono input Tony asks for (likely, from
+  Android's source, but the HAL is not public), and whether the input opened at the
+  device's own channels, for one input chosen, keeps the low-latency path
+  ([recording.md](recording.md#input-channels); the checklist's section 7).
 - **Touch on a Windows touch screen** has not been tried: Windows makes its own mouse
   events from touches, and its own right click from a press and hold.
 
@@ -255,7 +278,9 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   dot on a tone). A microphone noisier than −60 dBFS still gives dots in silence, unless
   the user sets the voice threshold over its noise
   ([recording.md](recording.md#the-live-tracker)). The checks' takes record with the
-  threshold Off.
+  threshold Off. A microphone that hears the speakers quietly, as a headset's held to an
+  earcup did, has the dev reference's tones under the floor: item 3 then draws no dots,
+  and says so ([calibrate-audio.md](calibrate-audio.md), §7).
 - Items 3 and 5 judge the fresh punch-ins only. Item 14 cannot see an overwrite question,
   which `record()` would ask before the observer starts.
 - Not in the dev run, of what the retired `test-tony-device` did: a take with no lead-in
@@ -263,8 +288,65 @@ The reasons are in [calibrate-audio.md](calibrate-audio.md), §10.
   two stages).
 - Every take logs "No such signal sv::WritableWaveFileModel::aboutToBeDeleted()", from the
   svapp fork ([forks.md](forks.md), known defects).
-- The calibration's result page does not give the microphone's channel or the noise
-  floor, which nothing in it measures.
+- The calibration's result page does not give the noise floor (Check Input Level does);
+  it gives the microphone's input, and offers to choose it.
+
+### Input channel and input level
+
+The design is in [recording.md](recording.md#input-channels) and
+[recording.md](recording.md#the-input-level).
+
+- **The numbers are starting values**, chosen without the user's devices: a clip is 3
+  samples in a row within 0.01 dB of full scale; the meter's bar and hold fall at 20 dB a
+  second, the hold after 1.5 s; Check Input Level reads 2 s of silence, aims peaks at
+  −10 dBFS, calls a gain within 2 dB right, and suggests a threshold 5 dB over the noise's
+  peaks; an input carries the microphone within 20 dB of the louder. Each is argued for
+  there; none has met the HS2 and the AI-Micro yet (the checklist's section 7).
+- **The take's scan runs on the GUI thread at Stop**, after the splice: a read of what went
+  into the take, a block at a time. Not timed on the phone.
+- **On a phone, before its input is open**, Input Channel applies to the input device
+  chosen, if it is plugged in, else to the input the driver last recorded from: a guess,
+  as `LatencyCalibration::onlyRecordDevice()` is for a measured round trip. The menu's
+  first line names it.
+- **Choosing an input on a phone opens the device again** while its input is open, which
+  moves the alignment, and the input then opens with the device's channels, which puts a
+  kept round trip out of date: calibrate again after choosing.
+- Untested anywhere but on the phone: `OboeAudioIO` opening its input at the device's own
+  channels, and Check Input Level asking for the microphone first.
+
+### Replace Take Audio from Recording
+
+The design is in [takes.md](takes.md#replace-take-audio-from-recording).
+
+- **Not tried on a real transmitter's recording.** The figures are the tests' synthetic
+  singing: the same singing reads 0.997 to 0.9999 alike, another singing of the song 0.20.
+  Whether a receiver's audio and its transmitter's own recording read as alike (the
+  receiver may process what it sends on: a high-pass, GainAssist), and where 0.5 sits
+  between them, is for the checklist's section 8. So are the other numbers: a dropout is
+  5 ms or more under −100 dBFS; another session is 0.1 s of loud 20 ms windows unlike,
+  ended by 0.1 s alike; where a range is not found as a whole, a session of its own is
+  four quarter seconds in a row alike.
+- **A dropout the receiver hides** other than with silence (repeating, fading) is not
+  left out of the comparison, and reads as less alike; one of 0.1 s or more reads as
+  another session, which is left as the take has it, not replaced.
+- **The two ends drifting apart is reported, not put right**: the audio is not
+  stretched, as asked, so a take whose ends lie 4 ms apart keeps each end up to 2 ms off.
+- **A punch-in shorter than half a second** is told apart (from 0.1 s) and left as the
+  take has it: too short to be looked for on its own.
+- **A punch-in that holds the range's loudest half second** is where the search starts:
+  the range is then found unlike it, and refused unless the punch-in is a second or more,
+  four quarter seconds alike, which is split off and the rest looked for. A singer who
+  punches in louder than before meets this. Anchors in several parts of the range, the
+  offset most of them agree on taken, would not.
+- **One take file is written per stretch replaced**, on the GUI thread, each a copy of
+  the whole take: 115 MB for a five-minute take at 48 kHz in stereo, ten times over for
+  ten stretches. The files between go at once, but the time stays. One pass would do: a
+  `TakeAudio` call taking every stretch as a patch, each with its own source file,
+  offset and gain, which would also do away with the extract step and its files.
+- **The whole recording is read** for its level, and the take's range is held in memory:
+  how long a long recording takes on the phone has not been timed.
+- **A punch-in is tested only in the core**, on synthetic takes: the app's test records
+  a take of one session.
 
 ### The voice threshold
 

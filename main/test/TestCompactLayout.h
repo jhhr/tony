@@ -24,6 +24,7 @@
 #include "../MainWindow.h"
 #include "../Analyser.h"
 #include "../CompactLayout.h"
+#include "../InputLevelMeter.h"
 #include "../LyricsTrack.h"
 #include "../SongScroll.h"
 #include "../SongScrollBar.h"
@@ -84,6 +85,11 @@ public:
     QList<QAction *> ownActions() {
         return { m_playAction, m_recordAction, m_recordIntoSelection,
                  m_eraseSingingAction, m_zoomInAction, m_zoomOutAction };
+    }
+
+    // The input meter beside Record, which each toolbar draws a meter of
+    QAction *inputMeterAction() {
+        return m_inputMeterAction;
     }
 
     // What it hides: the note-editing tools and the audio device menus
@@ -430,9 +436,10 @@ private slots:
             QVERIFY2(!toolBar->isVisible(), qPrintable(toolBar->objectName()));
         }
 
-        // Menu, Play, Record, Record into Selection, the take box, Undo,
-        // Redo, Erase, Zoom In, Zoom Out, Show and Play.  Undo and Redo are
-        // the ones of the window's own toolbar, with their menus
+        // Menu, Play, Record, Record into Selection, the input meter, the
+        // take box, Undo, Redo, Erase, Zoom In, Zoom Out, Show and Play.
+        // Undo and Redo are the ones of the window's own toolbar, with
+        // their menus
         QToolBar *tools = toolBar("Tools Toolbar");
         QVERIFY(tools);
         QVERIFY(compact->getMenuButton());
@@ -440,6 +447,7 @@ private slots:
         QList<QAction *> expected {
             compact->getMenuButton()->defaultAction(),
             own[0], own[1], own[2],
+            m_window->inputMeterAction(),
             takeBoxAction(bar),
             tools->actions()[0], tools->actions()[1],
             own[3], own[4], own[5],
@@ -473,6 +481,11 @@ private slots:
                                     .arg(button->height())));
             }
         }
+        QWidget *meter = bar->widgetForAction(m_window->inputMeterAction());
+        QVERIFY2(qobject_cast<InputLevelMeter *>(meter) &&
+                 meter->height() >= CompactLayout::iconSize,
+                 qPrintable(QString("the input meter is %1 high")
+                            .arg(meter ? meter->height() : -1)));
         QCOMPARE(bar->widgetForAction(takeBoxAction(bar)),
                  static_cast<QWidget *>(m_window->takeBox()));
         QCOMPARE(m_window->takeBox()->parentWidget(),

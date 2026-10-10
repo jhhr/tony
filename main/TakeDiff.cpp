@@ -56,6 +56,29 @@ decibels(double value, double against)
     return std::max(-limit, std::min(limit, db));
 }
 
+// The middle value, the upper of the two middle ones; -200 for none
+double
+medianOf(std::vector<double> values)
+{
+    if (values.empty()) return -200.0;
+    auto middle = values.begin() + values.size() / 2;
+    std::nth_element(values.begin(), middle, values.end());
+    return *middle;
+}
+
+// Whether the frames from \a from to \a to lie on one of the layout's
+// tones
+bool
+onATone(const LatencyCheck::Layout &layout, sv_frame_t from, sv_frame_t to)
+{
+    for (const LatencyCheck::Event &e : layout.events) {
+        if (from >= e.toneStart && to <= e.toneStart + e.toneLength) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The events no part of which lies in the window, sorted.  What
 // erasing the window would touch is what lies in it: a note that
 // crosses its edge goes with it, and an event with no duration, a
@@ -398,4 +421,46 @@ TakeDiff::placeLiveDot(const LatencyCheck::Layout &layout,
         return dot;
     }
     return dot;
+}
+
+TakeDiff::DotLevels
+TakeDiff::dotLevels(const LatencyCheck::Layout &layout, const float *audio,
+                    sv_frame_t count, double start, double end,
+                    double floor)
+{
+    DotLevels levels;
+    if (!audio || layout.rate <= 0) return levels;
+
+    // The tracker's windows, each whole within the punch-in: before it
+    // the take holds something else.  A window's dot is at its middle,
+    // where its first half ends
+    const sv_frame_t window = RealtimePitchTracker::kWindowSize;
+    const sv_frame_t half = window / 2;
+    const sv_frame_t from = std::max(sv_frame_t(0),
+                                     framesOf(start, layout.rate));
+    const sv_frame_t to = std::min(count, framesOf(end, layout.rate));
+
+    std::vector<double> tones, silence;
+    for (sv_frame_t w = from; w + window <= to;
+         w += RealtimePitchTracker::kHopSize) {
+        const double seconds = double(w + half) / layout.rate;
+        const LiveDot dot = placeLiveDot(layout, start, seconds, 0.0);
+        const double level = RealtimePitchTracker::level
+            (audio + w, int(half), 1);
+        // With no pitch, a dot on a tone where it would be judged is
+        // off it.  The last such dot past a tone's end has its window's
+        // first half past the end as well, and is counted with neither
+        if (dot.place == DotPlace::OffPitch &&
+            onATone(layout, w, w + half)) {
+            tones.push_back(level);
+            if (level < floor) ++levels.underFloor;
+        } else if (dot.place == DotPlace::OnNothing) {
+            silence.push_back(level);
+        }
+    }
+    levels.toneWindows = int(tones.size());
+    levels.tonesMedian = medianOf(tones);
+    levels.silenceWindows = int(silence.size());
+    levels.silenceMedian = medianOf(silence);
+    return levels;
 }

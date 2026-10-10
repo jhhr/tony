@@ -84,4 +84,5 @@ VoiceThresholdMenu::chosen(double dbfs)
 {
     QSettings settings;
     VoiceThreshold::setThreshold(settings, dbfs);
+    emit thresholdChosen(VoiceThreshold::threshold(settings));
 }

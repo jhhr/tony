@@ -22,6 +22,8 @@
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDate>
+#include "InputChannel.h"
+
 #include <QDateTime>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -147,6 +149,7 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     m_plan(AudioCheckRunner::calibrationPlan()),
     m_running(false),
     m_latencyKept(false),
+    m_inputChosen(-1),
     m_expectedSeconds(0),
     m_shownPermille(0),
     m_collapsed(false)
@@ -233,6 +236,7 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
 
     m_buttons = new QHBoxLayout;
     m_useButton = new QPushButton(tr("Use this latency"));
+    m_inputButton = new QPushButton;
     m_againButton = new QPushButton(tr("Check Again"));
     m_startButton = new QPushButton(tr("Start"));
     m_smallButton = new QPushButton(tr("Make Small"));
@@ -240,6 +244,7 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     m_closeButton = new QPushButton(tr("Close"));
     m_copyButton = new QPushButton(tr("Copy"));
     m_buttons->addWidget(m_useButton);
+    m_buttons->addWidget(m_inputButton);
     m_buttons->addStretch(1);
     m_buttons->addWidget(m_copyButton);
 #ifdef Q_OS_ANDROID
@@ -258,7 +263,8 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
     if (QScreen *screen = QGuiApplication::primaryScreen()) {
         const int height =
             PopupArea::fingerWidth(screen->physicalDotsPerInchY()) * 3 / 4;
-        for (QPushButton *button : { m_useButton, m_againButton,
+        for (QPushButton *button : { m_useButton, m_inputButton,
+                                     m_againButton,
                                      m_startButton, m_smallButton,
                                      m_cancelButton, m_closeButton,
                                      m_copyButton, m_saveButton }) {
@@ -284,6 +290,8 @@ CalibrateAudioDialog::CalibrateAudioDialog(MainWindow *window,
             this, &CalibrateAudioDialog::collapse);
     connect(m_useButton, &QPushButton::clicked,
             this, &CalibrateAudioDialog::useLatency);
+    connect(m_inputButton, &QPushButton::clicked,
+            this, &CalibrateAudioDialog::useInput);
     connect(m_closeButton, &QPushButton::clicked,
             this, &CalibrateAudioDialog::reject);
     connect(m_copyButton, &QPushButton::clicked,
@@ -483,6 +491,22 @@ CalibrateAudioDialog::canUseLatency() const
         !m_useButton->isHidden() && m_useButton->isEnabled();
 }
 
+int
+CalibrateAudioDialog::offeredInput() const
+{
+    const AudioCheckResult &r = m_result;
+    if (r.failure != "" || r.inputPeaks.size() < 2 ||
+        r.summary.verdict == Verdict::NoSignal) {
+        return -1;
+    }
+    const std::vector<int> carrying = InputChannel::carrying(r.inputPeaks);
+    if (carrying.size() != 1) return -1;
+    if (!InputChannel::offered(carrying[0])) return -1;
+    QSettings settings;
+    if (InputChannel::channel(settings, r.inputKey) == carrying[0]) return -1;
+    return carrying[0];
+}
+
 void
 CalibrateAudioDialog::present()
 {
@@ -615,6 +639,17 @@ CalibrateAudioDialog::cancelCheck()
 }
 
 void
+CalibrateAudioDialog::useInput()
+{
+    const int input = offeredInput();
+    if (input < 0) return;
+    m_window->chooseInputChannel(m_result.inputKey, input);
+    m_inputChosen = input;
+    m_resultText->setText(resultHtml());
+    showPage(Page::Result);
+}
+
+void
 CalibrateAudioDialog::useLatency()
 {
     if (!canUseLatency()) return;
@@ -686,6 +721,7 @@ void
 CalibrateAudioDialog::showResultPage()
 {
     m_latencyKept = false;
+    m_inputChosen = -1;
     m_resultText->setText(resultHtml());
     showPage(Page::Result);
 }
@@ -805,6 +841,11 @@ CalibrateAudioDialog::showPage(Page page)
     m_useButton->setVisible(page == Page::Result &&
                             m_result.calibrationUsable());
     m_useButton->setEnabled(!m_latencyKept);
+    const int input = (page == Page::Result ? offeredInput() : -1);
+    m_inputButton->setVisible(input >= 0);
+    if (input >= 0) {
+        m_inputButton->setText(tr("Use Input %1").arg(input + 1));
+    }
 
     if (page == Page::Instructions) m_startButton->setDefault(true);
     if (page == Page::Result) m_closeButton->setDefault(true);
@@ -951,19 +992,25 @@ CalibrateAudioDialog::instructionsHtml() const
             "</li></ul>";
     }
     // Open for playback only, a phone says which input it records from
-    // only when it records: the one calibrated with this output before,
-    // if there is one, else the phone's choice.  With no device open, it
-    // says nothing yet
+    // only when it records: the input device chosen, if it is plugged in,
+    // else the one calibrated with this output before, if there is one,
+    // else the phone's choice.  With no device open, it says nothing yet
     QString output = deviceName(devices.playbackDevice);
     QString input = deviceName(devices.recordDevice);
     if (phone && route.driver == "") {
         output = tr("the phone chooses when the check starts");
         input = output;
     } else if (phone && !route.hasInput) {
-        input = (devices.recordDevice != "" ?
-                 tr("%1, as when it was calibrated; the phone chooses when "
-                    "recording starts").arg(devices.recordDevice) :
-                 tr("the phone chooses when recording starts"));
+        AudioRoute::Device chosen;
+        if (m_window->chosenInputDevice(chosen)) {
+            input = tr("%1, chosen under Playback > Audio Input Device")
+                .arg(AudioRoute::deviceName(chosen));
+        } else {
+            input = (devices.recordDevice != "" ?
+                     tr("%1, as when it was calibrated; the phone chooses "
+                        "when recording starts").arg(devices.recordDevice) :
+                     tr("the phone chooses when recording starts"));
+        }
     }
     html += "<table cellspacing=\"4\">";
     html += "<tr><td>" + tr("Driver:") + "</td><td>" +
@@ -1119,6 +1166,34 @@ CalibrateAudioDialog::calibrationHtml() const
                           .arg(measured));
     }
 
+    // The input the microphone is on, of an interface with two: the
+    // check's takes are made of both, so that it is heard on either
+    const std::vector<int> carrying = InputChannel::carrying(r.inputPeaks);
+    if (r.inputPeaks.size() >= 2 && carrying.size() == 1 &&
+        s.verdict != Verdict::NoSignal) {
+        const int on = carrying[0];
+        const int other = (on == 0 ? 1 : 0);
+        const double quieter = r.inputPeaks[size_t(other)] > 0.f ?
+            20.0 * std::log10(double(r.inputPeaks[size_t(on)]) /
+                              double(r.inputPeaks[size_t(other)])) : 0.0;
+        QString words = tr("The microphone is on input %1 alone").arg(on + 1);
+        words += r.inputPeaks[size_t(other)] > 0.f ?
+            tr(": input %1 was %2 dB quieter.").arg(other + 1)
+            .arg(QLocale().toString(quieter, 'f', 0)) :
+            tr(": input %1 was silent.").arg(other + 1);
+        if (m_inputChosen == on) {
+            words += " " + boldHtml(tr("Kept.")) + " " +
+                tr("Takes from this device are now made from input %1 "
+                   "alone, in both ears and at its own level.").arg(on + 1);
+        } else if (offeredInput() == on) {
+            words += " " + tr("Press Use Input %1 to make your takes from it "
+                              "alone (Playback ▸ Input Channel): in both "
+                              "ears, and at its own level for the live dots "
+                              "and the voice threshold.").arg(on + 1);
+        }
+        html += paragraph(words);
+    }
+
     // The figures, for whoever wants them, and for passing on
     auto row = [](QString name, QString value) {
         return "<tr><td>" + name + "</td><td>" + value.toHtmlEscaped() +
@@ -1167,6 +1242,17 @@ CalibrateAudioDialog::calibrationHtml() const
                 tr("%1 dBFS").arg(QLocale().toString
                                   (20.0 * std::log10(s.inputPeak), 'f', 1)) :
                 tr("silence"));
+    if (!r.inputPeaks.empty()) {
+        QStringList peaks;
+        for (size_t c = 0; c < r.inputPeaks.size(); ++c) {
+            peaks << (r.inputPeaks[c] > 0.f ?
+                      tr("input %1 %2 dBFS").arg(c + 1)
+                      .arg(QLocale().toString
+                           (20.0 * std::log10(r.inputPeaks[c]), 'f', 1)) :
+                      tr("input %1 silent").arg(c + 1));
+        }
+        html += row(tr("Inputs:"), peaks.join(", "));
+    }
     html += row(tr("Echo:"),
                 s.echo.heard ?
                 tr("%1 after the sound, %2 dB %3")

@@ -57,6 +57,11 @@ namespace TakeAudio
      * crossfaded with what was there over fadeFrames frames; negative
      * means defaultFadeFrames().
      *
+     * With a recordingChannel that the recording has, only that channel
+     * of it is used, as a mono recording would be: copied into every
+     * channel of the old take, or a mono take if there was none
+     * (InputChannel). -1, or a channel it does not have, uses them all.
+     *
      * If placed is not null, it receives the range of the take that
      * the recording now fills.
      */
@@ -67,7 +72,8 @@ namespace TakeAudio
                    sv::sv_frame_t length,
                    QString outPath,
                    Coverage::Range *placed = nullptr,
-                   sv::sv_frame_t fadeFrames = -1);
+                   sv::sv_frame_t fadeFrames = -1,
+                   int recordingChannel = -1);
 
     /**
      * Write to outPath the take in oldPath with the given ranges made
@@ -90,6 +96,17 @@ namespace TakeAudio
     QString resample(QString inPath,
                      sv::sv_samplerate_t rate,
                      QString outPath);
+
+    /**
+     * Write to outPath count frames of the audio in inPath from its
+     * frame "from" on, every sample times gain, with its channels and
+     * at its rate; silence where it has nothing (before its frame 0,
+     * past its end). A stretch of a long recording made elsewhere (a
+     * wireless transmitter's own), to go into a take as a recording
+     * does.
+     */
+    QString extract(QString inPath, sv::sv_frame_t from,
+                    sv::sv_frame_t count, float gain, QString outPath);
 
     /// The sample rate of the audio file at path, or 0 if it cannot be read
     sv::sv_samplerate_t sampleRate(QString path);

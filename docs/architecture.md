@@ -41,8 +41,8 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `Coverage`, `TakeAudio`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `Coverage`, `TakeAudio`, `RecordingAlignment`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `TakeRecordingSearch`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
 Android-only code elsewhere is under `#ifdef Q_OS_ANDROID`; neither may change what the
@@ -213,6 +213,10 @@ leaves whoever keeps a pointer to it holding a layer that the redo stack owns an
 - The svapp fork emits `Document::modelAboutToBeReleased(ModelId)` and `MainWindowBase`
   removes the model from the play source on it. Upstream only did so from
   `RemoveLayerCommand`, which forced deletes never run.
+- **A take plays centred**: `Analyser::addWaveform()` pans the reference's waveform hard
+  left (its pitch and notes, right) as upstream does, and the singing track's to the
+  centre: it has no pan control, its pitch and notes are silent, and it is listened to for
+  how the voice sounds ([recording.md](recording.md#input-channels)).
 - Mute with `getPlayParameters()->setPlayAudible(false)` directly.
   `Analyser::setAudible()`, `setVisible()`, `setGain()` and `setPan()` **write the user's
   settings** (below); use them only for the user's own toggles and controls, never for
@@ -288,6 +292,17 @@ volume and the background music in `MainWindow`.
   always null and **`Analyser::stackLayers()` / `PaneStack::setCurrentLayer()` do nothing**.
   A tool acts on the topmost layer of its kind (`Pane::getTopFlexiNoteLayer()`, which
   skips dormant layers in the svgui fork). Layer order is changed with `TakeLayers::raise()`.
+- **The hover readout is not the top layer's.** The top of pane 0 is seldom the layer
+  pointed at: the coverage strip after a take, which describes nothing; the alternate
+  pitch track; and, after any selection, the reference's pitch candidates, hidden, which
+  stay there until the next re-analysis. The box at the top right and the note lit up
+  are therefore of the note under the pointer, in whichever note layer on show it is,
+  the reference's or the take's; off the notes, of the topmost layer on show that
+  describes anything there; and with the Edit tool, of the notes it edits
+  (`Pane::getIdentifyLayer()`, svgui fork). While the pointer is on a note low in the
+  pane, every layer above that one is drawn at every paint, as the lit layer is kept out
+  of the view's cache: about 13 ms a paint on the cloud machine with a 15 s take in view,
+  against 2 ms on a note of the take.
 - Making any selection starts `Analyser::reAnalyseSelection()` on the reference, so a
   transformer is usually running afterwards. Tests cannot assert
   `!haveRunningTransformers()` after selecting.
@@ -346,6 +361,15 @@ volume and the background music in `MainWindow`.
   of a recording in progress poll and wait.
 - The MinGW build force-includes `main/mingw_byte_fix.h` to resolve the C++17
   `std::byte` / `byte` clash; do not remove it.
+- The window's place is kept at close as Qt's own record of it (`saveGeometry()`,
+  `MainWindow/geometry`), which says whether it was maximised: its size and position
+  alone brought a maximised window back as large as the screen but not maximised, and on
+  Windows a little off it. `main()` puts it back (`restoreWindowGeometry()`) before it
+  shows the window, never the constructor: every test window would then come back where
+  the one closed before it was. On macOS the native window is made with the window
+  (`setUnifiedTitleAndToolBarOnMac()`), and a hidden window's geometry reaches it only
+  when it is shown, maximised by then: it kept Qt's default 640 x 480 as the size to
+  un-maximise to, so the restore gives it the normal geometry first.
 - A path, a URI or a name the user typed goes into a message in one `arg()` call with
   all the arguments (`arg(a, b)`), or the last of a chain: a `%1` or `%3A` in it (a take
   called "a %1", a `content://` URI) is taken for a placeholder by the `arg()` after it.
@@ -401,6 +425,52 @@ for every driver and device, and not in the session. A choice only writes it: `r
 reads it at every Start, and Analyse Now and a redo that analyses again read it when they
 run.
 
+**Input channel** (`InputChannel`, `InputChannelMenu`): Playback > Input Channel, for a
+microphone on one input of an interface with two. Both Inputs, the default, makes a stereo
+take of a two-input device, whose levels are the channels' average; Input 1 or Input 2
+makes the take mono, from that input alone, which the live tracker reads, the splice puts
+in, and pYIN and the voice threshold then hear at its own level. The design, and what a
+phone's Android does with a stereo device, are in
+[recording.md](recording.md#input-channels). Next to Voice Threshold, for the same
+reasons: with Record, reached on a phone from the menu button, greyed out during a take
+and a check. Kept per input device, as `LatencyCalibration` keys its figures (group
+`InputChannel`), and the menu's first line names that device. `record()` reads it after
+the base call, as a phone's input is known only then; the audio check's takes are made of
+both inputs. A choice on a phone opens the device again, as its input is opened otherwise
+for one input than for both (`OboeAudioIO`).
+
+**A phone's input device** (`InputDevice`;
+[port-android.md](port-android.md#choosing-the-input)): Playback > Audio Input Device,
+which on the desktop lists the driver's devices, lists on a phone the inputs Android's
+`AudioManager` lists (`MainWindow::listsInputDevices()`, `listedInputDevices()`, which
+the tests give a phone's), through `InputDeviceMenu`, made the first time the menu is
+listed. The choice is kept by type and product name (group `InputDevice`), and
+`OboeAudioIO` asks for the id to open it by each time it opens its input, of the inputs it
+lists once for that open. Before the first take, the measured round trip and the input
+channel are looked up for the input chosen if it is plugged in; with none chosen and none
+recorded from, Input Channel cannot say which input the take will open, and its entries
+are shut until one has (`InputChannel::Key::known`). One chosen but not plugged in, or
+not opened, is said in the status bar for 8 s, over the take's time and notes.
+
+**The status bar** (`StatusLine`): over what the views write there (the visible range,
+playback's position, a take's time, the note sung), first the countdown of a lead-in,
+then a notice about the audio device for 8 s, then the last take's level, held until the
+next take, playback or a selection. Everything that writes the status bar asks
+`MainWindow::showStatusLine()` first; when a notice runs out, what was under it is
+written again at once, as nothing else may write for a while.
+
+**The input level** (`InputLevel`, `InputLevelFeed`, `InputLevelMeter`,
+`CheckInputLevelDialog`; [recording.md](recording.md#the-input-level)): a meter beside
+Record, in the compact layout's toolbar too (a `QWidgetAction`, so that each toolbar has a
+meter of its own, all drawing one feed's state: the clip light lit in one is lit in all);
+the take's peak and clipped places in the status bar at Stop; Playback > Check Input
+Level, next to Input Channel. `MainWindow` owns the feed, made with the toolbar, and the
+dialog, made when first asked for, and deletes both in `~MainWindow` before the base class
+deletes the record target the feed reads. The feed reads only while the device runs with
+its input (`InputLevelFeed::setRunning()`, from `MainWindow::updateInputLevelReading()`):
+whatever is busy has resumed it, and it runs on until it is suspended as idle or opened
+again (`deleteAudioIO()`).
+
 **Touch** (`TouchGestures`, one per pane: an event filter in `main/`, not a change to
 svgui, so that synthetic touch events test it on the desktop). One finger is left to Qt,
 which makes mouse events of a touch nothing accepts, so taps, drags and selections go
@@ -444,9 +514,10 @@ pane just above the coverage strip, because a session restores only layers
 name `"Lyrics"`, in `analyseNewMainModel()` after the alternate pitch track. Its model is
 taken out of the play source after an import and again after a load: a word past the end
 of the reference would hold playback open. It is **never the pane's top layer**, because
-the pane takes its hover readout and vertical scale from the top layer and this one has
-neither. `show()` raises the layer that was on top before; `adopt()` raises the one under
-the lyrics if the session was saved with them on top; and when any other layer is deleted
+the pane takes its vertical scale from the top layer and this one has none (the hover
+readout passes over it: see [Selection and tools](#selection-and-tools)). `show()`
+raises the layer that was on top before; `adopt()` raises the one under the lyrics if
+the session was saved with them on top; and when any other layer is deleted
 (the alternate pitch track turned off, a take deleted) a zero-time timer does the same,
 because that layer is still in the pane when `layerAboutToBeDeleted` arrives. Not tied to
 takes: the take code finds layers by take name, source model or extra pane, so it never

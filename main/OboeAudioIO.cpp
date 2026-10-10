@@ -12,6 +12,7 @@
 */
 
 #include "OboeAudioIO.h"
+#include "InputChannel.h"
 
 #include <bqaudioio/ApplicationPlaybackSource.h>
 #include <bqaudioio/ApplicationRecordTarget.h>
@@ -86,29 +87,27 @@ describeStream(oboe::AudioStream *stream)
     return os.str();
 }
 
-// The device AAudio opened a stream on, as Android's AudioManager lists
-// it. Only the id if it is not listed, or the stream cannot say
-// (OpenSL ES: 0). On the GUI thread, as QJniObject clears and logs any
-// exception a call throws
-AudioRoute::Device
-lookUpDevice(int id, bool input)
+// The devices Android's AudioManager lists, inputs or outputs: their
+// ids, types, product names and channel counts. Each call asks Android
+// again, so an open asks once for each and passes the list on. On the
+// GUI thread, as QJniObject clears and logs any exception a call throws
+std::vector<AudioRoute::Device>
+listDevices(bool input)
 {
-    AudioRoute::Device device;
-    device.id = id;
-    if (id <= 0) return device;
+    std::vector<AudioRoute::Device> result;
 
     QJniObject context = QNativeInterface::QAndroidApplication::context();
-    if (!context.isValid()) return device;
+    if (!context.isValid()) return result;
     QJniObject manager = context.callObjectMethod
         ("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;",
          QJniObject::fromString("audio").object<jstring>());
-    if (!manager.isValid()) return device;
+    if (!manager.isValid()) return result;
 
     // AudioManager.GET_DEVICES_INPUTS and GET_DEVICES_OUTPUTS
     QJniObject devices = manager.callObjectMethod
         ("getDevices", "(I)[Landroid/media/AudioDeviceInfo;",
          jint(input ? 1 : 2));
-    if (!devices.isValid()) return device;
+    if (!devices.isValid()) return result;
 
     QJniEnvironment env;
     jobjectArray array = devices.object<jobjectArray>();
@@ -117,7 +116,8 @@ lookUpDevice(int id, bool input)
         QJniObject info = QJniObject::fromLocalRef
             (env->GetObjectArrayElement(array, i));
         if (!info.isValid()) continue;
-        if (info.callMethod<jint>("getId", "()I") != id) continue;
+        AudioRoute::Device device;
+        device.id = info.callMethod<jint>("getId", "()I");
         device.type = info.callMethod<jint>("getType", "()I");
         QJniObject name = info.callObjectMethod
             ("getProductName", "()Ljava/lang/CharSequence;");
@@ -125,7 +125,31 @@ lookUpDevice(int id, bool input)
             device.productName = name.callObjectMethod
                 ("toString", "()Ljava/lang/String;").toString();
         }
-        break;
+        QJniObject counts = info.callObjectMethod("getChannelCounts", "()[I");
+        if (counts.isValid()) {
+            jintArray ints = counts.object<jintArray>();
+            const jsize n = env->GetArrayLength(ints);
+            std::vector<jint> values(size_t(std::max<jsize>(n, 0)));
+            if (n > 0) env->GetIntArrayRegion(ints, 0, n, values.data());
+            for (jint v : values) {
+                device.channels = std::max(device.channels, int(v));
+            }
+        }
+        result.push_back(device);
+    }
+    return result;
+}
+
+// The device AAudio opened a stream on, of those listed. Only the id if
+// it is not listed, or the stream cannot say (OpenSL ES: 0)
+AudioRoute::Device
+lookUpDevice(int id, const std::vector<AudioRoute::Device> &listed)
+{
+    AudioRoute::Device device;
+    device.id = id;
+    if (id <= 0) return device;
+    for (const AudioRoute::Device &d : listed) {
+        if (d.id == id) return d;
     }
     return device;
 }
@@ -284,8 +308,12 @@ public:
 };
 
 OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
-                         ApplicationPlaybackSource *source) :
+                         ApplicationPlaybackSource *source,
+                         InputChannelFor inputChannelFor,
+                         InputDeviceFor inputDeviceFor) :
     SystemAudioIO(target, source),
+    m_inputChannelFor(inputChannelFor),
+    m_inputDeviceFor(inputDeviceFor),
     m_epoch(std::chrono::steady_clock::now()),
     m_rate(0),
     m_sourceChannels(2),
@@ -323,6 +351,12 @@ OboeAudioIO::OboeAudioIO(ApplicationRecordTarget *target,
             m_output.reset();
         }
     }
+}
+
+std::vector<AudioRoute::Device>
+OboeAudioIO::listInputDevices()
+{
+    return listDevices(true);
 }
 
 OboeAudioIO::~OboeAudioIO()
@@ -374,6 +408,8 @@ OboeAudioIO::openStreams()
     m_rate = m_output->getSampleRate();
     m_outputChannels = m_output->getChannelCount();
 
+    // The inputs as Android lists them, once for the whole open
+    std::vector<AudioRoute::Device> inputs;
     if (m_target) {
         oboe::AudioStreamBuilder inBuilder;
         inBuilder.setDirection(oboe::Direction::Input)
@@ -392,25 +428,98 @@ OboeAudioIO::openStreams()
             ->setBufferCapacityInFrames
             (m_output->getBufferCapacityInFrames() * 2);
 
-        result = inBuilder.openStream(m_input);
         // At the output's rate, in float, and with no more channels than
         // the output has, which FullDuplexStream's own input buffer had
         // room for: Engine::readInput() reads into one of its own now,
-        // but no more has been tried
-        if (result == oboe::Result::OK &&
-            (m_input->getSampleRate() != m_rate ||
-             m_input->getFormat() != oboe::AudioFormat::Float ||
-             m_input->getChannelCount() > m_outputChannels)) {
-            result = oboe::Result::ErrorInvalidFormat;
-            m_input->close();
+        // but no more has been tried. More than the output has are read
+        // as well for a device opened at its own channels (below): then
+        // exactly those
+        auto openInput = [&](int channels) {
+            oboe::Result opened = inBuilder.openStream(m_input);
+            if (opened == oboe::Result::OK &&
+                (m_input->getSampleRate() != m_rate ||
+                 m_input->getFormat() != oboe::AudioFormat::Float ||
+                 (channels > 0 ? m_input->getChannelCount() != channels :
+                  m_input->getChannelCount() > m_outputChannels))) {
+                opened = oboe::Result::ErrorInvalidFormat;
+                m_input->close();
+            }
+            if (opened != oboe::Result::OK) m_input.reset();
+            return opened;
+        };
+
+        // The input device chosen (Playback > Audio Input Device), by the
+        // id it has now: 0 is Android's choice, as is one that cannot be
+        // opened
+        inputs = listDevices(true);
+        const int chosenId =
+            (m_inputDeviceFor ? m_inputDeviceFor(inputs) : 0);
+        if (chosenId > 0) inBuilder.setDeviceId(chosenId);
+        result = openInput(0);
+        if (result != oboe::Result::OK && chosenId > 0) {
+            cerr << "OboeAudioIO: the input device chosen, device "
+                 << chosenId << ", could not be opened ("
+                 << oboe::convertToText(result) << "): Android's choice "
+                 << "instead" << endl;
+            inBuilder.setDeviceId(oboe::kUnspecified);
+            result = openInput(0);
         }
         if (result != oboe::Result::OK) {
             m_startupError = std::string("Failed to open the audio input: ") +
                 oboe::convertToText(result);
             cerr << "OboeAudioIO: " << m_startupError << endl;
-            m_input.reset();
             return false;
         }
+        if (chosenId > 0 && m_input->getDeviceId() != chosenId) {
+            cerr << "OboeAudioIO: the input device chosen is device "
+                 << chosenId << ", and Android opened device "
+                 << m_input->getDeviceId() << endl;
+        }
+
+        // One input of the device chosen: open it again at the device's
+        // own channels, which Android then leaves as they are, and leave
+        // the choice of one to the application. The mono stream is closed
+        // first, as an exclusive one holds the device. A device that
+        // cannot be opened so keeps the mono input
+        const int id = m_input->getDeviceId();
+        const AudioRoute::Device opened = lookUpDevice(id, inputs);
+        const int own = opened.channels;
+        if (m_inputChannelFor && own > 1 &&
+            InputChannel::isSingle(m_inputChannelFor(opened))) {
+            m_input->close();
+            m_input.reset();
+            inBuilder.setChannelCount(own)
+                ->setChannelConversionAllowed(false)
+                ->setDeviceId(id);
+            result = openInput(own);
+            if (result == oboe::Result::OK) {
+                cerr << "OboeAudioIO: one input chosen: the input opened at "
+                     << "the device's own " << own << " channels" << endl;
+            } else {
+                cerr << "OboeAudioIO: one input chosen, but the input could "
+                     << "not be opened at the device's own " << own
+                     << " channels (" << oboe::convertToText(result)
+                     << "): one channel, as Android makes it" << endl;
+                inBuilder.setChannelCount(1)
+                    ->setChannelConversionAllowed(true);
+                result = openInput(0);
+                if (result != oboe::Result::OK) {
+                    m_startupError =
+                        std::string("Failed to open the audio input: ") +
+                        oboe::convertToText(result);
+                    cerr << "OboeAudioIO: " << m_startupError << endl;
+                    return false;
+                }
+            }
+        }
+
+        // Whether Android converts the device's channels to the input's,
+        // as it does a stereo device's to mono: Android 14 and later say
+        // what the hardware runs at (0 or less where it cannot say)
+        cerr << "OboeAudioIO: input: " << m_input->getChannelCount()
+             << " channel(s), the hardware "
+             << m_input->getHardwareChannelCount() << ", the device lists "
+             << own << " at most" << endl;
     }
 
     freeBuffers();
@@ -455,7 +564,7 @@ OboeAudioIO::openStreams()
 
     logStream("output", m_output.get());
     if (m_input) logStream("input", m_input.get());
-    findRoute();
+    findRoute(inputs);
     return true;
 }
 
@@ -859,7 +968,7 @@ OboeAudioIO::logStream(std::string name, oboe::AudioStream *stream) const
 }
 
 void
-OboeAudioIO::findRoute()
+OboeAudioIO::findRoute(const std::vector<AudioRoute::Device> &inputs)
 {
     // The devices AAudio chose: for an unspecified device, those of the
     // route Android has now, which is what a measured round trip belongs
@@ -868,12 +977,13 @@ OboeAudioIO::findRoute()
     m_route = AudioRoute::Route();
     m_route.driver = "oboe";
     m_route.rate = m_rate;
-    m_route.output = lookUpDevice(m_output->getDeviceId(), false);
+    m_route.output = lookUpDevice
+        (m_output->getDeviceId(), listDevices(false));
     m_route.outputStreams = QString::fromStdString
         (describeStream(m_output.get()));
     if (m_input) {
         m_route.hasInput = true;
-        m_route.input = lookUpDevice(m_input->getDeviceId(), true);
+        m_route.input = lookUpDevice(m_input->getDeviceId(), inputs);
         m_route.inputStreams = QString::fromStdString
             (describeStream(m_input.get()));
     }

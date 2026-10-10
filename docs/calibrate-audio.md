@@ -222,14 +222,24 @@ and 28 dB over it); none has been tuned on a real device yet.
 
 ## 4. The result page
 
-The verdict in one sentence and its fix; the echo, if one was heard; then a table: the
-round trip measured (not for NoSignal) against the driver's, output plus input; what the
-takes were placed with (measured before, or the driver's figure); where each punch-in
-landed (+ is late); the spread; sweeps found of those judged; both rates ("recorded at
-48000 Hz, converted to the reference's 44100 Hz" where they differ); the input peak in
-dBFS; the echo; the driver and the devices; on a phone, how each stream was opened
-("Streams:"), which a kept figure is checked against (§5). A failed run shows why it
-ended instead.
+The verdict in one sentence and its fix; the echo, if one was heard; on a device with two
+inputs, the one the microphone is on, when it is on one alone; then a table: the round
+trip measured (not for NoSignal) against the driver's, output plus input; what the takes
+were placed with (measured before, or the driver's figure); where each punch-in landed (+
+is late); the spread; sweeps found of those judged; both rates ("recorded at 48000 Hz,
+converted to the reference's 44100 Hz" where they differ); the input peak in dBFS; each
+input's peak ("Inputs:"); the echo; the driver and the devices; on a phone, how each
+stream was opened ("Streams:"), which a kept figure is checked against (§5). A failed run
+shows why it ended instead.
+
+**Use Input N** is offered where the microphone was on one input of two alone (within 20
+dB of the louder, as the dev checks' item 5 judges it) and Input Channel has another for
+the input device the first punch-in recorded from: it chooses that input for that device,
+as the menu does ([recording.md](recording.md#input-channels)). The peaks are each
+input's in what the punch-ins kept, from the scan every take's raw recording gets at Stop
+(`MainWindow::reportTakeLevel()`): nothing is read twice. The check's takes are made of
+both inputs whatever is chosen, so that a microphone on the input not chosen is heard and
+found.
 
 **Use this latency** keeps the calibrated round trip for the devices the check started on,
 not for those the Preferences name when it is pressed (the result stays on show for as long
@@ -266,17 +276,20 @@ differs by more than 1 ms from the one the duplex stream reported at the check, 
 says "out of date" until the first take. Whether a real device does so is not known yet
 ([manual checklist](manual-checklist.md), 2.6).
 
-**On Android** there are no device settings: `OboeAudioIO` opens whatever route the phone
-has and reports it (`AudioRoute`, through `AudioRouteReporter`): each device's type and
+**On Android** there are no device settings but the input device chosen, if any
+(Playback > Audio Input Device, [port-android.md](port-android.md#choosing-the-input)):
+`OboeAudioIO` opens whatever route the phone has, with that input, and reports it (`AudioRoute`, through `AudioRouteReporter`): each device's type and
 product name from `AudioManager`, the rate, and how each stream was opened. The key is
 then the driver `oboe` and the two devices' type and product name, never their ids, which
 a headset changes each time it is plugged in; so the speaker, a wired headset and a
 Bluetooth one each keep a figure. The device is opened again when its streams are
 disconnected, as they are when the route changes, and the menu line follows the new
-route. Until the first take the device is open for output only, and the key takes the one
-input a figure is kept with for that output, if there is exactly one. That is a guess: the
-menu line and the instructions may show the figure of an input the first take does not
-open, though the take itself looks its figure up with the input it got.
+route. Until the first take the device is open for output only, and the key takes the
+input device chosen if it is plugged in, which the first take opens, and the instructions
+name it so. With none chosen, it takes the one input a figure is kept with for that
+output, if there is exactly one. That is a guess: the menu line and the instructions may
+show the figure of an input the first take does not open, though the take itself looks
+its figure up with the input it got.
 
 Oboe's latencies come from timestamps and move by several ms between starts of the same
 streams (5.2, 8.4 and 4.4 ms out on the first phone tried), which the 1 ms rule would take
@@ -284,7 +297,10 @@ for new buffers at every take. So on a route the fingerprint is how each stream 
 **opened** (the audio API, MMAP or not, rate, channels, format, performance and sharing
 mode, burst, buffer and capacity, and the input's preset), stored with the figure: it is
 stale when a stream it describes opened otherwise, never because the reported pair moved,
-and a stream not open (the input before the first take) is not compared. For the same
+and a stream not open (the input before the first take) is not compared. An input opened
+at the device's own channels, for one input chosen under Input Channel, is opened
+otherwise: a figure kept with the mono input is out of date after the choice, and the
+other way round ([recording.md](recording.md#input-channels)). For the same
 reason the check counts each punch-in as if placed with the first one's round trip
 (`LatencyCheck::PunchIn::placedWith`), so that a reported pair that moved between
 punch-ins does not read as spread.
@@ -406,7 +422,7 @@ WASAPI period of drift between two sound cards' clocks, which the user accepted
 | --- | --- | --- | --- |
 | 1 | `latency_on_this_machine` | every punch-in of every stage placed within ±6 ms; after the reopen, the take's file judged again over the dev take's punch-ins gives the same offsets to the frame, and the pitch and notes the session restored are the same events (values as the file rounds them) | offsets of each punch-in, the largest, the round trip used, the same after reopening |
 | 2 | `several_phrases_in_one_take` | at least two punch-ins; each wholly in the take's coverage, its median offset within ±6 ms, its own start gap measured | each punch-in's median offset and start gap |
-| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Counted apart and not judged: dots on the sweeps (a subharmonic of their top), and dots at an edge, whose window straddles it: within one window of the tracker (46 ms) after a tone's start or the punch-in's, or within half a window (23 ms) either side of a tone's end, where the window holds the tone's decay through the room and what follows. On the fake they are on pitch, but through a real speaker, room and microphone they wander 50 to 75 cents (`TakeDiff::placeLiveDot()`) | dots per punch-in, on tones, at edges, on sweeps, elsewhere, and the message says how many were at edges; how far behind the cursor they appeared, median and spread |
+| 3 | `live_dots` | stage 2: more than 10 dots in each punch-in, each on one of the reference's sounds, and those on tones within 50 cents of the tone. A sound's dots lie from its start, less a hop, to half the tracker's window and a hop past its end: a dot is drawn at the middle of its window, but YIN hears mostly the first half. Counted apart and not judged: dots on the sweeps (a subharmonic of their top), and dots at an edge, whose window straddles it: within one window of the tracker (46 ms) after a tone's start or the punch-in's, or within half a window (23 ms) either side of a tone's end, where the window holds the tone's decay through the room and what follows. On the fake they are on pitch, but through a real speaker, room and microphone they wander 50 to 75 cents (`TakeDiff::placeLiveDot()`) | dots per punch-in, on tones, at edges, on sweeps, elsewhere, and the message says how many were at edges; the levels the tracker met in each punch-in (the tones', how many of their windows were under its floor, the silence's); how far behind the cursor they appeared, median and spread |
 | 4 | `nothing_of_the_take_in_the_speakers` | no echo in any stage; an output level of exactly 0 at every look that lies wholly in one of the reference's silent gaps; Play Singing Audio the same after each take as before, and the take heard or not as it says | the second arrival; the largest output level in the gaps, and over how many looks; the largest output level; the margin of a look |
 | 5 | `mic_on_input_2` | stage 2: judged only when the microphone is on input 2 alone (an input within 20 dB of the loudest carries it), and then passes when every punch-in drew more than 10 dots; otherwise Measured, "not applicable here", as on a device that records one input channel (a phone's microphone); a Fail when no input recorded anything | each input's peak in each punch-in; which inputs carry the microphone |
 | 7 | `record_from_a_position` | stage 3: placed within ±6 ms; outside the selection the take's audio the same bit for bit, and its pitch and notes beyond ±0.25 s unchanged | the range, offsets, audio, pitch and notes outside |
@@ -428,6 +444,17 @@ Item 3 judges the dots as the live tracker draws them, after its level floor and
 octave slips dropped ([recording.md](recording.md#the-live-tracker)): the floor keeps out a
 room's steady noise, which failed item 3 on the user's PC, and the octave slips failed it
 on the user's phone (§14). Both are what a singer would have seen too.
+
+**A microphone that hears the reference too quietly** draws no dots, and item 3 says why.
+It takes the levels the tracker met from the take as the fresh punch-ins leave it
+(`TakeDiff::dotLevels()`): at each hop, the level of its window's first half, the
+channels' average, on the tones where a dot is judged and in the silence between the
+sounds. The floor is a cliff: the dev reference's own tones, turned down, gave every dot
+on a tone at −59 dBFS and none at −61, with a noise of −70 dBFS between them or without.
+When a punch-in fails and its tones' median is under the floor, the message gives that
+level and what to do: the volume up, the earcup held right against the microphone, or the
+microphone's gain raised. It still fails, since no dots came; the user's headset
+microphone held to an earcup did so on the PC and the phone (§14).
 
 **Pitch that is not there.** When the take has no pitch where a check compares it (as on a
 phone whose speaker played none of the tones), the pitch part of items 1, 7, 9 and 12, and
@@ -553,8 +580,8 @@ What it rests on:
   While Recording and Pre-roll write QSettings when toggled, so the runner sets an override
   (`m_audioCheckTakes`, with the plan's pre-roll and round trip) that `record()`,
   `recordingStarted()` and `wantedPreRollFrames()` read, and clears it when the take stops
-  or the run ends. It also records them with the voice threshold Off, whatever the setting
-  ([recording.md](recording.md#the-audio-checks-takes)).
+  or the run ends. It also records them with the voice threshold Off and with both
+  inputs, whatever the settings ([recording.md](recording.md#the-audio-checks-takes)).
 - **Record during a check.** The Record action goes to `recordPressed()`, which ignores a
   press while a check runs: `record()` itself cannot tell a press from the runner's calls or
   `pollTakeProgress()`'s, and a press would stop the check's take or record one of the
@@ -570,7 +597,8 @@ What it rests on:
   peak since the previous call and reset it. While recording, lead-in included,
   `ViewManager::checkPlayStatus()` reads the input levels only, for the meter's signal; the
   observer then reads the output levels, and only then, and takes the input levels from
-  that signal.
+  that signal, as the input meters' feed does (`InputLevelFeed`), which reads the input
+  levels itself only outside a take ([recording.md](recording.md#the-input-level)).
 - **A take's audio is read from its file**, never from its model (§2).
 
 ## 10. Known limitations and open points
@@ -657,8 +685,9 @@ below).
 - Items 3 and 5 judge stage 2's punch-ins only. Item 14 cannot see an overwrite question:
   `record()` would ask it before the observer starts. The check's takes record into a
   selection, where none is asked, so "no question" is watched for, not arranged.
-- The calibration's result page does not give the microphone's channel or the noise floor:
-  nothing in the calibration measures them (item 5 of the dev run finds the channel).
+- The calibration's result page does not give the noise floor: its silences hold the room
+  as the earcup-to-microphone loop has it. Check Input Level gives it
+  ([recording.md](recording.md#the-input-level)).
 - Windows' audio enhancements, echo cancellation or noise suppression can take the sweeps
   out, and Tony does not ask for raw capture (MME has no raw mode, and the bqaudioio
   fork does not ask WASAPI for its own): NoSignal and Fading tell the user to turn them
@@ -684,15 +713,11 @@ below).
 
 **Later candidates:**
 
-- A measured noise floor, and a suggested voice threshold: `RealtimePitchTracker`'s own
-  floor is a fixed −60 dBFS ([recording.md](recording.md#the-live-tracker)), which kept
-  out the room noise that failed item 3 on the user's run of 2026-09-27 (−66.5 dBFS). A
-  microphone noisier than that still gives dots in silence, unless the user raises
-  Playback > Voice Threshold over it; and a singer with the music on speakers chooses
-  that threshold blind, by recording the music alone. Calibrate Audio could measure the
-  microphone's floor in the silence between its sounds and, played through the speakers
-  as they are sung with, the level they reach the microphone at, put both on the result
-  page with the microphone's channel, and suggest a threshold over them.
+- A measured noise floor, and a suggested voice threshold, on the result page: Playback >
+  Check Input Level measures the floor (with the music playing, if the singer plays it on
+  speakers) and suggests a threshold ([recording.md](recording.md#the-input-level)), but
+  Calibrate Audio does not: its silences between the sweeps hold the room as the
+  earcup-to-microphone loop has it, not as the singer sings.
 - A quick re-measure after the device is opened or resumed again (a Bluetooth reconnect;
   on a phone, a resume after two idle minutes), without a test session.
 - A getter for the rate the record target records at (svapp fork), so that on a desktop
@@ -724,7 +749,11 @@ below).
   off pitch one window later, also at a punch-in from inside a tone; dots 71 and 62 cents
   sharp at 8.302 and 18.797 s, 2 ms after the tone of 245 Hz ends and 3 ms before that of
   220.5 Hz does, not judged, and off pitch one window earlier, the allowance half a window
-  either side of the end and no more; and the reach of a sound.
+  either side of the end and no more; and the reach of a sound. The levels a punch-in
+  gave the tracker: on the dev reference, its tones' windows none past a tone and none
+  under the floor, its silence's exact silence, also over one event where the sweep and
+  tone outnumber the pause between them; 50 dB down, every tone window under the floor;
+  and a noise's level in the silence.
   `TestAudioDriverSettings`: the drivers, the default and the latency kept per driver
   ([audio-drivers.md](audio-drivers.md), §6).
 - **The round trip in the take path** (`TestRecordWorkflow`, `latency_*`): a stored figure
@@ -758,7 +787,9 @@ below).
   ([audio-drivers.md](audio-drivers.md), §6). On a fake whose loopback moves 10 ms at each
   restart, a check whose window suspends at Stop lands its punch-ins 10 ms apart
   (Unsteady), and one kept running, as the application keeps it, lands them alike (Ok),
-  the fake resumed once. Its runs are two punch-ins of two sweeps on the first 11 s of the
+  the fake resumed once. With the loopback on input 2 of two and Input 1 chosen, the check
+  hears the sweeps all the same, its result names input 2, and Use Input 2 chooses it for
+  the device. Its runs are two punch-ins of two sweeps on the first 11 s of the
   calibration reference, about 13 s each.
 - **`TestDevChecks`** (`test-tony-dev`, development builds only): whole dev runs on the
   loopback fake. Passing, with the fake's true round trip and a long song of 60 s (240 s
@@ -770,7 +801,9 @@ below).
   run, every item passing but item 5, Measured, the report's header naming the route's
   driver and streams and the dialog's report holding the file whole. With noise as loud as
   the reference and no pitch anywhere, items 1, 7, 9, 10 and 12 pass on their other parts,
-  saying what was not judged, and item 3 fails. Failing: the round trip 20 ms off (items 1,
+  saying what was not judged, and item 3 fails. With the loopback 45 dB down, the tones
+  at −64 dBFS, under the live tracker's floor: no dots, and item 3 fails saying so and what
+  to do, every other item passing. Failing: the round trip 20 ms off (items 1,
   2, 7 and 13; item 10 still passes, both punch-ins moved alike); an echo tap, with the
   microphone on input 2 (item 4 fails, item 5 judged on input 2); the take made audible
   during the re-record's lead-in (items 4 and 12, also through a stall); a stall of the GUI
@@ -779,7 +812,7 @@ below).
   Also cancel, a closed session, the dev checks deleted during a run, the scratch folders,
   the report's header with the driver and the latency asked for, and the dialog carrying
   on into them. Parts that no fault run makes fail (among them item 3's dots on the tones,
-  item 9, and item 10's step) were seen failing with the code broken for a moment. About 7
+  item 9, and item 10's step) were seen failing with the code broken for a moment. About 9
   minutes.
 
 How the tests are built, and what to watch for: [testing.md](testing.md), "The audio check
@@ -873,10 +906,10 @@ So that later work does not derive them again.
   source's `getTargetBlockSize()` is always its default, 1024: `ResamplerWrapper` does not
   pass the device's block on, so the observer bounds a block by the frames received.
 - **The fake device.** `FakeAudioIO::Config::loopback` adds the output, the mean of its
-  channels, to the input `inputDelay` frames late; the latencies it reports are independent
-  of that delay, and `restartShift` moves it at each resume after the first. It reports
-  levels only with `reportLevels`, a route only when given one (`route`), and records
-  `inputChannels` channels.
+  channels, to the input `inputDelay` frames late, times `loopbackGain`; the latencies it
+  reports are independent of that delay, and `restartShift` moves it at each resume after
+  the first. It reports levels only with `reportLevels`, a route only when given one
+  (`route`), and records `inputChannels` channels.
 
 ## 14. The user's runs
 
@@ -899,6 +932,14 @@ So that later work does not derive them again.
   did twice; the third run's landed at its edge, and items 1 and 2 failed. Item 3 failed
   first on dots at a tone's end, since set apart, then on four dots in silence (§10), and
   passed with the live tracker's level floor.
+- **2026-10-06**, WASAPI at 20 ms, a Rode HS2 headset microphone on a Rode AI-Micro for
+  input and the Xonar for output, an earcup held to the HS2, after Calibrate Audio: round
+  trip 104.3 ms, every placement between −0.5 and −1.1 ms; 9 passed, 1 failed, 1
+  measured. Item 5: the AI-Micro gives the HS2 to both inputs, at the same peak. Item 3
+  failed with no dots at all. The loudest the input reached in its two punch-ins'
+  recordings, sweeps and all, was −45.3 and −52.8 dBFS, where no dot on a tone of the earlier microphone's runs
+  read under −42 dBFS: the tones reached the tracker at its floor, which they must clear
+  (§7, the checks). pYIN, which has no floor, found their pitch (item 10).
 
 **The user's phone**: a Pixel 9a, Bluetooth earphones (WF-1000XM6, A2DP) for output and
 the phone's own microphone for input, an earbud held to the microphone.
@@ -921,3 +962,13 @@ the phone's own microphone for input, an earbud held to the microphone.
   ([recording.md](recording.md#the-live-tracker)). The offsets drifted steadily, +0.1 to
   +1.5 ms over 81 s, about 1 ms a minute: the Bluetooth output's clock against the
   microphone's. Whether that keeps growing is open (§10).
+- **2026-10-06**, the HS2 on the AI-Micro over USB for input, the earphones for output, an
+  earbud held to the HS2: Calibrate Audio steady at 277 ms; both streams AAudio's MMAP,
+  the input mono at 48 kHz; every placement within ±1.0 ms; 9 passed, 1 failed, 1
+  measured. Item 3 failed: 12 and 55 dots where a punch-in gives about 280, 8 and 28 of
+  them off the tones, the first of each an octave under its tone, the input's peak
+  −41.7 dBFS (the calibration's chirps −27.4). The tones were at the floor again, with
+  only their loudest windows over it. Those have few dots either side, and a dot with none
+  on the hop before passes the octave slips as it is
+  ([recording.md](recording.md#the-live-tracker)). On the fake, tones at the floor over
+  white noise slipped not once; what the room and the earbud added is not known.

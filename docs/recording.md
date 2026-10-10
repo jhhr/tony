@@ -27,7 +27,13 @@ and the splice reads from there.
 
 1. **A Stop click returns early** into `MainWindowBase::record()` at the top of `record()`.
    Everything below is for a Start. The latency fields are zeroed only on Start: the
-   splice on Stop still needs them.
+   splice on Stop still needs them. **A Start stops playback first**, if Record was
+   pressed while it played, as Play / Pause does, the playhead left where it stopped:
+   every take starts from a standstill, and is the take Record would start from there.
+   Left playing, the reference would play on under the take, and the deferred lambda
+   (step 9), which starts it only when nothing plays, would neither start it at S nor
+   measure the start gap ([Latency](#latency)). It comes before the microphone and the
+   overwrite question, so that neither is asked over the music, and before P is read.
 2. **On Android the microphone is asked for first.** Without it `record()` asks
    (`QMicrophonePermission`) and returns; a yes calls `record()` again, from the top, and a
    no gets a box that says where to allow it. Until it is allowed, `createAudioIO()` opens
@@ -82,8 +88,9 @@ and the splice reads from there.
 10. `modelAdded()` sees `m_recordingAsSingingTrack`, stores `m_currentRecordingModelId`
     and returns. The recording is raw material, not the singing track; no analyser is
     made.
-11. After the base call: if `isRecording()` is false (no device, device busy) the take
-    flags are cleared and the singing unmuted. Otherwise the playback and centre frames
+11. After the base call: the take's input channel is read
+    ([Input channels](#input-channels)). If `isRecording()` is false (no device, device
+    busy) the take flags are cleared and the singing unmuted. Otherwise the playback and centre frames
     are restored to S, `setupRecordingLayer()` gives the recording a hidden, muted
     waveform layer (`attachLayerToView`, `setSavedInSession(false)`) — the document needs
     *some* layer to hold the model — and `startTakePolling()` starts the 100 ms timer if
@@ -122,8 +129,9 @@ that handler may wait for it.
    longer the take, and the cursor would be left past P. `stopReferenceAfterTake()` also
    suspends the device where Stop does (`suspendAudioOnStop()`, which says no; see
    [Latency](#latency)).
-4. `m_takes->spliceRecording(...)` — see [takes.md](takes.md). A recording no longer than
-   L + R is dropped quietly; a real failure is a dialog and leaves the track as it was.
+4. `m_takes->spliceRecording(...)` — see [takes.md](takes.md), from the take's input
+   channel. A recording no longer than L + R is dropped quietly; a real failure is a
+   dialog and leaves the track as it was.
 5. The undo command is made, the audio swapped, the ranged analysis started (gated by the
    take's voice threshold: [takes.md](takes.md#the-voice-threshold)), the command pushed,
    and `syncCoverageStrip()` called **after** the swap.
@@ -263,6 +271,254 @@ reference's: the recording is at the device's rate. A desktop device whose defau
   checks on a 48 kHz fake land every sweep +1.0 to +1.1 ms, calibrate-audio.md). A round
   trip measured by Calibrate Audio includes it; the reported pair does not.
 
+## Input channels
+
+What a take is made of when the microphone is on one input of an interface with two (a
+headset on input 1 of a two-input USB interface, say), and **Playback > Input Channel**,
+which chooses. Found on the fake device (`FakeAudioIO`, two input channels, the input on
+channel 1 or 2 only) and by reading the code; the Android part from the platform's
+source, as no test can run it.
+
+**Both Inputs**, the default, is what a take was before there was a choice:
+
+- **On the desktop the take is stereo.** bqaudioio's `PortAudioIO` opens as many input
+  channels as the record target asks for, at most as many as the device has; the record
+  target asks for two, and records what it is given. So a two-input interface gives a
+  two-channel `recorded-*.wav`, and the take's file, which has the channels of its first
+  recording (`TakeAudio::splice()`), is stereo too: the voice in one channel, the other
+  input's noise or silence in the other. A one-input device gives a mono take. The svapp
+  fork's record target asks every device for two, whatever the device before it gave:
+  asked for the channels of the one opened last, a two-input interface chosen after a
+  one-input microphone would be opened with one.
+- **It plays the voice in one ear**: a take plays centred (below), its first channel in
+  the left ear and its second in the right.
+- **The levels are the channels' average**, so a microphone on one input of two reads
+  6.02 dB under its own level everywhere a level is judged. On the fake, a sawtooth at
+  −10.82 dBFS RMS on input 1:
+
+  | | Mono device, or both inputs | Input 1 of 2 |
+  | --- | --- | --- |
+  | The live tracker's level (its floor, the voice threshold) | −10.82 dBFS | −16.84 dBFS |
+  | The take's analysis gate (`VoiceGate`) | the same measure | the same measure |
+  | What pYIN is given (svcore's transformer divides the mixdown by the channels; Tony reads a take normalised to its peak) | −4.80 dBFS RMS | −10.82 dBFS RMS |
+
+  With the voice threshold at −20 dBFS and singing at −17 dBFS RMS on its input, the
+  phrase had 203 dots and 203 pitch events on a mono device and on both inputs, and none
+  of either on one input of two. pYIN found the same pitch either way on the fake's
+  steady tones, at every level tried down to 18 dB under the take's peak; but Tony sets
+  pYIN's low-amplitude suppression at 0.2 RMS of the normalised take (−14 dBFS), under
+  which pYIN scales down how likely a frame is to be voiced in proportion to its level, so
+  soft singing on one input of two loses half its weight there.
+
+**A wireless receiver** used as a USB microphone (a RØDE Wireless PRO or GO) gives two
+channels in each of its modes. Found on the fake, as above:
+
+- **Merged** (one transmitter on both channels): two equal inputs. The take is stereo,
+  both channels the same, at the microphone's own level. Nothing needs choosing.
+- **Split, with one transmitter**: the voice on one channel, the other silent. This is a
+  microphone on one input of two, as above: 6 dB down, and Input 1 or Input 2 brings it
+  back.
+- **Safety channel** (merged mode only): the second channel is the first, 10 dB quieter
+  in RØDE's description. With Both the take is stereo, its second channel 10 dB down
+  (heard more in the left ear). Every level is the average, 0.66 of input 1's: **3.6 dB
+  down**. Singing at −17 dBFS RMS on input 1 got no dots and no pitch events with the
+  threshold at −19 dBFS; with it at −22 dBFS it got 193 dots and 202 events. With Input 1
+  chosen it got both at −19 dBFS, and the take was mono. The safety copy is there for a
+  peak that clips the first channel; Tony does not switch to it. A clipped take shows on
+  the meter's clip light and in the take's scan ([below](#the-input-level)).
+
+**Input 1 or Input 2** makes the take from that input alone:
+
+- `record()` reads the choice for the device it records from **after** the base call
+  (`m_takeInputChannel`), not before as it reads the voice threshold: a phone knows its
+  input only once it is open, which for the first take is inside the base call. The live
+  tracker, set up after the base call, reads that channel of the recording
+  (`RealtimePitchTracker::setChannel()`) and measures its level as one channel; the
+  splice (`SingingTakes::spliceRecording()`, `TakeAudio::splice()`) puts that channel
+  alone into the take. The raw `recorded-*.wav` keeps every input, as recorded.
+- The first recording of a take makes it **mono**: it plays in both ears, and pYIN and
+  the analysis gate, which read the take, hear the input at its own level. Into a take
+  that is stereo already (made with both inputs, before the choice) the chosen input goes
+  into both channels, as a mono recording always did; the rest of that take stays as it
+  was, and still reads 6 dB down where it was made of one input. A new take starts
+  afresh.
+- A device that does not have the input chosen (Input 2 of a one-input microphone) gives
+  its take as Both would: the one channel there is.
+- The choice is shut during a take and while an audio check runs, as the voice
+  threshold is. The audio check's takes are made of both inputs whatever is chosen
+  ([below](#the-audio-checks-takes)).
+- **Kept per input device** (`InputChannel`, group `InputChannel`): under the driver and
+  the record device as `LatencyCalibration` names them, the Preferences' names on a
+  desktop and the route's input on a phone. A phone's device open for playback only
+  cannot say which input it will record from, and takes the input device chosen, or the
+  one its driver last recorded from. With neither (a phone's first take after a fresh
+  install) the menu says the input is known once a take has started, and its entries
+  are shut until then: a choice kept for no device would never be read. The menu's first
+  line names the device a choice is for.
+
+**Every take plays centred.** `Analyser::addWaveform()` pans the reference's waveform
+hard left, upstream Tony's arrangement (its audio left, the pitch and notes played as
+tones on the right), which the user can change from the toolbar; the singing track has no
+pan control and its pitch and notes are silent, and it is listened back to for how the
+voice sounds, so its waveform is given the centre. Panned left as the reference is, a take
+would be heard in the left ear only, and a stereo one from input 2 alone not at all.
+
+**On Android Tony asks for a mono input** (`OboeAudioIO`, with Oboe allowed to convert
+channels), and what a two-input USB interface then gives depends on layers below Tony.
+From the source (Oboe 1.11.0; Android 14 to 16's frameworks, read in LineageOS's mirrors,
+as android.googlesource.com cannot be reached from a cloud session):
+
+- **Oboe converts nothing on a Pixel.** It opens another channel count than asked for in
+  two quirks only (stereo input on Android 8.0's OpenSL ES; mono MMAP input on two
+  Samsung Exynos chips), and passes one channel to AAudio otherwise. Where it does reduce
+  two channels to one it keeps the first (`MultiToMonoConverter`).
+- **AAudio cannot reduce channels.** Its client-side converter refuses ("Channel reduction
+  not supported"), so a mono MMAP stream on a stereo device does not open, and an MMAP
+  stream that does not open falls back to the legacy path.
+- **The legacy path averages.** AudioPolicyManager opens the device at the mono asked
+  for only where the device lists mono; otherwise at its own stereo, and AudioFlinger's
+  `RecordBufferConverter` downmixes `(L + R) / 2`. A microphone on input 1 then arrives
+  6 dB down with input 2's noise in it, and as the client's channels differ from the
+  device's, the input gets no FAST track: not the low-latency path asked for.
+- **A USB audio HAL that does list mono** for a stereo device (AOSP's legacy HAL, where
+  ALSA reports one channel as the device's least) drops the channels past the first:
+  input 1 alone. AOSP's AIDL HAL converts nothing. The Pixel 9a's HAL is Google's own
+  AIDL HAL, not public: which of these a two-input interface meets there is not known.
+- So with Both a microphone on input 1 most likely arrives averaged, 6 dB down and without
+  the FAST track, and possibly whole; on input 2, averaged or not at all.
+- **With one input chosen** for the input device Android opened, `OboeAudioIO` opens the
+  input again at the device's own channel count, the most `AudioDeviceInfo` lists for it
+  (`getChannelCounts()`), with Oboe's conversion off and the device named, so that
+  Android has nothing to convert; Tony then takes the channel itself, as on the desktop.
+  A device that cannot be opened so keeps the mono input, and the log says why. Choosing
+  from the menu opens the device again if its input is open. Each open logs the
+  channels the input has, those the hardware runs at (Android 14 and later,
+  `getHardwareChannelCount()`) and the most the device lists, which says whether Android
+  converted. The input's streams are then described with the device's channel count, so
+  a round trip kept for the route with a mono input is out of date
+  ([calibrate-audio.md](calibrate-audio.md), §5): calibrate again after choosing.
+
+## The input level
+
+**The meter** (`InputLevelMeter`, beside Record in the Playback toolbar and in the compact
+layout's toolbar; `InputLevelFeed` behind every meter shown): the input's peak in dBFS, on
+a scale from −60 to 0, green up to −6 dBFS (where a singer's peaks belong), amber to
+−1, red over it; a hold at the highest peak; a tick at the voice threshold, when it is on;
+and a clip light.
+
+- **No work in the audio callback.** The devices measure each block's peak already, for
+  the level meters (`PortAudioIO`, `OboeAudioIO`, and the fake with `reportLevels`), and the
+  record target keeps the highest since it was last read. A read takes those and clears
+  them, so they have **one reader**: during a take, lead-in included, the view manager
+  (`checkPlayStatus()`, every 20 ms, for its `monitoringLevelsChanged` signal), which the
+  feed listens to; at other times the feed reads them itself. The view manager says only
+  when the levels change, so a steady tone, or an input held at full scale, reads as what
+  it said last, not as silence. Outside a take there are levels only while the device runs
+  with its input: from the first take on (or Check Input Level, or a check), until it is
+  opened again or, on a phone, idles.
+- **20 readings a second** (`kIntervalMs`), each the peak since the one before, and drawn
+  only when the bar or the hold has moved by half a dB or the light changed: a phone's
+  GUI thread has little to spare during a take ([open-points.md](open-points.md)), and a
+  quiet input between takes draws nothing. **Only while the device runs with its input**
+  (`setRunning()`): a phone that sits with a song open, its device open for playback only
+  or suspended as idle, is not woken 20 times a second for a meter with nothing to show.
+  Stopped, the meter shows nothing but the clip light. Not tied to recording: the meter
+  reads between takes, and during Check Input Level, as long as the device runs.
+- **The input shown** is the take's (Input Channel's choice, or the louder of the two
+  inputs), as the device reports its first two inputs left and right; when a take stops,
+  the choice again (an audio check's takes are made of both).
+- **Hold and fall** (`InputLevel::Meter`, `tony_core`): the bar is the latest peak and
+  falls from it at 20 dB a second; the hold is the highest peak, stays 1.5 s, then falls as
+  fast. Between two readings the bar falls up to 1 dB, which a steady sound's next reading
+  puts back.
+- **The tick is the voice threshold**, but the meter shows peaks, and the threshold
+  compares the level (RMS) of a half window, which a voice's peaks stand some 10 dB over
+  (a sine's, 3 dB): a voice whose peaks only reach the tick is under the threshold. Said in
+  the meter's tooltip and the README. Not built: a second bar of that level, which only the
+  live tracker measures, and only during a take.
+- **The clip light** is lit by a reading at full scale (`InputLevel::kFullScale`) or by
+  the take's scan, and put out by the next take's start and by a click anywhere on the
+  meter (a finger is wider than the light).
+
+**The take's scan** (`InputLevel::scanFile()`, `Scanner`; `MainWindow::reportTakeLevel()`):
+once a take is spliced, what of the raw recording went into it (from L + R on, to the
+punch-out if there is one), of the take's input, is read again a block at a time and
+scanned for its peak and for runs of samples at full scale.
+
+- A sample at full scale is one within 0.01 dB of it (0.999): a converter that clips holds
+  its largest code, which a 24-bit one gives as 1 − 2⁻²³ and a 16-bit one as 1 − 2⁻¹⁵,
+  both well over that. A clip is a run of **3** or more (Audacity's Find Clipping's
+  default): a sibilant's crest or a click that touches full scale is one sample there; a
+  clipped waveform is flat for as long as it is over. A smooth crest that reaches full
+  scale exactly is a run too (a 100 Hz sine at 48 kHz holds 7 samples within 0.01 dB of its
+  top) and is counted: it came that near clipping, and wants the gain down as much.
+- The raw recording, not the take's file: the take is converted to the reference's rate
+  when the device runs at another, which smooths a flat top into ripples, and normalised as
+  it is read.
+- Runs within 0.5 s of each other are one place. The status bar says the take's peak, or
+  "Take: clipped at 1:02.5, 1:05.0, 1:10.2 and 2 more" on the song's timeline (placed as
+  the dots are), and a clip lights the light. The message stays until the next take,
+  playback or a selection (the `StatusLine`'s held message): the view moves back to the
+  take's position after Stop, which would write the visible range over it at once.
+- The scan runs on the GUI thread at Stop, after the splice, which reads and writes the
+  whole take already: a 4-minute stereo recording at 48 kHz is 23 million samples.
+- **Not on the coverage strip.** The strip's model is the take's stored coverage, saved and
+  read back as it is (`Coverage::fromEvents()`): marks there would be read as coverage.
+  They would need a model and a layer of their own per take, and a style in the svgui fork
+  to draw them ([open-points.md](open-points.md)).
+
+**Playback > Check Input Level** (`CheckInputLevelDialog`): the meter, large, with the input
+open and nothing recorded. Two seconds of silence are read first, as the noise floor (with
+the music playing, for a singer who has it on speakers); then the singer sings their
+loudest phrase and presses Done. The result (`InputLevel`, `tony_core`):
+
+- **The loudest peak, and the gain change** that puts it at −10 dBFS, to a whole dB, "right"
+  within 2 dB. −10 dBFS leaves 10 dB for a take sung louder than the phrase tried, and a
+  24-bit converter's own noise is still over 100 dB under it. A phrase that clipped cannot
+  say how loud it was: turn down by 10 dB or more, and check again.
+- **The noise floor**: the median of the readings in the silence, so that a click or a
+  breath does not move it. Readings are peaks, over 50 ms each.
+- **A voice threshold**: the lowest of the menu's that is 5 dB or more over the noise
+  floor; Off where that is still 5 dB under the live tracker's own −60 dBFS floor. The
+  threshold compares a half window's RMS, which a noise's peaks stand over by about 12 dB
+  for a hiss and 3 dB for a steady hum or a fan's lines, so the noise's level is 8 dB or
+  more under it. A button sets it, as the menu does. Where it is within 25 dB of the
+  loudest peak the page says soft singing may fall under it.
+- **No conflict with the stream kept running between takes.** Opening the input is what the
+  first take's start does (`MainWindowBase::record()`: the device opened again with its
+  input if it was for playback only, then resumed), and moves the alignment as that would;
+  once a take or a check has opened it, the input is open and running already and nothing
+  is opened again. The dialog resumes the device and leaves it running when it closes, as
+  a take does: suspending it would move the alignment the takes after it share. While it
+  is open, the device counts as busy, so that a phone does not suspend it as idle. It is
+  shut during a take and a check, asks for the microphone on a phone first, and runs no
+  event loop of its own (`open()`).
+- **The music**: the dialog's Play plays it, as the window behind is shut while the dialog
+  is open (and opening the input stops what played, if the device has to be opened
+  again). Started or stopped during the silence, the two seconds start again, so that
+  all of them are read as the singer will have it.
+- **An input that comes late**, after the dialog has said it delivered nothing, starts
+  the silence when it comes, by the clock started again with it. Closed, the dialog's
+  clock stops too.
+- **The device opened again under it** (a phone's that failed, `checkAudioDevice()`) is
+  run again, and a check under way starts from the silence, as it may be another
+  microphone now; a result stays.
+
+**Only digital clipping can be seen**, by the meter, the scan and the check alike: samples
+held at the converter's largest value. A microphone that distorts in its own electronics
+(a capsule or preamplifier driven past what it takes, as a headset's can be at full voice)
+gives a waveform under full scale that looks like any other, and has to be heard. So does a
+converter's clipping scaled down after it, by an operating system's input volume under
+100 %: set the gain on the interface.
+
+**No monitoring through Tony** (the user's decision, 2026-10-03): the microphone is not
+played back to the headphones. Tony's round trip is tens of ms at best (about 90 ms
+measured through WASAPI at 20 ms on the user's PC, 276 ms through Bluetooth on the phone;
+about 20 ms is Google's best case for a phone), and a singer hears their own voice through
+the bones of the head at once: the voice in the headphones would come as an echo of it. An
+interface with zero-latency monitoring mixes the microphone into the headphones before its
+converter, which is the fix (README, "Microphone and levels").
+
 ## Pre-roll and Record into Selection
 
 - **Pre-roll**: R = `MainWindow/prerollseconds` (3 s, no UI on purpose) clipped to the
@@ -283,9 +539,10 @@ reference's: the recording is at the device's rate. A desktop device whose defau
   the poll stops itself when it finds no take.
 - **The countdown**: three things in `MainWindowBase` write the status bar during a take
   (recorded duration every 10 ms, playback position every 20 ms, visible range on
-  scroll). All three are routed through `MainWindow::showTakeCountdown()` first. Anything
-  written to the status bar from a timer of your own will be overwritten before it can be
-  read.
+  scroll). All three are routed through `MainWindow::showStatusLine()` first, which puts
+  the countdown there while it runs (`StatusLine`). Anything written to the status bar
+  from a timer of your own will be overwritten before it can be read: give it to the
+  `StatusLine` instead.
 
 ## The audio check's takes
 
@@ -301,7 +558,9 @@ The same override records them with the **voice threshold Off**, whatever the se
 they measure the device, and what reaches the microphone from the speakers or an earcup is
 what they listen for. A threshold over the level that reaches it would take out the dots
 item 3 judges and the pitch and notes other items compare
-([calibrate-audio.md](calibrate-audio.md), §7).
+([calibrate-audio.md](calibrate-audio.md), §7). And with **both inputs**, whatever
+Input Channel says: one chosen that the microphone is not on would make takes of silence,
+and the dev checks' item 5 looks for the input that carries the microphone.
 
 Record's action goes to `recordPressed()`, which ignores a press while a check runs (the
 button is greyed then as well). The guard is not in `record()`: the runner and
@@ -311,7 +570,8 @@ their calls from a press.
 ## The live tracker
 
 `RealtimePitchTracker::run()`: read a 2048-frame window of the **mixdown**
-(`getData(-1, ...)`, so a mic on input 2 works), YIN, keep the estimate, advance 256;
+(`getData(-1, ...)`, so a mic on input 2 works), or of the one input the take is made
+from ([Input channels](#input-channels)), YIN, keep the estimate, advance 256;
 sleep 5 ms when there is not a full window yet. `kHopSize` is also the resolution of the
 dot model, whose unit must be `"Hz"` for the layer to align to the pane's log-frequency
 scale.
@@ -329,11 +589,11 @@ is:
   before it: on the fake, dots of its hum just before every sweep;
 - **the channels' average**, not the mixdown's sum: a microphone on both inputs would read
   6 dB louder than on one. A microphone on one input of two reads 6 dB below its own
-  level.
+  level, unless that input is chosen, which the tracker then reads alone.
 
 A microphone whose noise is louder than −60 dBFS still gives such dots, unless the voice
-threshold below is set over it; Calibrate Audio could measure that noise and suggest one
-([calibrate-audio.md](calibrate-audio.md), §10).
+threshold below is set over it; Playback > Check Input Level measures that noise and
+suggests one ([The input level](#the-input-level)).
 
 **The voice threshold** (Playback > Voice Threshold; `VoiceThreshold`) raises the floor for
 a singer with the music on speakers, which the microphone hears as well: set over the level

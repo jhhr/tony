@@ -22,6 +22,7 @@
 #include "../Coverage.h"
 #include "../LatencyCalibration.h"
 #include "../LatencyCheck.h"
+#include "../TakeDiff.h"
 #include "TakeObserver.h"
 
 #include "base/Event.h"
@@ -369,12 +370,15 @@ private:
 
     /// What the observer saw of one of the runner's punch-ins, and the
     /// peak of each channel of its raw recording, full scale 1, or why
-    /// that could not be read
+    /// that could not be read; and, of the fresh punch-ins, the levels
+    /// the live tracker met in the take, or why they could not be read
     struct Watched {
         int punchIn;    ///< counting from 0
         TakeObserver::Observation seen;
         std::vector<float> channelPeaks;
         QString channelError;
+        TakeDiff::DotLevels dotLevels;
+        QString dotLevelsError;
         Watched() : punchIn(0) { }
     };
 

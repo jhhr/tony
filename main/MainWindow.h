@@ -29,11 +29,15 @@
 #include "LatencyUtils.h"
 #include "LatencyCalibration.h"
 #include "LiveDotsFeed.h"
+#include "InputChannel.h"
+#include "TakeRecordingSearch.h"
 
 #include <vector>
 #include <string>
 #include <atomic>
 #include <functional>
+
+#include <QElapsedTimer>
 
 #include "data/model/SparseTimeValueModel.h"
 
@@ -55,6 +59,12 @@ class AudioCheckRunner;
 struct AudioCheckResult;
 class AudioDriverMenus;
 class VoiceThresholdMenu;
+class InputChannelMenu;
+class InputDeviceMenu;
+class InputLevelFeed;
+class InputLevelMeterAction;
+class CheckInputLevelDialog;
+class StatusLine;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -123,6 +133,12 @@ public:
     // Compact Layout does: main() switches it on at start on Android and
     // with --compact
     void setCompactLayout(bool on);
+
+    // The window put back as it was when it was last closed, before main()
+    // shows it: maximised if it was, on the screen it was on, and within
+    // that screen. False if nothing was kept, and the window left as it is
+    bool restoreWindowGeometry();
+
     // The round trip takes are placed with (see LatencyCalibration).
     // Keep the one an audio check measured, for the devices it started
     // on and the rate it recorded at (AudioCheckResult::key); false, with
@@ -152,6 +168,29 @@ public:
     // The route the open device reports; its driver is "" if it reports
     // none, or there is no device open
     AudioRoute::Route audioRoute() const;
+
+    // The input device an Input Channel choice is kept for: the record
+    // device the Preferences name, or the input of the route the open
+    // device reports (on a phone), or while it is open for playback only
+    // the input its driver last recorded from (InputChannel::lastInput())
+    InputChannel::Key inputChannelKey() const;
+
+    // The input channel chosen for that device now (InputChannel)
+    int currentInputChannel() const;
+
+    // Choose the input channel for the input device given, as the menu
+    // chooses it for the device in use (Calibrate Audio's result page
+    // offers the one its check heard the microphone on)
+    void chooseInputChannel(const InputChannel::Key &key, int channel);
+
+    // Whether the input device is chosen from the inputs the driver
+    // lists (Android's AudioManager), as on a phone, rather than from
+    // the Preferences' device names (Playback > Audio Input Device)
+    virtual bool listsInputDevices() const;
+
+    // The input device chosen, as it is listed now (with its id), if one
+    // is chosen and plugged in (InputDevice)
+    bool chosenInputDevice(AudioRoute::Device &device) const;
 
 #ifdef Q_OS_ANDROID
     // The microphone is asked for when it is first needed: Record starts
@@ -189,6 +228,10 @@ signals:
 
 public slots:
     virtual bool commitData(bool mayAskUser); // on session shutdown
+
+    // As MainWindowBase's; under Check Input Level, the device opened
+    // again is run, and the check starts again from the silence
+    void recreateAudioIO() override;
 
 protected slots:
     // Override record() so that when a reference track is already loaded we
@@ -241,6 +284,13 @@ protected slots:
     // selected to erase a whole recording (spec 5.2)
     virtual void eraseSingingInSelection();
     virtual void selectRecordingAtPlayhead();
+
+    // Takes > Replace Take Audio from Recording: the take's audio over
+    // its coverage from a longer recording of the same singing (a
+    // wireless transmitter's own, whole where the radio dropped out),
+    // found in it (RecordingAlignment) on a thread of its own, then
+    // spliced in and analysed as a recording is, as one undoable step
+    virtual void replaceTakeAudioFromRecording();
 
     // The Takes menu and the "Take:" combo box (spec 5.3)
     virtual void takeChosenInCombo(int index);
@@ -362,6 +412,14 @@ protected slots:
     // Preferences: the device is opened again, with it
     void audioDriverChosen(QString implementation);
     void audioLatencyChosen(double seconds);
+
+    // Playback > Input Channel chosen, and written to the settings: a
+    // phone opens its device again if the input is open otherwise
+    void inputChannelChosen(int channel);
+
+    // Playback > Check Input Level: the input opened and run as a take's
+    // is, nothing recorded, and the meter shown large
+    void checkInputLevel();
 
     // Playback > Calibrate Audio: the audio check's dialog, not modal
     virtual void calibrateAudio();
@@ -772,6 +830,14 @@ protected:
     // analysis of the take at Stop both go by it
     double m_takeVoiceThreshold;
 
+    // The input channel (InputChannel) of the take being recorded, or of
+    // the one most recently recorded, read as the voice threshold is:
+    // the choice for the input device as the take started, and both
+    // inputs for the audio check's takes, which measure the device and
+    // say which input the microphone is on.  The live tracker reads that
+    // channel, and the splice makes the take from it
+    int m_takeInputChannel;
+
     // Polls the record target while a take that has an end to reach
     // runs, and stops the take once the singing for that end has
     // arrived.  Not running for a take that goes on until Stop.
@@ -790,10 +856,17 @@ protected:
     // for a take of the audio check, the check's own
     sv::sv_frame_t wantedPreRollFrames() const;
 
-    // Put the countdown of a pre-roll's lead-in in the status bar, and
-    // say so, if that is what belongs there just now.  Everything that
-    // writes the status bar while a take runs asks this first.
-    bool showTakeCountdown() const;
+    // The countdown of a pre-roll's lead-in, while it runs; "" when
+    // there is none
+    QString takeCountdown() const;
+
+    // Put what has the status bar over what the views write there in it
+    // (m_statusLine), and say so: the countdown, a notice about the
+    // audio device, the take's level.  Everything that writes the status
+    // bar asks this first.  When a notice runs out, what was under it
+    // is shown again
+    bool showStatusLine() const;
+    void statusLineExpired();
 
     // Ask before recording over singing that is already there, unless
     // the user has said not to.  Overridden by the tests, which cannot
@@ -869,8 +942,58 @@ protected:
     // Playback > Audio Driver and Audio Latency, before the device menus
     AudioDriverMenus *m_audioDriverMenus;
 
-    // Playback > Voice Threshold, after Record
+    // Playback > Voice Threshold and Input Channel, after Record
     VoiceThresholdMenu *m_voiceThresholdMenu;
+    InputChannelMenu *m_inputChannelMenu;
+
+    // The input meters' levels, the meter beside Record (in the compact
+    // layout's toolbar too), and Playback > Check Input Level, its dialog
+    // and whether it is open (the device then counts as busy)
+    InputLevelFeed *m_inputLevels;
+    InputLevelMeterAction *m_inputMeterAction;
+    QAction *m_checkInputLevelAction;
+    CheckInputLevelDialog *m_checkInputLevelDialog;
+    bool m_checkingInputLevel;
+
+    // The input the meters show: the take's while one is recorded, else
+    // the one chosen for the device
+    void updateInputMeterChannel();
+
+    // Open the device with its input and run it, as a take's start does,
+    // for the input level to be read without recording.  False if there
+    // is no input to be had (said in a box), or on a phone the microphone
+    // has yet to be allowed (then asked for, and the check started again
+    // once it is)
+    bool openInputForLevels();
+
+    // Scan what of the recording at path went into the take, and say
+    // its peak, and where it clipped, in the status bar
+    void reportTakeLevel(QString recordingPath, const TakeTiming &timing);
+
+    // The countdown, the input device chosen that is not plugged in,
+    // and what reportTakeLevel() said, held until the next take,
+    // playback or a selection: the view moves back to the take's
+    // position after Stop, which would write the visible range over it
+    StatusLine *m_statusLine;
+
+    // The peak of each input in what went into the last take, as its
+    // scan found them; empty if it was not scanned
+    std::vector<float> m_takeInputPeaks;
+
+    // Replace Take Audio from Recording (replaceTakeAudioFromRecording()):
+    // the action; the file searched, asked for with the file dialog,
+    // which the tests answer; the search while it runs; and what it
+    // found put into the take, as one undoable step, with a report for
+    // the user, or a message if that could not be done
+    QAction *m_replaceTakeAudioAction = nullptr;
+    virtual QString askForTakeRecordingFile();
+    TakeRecordingSearch *m_takeRecordingSearch = nullptr;
+    void takeRecordingSearchDone();
+    QString replaceTakeAudio(const TakeRecordingSearch::Result &result,
+                             QString &report);
+    bool takeAudioSearchRunning() const {
+        return m_takeRecordingSearch != nullptr;
+    }
 
     QAction       *m_deleteSelectedAction;
     QAction       *m_ffwdAction;
@@ -925,6 +1048,33 @@ protected:
                                       QActionGroup *group,
                                       const std::vector<std::string> &names,
                                       QString settingKey);
+
+    // The input devices the driver lists now (Android's AudioManager);
+    // none where listsInputDevices() is false.  Virtual so that the
+    // tests can list a phone's
+    virtual std::vector<AudioRoute::Device> listedInputDevices() const;
+
+    // The driver whose inputs are listed, as its route names it: the
+    // input device chosen is kept under it
+    static QString listingDriver() { return "oboe"; }
+
+    // Playback > Audio Input Device from listedInputDevices()
+    // (InputDeviceMenu), made the first time it is listed; and what a
+    // choice there opens
+    InputDeviceMenu *m_inputDeviceMenu;
+    void listedInputDeviceChosen();
+
+    // The id to open the input device chosen by, of those listed now
+    // (the open lists them once for all it asks): 0 for the driver's own
+    // choice, as for one chosen that is not plugged in.  Asked each time
+    // the input is opened
+    int inputDeviceIdToOpen
+    (const std::vector<AudioRoute::Device> &listed) const;
+
+    // Once the device is open with its input: if that is not the input
+    // device chosen (not plugged in, or it could not be opened), say so
+    // in the status bar
+    void reportInputDevice();
 
     // The implementations bqaudioio has, of which the drivers are offered
     // in Playback > Audio Driver.  Virtual so that the tests can give
@@ -1263,9 +1413,18 @@ protected:
     // Android, where the microphone stays open and the battery drains
     // while it runs, a couple of minutes; on desktop never
     virtual int audioIdleSuspendMillis() const;
+    bool audioBusy() const;
     void audioActivityChanged();
     void suspendIdleAudio();
     QTimer *m_audioIdleTimer;
+
+    // The input meter reads the device only while it runs with its input
+    // open (InputLevelFeed::setRunning()): while something is busy, and
+    // after it until the device is suspended or opened again, which is
+    // what m_audioRunning says
+    void deleteAudioIO() override;
+    void updateInputLevelReading();
+    bool m_audioRunning;
 
 #ifdef Q_OS_ANDROID
     // Android's file picker gives content:// URIs, which svcore's readers

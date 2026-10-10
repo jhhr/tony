@@ -626,6 +626,21 @@ private slots:
             QVERIFY2(number(*dots, label).endsWith(", 0 elsewhere"),
                      describe());
         }
+        // The tones far over the tracker's floor, and the room's noise
+        // under it between the sounds
+        for (int i : { 1, 2 }) {
+            const QString levels = number
+                (*dots, QString("levels the live tracker met, punch-in %1")
+                 .arg(i));
+            const double tones = levels.section(' ', 2, 2).toDouble();
+            const double silence =
+                levels.section("the silence between the sounds ", 1, 1)
+                .section(' ', 0, 0).toDouble();
+            QVERIFY2(levels.startsWith("the tones ") && tones > -25.0 &&
+                     tones < -15.0 && levels.contains(", 0 of their ") &&
+                     silence < -60.0 && silence > -70.0, describe(3));
+            QVERIFY2(!dots->message.contains("too quietly"), describe(3));
+        }
         QVERIFY2(milliseconds(number(*dots, "dots behind the cursor, median"))
                  >= roundTrip * 1000.0 / rate, describe());
         QCOMPARE(number(*speakers, "second arrival"), QString("none heard"));
@@ -1020,6 +1035,51 @@ private slots:
                  describe(3));
         QCOMPARE(lastReportLine(),
                  QString("Totals: 9 passed, 1 failed, 1 measured, 0 skipped"));
+    }
+
+    // A microphone that hears the speakers 45 dB down, as the user's
+    // headset microphone held to an earcup did: the tones under the live
+    // tracker's floor, no dots, and item 3 says why and what to do. The
+    // sweeps are found all the same, and the rest is judged as ever
+    void dev_checks_with_the_reference_heard_quietly() {
+        FakeAudioIO::Config config = loopback();
+        config.loopbackGain = float(std::pow(10.0, -45.0 / 20.0));
+        makeWindow(config);
+
+        runDevChecks(roundTrip / rate);
+        if (QTest::currentTestFailed()) return;
+
+        for (const QString &line : reportText().split('\n')) {
+            qDebug().noquote() << "report:" << line;
+        }
+        QVERIFY2(m_report.failure == "", describe());
+        const CheckResult *dots = check(3);
+        QVERIFY2(dots && dots->verdict == CheckResult::Verdict::Fail,
+                 describe(3));
+        for (int i : { 1, 2 }) {
+            QVERIFY2(dots->message.contains
+                     (QString("punch-in %1 drew 0 live dots; punch-in %1's "
+                              "tones reached the microphone at -6").arg(i)),
+                     describe(3));
+            const QString levels = number
+                (*dots, QString("levels the live tracker met, punch-in %1")
+                 .arg(i));
+            QVERIFY2(levels.startsWith("the tones -6"), describe(3));
+            const QString windows = levels.section(", ", 1, 1);
+            QVERIFY2(windows.section(' ', 0, 0) == windows.section(' ', 3, 3)
+                     && windows.endsWith(" windows under its floor of "
+                                         "-60.0 dBFS; the silence between "
+                                         "the sounds silence"),
+                     describe(3));
+        }
+        QVERIFY2(dots->message.contains
+                 (", under the live tracker's floor of -60.0 dBFS. The "
+                  "microphone heard the reference too quietly for the live "
+                  "tracker: turn the volume up, "), describe(3));
+        for (int item : { 1, 2, 4, 7, 9, 10, 12, 13, 14 }) {
+            QVERIFY2(check(item) && check(item)->verdict ==
+                     CheckResult::Verdict::Pass, describe(item));
+        }
     }
 
     // A device whose input moves 10 ms against its output each time its

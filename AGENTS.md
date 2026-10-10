@@ -16,8 +16,8 @@ code.
 | [docs/building.md](docs/building.md) | building for the first time in a session |
 | [docs/testing.md](docs/testing.md) | running or writing tests |
 | [docs/architecture.md](docs/architecture.md) | touching layers, models, the document, commands, playback, the bottom bar's remembered settings or the session file |
-| [docs/recording.md](docs/recording.md) | touching `record()`, the Stop path, latency, pre-roll, the live tracker |
-| [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore |
+| [docs/recording.md](docs/recording.md) | touching `record()`, the Stop path, latency, pre-roll, the live tracker, the input channel, the input meter and level check |
+| [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore, Replace Take Audio from Recording |
 | [docs/calibrate-audio.md](docs/calibrate-audio.md) | touching Calibrate Audio (`AudioCheckRunner`, `CalibrateAudioDialog`), the dev checks (`main/dev/`) or the measured latency (`LatencyCheck`, `LatencyCalibration`) |
 | [docs/audio-drivers.md](docs/audio-drivers.md) | touching the Audio Driver or Audio Latency menus (`AudioDriverSettings`, `AudioDriverMenus`), how the device is opened (`MainWindow::createAudioIO()`), or the bqaudioio fork |
 | [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/`, `bqaudioio/` |
@@ -56,7 +56,7 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   that lack it fail, so the exit status is only meaningful for a run with no names.
 - Run named tests while working; run **both whole suites** before calling anything done.
 - `test-tony-dev.exe` (development builds only) holds the development checks' suite,
-  about seven minutes of real-time takes. Run it as well, whole, when a change touches
+  about nine minutes of real-time takes. Run it as well, whole, when a change touches
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.

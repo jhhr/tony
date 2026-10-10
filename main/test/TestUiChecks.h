@@ -35,6 +35,7 @@
 #include "view/Pane.h"
 #include "view/PaneStack.h"
 #include "layer/Layer.h"
+#include "layer/TimeValueLayer.h"
 #include "layer/ColourDatabase.h"
 #include "layer/CoordinateScale.h"
 #include "data/model/SparseTimeValueModel.h"
@@ -127,6 +128,26 @@ class TestUiChecks : public QObject
         QVERIFY(QTest::qWaitForWindowExposed(m_window));
         m_window->activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(m_window));
+    }
+
+    // The window closed and opened again, as quitting and starting Tony
+    // do (main() restores what the close kept, then shows the window).
+    // Made early, its native window is made before the restore, as on
+    // macOS, where the window makes it itself
+    void reopenWindow(bool madeEarly = false) {
+        QVERIFY(m_window->close());
+        delete m_window;
+        m_window = nullptr;
+        QSettings settings;
+        QVERIFY(settings.contains("MainWindow/geometry"));
+        QVERIFY(!settings.contains("MainWindow/size"));
+        QVERIFY(!settings.contains("MainWindow/position"));
+
+        m_window = new TestMainWindow(FakeAudioIO::Config());
+        if (madeEarly) (void)m_window->winId();
+        QVERIFY(m_window->restoreWindowGeometry());
+        m_window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(m_window));
     }
 
     static bool analysed(Analyser *a) {
@@ -341,6 +362,41 @@ class TestUiChecks : public QObject
         QApplication::sendEvent(pane, &move);
     }
 
+    // The middle of the box drawn for the note of this layer sounding at
+    // that time, in pane 0; (-1, -1) if there is none
+    QPoint noteAt(sv::Layer *notes, double seconds) {
+        sv::Pane *pane = pane0();
+        auto model = sv::ModelById::getAs<sv::NoteModel>(notes->getModel());
+        if (!model) return QPoint(-1, -1);
+        sv::EventVector sounding = model->getEventsCovering(frames(seconds));
+        if (sounding.empty()) return QPoint(-1, -1);
+        int y = pane->getEffectiveVerticalExtentsForLayer(notes)
+            .getCoordForValueRounded(pane, sounding[0].getValue());
+        return QPoint(pane->getXForFrame(frames(seconds)), y);
+    }
+
+    // With the pointer at pos, the box at top right of pane 0 describes
+    // a note of this layer, and that is the note lit up
+    void verifyReadout(QPoint pos, sv::Layer *notes, QString what) {
+        QVERIFY2(pos.x() >= 0, qPrintable("no note: " + what));
+        sv::Pane *pane = pane0();
+        hover(pos);
+        const sv::Layer *layer = pane->getIdentifyLayer();
+        QPoint p = pos;
+        QString text = layer ? layer->getFeatureDescription(pane, p) : "";
+        QVERIFY2(layer == notes,
+                 qPrintable(QString("over %1 the readout is of \"%2\": %3")
+                            .arg(what)
+                            .arg(layer ? layer->objectName() : "nothing")
+                            .arg(QString(text).replace('\n', ' '))));
+        QVERIFY2(text.contains("Pitch:"),
+                 qPrintable(QString("over %1 the readout says \"%2\"")
+                            .arg(what).arg(QString(text).replace('\n', ' '))));
+        QPoint lit;
+        QVERIFY2(pane->shouldIlluminateLocalFeatures(notes, lit),
+                 qPrintable("over " + what + " its notes are not lit up"));
+    }
+
     // A drag across pane 0 with the left button, in ten steps
     void drag(QPoint from, QPoint to) {
         sv::Pane *pane = pane0();
@@ -471,6 +527,41 @@ class TestUiChecks : public QObject
         };
     }
 
+    // A window resized, maximised, closed and opened again comes back
+    // maximised, within the screen, and un-maximised at its size
+    void windowComesBackMaximised(bool madeEarly) {
+        {
+            TestMainWindow first{FakeAudioIO::Config()};
+            QVERIFY2(!first.restoreWindowGeometry(),
+                     "a window was restored with nothing kept");
+        }
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        // Within the offscreen platform's screen, 800 x 600
+        const QSize normal(640, 420);
+        m_window->resize(normal);
+        QTRY_COMPARE(m_window->size(), normal);
+        m_window->showMaximized();
+        QTRY_VERIFY(m_window->isMaximized());
+
+        reopenWindow(madeEarly);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY2(m_window->isMaximized(),
+                     "the window was closed maximised and came back not");
+        const QRect screen = m_window->screen()->availableGeometry();
+        QVERIFY2(screen.contains(m_window->frameGeometry()),
+                 qPrintable(QString("the window is at (%1, %2) %3 x %4, "
+                                    "past the screen's %5 x %6")
+                            .arg(m_window->frameGeometry().x())
+                            .arg(m_window->frameGeometry().y())
+                            .arg(m_window->frameGeometry().width())
+                            .arg(m_window->frameGeometry().height())
+                            .arg(screen.width()).arg(screen.height())));
+
+        m_window->showNormal();
+        QTRY_COMPARE(m_window->size(), normal);
+    }
+
 private slots:
     void initTestCase() {
         QVERIFY(m_dir.isValid());
@@ -510,6 +601,8 @@ private slots:
         settings.remove("backgroundmusicmix");
         settings.remove("backgroundmusicgain");
         settings.remove("backgroundmusicpan");
+        // A window closed by a test before keeps where it was
+        settings.remove("geometry");
         settings.endGroup();
         settings.beginGroup("Analyser");
         settings.remove("");
@@ -1090,6 +1183,113 @@ private slots:
         press(QKeySequence("1"));
     }
 
+    // Hovering over a note of the reference gives its pitch at top right.
+    // A selection has the reference's pitch candidates made, hidden, on
+    // top of the pane, where they stay after it is cleared; the readout
+    // used to be theirs, which said "No local points" outside the
+    // selection and gave a candidate's pitch inside it
+    void hover_readout_passes_over_hidden_layers() {
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+        showSeconds(0.0, 3.0);
+
+        sv::Pane *pane = pane0();
+        m_window->selectRange(frames(1.0), frames(2.0));
+        QTRY_VERIFY_WITH_TIMEOUT
+            (pane->getTopLayer()->getLayerPresentationName() == "candidate",
+             30000);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        m_window->clearSelections();
+        QVERIFY2(pane->getTopLayer()->isLayerDormant(pane),
+                 "the pitch candidates on top of the pane are not hidden");
+
+        sv::Layer *notes = m_window->analyser()->getLayer(Analyser::Notes);
+        QVERIFY(notes);
+        for (double seconds : { 0.5, 1.5, 2.5 }) {
+            verifyReadout(noteAt(notes, seconds), notes,
+                          QString("the reference's note at %1 s")
+                          .arg(seconds));
+            if (QTest::currentTestFailed()) return;
+        }
+
+        // Off the notes, inside the selection that was, the readout is
+        // still of a layer on show
+        hover(noteAt(notes, 1.5) - QPoint(0, 100));
+        const sv::Layer *off = pane->getIdentifyLayer();
+        QVERIFY2(off && !off->isLayerDormant(pane),
+                 "off the notes, the readout is of a hidden layer");
+    }
+
+    // Hovering over a note gives its pitch at top right, the reference's
+    // or the take's, wherever one lies over the other in the pane: after
+    // a take its coverage strip is on top of the pane, describing
+    // nothing, and the readout used to be the strip's. With the Edit
+    // tool in hand, what is lit up and described is what the tool would
+    // change, which is the take's notes
+    void hover_readout_names_the_note_under_the_pointer() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 4.0);
+        makeWindow(config);
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->seekTo(frames(0.5));
+        take(1500);
+        if (QTest::currentTestFailed()) return;
+        m_window->clearSelections();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (!sv::ModelTransformerFactory::getInstance()
+             ->haveRunningTransformers(), 30000);
+        showSeconds(0.0, 3.0);
+
+        sv::Pane *pane = pane0();
+        QCOMPARE(pane->getTopLayer()->objectName(),
+                 TakeLayers::nameFor(m_window->takes()->getActiveName(),
+                                     TakeLayers::Coverage));
+        sv::Layer *reference = m_window->analyser()->getLayer(Analyser::Notes);
+        sv::Layer *sung = m_window->analyser2()->getLayer(Analyser::Notes);
+        QVERIFY(reference && sung);
+
+        // At 1.5 s both are singing, the take a fourth above
+        const QPoint onReference = noteAt(reference, 1.5);
+        const QPoint onTake = noteAt(sung, 1.5);
+        QVERIFY(onTake.y() < onReference.y() - 20);
+
+        verifyReadout(onReference, reference, "the reference's note");
+        verifyReadout(onTake, sung, "the take's note");
+        if (QTest::currentTestFailed()) return;
+
+        // Off the notes, the readout says something: the strip is passed
+        // over
+        QPoint off = onTake - QPoint(0, 100);
+        hover(off);
+        const sv::Layer *layer = pane->getIdentifyLayer();
+        QVERIFY2(layer && layer->getFeatureDescription(pane, off) != "",
+                 "off the notes, the readout is empty");
+
+        m_window->doToggleAlternatePitch();
+        QVERIFY(pane->getTopLayer() == m_window->alternatePitch()->getLayer());
+        verifyReadout(onReference, reference,
+                      "the reference's note under the alternate pitch track");
+        m_window->doToggleAlternatePitch();
+        if (QTest::currentTestFailed()) return;
+
+        press(QKeySequence("2"));
+        hover(onReference);
+        QVERIFY2(pane->getIdentifyLayer() == sung,
+                 "with the Edit tool, the readout is not of the take's notes");
+        QPoint lit;
+        QVERIFY2(!pane->shouldIlluminateLocalFeatures(reference, lit),
+                 "with the Edit tool, a note of the reference is lit up");
+        verifyReadout(onTake, sung, "the take's note, with the Edit tool");
+        press(QKeySequence("1"));
+    }
+
     // Checklist: the band is readable over waveform and dots at every
     // zoom: where there is singing the band is drawn over whatever else
     // is there, band high, and nowhere else
@@ -1544,6 +1744,38 @@ private slots:
                  qPrintable(asked[0]));
         QVERIFY2(m_window->isVisible(), "Cancel did not keep the window open");
         QVERIFY(m_window->takes()->haveTake());
+    }
+
+    // Closed maximised, the window comes back maximised, within the
+    // screen, and Restore gives it the size it had before. Kept as its
+    // size and position, it came back as large as the screen but not
+    // maximised, and on Windows a little off the screen
+    void window_comes_back_maximised() {
+        windowComesBackMaximised(false);
+    }
+
+    // The same with the native window made before the restore, as on
+    // macOS: un-maximised, it came back at Qt's default 640 x 480
+    void window_made_early_comes_back_maximised() {
+        windowComesBackMaximised(true);
+    }
+
+    // Closed as it was, the window comes back where it was and as large
+    void window_comes_back_where_it_was() {
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        const QSize size(640, 420);
+        const QPoint at(60, 40);
+        m_window->resize(size);
+        m_window->move(at);
+        QTRY_COMPARE(m_window->size(), size);
+        QTRY_COMPARE(m_window->pos(), at);
+
+        reopenWindow();
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(!m_window->isMaximized());
+        QTRY_COMPARE(m_window->size(), size);
+        QTRY_COMPARE(m_window->pos(), at);
     }
 
     // Checklist: stop a take and close the window at once: no crash.

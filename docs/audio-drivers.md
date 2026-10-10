@@ -43,8 +43,10 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
   WASAPI and 200 ms on the others. Both are shown only where two drivers or more are built
   in, which is on Windows. Linux has none of the three. Nor has Android, where Tony opens
   a device of its own, `OboeAudioIO` ([port-android.md](port-android.md#audio)), on
-  whatever route the phone has: there is no driver, device or latency to choose, and the
-  compact layout hides these menus and the device submenus as well.
+  whatever route the phone has: there is no driver, output device or latency to choose,
+  and the compact layout hides these menus and the output device submenu as well. Its
+  input device is chosen from the inputs Android lists, as Audio Input Device lists them
+  there ([port-android.md](port-android.md#choosing-the-input)).
 - **Choosing a driver** stops playback and opens the device again through it, with the
   devices chosen under it (the driver's own default devices where none are) and its
   latency. The device submenus then list that driver's devices and write its keys; going
