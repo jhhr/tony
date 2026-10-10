@@ -53,6 +53,7 @@ public:
         Coverage coverage;
         double takeRate = 0;
         double recordingRate = 0;
+        sv::sv_frame_t recordingFrames = 0;
 
         /// The stretches of the coverage's ranges, in order, end to end
         /// over each range, each found where it is in the recording or
@@ -64,7 +65,9 @@ public:
 
         bool cancelled = false;
 
-        /// Whether a segment was long enough to look for
+        /// Whether a segment was looked for, so that one not found
+        /// refuses the replacement: not one left as it is, too short to
+        /// look for or not in the recording
         bool lookedFor(const RecordingAlignment::Segment &segment) const;
     };
 

@@ -259,6 +259,14 @@ public:
      */
     QStringList removeUnusedFiles();
 
+    /**
+     * Delete a file this run wrote that nothing will want again, and
+     * forget it: a step on the way of an operation that undo knows only as
+     * a whole, the take before it and after it.  Not a take's file, a
+     * protected one or one the user brought.  True if it went.
+     */
+    bool discardWritten(QString path);
+
     /// Recording from this frame on would record over material that is there
     bool coversPosition(sv::sv_frame_t position) const;
 

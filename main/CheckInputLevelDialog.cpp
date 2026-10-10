@@ -16,6 +16,7 @@
 #include "InputLevel.h"
 #include "InputLevelFeed.h"
 #include "InputLevelMeter.h"
+#include "UserText.h"
 #include "VoiceThreshold.h"
 
 #include <QDialogButtonBox>
@@ -28,14 +29,6 @@
 #include <cmath>
 
 namespace {
-
-// A level as the page gives it: "−3.2 dBFS", with a minus sign
-QString levelText(double db)
-{
-    QString number = QString::number(std::fabs(db), 'f', 1);
-    if (db < -0.05) number = QChar(0x2212) + number;
-    return CheckInputLevelDialog::tr("%1 dBFS").arg(number);
-}
 
 // A change in dB, whole
 QString dbText(double db)
@@ -262,31 +255,31 @@ CheckInputLevelDialog::resultText() const
         text += tr("<p><b>Hardly anything reached the input</b>: its loudest "
                    "peak was %1. Is the microphone plugged in, on the input "
                    "chosen under Playback &gt; Input Channel, and its gain "
-                   "up?</p>").arg(levelText(peak));
+                   "up?</p>").arg(UserText::dbfs(peak));
     } else {
         const double change = InputLevel::gainChange(peak);
         text += tr("<p>Your loudest peak: <b>%1</b>.</p>")
-            .arg(levelText(peak));
+            .arg(UserText::dbfs(peak));
         if (std::fabs(change) <= closeEnoughDb) {
             text += tr("<p>The gain is right: your loudest peaks are near "
                        "%1.</p>")
-                .arg(levelText(InputLevel::kTargetPeakDbfs));
+                .arg(UserText::dbfs(InputLevel::kTargetPeakDbfs));
         } else if (change < 0.0) {
             text += tr("<p><b>Turn the input gain down by about %1</b>, to "
                        "put your loudest peaks near %2, which leaves room "
                        "for a take sung louder than this.</p>")
                 .arg(dbText(change))
-                .arg(levelText(InputLevel::kTargetPeakDbfs));
+                .arg(UserText::dbfs(InputLevel::kTargetPeakDbfs));
         } else {
             text += tr("<p><b>Turn the input gain up by about %1</b>, to put "
                        "your loudest peaks near %2.</p>")
                 .arg(dbText(change))
-                .arg(levelText(InputLevel::kTargetPeakDbfs));
+                .arg(UserText::dbfs(InputLevel::kTargetPeakDbfs));
         }
     }
 
     text += tr("<p>The silence before you sang, the noise floor: <b>%1</b>.")
-        .arg(levelText(noise));
+        .arg(UserText::dbfs(noise));
     if (!m_clipped && peak >= nothingHeardDb && noise > -200.0) {
         text += tr(" That is %1 under your loudest peak.")
             .arg(dbText(peak - noise));

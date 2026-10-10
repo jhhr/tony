@@ -162,6 +162,46 @@ class TestRecordingAlignment : public QObject
         return int(100 * dropped / (to - from));
     }
 
+    // The take's audio: base's singing, with each of the punch-ins' own
+    // singing from its in to its out (seconds into the take)
+    struct Punch { const Phrase *phrase; double in, out; float gain = 1.f; };
+    static std::vector<float> punched(const Phrase &base, double seconds,
+                                      const std::vector<Punch> &punches) {
+        std::vector<float> audio = takeOf(base, seconds, 0);
+        for (const Punch &p : punches) {
+            const std::vector<float> other = takeOf(*p.phrase, seconds, 0);
+            const size_t in = size_t(p.in * takeRate);
+            const size_t out = size_t(p.out * takeRate);
+            for (size_t i = in; i < out; ++i) audio[i] = p.gain * other[i];
+        }
+        return audio;
+    }
+
+    static QString describe(const std::vector<RecordingAlignment::Segment> &ss) {
+        QString all;
+        for (const auto &s : ss) {
+            all += QString("[%1, %2) s found %3 at %4 left %5: %6; ")
+                .arg(s.start / takeRate, 0, 'f', 3)
+                .arg(s.end / takeRate, 0, 'f', 3)
+                .arg(s.match.found).arg(s.match.offset)
+                .arg(int(s.match.left)).arg(s.match.error);
+        }
+        return all;
+    }
+
+    // Segments end to end over [from, to), in order
+    static bool endToEnd(const std::vector<RecordingAlignment::Segment> &ss,
+                         sv::sv_frame_t from, sv::sv_frame_t to) {
+        if (ss.empty() || ss.front().start != from || ss.back().end != to) {
+            return false;
+        }
+        for (size_t i = 0; i < ss.size(); ++i) {
+            if (ss[i].end <= ss[i].start) return false;
+            if (i > 0 && ss[i].start != ss[i - 1].end) return false;
+        }
+        return true;
+    }
+
     QString describe(const RecordingAlignment::Match &m) {
         return QString("found %1, offset %2, confidence %3 over %4 pieces, "
                        "ends %5 and %6, gain %7: %8")
@@ -509,11 +549,343 @@ private slots:
         QVERIFY(m.cancelled);
         QCOMPARE(m.error, QString("Cancelled"));
 
+        // A recording shorter than the range, of something else, is
+        // looked through and the singing not found in it; one shorter
+        // than half a second cannot hold the take's singing
         RecordingAlignment::MemorySource shorter
             (recordingOf({}, 2.0, takeRate), takeRate);
         m = RecordingAlignment::find(take, 0, 4 * 44100, shorter);
         QVERIFY(!m.found);
-        QVERIFY2(m.error.contains("shorter"), qPrintable(m.error));
+        QVERIFY2(m.error.contains("not in the recording"), qPrintable(m.error));
+        RecordingAlignment::MemorySource tiny
+            (recordingOf({ { &sung, 0.0 } }, 0.3, takeRate), takeRate);
+        m = RecordingAlignment::find(take, 0, 4 * 44100, tiny);
+        QVERIFY(!m.found);
+        QVERIFY2(m.error.contains("too short to hold"), qPrintable(m.error));
+    }
+
+    // A range of 0.74 s: its first half second a rest of the first
+    // session, which the transmitter recorded as such, with a punch-in
+    // over it at -20 dB; then 0.24 s of the first session, loud. The
+    // walk's two quarter seconds are the punch-in, unlike the recording;
+    // the loudest half second, the anchor, is mostly the loud part, and
+    // alike. Judged by its pieces, the range is not found; judged by the
+    // anchor, as it was, it was found, and the run of its two pieces
+    // unlike, the whole range, was looked into again and again until the
+    // stack overflowed
+    void a_short_range_is_judged_by_its_pieces() {
+        const Phrase first = phrase(40, 3.0, 1);
+        const Phrase second = phrase(40, 3.0, 2, 0.03);
+        const sv::sv_frame_t from = sv::sv_frame_t(1.0 * takeRate);
+        const sv::sv_frame_t switchAt = from + sv::sv_frame_t(0.5 * takeRate);
+        const sv::sv_frame_t to = from + sv::sv_frame_t(0.74 * takeRate);
+        std::vector<float> audio = takeOf(first, 3.0, 0);
+        const std::vector<float> other = takeOf(second, 3.0, 0);
+        for (sv::sv_frame_t i = from; i < switchAt; ++i) {
+            audio[size_t(i)] = 0.1f * other[size_t(i)];
+        }
+        RecordingAlignment::MemorySource take(audio, takeRate);
+        // The first session from 2 s, silent where the punch-in went
+        std::vector<float> recorded = recordingOf
+            ({ { &second, 8.0 } }, 12.0, takeRate);
+        const std::vector<float> sung = takeOf
+            (first, 12.0, sv::sv_frame_t(2.0 * takeRate));
+        for (size_t i = 0; i < recorded.size(); ++i) {
+            const double t = double(i) / takeRate;
+            if (t < 3.0 || t >= 3.5) recorded[i] += sung[i];
+        }
+        RecordingAlignment::MemorySource recording(recorded, takeRate);
+
+        std::vector<double> levels;
+        QVERIFY(RecordingAlignment::levels(recording, levels));
+        const auto m = RecordingAlignment::find(take, from, to, recording,
+                                                levels);
+        QVERIFY2(!m.found && m.pieces == 2 && m.confidence < 0.5,
+                 qPrintable(describe(m)));
+        const auto segments = RecordingAlignment::findSegments
+            (take, from, to, recording, levels);
+        QVERIFY2(segments.size() == 1 && !segments[0].match.found,
+                 qPrintable(describe(segments)));
+    }
+
+    // Pieces of a second's range alike, unlike, unlike and alike, the
+    // range's first and last 20 ms another sound: the stretch of another
+    // session is the middle half, looked for and found on its own, and
+    // the ends found as before. It was the whole range again, its two
+    // switches at its ends, looked into for ever
+    void a_range_with_unlike_ends_is_looked_into_once() {
+        const Phrase first = phrase(41, 4.0, 1);
+        const Phrase second = phrase(41, 4.0, 2, 0.03);
+        const Phrase noise = phrase(42, 4.0, 1);
+        const sv::sv_frame_t from = sv::sv_frame_t(1.0 * takeRate);
+        const sv::sv_frame_t to = from + sv::sv_frame_t(1.0 * takeRate);
+        std::vector<float> audio = punched
+            (first, 4.0, { { &second, 1.25, 1.75 }, { &noise, 1.0, 1.02 },
+                           { &noise, 1.98, 2.0 } });
+        RecordingAlignment::MemorySource take(audio, takeRate);
+        RecordingAlignment::MemorySource recording
+            (recordingOf({ { &first, 2.0 }, { &second, 9.0 } }, 14.0,
+                         takeRate), takeRate);
+
+        std::vector<double> levels;
+        QVERIFY(RecordingAlignment::levels(recording, levels));
+        const auto segments = RecordingAlignment::findSegments
+            (take, from, to, recording, levels);
+        // Whichever session the range is found as, the other's stretches
+        // are looked for on their own, or are too short to be and left
+        QVERIFY2(endToEnd(segments, from, to), qPrintable(describe(segments)));
+        QVERIFY2(segments.size() == 3, qPrintable(describe(segments)));
+        QVERIFY2(segments[1].match.found &&
+                 segments[1].match.offset == double(9 * 44100) &&
+                 std::llabs(segments[1].start - (from + 11025)) < 0.03 * takeRate &&
+                 std::llabs(segments[1].end - (from + 33075)) < 0.03 * takeRate,
+                 qPrintable(describe(segments)));
+        using Left = RecordingAlignment::Match::Left;
+        for (size_t i : { size_t(0), size_t(2) }) {
+            const auto &m = segments[i].match;
+            QVERIFY2((m.found && m.offset == double(2 * 44100)) ||
+                     (!m.found && m.left == Left::ShortSession),
+                     qPrintable(describe(segments)));
+        }
+    }
+
+    // Sessions in a row, each louder than the one before, then one with
+    // a punch-in of its own: the search finds the loudest, not the range,
+    // splits it off and looks into the rest, a level deeper each time.
+    // The punch-in is four deep and further, too deep to look into, and
+    // not found, which refuses the replacement; the rest is found
+    void sessions_are_looked_into_four_deep() {
+        const double seconds = 7.2;
+        std::vector<Phrase> singings;
+        for (unsigned i = 1; i <= 6; ++i) {
+            singings.push_back(phrase(43, seconds, i, i == 1 ? 0.0 : 0.03));
+        }
+        // 0 from 0 to 2 s but for 1 from 0.7 to 1.3 s; then 2, 3, 4 and 5
+        // for 1.3 s each, louder and louder
+        const std::vector<Punch> punches = {
+            { &singings[1], 0.7, 1.3, 0.4f }, { &singings[2], 2.0, 3.3, 1.2f },
+            { &singings[3], 3.3, 4.6, 1.4f }, { &singings[4], 4.6, 5.9, 1.6f },
+            { &singings[5], 5.9, 7.2, 1.8f } };
+        RecordingAlignment::MemorySource take
+            (punched(singings[0], seconds, punches), takeRate);
+        std::vector<Placed> placed;
+        for (size_t i = 0; i < singings.size(); ++i) {
+            placed.push_back({ &singings[i], 1.0 + 8.0 * double(i) });
+        }
+        RecordingAlignment::MemorySource recording
+            (recordingOf(placed, 8.0 * 6 + 1.0, takeRate), takeRate);
+
+        std::vector<double> levels;
+        QVERIFY(RecordingAlignment::levels(recording, levels));
+        const sv::sv_frame_t to = sv::sv_frame_t(seconds * takeRate);
+        const auto segments = RecordingAlignment::findSegments
+            (take, 0, to, recording, levels);
+        QVERIFY2(endToEnd(segments, 0, to), qPrintable(describe(segments)));
+        QStringList seen;
+        for (const auto &s : segments) {
+            if (s.match.found) {
+                seen << QString::number
+                    (std::llround(s.match.offset / takeRate - 1.0) / 8);
+            } else if (s.match.error.contains("too many deep")) {
+                seen << "deep";
+            } else {
+                seen << "?";
+            }
+        }
+        QVERIFY2(seen.join(" ") == "0 deep 0 2 3 4 5",
+                 qPrintable(seen.join(" ") + "; " + describe(segments)));
+    }
+
+    // Punch-ins of 0.15 to 0.4 s, too short for the walk's pieces to tell,
+    // and one of 0.8 s: the short ones are left as the take has them, a
+    // stretch of another session too short to look for, and the long one
+    // is found where it was sung. They were all written over with the
+    // first session's singing. The long one is sung 6 dB down: with the
+    // take's loudest half second in it, the search starts from the
+    // punch-in, finds the range unlike it, and refuses the lot (a known
+    // limit: docs/open-points.md)
+    void short_punch_ins_are_left_as_they_are() {
+        const Phrase first = phrase(44, 12.0, 1);
+        const Phrase second = phrase(44, 12.0, 2, 0.03);
+        const std::vector<Punch> punches = {
+            { &second, 2.10, 2.25 }, { &second, 4.10, 4.40 },
+            { &second, 6.37, 6.77 }, { &second, 8.30, 9.10, 0.5f } };
+        RecordingAlignment::MemorySource take
+            (punched(first, 12.0, punches), takeRate);
+        RecordingAlignment::MemorySource recording
+            (recordingOf({ { &first, 2.0 }, { &second, 17.0 } }, 31.0,
+                         takeRate), takeRate);
+
+        std::vector<double> levels;
+        QVERIFY(RecordingAlignment::levels(recording, levels));
+        const sv::sv_frame_t to = sv::sv_frame_t(12.0 * takeRate);
+        const auto segments = RecordingAlignment::findSegments
+            (take, 0, to, recording, levels);
+        QVERIFY2(endToEnd(segments, 0, to), qPrintable(describe(segments)));
+        QVERIFY2(segments.size() == 9, qPrintable(describe(segments)));
+        for (size_t i = 0; i < punches.size(); ++i) {
+            const auto &s = segments[2 * i + 1];
+            const bool shortOne = (i < 3);
+            QVERIFY2(std::fabs(s.start / takeRate - punches[i].in) < 0.03 &&
+                     std::fabs(s.end / takeRate - punches[i].out) < 0.03,
+                     qPrintable(describe(segments)));
+            if (shortOne) {
+                QVERIFY2(!s.match.found && s.match.left ==
+                         RecordingAlignment::Match::Left::ShortSession,
+                         qPrintable(describe(segments)));
+            } else {
+                QVERIFY2(s.match.found, qPrintable(describe(segments)));
+                QCOMPARE(s.match.offset, double(17 * 44100));
+            }
+        }
+        for (size_t i = 0; i < segments.size(); i += 2) {
+            QVERIFY2(segments[i].match.found, qPrintable(describe(segments)));
+            QCOMPARE(segments[i].match.offset, double(2 * 44100));
+        }
+    }
+
+    // The recording begun 0.3 s after the range began, in its room noise
+    // before the singing, and stopped 1.2 s before it ended, during it:
+    // found, and what lies before and after it left as the take has it.
+    // A recording had to hold the whole range to be found at all
+    void a_recording_holding_part_of_the_range() {
+        const Phrase sung = phrase(45, 8.0);
+        std::vector<float> audio(size_t(10.0 * takeRate), 0.f);
+        const std::vector<float> singing = takeOf(sung, 10.0,
+                                                  sv::sv_frame_t(1.5 * takeRate));
+        std::mt19937 noise(7);
+        std::normal_distribution<double> g(0.0, 0.0005);
+        for (size_t i = 0; i < audio.size(); ++i) {
+            audio[i] = singing[i] + float(g(noise));
+        }
+        RecordingAlignment::MemorySource take(audio, takeRate);
+        const sv::sv_frame_t from = sv::sv_frame_t(1.0 * takeRate);
+        const sv::sv_frame_t to = sv::sv_frame_t(9.5 * takeRate);
+
+        // The take's frame 1.3 s is the recording's first; its 8.3 s, the
+        // recording's last
+        std::vector<float> full = recordingOf({ { &sung, 0.2 } }, 9.0,
+                                              takeRate);
+        full.resize(size_t(7.0 * takeRate));
+        RecordingAlignment::MemorySource recording(full, takeRate);
+
+        std::vector<double> levels;
+        QVERIFY(RecordingAlignment::levels(recording, levels));
+        const auto m = RecordingAlignment::find(take, from, to, recording,
+                                                levels);
+        QVERIFY2(m.found, qPrintable(describe(m)));
+        const double offset = -1.3 * takeRate;
+        QVERIFY2(std::fabs(m.offset - offset) < 1.0, qPrintable(describe(m)));
+        QVERIFY2(std::llabs(m.coveredFrom - sv::sv_frame_t(1.3 * takeRate)) <= 1 &&
+                 std::llabs(m.coveredTo - sv::sv_frame_t(8.3 * takeRate)) <= 1,
+                 qPrintable(QString("covered %1 to %2").arg(m.coveredFrom)
+                            .arg(m.coveredTo)));
+
+        const auto segments = RecordingAlignment::findSegments
+            (take, from, to, recording, levels);
+        QVERIFY2(endToEnd(segments, from, to), qPrintable(describe(segments)));
+        QVERIFY2(segments.size() == 3, qPrintable(describe(segments)));
+        using Left = RecordingAlignment::Match::Left;
+        QVERIFY2(!segments[0].match.found &&
+                 segments[0].match.left == Left::OutsideRecording &&
+                 segments[1].match.found &&
+                 !segments[2].match.found &&
+                 segments[2].match.left == Left::OutsideRecording,
+                 qPrintable(describe(segments)));
+        QCOMPARE(segments[1].start, m.coveredFrom);
+        QCOMPARE(segments[1].end, m.coveredTo);
+
+        // The span of the recording for the stretch found lies within it
+        const auto span = RecordingAlignment::recordingSpan
+            (segments[1].start, segments[1].end, segments[1].match.offset,
+             takeRate, takeRate, recording.frames());
+        QVERIFY(span.from >= 0 && span.from + span.count <= recording.frames());
+        QCOMPARE(span.start, segments[1].start);
+        QCOMPARE(span.end, segments[1].end);
+    }
+
+    // Two stretches of another session, each two of the walk's pieces
+    // long, either side of one piece of the first session whose first
+    // and last 20 ms are another sound: the piece is alike as a whole,
+    // its ends are not. The segments meet end to end and do not overlap;
+    // the piece's middle is the first session's
+    void stretches_either_side_of_a_piece_do_not_overlap() {
+        const Phrase first = phrase(46, 8.0, 1);
+        const Phrase second = phrase(46, 8.0, 2, 0.03);
+        const Phrase noise = phrase(47, 8.0, 1);
+        // The walk's pieces from 0: [3.5, 4.0) and [4.25, 4.75) the
+        // other session, [4.0, 4.25) the first with its ends spoilt
+        const std::vector<Punch> punches = {
+            { &second, 3.5, 4.0 }, { &noise, 4.0, 4.02 },
+            { &noise, 4.23, 4.25 }, { &second, 4.25, 4.75 } };
+        RecordingAlignment::MemorySource take
+            (punched(first, 8.0, punches), takeRate);
+        RecordingAlignment::MemorySource recording
+            (recordingOf({ { &first, 2.0 }, { &second, 13.0 } }, 23.0,
+                         takeRate), takeRate);
+
+        std::vector<double> levels;
+        QVERIFY(RecordingAlignment::levels(recording, levels));
+        const sv::sv_frame_t to = sv::sv_frame_t(8.0 * takeRate);
+        const auto m = RecordingAlignment::find(take, 0, to, recording, levels);
+        QString pieces;
+        for (const auto &p : m.walked) {
+            if (p.start >= 3.4 * takeRate && p.end <= 4.9 * takeRate) {
+                pieces += QString("%1 ").arg(p.r, 0, 'f', 2);
+            }
+        }
+        const auto segments = RecordingAlignment::findSegments
+            (take, 0, to, recording, levels);
+        QVERIFY2(endToEnd(segments, 0, to),
+                 qPrintable("pieces " + pieces + "; " + describe(segments)));
+        QVERIFY2(segments.size() == 5,
+                 qPrintable("pieces " + pieces + "; " + describe(segments)));
+        QCOMPARE(segments[2].match.offset, double(2 * 44100));
+        QVERIFY2(segments[2].start >= sv::sv_frame_t(4.0 * takeRate) &&
+                 segments[2].end <= sv::sv_frame_t(4.25 * takeRate),
+                 qPrintable(describe(segments)));
+    }
+
+    // The recording's frames for a stretch: from the frame before to the
+    // frame after, the take's frames before its first left off the
+    // front; cut at the recording's ends
+    void the_recording_span_of_a_stretch() {
+        using RecordingAlignment::recordingSpan;
+        // The same rate: exact, a frame either side
+        auto s = recordingSpan(1000, 2000, 500.0, 44100, 44100, 100000);
+        QCOMPARE(s.start, sv::sv_frame_t(1000));
+        QCOMPARE(s.end, sv::sv_frame_t(2000));
+        QCOMPARE(s.from, sv::sv_frame_t(1500));
+        QCOMPARE(s.count, sv::sv_frame_t(1001));
+        QCOMPARE(s.lead, sv::sv_frame_t(0));
+
+        // 48 kHz: begins a fraction of a frame early, by a frame of the
+        // take's rounded
+        s = recordingSpan(1001, 2001, 0.0, 44100, 48000, 100000);
+        const double at = 1001.0 * 48000.0 / 44100.0;
+        QCOMPARE(s.from, sv::sv_frame_t(std::floor(at)));
+        QCOMPARE(s.count, sv::sv_frame_t(std::ceil(2001.0 * 48000.0 / 44100.0)) -
+                 s.from + 1);
+        QCOMPARE(s.lead, sv::sv_frame_t(std::llround
+                                        ((at - std::floor(at)) * 44100.0 /
+                                         48000.0)));
+
+        // Before the recording's start: cut at it
+        s = recordingSpan(0, 2000, -700.0, 44100, 44100, 100000);
+        QCOMPARE(s.start, sv::sv_frame_t(700));
+        QCOMPARE(s.from, sv::sv_frame_t(0));
+        // Past its end, at either rate: cut so that the frame after is
+        // its last
+        for (double rate : { 44100.0, 48000.0 }) {
+            s = recordingSpan(90000, 120000, 1000.0, 44100, rate, 100000);
+            QVERIFY(s.end < 120000);
+            QVERIFY(s.from + s.count <= 100000);
+            QVERIFY2(s.from + s.count >= 100000 - 2,
+                     qPrintable(QString::number(s.from + s.count)));
+        }
+        // Nothing of it on the recording
+        s = recordingSpan(1000, 2000, 200000.0, 44100, 44100, 100000);
+        QVERIFY(s.end <= s.start);
     }
 };
 

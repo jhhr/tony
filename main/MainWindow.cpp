@@ -41,6 +41,8 @@
 #include "InputDevice.h"
 #include "RecordingAlignment.h"
 #include "TakeAudio.h"
+#include "TakeReplacement.h"
+#include "UserText.h"
 #include "InputLevel.h"
 #include "InputLevelFeed.h"
 #include "InputLevelMeter.h"
@@ -6759,15 +6761,10 @@ MainWindow::reportTakeLevel(QString recordingPath, const TakeTiming &timing)
     }
     m_takeInputPeaks = scan.channelPeaks;
 
-    const auto levelText = [](double db) {
-        QString number = QString::number(std::fabs(db), 'f', 1);
-        if (db < -0.05) number = QChar(0x2212) + number;
-        return tr("%1 dBFS").arg(number);
-    };
-
     QString message;
     if (!scan.clipped()) {
-        message = tr("Take: peak %1").arg(levelText(InputLevel::dbfs(scan.peak)));
+        message = tr("Take: peak %1")
+            .arg(UserText::dbfs(InputLevel::dbfs(scan.peak)));
     } else {
         // Where on the song, as the dots are placed
         const sv_samplerate_t recordRate =
@@ -6777,12 +6774,9 @@ MainWindow::reportTakeLevel(QString recordingPath, const TakeTiming &timing)
         QStringList times;
         for (const InputLevel::Clip &place : places) {
             if (times.size() == 3) break;
-            const double seconds = double
-                (timing.position + timing.liveFrameIntoTake(place.start)) /
-                timing.rate;
-            const int minutes = int(seconds / 60.0);
-            times << QString("%1:%2").arg(minutes)
-                .arg(seconds - 60.0 * minutes, 4, 'f', 1, QChar('0'));
+            times << UserText::minutesAndSeconds
+                (double(timing.position +
+                        timing.liveFrameIntoTake(place.start)) / timing.rate);
         }
         QString where = times.join(", ");
         if (places.size() > 3) {
@@ -8166,18 +8160,6 @@ MainWindow::applyTakeState(SingingTakeCommand *command, const TakeState &state)
     return error == "";
 }
 
-namespace {
-
-// A time on the reference's timeline as the user reads it: 1:02.5
-QString minutesAndSeconds(double seconds)
-{
-    const int minutes = int(seconds / 60.0);
-    return QString("%1:%2").arg(minutes)
-        .arg(seconds - 60.0 * minutes, 4, 'f', 1, QChar('0'));
-}
-
-}
-
 QString
 MainWindow::askForTakeRecordingFile()
 {
@@ -8238,8 +8220,8 @@ MainWindow::takeRecordingSearchDone()
              << m.error << endl;
         if (error == "" && !m.found && result.lookedFor(segment)) {
             error = tr("At %1: %2")
-                .arg(minutesAndSeconds(double(segment.start) /
-                                       result.takeRate), m.error);
+                .arg(UserText::minutesAndSeconds(double(segment.start) /
+                                                 result.takeRate), m.error);
         }
     }
     if (error != "") {
@@ -8283,99 +8265,18 @@ MainWindow::replaceTakeAudio(const TakeRecordingSearch::Result &search,
         return tr("Could not find a directory to write the singing track "
                   "into");
     }
-    // The stretches of the recording go in through files of their own,
-    // as a recording does, which go again with the folder
-    QTemporaryDir scratch(QDir(directory).filePath("replacing-XXXXXX"));
-    if (!scratch.isValid()) {
-        return tr("Could not make a folder to work in, in \"%1\"")
-            .arg(directory);
-    }
 
-    // What an undo has to put back, and what a failure part of the way
-    // through does
+    // What an undo has to put back
     const QString pathBefore = m_takes->getAudioPath();
     const Coverage coverageBefore = m_takes->getCoverage();
-    const double rate = search.takeRate;
-    const double ratio = search.recordingRate / rate;
 
-    Coverage::Range whole;
-    bool any = false;
-    QStringList lines;
-    for (size_t i = 0; i < search.segments.size(); ++i) {
-        const Coverage::Range r(search.segments[i].start,
-                                search.segments[i].end);
-        const RecordingAlignment::Match &m = search.segments[i].match;
-        const QString when = tr("%1 to %2")
-            .arg(minutesAndSeconds(double(r.start) / rate),
-                 minutesAndSeconds(double(r.end) / rate));
-        if (!m.found) {
-            // Not looked for: anything else not found refused the lot
-            lines << tr("%1: too short to look for, left as it was").arg(when);
-            continue;
-        }
-
-        // The recording's frames that hold the range, at the recording's
-        // rate, brought to the take's level and converted to its rate by
-        // the splice.  They begin up to a frame early, which is left off
-        // the front in the take's frames
-        const double first = (double(r.start) + m.offset) * ratio;
-        const sv_frame_t from = sv_frame_t(std::floor(first));
-        const sv_frame_t count =
-            sv_frame_t(std::ceil((double(r.end) + m.offset) * ratio)) -
-            from + 1;
-        const sv_frame_t lead =
-            sv_frame_t(std::llround((first - double(from)) / ratio));
-        const QString part =
-            scratch.filePath(QString("part-%1.wav").arg(int(i)));
-        QString error = TakeAudio::extract(search.recordingPath, from, count,
-                                           float(m.gain), part);
-        Coverage::Range placed;
-        if (error == "") {
-            error = m_takes->spliceRecording(part, lead, r.start,
-                                             r.end - r.start, directory,
-                                             &placed, rate);
-        }
-        if (error != "") {
-            // The files written so far are superseded, and go when the
-            // session closes, as an undone recording's do
-            m_takes->restoreTake(pathBefore, coverageBefore);
-            return error;
-        }
-        whole = any ? Coverage::Range(std::min(whole.start, placed.start),
-                                      std::max(whole.end, placed.end))
-            : placed;
-        any = true;
-
-        QString line = tr("%1: at %2 in the recording, %3 alike")
-            .arg(when, minutesAndSeconds((double(r.start) + m.offset) / rate))
-            .arg(m.confidence, 0, 'f', 2);
-        const double drift = m.drift(rate);
-        if (m.endsMeasured &&
-            std::fabs(drift) > RecordingAlignment::kDriftSeconds) {
-            line += tr("; <b>its two ends lie %1 ms apart</b>: the "
-                       "transmitter's clock and the receiver's differ. The "
-                       "singing was not stretched to fit, and its ends are "
-                       "up to %2 ms from where the take had them")
-                .arg(std::fabs(drift) * 1000.0, 0, 'f', 1)
-                .arg(std::fabs(drift) * 500.0, 0, 'f', 1);
-        } else if (m.endsMeasured) {
-            line += tr("; its two ends %1 ms apart")
-                .arg(std::fabs(drift) * 1000.0, 0, 'f', 1);
-        }
-        const double gainDb = 20.0 * std::log10(std::max(m.gain, 1e-9));
-        if (std::fabs(gainDb) >= 0.5) {
-            line += tr("; brought %1 by %2 dB to the take's level")
-                .arg(gainDb > 0 ? tr("up") : tr("down"))
-                .arg(std::fabs(gainDb), 0, 'f', 1);
-        }
-        lines << line;
-    }
-
-    if (!any) {
-        return tr("Nothing in the take is long enough to be looked for: "
-                  "at least %1 s is needed")
-            .arg(RecordingAlignment::kMinRangeSeconds, 0, 'f', 1);
-    }
+    TakeReplacement::Result replaced;
+    const QString error = TakeReplacement::replace
+        (*m_takes, search.segments, search.recordingPath, search.takeRate,
+         search.recordingRate, search.recordingFrames, directory, replaced);
+    if (error != "") return error;
+    const Coverage::Range whole = replaced.whole;
+    const QStringList &lines = replaced.lines;
 
     cerr << "MainWindow::replaceTakeAudio: [" << whole.start << ","
          << whole.end << ") of the take from " << search.recordingPath

@@ -1218,7 +1218,9 @@ tony_core_files = [
   'main/TakeDiff.cpp',
   'main/TakeEvents.cpp',
   'main/TakesFile.cpp',
+  'main/TakeReplacement.cpp',
   'main/TakeTiming.cpp',
+  'main/UserText.cpp',
   'main/VerticalZoom.cpp',
   'main/VoiceGate.cpp',
   'main/VoiceThreshold.cpp',
@@ -1615,6 +1617,8 @@ if system != 'android'
     'main/test/TestRecordingAlignment.h',
     'main/test/TestInputLevel.h',
     'main/test/TestVoiceGate.h',
+    'main/test/TestUserText.h',
+    'main/test/TestTakeReplacement.h',
     'main/test/TestRunSuite.h',
   ])
 

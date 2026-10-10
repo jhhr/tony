@@ -296,6 +296,20 @@ SingingTakes::removeUnusedFiles()
     return gone;
 }
 
+bool
+SingingTakes::discardWritten(QString path)
+{
+    if (path == "" || !m_written.contains(path)) return false;
+    if (m_protected.contains(path)) return false;
+    for (const Take &take : m_takes) {
+        if (take.audioPath == path) return false;
+    }
+    if (!QFile::remove(path) && QFile::exists(path)) return false;
+    m_written.removeAll(path);
+    m_superseded.removeAll(path);
+    return true;
+}
+
 void
 SingingTakes::setWholeFileTake(QString path, sv_frame_t frames)
 {

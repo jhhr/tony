@@ -399,6 +399,40 @@ levels(const Source &recording, std::vector<double> &levels,
     return envelopeOf(recording, levels, progress, 0, 100);
 }
 
+Span
+recordingSpan(sv_frame_t start, sv_frame_t end, double offset,
+              double takeRate, double recordingRate,
+              sv_frame_t recordingFrames)
+{
+    Span span { start, start, 0, 0, 0 };
+    if (!(takeRate > 0.0) || !(recordingRate > 0.0) || recordingFrames < 2) {
+        return span;
+    }
+    const double ratio = recordingRate / takeRate;
+
+    // The stretch's first frame may not lie before the recording's
+    // first, nor the frame after its end after the recording's last
+    const sv_frame_t first = sv_frame_t(std::ceil(-offset));
+    const sv_frame_t past = sv_frame_t
+        (std::floor(double(recordingFrames - 1) / ratio - offset));
+    span.start = std::max(start, first);
+    span.end = std::min(end, past);
+    if (span.end <= span.start) {
+        span.end = span.start;
+        return span;
+    }
+
+    // From the frame before to the frame after, at the recording's rate;
+    // begun up to a frame early, which is left off the front in the
+    // take's frames
+    const double at = (double(span.start) + offset) * ratio;
+    span.from = sv_frame_t(std::floor(at));
+    span.count = sv_frame_t(std::ceil((double(span.end) + offset) * ratio)) -
+        span.from + 1;
+    span.lead = sv_frame_t(std::llround((at - double(span.from)) / ratio));
+    return span;
+}
+
 namespace {
 
 // Whether the range can be looked for at all; why not in match.error
@@ -494,17 +528,27 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
     }
     const double quiet = loud * std::pow(10.0, -quietDb / 20.0);
 
-    // 1. Coarse: the take's level against the recording's
-    if (sv_frame_t(recordingLevel.size()) < hops) {
-        match.error = tr("The recording is shorter than the take's recorded "
-                         "range");
+    // 1. Coarse: the take's level against the recording's, at every
+    // placement that leaves the anchor's length of the take or more on
+    // the recording. The recording may have been started after the range
+    // began, or stopped before it ended, and still hold the singing: off
+    // its ends it is silence, which the take's quiet before and after
+    // its singing is alike
+    const sv_frame_t anchorHops = sv_frame_t(anchorSeconds / kHopSeconds);
+    const sv_frame_t overlapHops = std::min(hops, anchorHops);
+    if (sv_frame_t(recordingLevel.size()) < overlapHops) {
+        match.error = tr("The recording is too short to hold the take's "
+                         "singing");
         return match;
     }
-    const std::vector<double> coarse =
-        maskedCorrelation(level, whole, recordingLevel);
+    const sv_frame_t pad = hops - overlapHops;
+    std::vector<double> padded(size_t(pad), 0.0);
+    padded.insert(padded.end(), recordingLevel.begin(), recordingLevel.end());
+    padded.resize(padded.size() + size_t(pad), 0.0);
+    const std::vector<double> coarse = maskedCorrelation(level, whole, padded);
 
     // The candidates: the best offsets, each the best for some way
-    // around it
+    // around it, in the recording's hops (before its start, negative)
     std::vector<size_t> order(coarse.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
     std::sort(order.begin(), order.end(), [&](size_t x, size_t y) {
@@ -514,13 +558,14 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
     for (size_t i : order) {
         if (int(candidates.size()) >= candidateCount) break;
         if (!(coarse[i] > 0.0)) break;
+        const sv_frame_t c = sv_frame_t(i) - pad;
         bool tooClose = false;
-        for (sv_frame_t c : candidates) {
-            if (std::llabs(c - sv_frame_t(i)) < candidateSpacingHops) {
+        for (sv_frame_t other : candidates) {
+            if (std::llabs(other - c) < candidateSpacingHops) {
                 tooClose = true;
             }
         }
-        if (!tooClose) candidates.push_back(sv_frame_t(i));
+        if (!tooClose) candidates.push_back(c);
     }
     if (candidates.empty()) {
         match.error = tr("Nothing in the recording rises and falls as the "
@@ -533,10 +578,11 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
         return match;
     }
 
-    // 2. Fine: the loudest stretch of the take, as whole as any
+    // 2. Fine: the loudest stretch of the take, as whole as any. Off the
+    // recording's ends it is matched against silence, which is alike to
+    // nothing: the anchor has to be on the recording
     const sv_frame_t anchorFrames =
         std::min(n, sv_frame_t(std::llround(anchorSeconds * rate)));
-    const sv_frame_t anchorHops = sv_frame_t(anchorSeconds / kHopSeconds);
     sv_frame_t anchorHop = 0;
     double anchorScore = -1.0;
     for (sv_frame_t k = 0; k + anchorHops <= hops; ++k) {
@@ -580,6 +626,18 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
         return match;
     }
 
+    // What of the range the recording holds at the anchor's offset, in
+    // the range's frames: a frame of the take whose frame of the recording
+    // exists. The walk keeps to it, and the rest is no part of the match
+    const double recordingEnd = double(recording.frames() - 1) / ratio;
+    const sv_frame_t covered0 = std::max<sv_frame_t>
+        (0, sv_frame_t(std::ceil(-double(from) - double(anchorOffset))));
+    const sv_frame_t covered1 = std::min<sv_frame_t>
+        (n, sv_frame_t(std::floor(recordingEnd - double(from) -
+                                  double(anchorOffset))));
+    match.coveredFrom = from + covered0;
+    match.coveredTo = from + std::max(covered0, covered1);
+
     // 3. The walk, out from the anchor both ways
     struct Piece {
         sv_frame_t start;
@@ -594,7 +652,7 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
 
     std::vector<sv_frame_t> starts;
     for (sv_frame_t s = 0; s + pieceFrames <= n; s += spacing) {
-        starts.push_back(s);
+        if (s >= covered0 && s + pieceFrames <= covered1) starts.push_back(s);
     }
 
     std::vector<Piece> pieces;
@@ -688,7 +746,9 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
         match.walked.push_back({ from + p.start, from + p.start + pieceFrames,
                                  double(p.offset), p.r });
     }
-    match.confidence = (rs.size() >= 3 ? median(rs) : anchorR);
+    // The anchor alone only where no piece was walked: two pieces unlike
+    // the recording say more of a short range than its best half second
+    match.confidence = (rs.empty() ? anchorR : median(rs));
     match.confidence = std::max(0.0, match.confidence);
 
     match.startOffset = match.endOffset = double(anchorOffset);
@@ -723,17 +783,17 @@ find(const Source &take, sv_frame_t from, sv_frame_t to,
 
 namespace {
 
-// How many pieces in a row unlike the recording make another session;
-// and where a range is not found as a whole, how many in a row alike
-// make a session of its own: a second of singing alike throughout, more
-// than another singing of the song is alike by chance (a stretch of one
-// a second long read 0.53 alike over its four pieces, two of them
-// alike). How deep the search goes into the parts that are left
-const int otherSessionPieces = 2;
+// Where a range is not found as a whole, how many of the walk's pieces
+// in a row alike make a session of its own: a second of singing alike
+// throughout, more than another singing of the song is alike by chance
+// (a stretch of one a second long read 0.53 alike over its four pieces,
+// two of them alike). How deep the search goes into the parts that are
+// left
 const int sessionPieces = 4;
 const int maxDepth = 4;
 
-// The windows a switch from one session to another is found in
+// The windows a switch from one session to another is found in, and
+// another session inside one
 const double switchWindowSeconds = 0.02;
 const double switchStepSeconds = 0.01;
 
@@ -843,6 +903,196 @@ Match within(const Match &m, sv_frame_t from, sv_frame_t to, double rate)
     return result;
 }
 
+// The scan for another session inside one found: windows of the take
+// at the offset of the nearest of the walk's pieces alike, in blocks of
+// this many windows read at once
+const int scanBlockWindows = 500;
+
+// Another session inside one is where at least kMinSessionSeconds of
+// loud windows are unlike the recording, and it ends where as long a run
+// of them is alike: another singing of the same notes is alike now and
+// then for a few windows (three in a row, in a punch-in of the tests'
+// synthetic singing), and a run that ended there came in pieces
+
+// The stretches of [from, to) whose loud windows are unlike the
+// recording at the offsets of the session found as m, end to end with
+// the rest of it and in order. Each switch is the middle of the stretch
+// between the last window alike and the first unlike, or the other way;
+// one with no window alike before or after it runs to from or to
+std::vector<std::pair<sv_frame_t, sv_frame_t>>
+unlikeRuns(const Source &take, const Source &recording, const Match &m,
+           sv_frame_t from, sv_frame_t to)
+{
+    std::vector<std::pair<sv_frame_t, sv_frame_t>> runs;
+    std::vector<const Match::Piece *> alikePieces;
+    for (const Match::Piece &p : m.walked) {
+        if (p.r >= kMinConfidence) alikePieces.push_back(&p);
+    }
+    const double rate = take.rate();
+    const double ratio = recording.rate() / rate;
+    const sv_frame_t window = sv_frame_t(switchWindowSeconds * rate);
+    const sv_frame_t step = sv_frame_t(switchStepSeconds * rate);
+    if (alikePieces.empty() || window < 2 || step < 1 || to - from < window) {
+        return runs;
+    }
+
+    // Each window's offset: that of the piece alike nearest its middle
+    std::vector<sv_frame_t> starts;
+    for (sv_frame_t w = from; w + window <= to; w += step) starts.push_back(w);
+    std::vector<sv_frame_t> lags(starts.size());
+    size_t p = 0;
+    for (size_t k = 0; k < starts.size(); ++k) {
+        const sv_frame_t middle = starts[k] + window / 2;
+        auto distance = [&](size_t i) -> sv_frame_t {
+            const Match::Piece &piece = *alikePieces[i];
+            if (middle >= piece.start && middle < piece.end) return 0;
+            return sv_frame_t(std::min(std::llabs(middle - piece.start),
+                                       std::llabs(middle - piece.end)));
+        };
+        while (p + 1 < alikePieces.size() && distance(p + 1) <= distance(p)) ++p;
+        lags[k] = sv_frame_t(std::llround(alikePieces[p]->offset));
+    }
+
+    // Each window's level and how alike it is, a block at a time
+    std::vector<double> levels(starts.size(), 0.0), alike(starts.size(), 0.0);
+    const sv_frame_t margin = sv_frame_t(std::ceil(0.01 * rate));
+    for (size_t k0 = 0; k0 < starts.size(); k0 += scanBlockWindows) {
+        const size_t k1 = std::min(starts.size(), k0 + scanBlockWindows);
+        const sv_frame_t b0 = starts[k0] - margin;
+        const sv_frame_t b1 = starts[k1 - 1] + window + margin;
+        const std::vector<float> audio = take.read(b0, b1 - b0);
+        const std::vector<char> gaps = dropouts(audio, rate);
+        std::vector<double> raw(audio.begin(), audio.end());
+        const std::vector<double> e = emphasised(raw);
+        sv_frame_t lag0 = lags[k0], lag1 = lags[k0];
+        for (size_t k = k0; k < k1; ++k) {
+            lag0 = std::min(lag0, lags[k]);
+            lag1 = std::max(lag1, lags[k]);
+        }
+        const std::vector<double> r = emphasised
+            (readAt(recording, ratio, b0 + lag0, b1 - b0 + lag1 - lag0));
+        for (size_t k = k0; k < k1; ++k) {
+            const sv_frame_t s = starts[k] - b0;
+            const sv_frame_t shift = lags[k] - lag0;
+            double sum = 0.0, sab = 0.0, saa = 0.0, sbb = 0.0, sa = 0.0,
+                sb = 0.0, count = 0.0;
+            for (sv_frame_t i = s + 1; i < s + window; ++i) {
+                if (gaps[size_t(i)] || gaps[size_t(i - 1)]) continue;
+                const double x = e[size_t(i)], y = r[size_t(i + shift)];
+                sum += raw[size_t(i)] * raw[size_t(i)];
+                sa += x; sb += y; sab += x * y; saa += x * x; sbb += y * y;
+                count += 1.0;
+            }
+            if (count <= double(window) / 2) continue;
+            const double va = saa - sa * sa / count;
+            const double vb = sbb - sb * sb / count;
+            levels[k] = std::sqrt(sum / count);
+            alike[k] = (va > 0 && vb > 0) ?
+                (sab - sa * sb / count) / std::sqrt(va * vb) : 0.0;
+        }
+    }
+
+    // Loud as the walk counts it: within quietDb of the range's loud level
+    std::vector<double> sorted;
+    for (double l : levels) if (l > 0.0) sorted.push_back(l);
+    if (sorted.empty()) return runs;
+    std::sort(sorted.begin(), sorted.end());
+    const double quiet = sorted[sorted.size() * 9 / 10] *
+        std::pow(10.0, -quietDb / 20.0);
+    // 1 alike, -1 unlike, 0 neither: too quiet, or mostly dropouts
+    std::vector<int> state(starts.size(), 0);
+    for (size_t k = 0; k < starts.size(); ++k) {
+        if (levels[k] > 0.0 && levels[k] >= quiet) {
+            state[k] = (alike[k] >= kMinConfidence) ? 1 : -1;
+        }
+    }
+
+    const int minRun = int(std::ceil(kMinSessionSeconds /
+                                     switchStepSeconds));
+    size_t k = 0;
+    while (k < starts.size()) {
+        if (state[k] != -1) { ++k; continue; }
+        const size_t first = k;
+        size_t last = k;
+        int unlike = 0, alikeInRow = 0;
+        for (size_t j = k; j < starts.size(); ++j) {
+            if (state[j] == -1) {
+                last = j;
+                ++unlike;
+                alikeInRow = 0;
+            } else if (state[j] == 1 && ++alikeInRow >= minRun) {
+                break;
+            }
+        }
+        k = last + 1;
+        if (unlike < minRun) continue;
+
+        size_t before = first;
+        while (before > 0 && state[before - 1] != 1) --before;
+        size_t after = last + 1;
+        while (after < starts.size() && state[after] != 1) ++after;
+        const sv_frame_t start = (before == 0) ? from :
+            (starts[before - 1] + window + starts[first]) / 2;
+        const sv_frame_t end = (after == starts.size()) ? to :
+            (starts[last] + window + starts[after]) / 2;
+        runs.push_back({ std::max(start, from), std::min(end, to) });
+    }
+    return runs;
+}
+
+std::vector<Segment> segmentsOf(const Source &take, sv_frame_t from,
+                                sv_frame_t to, const Source &recording,
+                                const std::vector<double> &levels,
+                                std::function<bool(int)> progress,
+                                int depth);
+
+// [from, to) of the session found as m: its stretches of another session
+// cut out, each looked for on its own or, too short to look for, left as
+// it is, and the rest of it m's
+std::vector<Segment> sessionSegments(const Source &take, sv_frame_t from,
+                                     sv_frame_t to, const Source &recording,
+                                     const std::vector<double> &levels,
+                                     std::function<bool(int)> progress,
+                                     int depth, const Match &m)
+{
+    std::vector<Segment> result;
+    const double rate = take.rate();
+    sv_frame_t at = from;
+    for (const auto &run : unlikeRuns(take, recording, m, from, to)) {
+        if (run.second <= at) continue;
+        const sv_frame_t start = std::max(run.first, at);
+        if (start > at) result.push_back({ at, start, within(m, at, start, rate) });
+        if (double(run.second - start) < kMinRangeSeconds * rate) {
+            Match other;
+            other.left = Match::Left::ShortSession;
+            other.error = tr("Another recording session, too short to look "
+                             "for");
+            result.push_back({ start, run.second, other });
+        } else if (depth <= 0) {
+            Match other;
+            other.error = tr("Recording sessions inside one another, too "
+                             "many deep to look into");
+            result.push_back({ start, run.second, other });
+        } else if (start <= from && run.second >= to) {
+            // Never the same range again, which would never end: its
+            // sessions cannot be told apart
+            Match other;
+            other.error = tr("Another recording session that could not be "
+                             "told apart from the rest");
+            result.push_back({ start, run.second, other });
+        } else {
+            for (const Segment &s : segmentsOf(take, start, run.second,
+                                               recording, levels, progress,
+                                               depth - 1)) {
+                result.push_back(s);
+            }
+        }
+        at = run.second;
+    }
+    if (at < to) result.push_back({ at, to, within(m, at, to, rate) });
+    return result;
+}
+
 std::vector<Segment> segmentsOf(const Source &take, sv_frame_t from,
                                 sv_frame_t to, const Source &recording,
                                 const std::vector<double> &levels,
@@ -852,9 +1102,8 @@ std::vector<Segment> segmentsOf(const Source &take, sv_frame_t from,
     std::vector<Segment> result;
     if (double(to - from) < kMinRangeSeconds * take.rate()) {
         Match m;
-        m.error = QCoreApplication::translate
-            ("RecordingAlignment", "The take's recorded range is too short "
-             "to look for");
+        m.left = Match::Left::TooShort;
+        m.error = tr("The take's recorded range is too short to look for");
         result.push_back({ from, to, m });
         return result;
     }
@@ -905,7 +1154,11 @@ std::vector<Segment> segmentsOf(const Source &take, sv_frame_t from,
             result = segmentsOf(take, from, runStart, recording, levels,
                                 progress, depth - 1);
         }
-        result.push_back({ runStart, runEnd, run });
+        for (const Segment &s : sessionSegments(take, runStart, runEnd,
+                                                recording, levels, progress,
+                                                depth, run)) {
+            result.push_back(s);
+        }
         if (runEnd < to) {
             for (const Segment &s : segmentsOf(take, runEnd, to, recording,
                                                levels, progress, depth - 1)) {
@@ -915,47 +1168,19 @@ std::vector<Segment> segmentsOf(const Source &take, sv_frame_t from,
         return result;
     }
 
-    // Runs of the walk's pieces unlike the recording at the offset found,
-    // two or more in a row: another session
-    std::vector<std::pair<size_t, size_t>> others;
-    for (size_t i = 0; i < walked.size(); ) {
-        if (walked[i].r >= kMinConfidence) { ++i; continue; }
-        size_t j = i;
-        while (j < walked.size() && walked[j].r < kMinConfidence) ++j;
-        if (int(j - i) >= otherSessionPieces) others.push_back({ i, j });
-        i = j;
+    // Found: what lies off the recording's ends is left as it is, and
+    // the rest is this session's but for any other inside it
+    Match outside;
+    outside.left = Match::Left::OutsideRecording;
+    outside.error = tr("Not in the recording");
+    const sv_frame_t in0 = std::max(from, m.coveredFrom);
+    const sv_frame_t in1 = std::max(in0, std::min(to, m.coveredTo));
+    if (in0 > from) result.push_back({ from, in0, outside });
+    for (const Segment &s : sessionSegments(take, in0, in1, recording, levels,
+                                            progress, depth, m)) {
+        result.push_back(s);
     }
-    if (others.empty()) {
-        result.push_back({ from, to, m });
-        return result;
-    }
-    const double rate = take.rate();
-
-    // The stretches between: this session's, then another's, and so on.
-    // Each switch lies between the last piece of one and the first of
-    // the next, and is found at the offset of the piece of this session
-    // beside it, which the walk followed through any drift
-    sv_frame_t at = from;
-    for (const auto &o : others) {
-        const sv_frame_t otherStart = (o.first == 0) ? from :
-            switchPoint(take, recording, walked[o.first - 1].offset,
-                        walked[o.first - 1].start, walked[o.first].end, true);
-        const sv_frame_t otherEnd = (o.second == walked.size()) ? to :
-            switchPoint(take, recording, walked[o.second].offset,
-                        walked[o.second - 1].start, walked[o.second].end,
-                        false);
-        if (otherStart > at) {
-            result.push_back({ at, otherStart,
-                               within(m, at, otherStart, rate) });
-        }
-        for (const Segment &s : segmentsOf(take, otherStart, otherEnd,
-                                           recording, levels, progress,
-                                           depth - 1)) {
-            result.push_back(s);
-        }
-        at = otherEnd;
-    }
-    if (at < to) result.push_back({ at, to, within(m, at, to, rate) });
+    if (in1 < to) result.push_back({ in1, to, outside });
     return result;
 }
 

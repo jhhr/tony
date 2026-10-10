@@ -44,6 +44,8 @@
 #include "TestRecordingAlignment.h"
 #include "TestInputLevel.h"
 #include "TestVoiceGate.h"
+#include "TestUserText.h"
+#include "TestTakeReplacement.h"
 #include "TestRunSuite.h"
 
 #include "RunSuite.h"
@@ -266,6 +268,18 @@ int main(int argc, char *argv[])
 
     {
         TestVoiceGate t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestUserText t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestTakeReplacement t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

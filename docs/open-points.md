@@ -323,13 +323,26 @@ The design is in [takes.md](takes.md#replace-take-audio-from-recording).
   Whether a receiver's audio and its transmitter's own recording read as alike (the
   receiver may process what it sends on: a high-pass, GainAssist), and where 0.5 sits
   between them, is for the checklist's section 8. So are the other numbers: a dropout is
-  5 ms or more under −100 dBFS; another session is two quarter seconds in a row unlike;
-  where a range is not found as a whole, a session of its own is four in a row alike.
+  5 ms or more under −100 dBFS; another session is 0.1 s of loud 20 ms windows unlike,
+  ended by 0.1 s alike; where a range is not found as a whole, a session of its own is
+  four quarter seconds in a row alike.
 - **A dropout the receiver hides** other than with silence (repeating, fading) is not
-  left out of the comparison, and reads as less alike.
+  left out of the comparison, and reads as less alike; one of 0.1 s or more reads as
+  another session, which is left as the take has it, not replaced.
 - **The two ends drifting apart is reported, not put right**: the audio is not
   stretched, as asked, so a take whose ends lie 4 ms apart keeps each end up to 2 ms off.
-- **A punch-in shorter than half a second** is not told apart from the singing around it.
+- **A punch-in shorter than half a second** is told apart (from 0.1 s) and left as the
+  take has it: too short to be looked for on its own.
+- **A punch-in that holds the range's loudest half second** is where the search starts:
+  the range is then found unlike it, and refused unless the punch-in is a second or more,
+  four quarter seconds alike, which is split off and the rest looked for. A singer who
+  punches in louder than before meets this. Anchors in several parts of the range, the
+  offset most of them agree on taken, would not.
+- **One take file is written per stretch replaced**, on the GUI thread, each a copy of
+  the whole take: 115 MB for a five-minute take at 48 kHz in stereo, ten times over for
+  ten stretches. The files between go at once, but the time stays. One pass would do: a
+  `TakeAudio` call taking every stretch as a patch, each with its own source file,
+  offset and gain, which would also do away with the extract step and its files.
 - **The whole recording is read** for its level, and the take's range is held in memory:
   how long a long recording takes on the phone has not been timed.
 - **A punch-in is tested only in the core**, on synthetic takes: the app's test records

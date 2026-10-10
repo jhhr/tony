@@ -82,6 +82,10 @@ namespace RecordingAlignment
     /// The shortest take range that can be looked for
     constexpr double kMinRangeSeconds = 0.5;
 
+    /// The shortest stretch of another recording session found inside a
+    /// session: loud windows unlike the recording for this long
+    constexpr double kMinSessionSeconds = 0.1;
+
     /// Audio read a stretch at a time, its channels averaged
     class Source
     {
@@ -123,6 +127,13 @@ namespace RecordingAlignment
         bool found;
         QString error;
 
+        /// A stretch not found that is left as the take has it, rather
+        /// than refusing the replacement, and why: too short to look
+        /// for; another recording session too short to look for; or
+        /// before or after what the recording holds
+        enum class Left { No, TooShort, ShortSession, OutsideRecording };
+        Left left;
+
         /// Given up, as progress asked
         bool cancelled;
 
@@ -153,6 +164,12 @@ namespace RecordingAlignment
         /// ratio over the pieces that matched
         double gain;
 
+        /// The take's frames the recording holds at the offset, within
+        /// the range looked for: all of it, unless the recording began
+        /// after the range did or ended before it did
+        sv::sv_frame_t coveredFrom;
+        sv::sv_frame_t coveredTo;
+
         /// The walk's pieces, in order: where each is in the take, the
         /// offset it was found at, and how alike it was there. Only
         /// those that counted: mostly whole, and loud enough
@@ -164,10 +181,10 @@ namespace RecordingAlignment
         };
         std::vector<Piece> walked;
 
-        Match() : found(false), cancelled(false), offset(0), confidence(0),
-                  pieces(0),
+        Match() : found(false), left(Left::No), cancelled(false),
+                  offset(0), confidence(0), pieces(0),
                   endsMeasured(false), startOffset(0), endOffset(0),
-                  gain(1) { }
+                  gain(1), coveredFrom(0), coveredTo(0) { }
     };
 
     /// A stretch of the take and where it is in the recording
@@ -178,7 +195,10 @@ namespace RecordingAlignment
     };
 
     /**
-     * Search the recording for the take's audio over [from, to). progress
+     * Search the recording for the take's audio over [from, to): placed
+     * anywhere that leaves at least the loudest half second of the range
+     * on the recording, so that a recording begun after the range began,
+     * or stopped before it ended, still holds what it holds. progress
      * is told how far the search is, in percent, from time to time, and
      * may return false to give it up (then error says so).
      */
@@ -207,23 +227,46 @@ namespace RecordingAlignment
      * more than one recording session, a punch-in over an earlier take,
      * which the transmitter recorded at another time.
      *
-     * The range is looked for with find(). Where two or more of the
-     * walk's pieces in a row, loud and whole, are unlike the recording
-     * there, that stretch is another session: the point where the one
-     * stops being alike is found in 20 ms windows, and the stretch is
-     * looked for on its own, the same way. In a range not found as a
-     * whole, the punch-ins may be most of it: the longest run of pieces
-     * alike, four in a row or more, is a session of its own, and the
-     * rest is looked for the same way. A segment not found
-     * has its match's found false; one too short to look for,
-     * kMinRangeSeconds, as well. In order, end to end, over the whole
-     * range.
+     * The range is looked for with find(). What of it lies before or
+     * after what the recording holds is left as it is. The rest is
+     * scanned in 20 ms windows at the offsets the walk found: where
+     * loud windows are unlike the recording for kMinSessionSeconds or
+     * more, that stretch is another session, looked for on its own the
+     * same way if it is kMinRangeSeconds long, and left as it is if it
+     * is shorter. In a range not found as a whole, the punch-ins may be
+     * most of it: the longest run of the walk's pieces alike, four in a
+     * row or more, is a session of its own, and the rest is looked for
+     * the same way. Four sessions deep at most. A segment not found has
+     * its match's found false, and its left says whether it is left as
+     * it is or refuses the replacement. In order, end to end, over the
+     * whole range.
      */
     std::vector<Segment> findSegments(const Source &take, sv::sv_frame_t from,
                                       sv::sv_frame_t to,
                                       const Source &recording,
                                       const std::vector<double> &recordingLevels,
                                       std::function<bool(int)> progress = {});
+
+    /**
+     * The recording's frames that hold the take's frames [start, end)
+     * found at offset: from the frame before to the frame after, at the
+     * recording's rate, every one of them within the recording's frames.
+     * A stretch that reaches past either end of the recording is cut at
+     * it first: start and end are what is left of it, end not after
+     * start if nothing is. lead is how many of the take's frames the
+     * span begins early, which the splice leaves off its front.
+     */
+    struct Span {
+        sv::sv_frame_t start;
+        sv::sv_frame_t end;
+        sv::sv_frame_t from;
+        sv::sv_frame_t count;
+        sv::sv_frame_t lead;
+    };
+    Span recordingSpan(sv::sv_frame_t start, sv::sv_frame_t end,
+                       double offset, double takeRate,
+                       double recordingRate,
+                       sv::sv_frame_t recordingFrames);
 
     /**
      * The correlation coefficient of a, over the samples where mask is

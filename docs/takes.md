@@ -269,39 +269,69 @@ from whenever its recording was started, for as long as it was left running).
    - **Coarse**: the take's level against the recording's, a correlation at every
      offset, through the FFT; the 16 best offsets at least 0.1 s apart are the
      candidates. Several, as the recording may hold other singings of the same song,
-     whose levels rise and fall as the take's do.
+     whose levels rise and fall as the take's do. Every offset that leaves half a second
+     of the range or more on the recording is a placement: the recording may have been
+     started after the range began, or stopped before it ended. Off its ends it reads as
+     silence, which the take's quiet before and after its singing is alike.
    - **Fine**: the take's loudest half second against the recording's samples within
-     25 ms of each candidate. The best is the anchor.
-   - **The walk**: quarter seconds end to end over the range, each against the recording
-     within 0.5 ms of the offset of the last that matched, out from the anchor both ways.
-     So a drift between two clocks is followed. After pieces that did not match the reach
-     grows by what two clocks 100 ppm apart drift meanwhile, to at most 2 ms. The
-     **confidence** is the median of how alike the pieces are (a correlation
-     coefficient, 1 for the same waveform at any gain). Below **0.5** the range is not
-     found.
+     25 ms of each candidate. The best is the anchor. Off the recording it is matched
+     against silence, alike to nothing, so the anchor lies on the recording.
+   - **The walk**: quarter seconds end to end over what of the range the recording holds
+     at the anchor's offset, each against the recording within 0.5 ms of the offset of
+     the last that matched, out from the anchor both ways. So a drift between two clocks
+     is followed. After pieces that did not match the reach grows by what two clocks
+     100 ppm apart drift meanwhile, to at most 2 ms. The **confidence** is the median of
+     how alike the pieces are (a correlation coefficient, 1 for the same waveform at any
+     gain); the anchor's only when no piece was walked. Below **0.5** the range is not
+     found. A short range is judged by its one or two pieces, not by the anchor: a range
+     of 0.74 s whose two pieces were a punch-in read the anchor's 0.99, mostly its last
+     quarter second, and was found.
    - The samples are **pre-emphasised** (a first difference): a held note of another
      singing finds a match within half a period anywhere, and the waveform's detail is
      what only the same singing has.
    - **Dropout gaps** (runs of 5 ms or more under −100 dBFS) are left out of every
      comparison: the recording has singing there, which the take does not, and counting
      it would read a take with many gaps as unlike its own recording.
+   - **What the recording does not hold** of a range found, before its start or after
+     its end, is left as the take has it.
    - **More than one recording session in a range**: a punch-in over an earlier take
      merges into one coverage range, but the transmitter recorded it at another time.
-     Two or more of the walk's pieces in a row unlike the recording at the offset found
-     are another session. The switch is found in 20 ms windows, at the offset of the piece
-     beside it, and the stretch is looked for on its own, the same way, four deep at most.
-     A range not found as a whole may be mostly punch-ins: its longest run of four or more
-     pieces alike in a row is a session of its own, and the rest is looked for.
-3. **Refused** unless every stretch at least 0.5 s long is found. The message names the
-   first that was not, and how alike its best match was. A stretch under 0.5 s is left as
-   it was, and the report says so.
-4. **The replacement**: for each stretch, its span of the recording, from the frame
-   before to the frame after, is written to a file of its own (`TakeAudio::extract()`) in
-   a temporary folder beside the take's files. It is **scaled to the take's level** by
-   the RMS ratio over the pieces that matched. Then it is spliced in as a recording is
+     The range found is scanned in 20 ms windows every 10 ms, each at the offset of the
+     nearest of the walk's pieces alike. Where 0.1 s of loud windows are unlike the
+     recording, with no 0.1 s alike among them, that stretch is another session: its ends
+     are halfway between the last window alike and the first unlike. One of half a second
+     or more is looked for on its own, the same way; a shorter one cannot be, and is left
+     as the take has it. Another singing of the same notes reads alike now and then for a
+     few windows (three in a row in the tests' punch-in), which ended a stretch there when
+     two alike in a row did, and a punch-in came in pieces. The stretches are disjoint and
+     in order by how they are found, and never the range itself again.
+   - **Four deep at most**: a session inside one four deep is not looked into, and is not
+     found. A range not found as a whole may be mostly punch-ins: its longest run of four
+     or more of the walk's pieces alike in a row is a session of its own, scanned as
+     above, and the rest is looked for.
+   - **Before these**, another session was two or more of the walk's quarter seconds in a
+     row unlike. A punch-in of 0.3 s or less left the pieces it straddled alike as a whole
+     (0.55 to 0.62 against 0.5), and the old singing went in over it. The switches were
+     found from either side of the piece between two such runs, and where that piece's
+     first and last 20 ms were unlike, the two stretches overlapped by the piece, and the
+     first was found to hold itself as another session and looked into for ever. A short
+     range found by its anchor did the same. All three are tests now.
+3. **Refused** unless every stretch looked for is found. The message names the first that
+   was not, and how alike its best match was. Left as it was, and the report says so: a
+   range under 0.5 s, another session's stretch under 0.5 s, and what the recording does
+   not hold (`Match::left`).
+4. **The replacement** (`TakeReplacement`, `tony_core`): for each stretch, its span of
+   the recording, from the frame before to the frame after, cut at the recording's ends
+   (`RecordingAlignment::recordingSpan()`; `TakeAudio::extract()` would fill what lies
+   past them with silence), is written to a file of its own in a temporary folder beside
+   the take's files. It is **scaled to the take's level** by the RMS ratio over the
+   pieces that matched. Then it is spliced in as a recording is
    (`SingingTakes::spliceRecording()`, converted to the take's rate, 5 ms fades at each
    end). The fraction of a frame by which the span begins early is left off its front.
-   The coverage does not change. A splice that fails puts the take back as it was.
+   Each take file written on the way goes as soon as the next is written
+   (`SingingTakes::discardWritten()`): undo knows the take before and after, nothing in
+   between. The coverage does not change. A splice that fails puts the take back as it
+   was, and every file written goes.
 5. **One undoable step**, as a recording is: a `SingingTakeCommand` named "Replace Take
    Audio", open until the analysis merges. The analysis is one ranged run from the first
    stretch to the last, as Analyse Now's, gated by the voice threshold as it is set now.
@@ -326,7 +356,10 @@ Measured on the tests' synthetic singing: the same singing reads 0.997 to 0.9999
 the same singing 22 dB down under −66 dBFS of noise, 0.93; another singing of the same
 song, the same notes 30 ms or so apart, 0.20; anything else, 0.02 to 0.08. A take with a
 fifth of it in dropouts reads 0.997 (0.887 with the gaps counted). A 100 ppm drift over
-30 s reads 2.9 ms, the end pieces a little inside the ends. Nothing has been measured on
+30 s reads 2.9 ms, the end pieces a little inside the ends. Punch-ins of 0.15 to 0.4 s
+are told apart, their ends within 30 ms. The scan costs about 0.1 s a minute of take in
+memory (a 60 s take with a punch-in: 447 ms against 342 without it, which also did not
+look for the punch-in); reading a long recording costs more. Nothing has been measured on
 a real transmitter's recording yet ([manual-checklist.md](manual-checklist.md)).
 
 ## Files on disk

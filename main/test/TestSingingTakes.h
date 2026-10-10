@@ -703,6 +703,43 @@ private slots:
         QVERIFY(takes.removeUnusedFiles().isEmpty());
     }
 
+    // A step on the way of an operation undo knows as a whole goes at
+    // once: a file this run wrote and nothing holds. Not the take's own,
+    // a protected one or the user's
+    void a_written_step_is_discarded() {
+        SingingTakes takes;
+        QString loaded = writeRecording(1000, 0.5f);
+        takes.setWholeFileTake(loaded, 1000);
+        QString recording = writeRecording(1000, 0.25f);
+        QVERIFY(takes.spliceRecording(recording, 0, 2000, -1,
+                                      takeDirectory()).isEmpty());
+        const QString first = takes.getAudioPath();
+        QVERIFY(takes.spliceRecording(recording, 0, 5000, -1,
+                                      takeDirectory()).isEmpty());
+        const QString second = takes.getAudioPath();
+        QVERIFY(takes.getSupersededPaths().contains(first));
+
+        QVERIFY(!takes.discardWritten(second));
+        QVERIFY(!takes.discardWritten(loaded));
+        QVERIFY(QFileInfo::exists(second) && QFileInfo::exists(loaded));
+        takes.protectPath(first);
+        QVERIFY(!takes.discardWritten(first));
+        QVERIFY(QFileInfo::exists(first));
+
+        SingingTakes other;
+        other.setWholeFileTake(loaded, 1000);
+        QVERIFY(other.spliceRecording(recording, 0, 2000, -1,
+                                      takeDirectory()).isEmpty());
+        const QString step = other.getAudioPath();
+        QVERIFY(other.spliceRecording(recording, 0, 5000, -1,
+                                      takeDirectory()).isEmpty());
+        QVERIFY(other.discardWritten(step));
+        QVERIFY(!QFileInfo::exists(step));
+        QVERIFY(!other.getWrittenPaths().contains(step));
+        QVERIFY(!other.getSupersededPaths().contains(step));
+        QVERIFY(!other.discardWritten(step));
+    }
+
     // The file a saved session names must be there when that session is
     // opened again, however many recordings have superseded it since
     void a_saved_session_keeps_its_file() {

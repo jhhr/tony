@@ -591,23 +591,29 @@ receiver's analog output into the AI-Micro instead. The designs:
    now. Undo puts the gaps back; Redo replaces them again.
 7. A take with a punch-in (Record into Selection over part of it), the transmitter
    recording through both: the report lists the parts, each found at its own place in
-   the recording; the punch-in sounds as sung, not as the take under it was.
+   the recording; the punch-in sounds as sung, not as the take under it was. Then a
+   punch-in of under a second: the report says it was "sung at another time, too short
+   to look for, left as it was", and the take sounds as it was there, the rest replaced.
 8. Pick a transmitter file of another day: refused, "not found", and the take as it was.
+9. Start the transmitter's recording a few seconds after Record, or stop it a few
+   seconds before the take ends: the report says the stretch outside it is "not in the
+   recording, which began later or ended sooner, left as it was", and the rest is
+   replaced; no click at either edge of the replaced part.
 
 **On the phone**:
 
-9. Plug the receiver in, with Bluetooth earphones on, then with the speaker: Playback >
-   Audio Input Device's first line ("In use:") names the receiver once a take has
-   started (Android's choice, as the research says). Choose the phone's microphone: the
-   next take records from it (the log's route line), the receiver plugged in or not.
-   Choose the receiver again.
-10. Unplug the receiver, then Record: the status bar says it is not plugged in and that
+10. Plug the receiver in, with Bluetooth earphones on, then with the speaker: Playback >
+    Audio Input Device's first line ("In use:") names the receiver once a take has
+    started (Android's choice, as the research says). Choose the phone's microphone: the
+    next take records from it (the log's route line), the receiver plugged in or not.
+    Choose the receiver again.
+11. Unplug the receiver, then Record: the status bar says it is not plugged in and that
     the phone's microphone records instead, for about 8 s; the menu shows the receiver
     "(not connected)", ticked. Plug it in again: the next take records from it. Unplug
     it during a take: the take stops as Stop would, and Tony goes on with the phone's
     microphone.
-11. With the receiver chosen: the log's input stream line (MMAP or not, its burst and
+12. With the receiver chosen: the log's input stream line (MMAP or not, its burst and
     buffer), and the round trip Calibrate Audio measures, Bluetooth out and receiver in.
     In split mode, Input 1 opens the input at the receiver's own channels (the log).
-12. Replace Take Audio from Recording on the phone, with the transmitter's file copied to
+13. Replace Take Audio from Recording on the phone, with the transmitter's file copied to
     the phone: the picker, the time the search takes, and the result as in 6.

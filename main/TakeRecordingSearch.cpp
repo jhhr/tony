@@ -22,8 +22,7 @@ bool
 TakeRecordingSearch::Result::lookedFor
 (const RecordingAlignment::Segment &segment) const
 {
-    return double(segment.end - segment.start) >=
-        RecordingAlignment::kMinRangeSeconds * takeRate;
+    return segment.match.left == RecordingAlignment::Match::Left::No;
 }
 
 TakeRecordingSearch::TakeRecordingSearch(QString takePath,
@@ -76,6 +75,7 @@ TakeRecordingSearch::start()
         }
         result.takeRate = take->rate();
         result.recordingRate = recording->rate();
+        result.recordingFrames = recording->frames();
         auto going = [&shared](int percent) {
             shared->percent.store(percent);
             return !shared->cancelled.load();
