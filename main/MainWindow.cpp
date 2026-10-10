@@ -47,6 +47,7 @@
 #include "InputLevelFeed.h"
 #include "InputLevelMeter.h"
 #include "CheckInputLevelDialog.h"
+#include "StatusLine.h"
 
 #ifdef Q_OS_ANDROID
 #include "AndroidFiles.h"
@@ -258,6 +259,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_checkInputLevelAction(nullptr),
     m_checkInputLevelDialog(nullptr),
     m_checkingInputLevel(false),
+    m_statusLine(new StatusLine(this)),
     m_deleteSelectedAction(0),
     m_ffwdAction(0),
     m_rwdAction(0),
@@ -610,6 +612,9 @@ MainWindow::MainWindow(AudioMode audioMode,
         connect(m_recordTarget, SIGNAL(recordStatusChanged(bool)),
                 this, SLOT(recordingStarted()));
     }
+
+    connect(m_statusLine, &StatusLine::expired,
+            this, &MainWindow::statusLineExpired);
 
     // The device is kept running between takes (suspendAudioOnStop()),
     // and suspended once it has idled for audioIdleSuspendMillis()
@@ -2055,7 +2060,7 @@ MainWindow::setupToolbars()
     // no longer held
     connect(m_playSource, &AudioCallbackPlaySource::playStatusChanged,
             this, [this](bool playing) {
-                if (playing) m_takeLevelMessage = "";
+                if (playing) m_statusLine->clearHeld();
             });
     m_inputMeterAction = new InputLevelMeterAction(m_inputLevels, this);
     toolbar->addAction(m_inputMeterAction);
@@ -3330,7 +3335,7 @@ MainWindow::closeSession()
     if (!checkSaveModified()) return;
 
     // The last take's level is no more the next session's
-    m_takeLevelMessage = "";
+    m_statusLine->clearHeld();
 
     // A check has nothing left to record into; a take of its own that is
     // running is stopped through the Stop path, as the check's Cancel does.
@@ -5955,7 +5960,7 @@ MainWindow::record()
         currentInputChannel();
     // The meters show that input, and their clip light is the take's
     updateInputMeterChannel();
-    m_takeLevelMessage = "";
+    m_statusLine->clearHeld();
     m_takeInputPeaks.clear();
     if (m_inputLevels && m_recordTarget && m_recordTarget->isRecording()) {
         m_inputLevels->setClipped(false);
@@ -6114,63 +6119,47 @@ MainWindow::pollTakeProgress()
     }
 }
 
-bool
-MainWindow::showTakeCountdown() const
+QString
+MainWindow::takeCountdown() const
 {
     // While the lead-in of a pre-roll runs, the status bar counts it down
     // instead of saying where playback is or how much has been recorded:
-    // what is coming in does not count yet.
-    //
-    // Everything that writes the status bar during a take has to come
-    // through here, because they all write often — the recorded duration
-    // every 10 ms, the playback position every 20 ms, the visible range
-    // whenever the view scrolls after the cursor — and anything written
-    // between two of those would be gone before it could be read.  (The
-    // live dots write it too, and need no help: none is drawn during the
-    // lead-in.)
+    // what is coming in does not count yet
     if (!m_recordingAsSingingTrack || m_takePreRoll <= 0 || !m_recordTarget) {
-        return false;
+        return {};
     }
-
-    QString countdown = currentTakeTiming().countdownText
+    return currentTakeTiming().countdownText
         (m_recordTarget->getFramesReceived());
-    if (countdown == "") return false;
+}
 
-    m_myStatusMessage = countdown;
-    getStatusLabel()->setText(countdown);
+bool
+MainWindow::showStatusLine() const
+{
+    const QString text = m_statusLine->text(takeCountdown());
+    if (text == "") return false;
+    m_myStatusMessage = text;
+    getStatusLabel()->setText(text);
     return true;
 }
 
 void
-MainWindow::setAudioNotice(QString message)
+MainWindow::statusLineExpired()
 {
-    m_audioNotice = message;
-    m_audioNoticeTimer.start();
-    showAudioNotice();
-}
-
-bool
-MainWindow::showAudioNotice() const
-{
-    // Long enough to be read at the start of a take, whose duration and
-    // position take the status bar back after it
-    const qint64 noticeMs = 8000;
-    if (m_audioNotice == "") return false;
-    if (!m_audioNoticeTimer.isValid() ||
-        m_audioNoticeTimer.elapsed() > noticeMs) {
-        m_audioNotice = "";
-        return false;
+    // Nothing else may write the status bar for a while
+    if (showStatusLine()) return;
+    Pane *pane = m_paneStack ? m_paneStack->getCurrentPane() : nullptr;
+    if (getMainModel() && pane) {
+        updateVisibleRangeDisplay(pane);
+    } else {
+        m_myStatusMessage = "";
+        getStatusLabel()->setText("");
     }
-    if (showTakeCountdown()) return true;
-    m_myStatusMessage = m_audioNotice;
-    getStatusLabel()->setText(m_audioNotice);
-    return true;
 }
 
 void
 MainWindow::recordDurationChanged(sv_frame_t frame, sv_samplerate_t rate)
 {
-    if (showTakeCountdown() || showAudioNotice()) return;
+    if (showStatusLine()) return;
     MainWindowBase::recordDurationChanged(frame, rate);
 }
 
@@ -6182,7 +6171,7 @@ MainWindow::playbackFrameChanged(sv_frame_t frame)
     // playing, while recording, and for a seek with playback stopped
     if (m_lyrics) m_lyrics->setPlaybackFrame(frame);
 
-    if (showTakeCountdown() || showAudioNotice()) return;
+    if (showStatusLine()) return;
     MainWindowBase::playbackFrameChanged(frame);
 }
 
@@ -6570,7 +6559,8 @@ MainWindow::reportInputDevice()
         tr("%1 is not plugged in: recording from %2, the phone's choice")
         .arg(name, input);
     cerr << "MainWindow::reportInputDevice: " << message << endl;
-    setAudioNotice(message);
+    m_statusLine->setNotice(message);
+    showStatusLine();
 }
 
 void
@@ -6847,9 +6837,8 @@ MainWindow::reportTakeLevel(QString recordingPath, const TakeTiming &timing)
     cerr << "MainWindow::reportTakeLevel: peak "
          << InputLevel::dbfs(scan.peak) << " dBFS over " << scan.frames
          << " frames, " << scan.clips.size() << " clipped run(s)" << endl;
-    m_takeLevelMessage = message;
-    m_myStatusMessage = message;
-    getStatusLabel()->setText(message);
+    m_statusLine->setHeld(message);
+    showStatusLine();
 }
 
 sv_samplerate_t
@@ -7068,7 +7057,7 @@ MainWindow::onRealtimePitchDetected
     // estimate of the batch, once a notice about the device has been
     // read.  Convert Hz to MIDI note number and cents deviation.  MIDI
     // note 69 = A4 = 440 Hz.
-    if (showAudioNotice()) return;
+    if (showStatusLine()) return;
     double hz = newest->hz;
     double midiNote = 12.0 * std::log2(hz / 440.0) + 69.0;
     int nearestNote = int(std::round(midiNote));
@@ -10188,10 +10177,6 @@ MainWindow::updateVisibleRangeDisplay(Pane *p) const
         return;
     }
 
-    // The countdown of a pre-roll's lead-in has the status bar to itself,
-    // and a notice about the device has it for a while
-    if (showTakeCountdown() || showAudioNotice()) return;
-
     bool haveSelection = false;
     sv_frame_t startFrame = 0, endFrame = 0;
 
@@ -10207,11 +10192,11 @@ MainWindow::updateVisibleRangeDisplay(Pane *p) const
         }
     }
 
-    // The take's level stays until something the user does replaces it
-    if (m_takeLevelMessage != "") {
-        if (!haveSelection) return;
-        m_takeLevelMessage = "";
-    }
+    // The take's level stays until something the user does replaces
+    // it; the countdown, and a notice about the device, have the status
+    // bar for as long as they last
+    if (haveSelection) m_statusLine->clearHeld();
+    if (showStatusLine()) return;
 
     if (!haveSelection) {
         startFrame = p->getFirstVisibleFrame();

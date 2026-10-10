@@ -455,8 +455,8 @@ scanned for its peak and for runs of samples at full scale.
 - Runs within 0.5 s of each other are one place. The status bar says the take's peak, or
   "Take: clipped at 1:02.5, 1:05.0, 1:10.2 and 2 more" on the song's timeline (placed as
   the dots are), and a clip lights the light. The message stays until the next take,
-  playback or a selection (`m_takeLevelMessage`): the view moves back to the take's
-  position after Stop, which would write the visible range over it at once.
+  playback or a selection (the `StatusLine`'s held message): the view moves back to the
+  take's position after Stop, which would write the visible range over it at once.
 - The scan runs on the GUI thread at Stop, after the splice, which reads and writes the
   whole take already: a 4-minute stereo recording at 48 kHz is 23 million samples.
 - **Not on the coverage strip.** The strip's model is the take's stored coverage, saved and
@@ -536,9 +536,10 @@ converter, which is the fix (README, "Microphone and levels").
   the poll stops itself when it finds no take.
 - **The countdown**: three things in `MainWindowBase` write the status bar during a take
   (recorded duration every 10 ms, playback position every 20 ms, visible range on
-  scroll). All three are routed through `MainWindow::showTakeCountdown()` first. Anything
-  written to the status bar from a timer of your own will be overwritten before it can be
-  read.
+  scroll). All three are routed through `MainWindow::showStatusLine()` first, which puts
+  the countdown there while it runs (`StatusLine`). Anything written to the status bar
+  from a timer of your own will be overwritten before it can be read: give it to the
+  `StatusLine` instead.
 
 ## The audio check's takes
 

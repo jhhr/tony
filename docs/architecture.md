@@ -444,8 +444,14 @@ the tests give a phone's). The choice is kept by type and product name (group
 `InputDevice`), and `OboeAudioIO` asks for the id to open it by each time it opens its
 input. Before the first take, the measured round trip and the input channel are looked
 up for the input chosen if it is plugged in. One chosen but not plugged in, or not
-opened, is said in the status bar for 8 s (`setAudioNotice()`), over the take's time and
-notes, as the countdown is.
+opened, is said in the status bar for 8 s, over the take's time and notes.
+
+**The status bar** (`StatusLine`): over what the views write there (the visible range,
+playback's position, a take's time, the note sung), first the countdown of a lead-in,
+then a notice about the audio device for 8 s, then the last take's level, held until the
+next take, playback or a selection. Everything that writes the status bar asks
+`MainWindow::showStatusLine()` first; when a notice runs out, what was under it is
+written again at once, as nothing else may write for a while.
 
 **The input level** (`InputLevel`, `InputLevelFeed`, `InputLevelMeter`,
 `CheckInputLevelDialog`; [recording.md](recording.md#the-input-level)): a meter beside

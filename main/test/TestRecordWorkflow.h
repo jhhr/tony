@@ -3084,6 +3084,41 @@ private slots:
         QVERIFY(!InputDevice::chosen(settings, "oboe", kept));
     }
 
+    // A notice about the device runs out by itself, and what was under
+    // it comes back: the last take's level, held until something the
+    // user does replaces it
+    void a_notice_runs_out_to_the_take_level() {
+        const AudioRoute::Device mic = phoneDevice(12, 15, "Pixel 9a");
+        const AudioRoute::Device usb = phoneDevice(40, 11, "Wireless PRO RX");
+        const QString usbName = "USB device (Wireless PRO RX)";
+        AudioRoute::Route route;
+        route.driver = "oboe";
+        route.output = phoneDevice(2, 2, "Pixel 9a");
+        route.hasInput = true;
+        route.input = usb;
+        FakeAudioIO::Config config;
+        config.channels = 2;
+        config.route = route;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        m_window->setFakeListedInputs({ mic, usb }, usb);
+        m_window->statusLine()->setNoticeMs(500);
+        openReference(writeWav(tone(lowHz, 3.0)));
+        if (QTest::currentTestFailed()) return;
+        chooseInputDevice(usbName);
+        if (QTest::currentTestFailed()) return;
+
+        take(500);
+        if (QTest::currentTestFailed()) return;
+        const QString level = m_window->statusText();
+        QVERIFY2(level.startsWith("Take: peak"), qPrintable(level));
+
+        m_window->setFakeListedInputs({ mic }, mic);
+        m_window->doRecreateAudioIO();
+        QVERIFY(m_window->statusText().contains("not plugged in"));
+        QTRY_COMPARE_WITH_TIMEOUT(m_window->statusText(), level, 3000);
+    }
+
     // Open for playback only, as a phone's device is until its first
     // take, the device a round trip is looked up for is the input chosen,
     // not the one a figure was kept with for the output

@@ -63,6 +63,7 @@ class InputChannelMenu;
 class InputLevelFeed;
 class InputLevelMeterAction;
 class CheckInputLevelDialog;
+class StatusLine;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
 class DevChecks;
@@ -854,19 +855,17 @@ protected:
     // for a take of the audio check, the check's own
     sv::sv_frame_t wantedPreRollFrames() const;
 
-    // Put the countdown of a pre-roll's lead-in in the status bar, and
-    // say so, if that is what belongs there just now.  Everything that
-    // writes the status bar while a take runs asks this first.
-    bool showTakeCountdown() const;
+    // The countdown of a pre-roll's lead-in, while it runs; "" when
+    // there is none
+    QString takeCountdown() const;
 
-    // Put a notice about the audio device in the status bar, over what
-    // shows there, for a few seconds, as the countdown is: the input
-    // device chosen that is not plugged in.  showAudioNotice() shows it,
-    // and says so, while it lasts
-    void setAudioNotice(QString message);
-    bool showAudioNotice() const;
-    mutable QString m_audioNotice;
-    QElapsedTimer m_audioNoticeTimer;
+    // Put what has the status bar over what the views write there in it
+    // (m_statusLine), and say so: the countdown, a notice about the
+    // audio device, the take's level.  Everything that writes the status
+    // bar asks this first.  When a notice runs out, what was under it
+    // is shown again
+    bool showStatusLine() const;
+    void statusLineExpired();
 
     // Ask before recording over singing that is already there, unless
     // the user has said not to.  Overridden by the tests, which cannot
@@ -970,10 +969,11 @@ protected:
     // its peak, and where it clipped, in the status bar
     void reportTakeLevel(QString recordingPath, const TakeTiming &timing);
 
-    // What reportTakeLevel() said, kept in the status bar until the next
-    // take, playback or a selection: the view moves back to the take's
+    // The countdown, the input device chosen that is not plugged in,
+    // and what reportTakeLevel() said, held until the next take,
+    // playback or a selection: the view moves back to the take's
     // position after Stop, which would write the visible range over it
-    mutable QString m_takeLevelMessage;
+    StatusLine *m_statusLine;
 
     // The peak of each input in what went into the last take, as its
     // scan found them; empty if it was not scanned

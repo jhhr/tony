@@ -29,6 +29,7 @@
 #include "../InputLevelFeed.h"
 #include "../InputLevelMeter.h"
 #include "../CheckInputLevelDialog.h"
+#include "../StatusLine.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -420,6 +421,7 @@ public:
     // than the machine the tests run on
     void setLiveDotsDelay(int ms) { m_liveDotsDelayMs = ms; }
     QString statusText() { return getStatusLabel()->text(); }
+    StatusLine *statusLine() { return m_statusLine; }
     void setStatusText(QString text) { getStatusLabel()->setText(text); }
 
 protected:

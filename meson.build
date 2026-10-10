@@ -1213,6 +1213,7 @@ tony_core_files = [
   'main/RecordingAlignment.cpp',
   'main/SingingTakes.cpp',
   'main/SongScroll.cpp',
+  'main/StatusLine.cpp',
   'main/StreamLatency.cpp',
   'main/TakeAudio.cpp',
   'main/TakeDiff.cpp',
@@ -1276,6 +1277,7 @@ tony_core_moc_files = qt.preprocess(
   moc_headers: [
   'main/RealtimePitchTracker.h',
   'main/SingingTakes.h',
+  'main/StatusLine.h',
 ])
 
 tony_app_moc_headers = [
@@ -1619,6 +1621,7 @@ if system != 'android'
     'main/test/TestVoiceGate.h',
     'main/test/TestUserText.h',
     'main/test/TestTakeReplacement.h',
+    'main/test/TestStatusLine.h',
     'main/test/TestRunSuite.h',
   ])
 
