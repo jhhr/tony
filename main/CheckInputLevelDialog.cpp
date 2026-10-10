@@ -57,7 +57,8 @@ CheckInputLevelDialog::CheckInputLevelDialog(InputLevelFeed *feed,
     m_currentThreshold(VoiceThreshold::kOff),
     m_firstReadingMs(-1),
     m_loudest(0.f),
-    m_clipped(false)
+    m_clipped(false),
+    m_playing(false)
 {
     setWindowTitle(tr("Check Input Level"));
     setModal(true);
@@ -83,6 +84,7 @@ CheckInputLevelDialog::CheckInputLevelDialog(InputLevelFeed *feed,
                                         QDialogButtonBox::ActionRole);
     m_again = buttons->addButton(tr("Check Again"),
                                  QDialogButtonBox::ActionRole);
+    m_play = buttons->addButton(tr("Play"), QDialogButtonBox::ActionRole);
     m_close = buttons->addButton(QDialogButtonBox::Close);
     layout->addWidget(buttons);
 
@@ -98,6 +100,8 @@ CheckInputLevelDialog::CheckInputLevelDialog(InputLevelFeed *feed,
         m_useThreshold->hide();
         m_label->setText(resultText());
     });
+    connect(m_play, &QPushButton::clicked,
+            this, &CheckInputLevelDialog::playPressed);
     connect(m_close, &QPushButton::clicked, this, &QDialog::reject);
 
     if (m_feed) {
@@ -105,6 +109,8 @@ CheckInputLevelDialog::CheckInputLevelDialog(InputLevelFeed *feed,
                 this, &CheckInputLevelDialog::levelRead);
     }
     connect(&m_timer, &QTimer::timeout, this, &CheckInputLevelDialog::tick);
+    // start() runs it again
+    connect(this, &QDialog::finished, &m_timer, &QTimer::stop);
 }
 
 CheckInputLevelDialog::~CheckInputLevelDialog()
@@ -127,14 +133,39 @@ CheckInputLevelDialog::start(double currentThreshold)
 }
 
 void
+CheckInputLevelDialog::deviceReopened()
+{
+    if (isVisible() && m_stage != Stage::Result) start(m_currentThreshold);
+}
+
+void
+CheckInputLevelDialog::setPlaying(bool playing)
+{
+    m_play->setText(playing ? tr("Stop") : tr("Play"));
+    if (playing == m_playing) return;
+    m_playing = playing;
+
+    // The silence is read with the music as it will be when singing
+    if (isVisible() && m_stage == Stage::Quiet) start(m_currentThreshold);
+}
+
+void
+CheckInputLevelDialog::setCanPlay(bool canPlay)
+{
+    m_play->setEnabled(canPlay);
+}
+
+void
 CheckInputLevelDialog::levelRead(float peak)
 {
     if (!isVisible()) return;
-    const std::int64_t ms = m_clock.elapsed();
+    std::int64_t ms = m_clock.elapsed();
 
     if (m_stage == Stage::NoInput) {
-        // It came after all: from the silence again
+        // It came after all: from the silence again, by the clock that
+        // starts again with it
         start(m_currentThreshold);
+        ms = m_clock.elapsed();
     }
 
     if (m_stage == Stage::Quiet) {
@@ -207,9 +238,10 @@ CheckInputLevelDialog::showStage(Stage stage)
         m_label->setText
             (tr("<p><b>Stay quiet for two seconds</b>: the silence is being "
                 "measured, as the noise floor.</p>"
-                "<p>If you sing with the music on speakers, play it now, at "
-                "the volume you sing with: it is then part of what the "
-                "voice threshold has to stay over.</p>"));
+                "<p>If you sing with the music on speakers, press Play, at "
+                "the volume you sing with: the two seconds start again with "
+                "the music in them, and it is then part of what the voice "
+                "threshold has to stay over.</p>"));
         break;
     case Stage::Singing:
         m_label->setText

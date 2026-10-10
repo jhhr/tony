@@ -131,6 +131,11 @@ public:
         // with a driver whose stream starts and then delivers nothing
         bool neverCallsBack = false;
 
+        // The device calls back only once it has run this long since it
+        // was first resumed: a driver whose stream starts late.  0 for
+        // at once
+        int firstCallbackMs = 0;
+
         // Whether the application keeps the input it is given just
         // now. It discards input until its recording file is open,
         // which is some time after it resumes the device. If unset,
@@ -159,14 +164,18 @@ public:
         m_source->setSystemPlaybackLatency(m_config.playbackLatency);
 
         // As PortAudioIO opens its input: as many channels as the
-        // application asks for, and no more than the device has
-        const int asked = m_target->getApplicationChannelCount();
-        m_inputs = asked > 0 ? std::min(asked, inputChannelCount())
-                             : inputChannelCount();
-        m_target->setSystemRecordBlockSize(m_config.blockSize);
-        m_target->setSystemRecordSampleRate(m_config.sampleRate);
-        m_target->setSystemRecordChannelCount(m_inputs);
-        m_target->setSystemRecordLatency(m_config.recordLatency);
+        // application asks for, and no more than the device has. None
+        // without a target: a device open for playback only
+        m_inputs = 0;
+        if (m_target) {
+            const int asked = m_target->getApplicationChannelCount();
+            m_inputs = asked > 0 ? std::min(asked, inputChannelCount())
+                                 : inputChannelCount();
+            m_target->setSystemRecordBlockSize(m_config.blockSize);
+            m_target->setSystemRecordSampleRate(m_config.sampleRate);
+            m_target->setSystemRecordChannelCount(m_inputs);
+            m_target->setSystemRecordLatency(m_config.recordLatency);
+        }
         m_reportedRecordLatency = m_config.recordLatency;
 
         m_thread = std::thread([this]() { run(); });
@@ -203,8 +212,12 @@ public:
         m_sinceResume = 0;
         m_framesBeforePlayStart = -1;
         ++m_resumeCount;
+        if (m_resumeCount == 1) {
+            m_firstResumed = std::chrono::steady_clock::now();
+        }
         // No callback runs while suspended, and none has started yet
-        if (m_config.recordLatencyStep != 0 && m_resumeCount > 1) {
+        if (m_target && m_config.recordLatencyStep != 0 &&
+            m_resumeCount > 1) {
             m_reportedRecordLatency += m_config.recordLatencyStep;
             m_target->setSystemRecordLatency(m_reportedRecordLatency);
         }
@@ -271,6 +284,7 @@ private:
     long m_sinceResume;
     long m_framesBeforePlayStart;
     int m_resumeCount;
+    std::chrono::steady_clock::time_point m_firstResumed;
     int m_reportedRecordLatency = 0;
     int m_inputs = 1;
     int m_loopbackDelay;
@@ -295,13 +309,22 @@ private:
             next += period;
             std::this_thread::sleep_until(next);
             std::lock_guard<std::mutex> guard(m_mutex);
-            if (m_suspended || m_config.neverCallsBack) {
+            if (m_suspended || m_config.neverCallsBack || late()) {
                 // don't try to catch up on the time spent suspended
                 next = steady_clock::now();
                 continue;
             }
             process();
         }
+    }
+
+    // Not calling back yet, for firstCallbackMs
+    bool late() const {
+        using namespace std::chrono;
+        if (m_config.firstCallbackMs <= 0) return false;
+        return m_resumeCount == 0 ||
+            steady_clock::now() - m_firstResumed <
+            milliseconds(m_config.firstCallbackMs);
     }
 
     int inputChannelCount() const {
@@ -381,12 +404,14 @@ private:
                 if (c != m_config.inputChannel) inPtrs[c] = other.data();
             }
         }
-        m_target->putSamples(inPtrs.data(), inCh, n);
-        if (kept) m_sinceResume += n;
-        if (m_config.reportLevels) {
-            m_target->setInputLevels(peak(inPtrs[0], n),
-                                     peak(inPtrs[inCh > 1 ? 1 : 0], n));
+        if (m_target) {
+            m_target->putSamples(inPtrs.data(), inCh, n);
+            if (m_config.reportLevels) {
+                m_target->setInputLevels(peak(inPtrs[0], n),
+                                         peak(inPtrs[inCh > 1 ? 1 : 0], n));
+            }
         }
+        if (kept) m_sinceResume += n;
 
         std::vector<std::vector<float>> out(ch, std::vector<float>(n, 0.f));
         std::vector<float *> outPtrs;

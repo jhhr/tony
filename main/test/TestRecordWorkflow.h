@@ -2189,7 +2189,8 @@ private slots:
     // device runs on after a take and after playback, and is suspended
     // once it has idled for audioIdleSuspendMillis(): not before, not
     // while it plays however long that is, and the next take resumes
-    // it. The application idles it for ever on desktop
+    // it. The application idles it for ever on desktop. The input meter
+    // reads it only while it runs
     void a_kept_running_device_is_suspended_once_idle() {
         const int idle = 1500;
         FakeAudioIO::Config config;
@@ -2202,9 +2203,12 @@ private slots:
         if (QTest::currentTestFailed()) return;
         FakeAudioIO *fake = m_window->fake();
         QVERIFY(fake);
+        InputLevelFeed *levels = m_window->inputLevels();
+        QVERIFY(!levels->isRunning());
 
         startTake();
         if (QTest::currentTestFailed()) return;
+        QVERIFY(levels->isRunning());
         waitForSomethingRecorded();
         // Timed from before Stop: the take's splice, which Stop runs
         // before it returns, comes after the idle time has started
@@ -2213,8 +2217,10 @@ private slots:
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QVERIFY(!fake->isSuspended());
+        QVERIFY(levels->isRunning());
         const int resumes = fake->getResumeCount();
         QTRY_VERIFY_WITH_TIMEOUT(fake->isSuspended(), 10000);
+        QVERIFY(!levels->isRunning());
         QVERIFY2(stopped.elapsed() >= idle * 9 / 10,
                  qPrintable(QString("suspended %1 ms after the take")
                             .arg(stopped.elapsed())));
@@ -2223,6 +2229,7 @@ private slots:
         m_window->doPlay();
         QVERIFY(m_window->playSource()->isPlaying());
         QCOMPARE(fake->getResumeCount(), resumes + 1);
+        QVERIFY(levels->isRunning());
         QTest::qWait(idle + 700);
         QVERIFY(m_window->playSource()->isPlaying());
         QVERIFY(!fake->isSuspended());
@@ -2230,6 +2237,7 @@ private slots:
         QVERIFY(!m_window->playSource()->isPlaying());
         QVERIFY(!fake->isSuspended());
         QTRY_VERIFY_WITH_TIMEOUT(fake->isSuspended(), 10000);
+        QVERIFY(!levels->isRunning());
 
         take(500);
         if (QTest::currentTestFailed()) return;
@@ -2762,11 +2770,18 @@ private slots:
         if (QTest::currentTestFailed()) return;
         const int opened = m_window->audioIOOpened();
         QVERIFY(opened >= 1);
+        // Open for playback only, there is no input to read, playing or
+        // not
+        QVERIFY(!m_window->inputLevels()->isRunning());
+        m_window->doPlay();
+        QVERIFY(m_window->playSource()->isPlaying());
+        QVERIFY(!m_window->inputLevels()->isRunning());
 
         m_window->checkInputLevelAction()->trigger();
         CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
         QVERIFY(dialog && dialog->isVisible());
         QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QVERIFY(m_window->inputLevels()->isRunning());
         QTRY_VERIFY_WITH_TIMEOUT(meterHold() > -7.0, 5000);
         dialog->reject();
 
@@ -2791,6 +2806,104 @@ private slots:
             (dialog->stage() == CheckInputLevelDialog::Stage::NoInput, 6000);
         QVERIFY(dialog->againButton()->isVisible());
         QVERIFY(dialog->text().contains("delivered nothing"));
+
+        // Closed during the silence, it waits no more for input that
+        // does not come: its clock stops with it
+        dialog->againButton()->click();
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        dialog->reject();
+        QTest::qWait(CheckInputLevelDialog::kNoInputMs + 300);
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+    }
+
+    // An input that starts after the dialog has said it delivered
+    // nothing: the silence is read for two seconds from when it came, by
+    // the clock started again with it
+    void check_input_level_after_a_late_input() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.firstCallbackMs = CheckInputLevelDialog::kNoInputMs + 500;
+        config.input = TestSignals::whiteNoise(int(10.0 * rate), 7, 0.003);
+        makeWindow(config);
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::NoInput, 6000);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Quiet, 3000);
+        QElapsedTimer quiet;
+        quiet.start();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 8000);
+        QVERIFY2(quiet.elapsed() < CheckInputLevelDialog::kQuietMs + 1000,
+                 qPrintable(QString("the silence was read for %1 ms")
+                            .arg(quiet.elapsed())));
+        dialog->reject();
+    }
+
+    // The window behind is shut while the dialog is open: its Play plays
+    // the music, and the silence is read again, all of it with the music
+    void check_input_level_plays_the_music() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.input = TestSignals::whiteNoise(int(10.0 * rate), 7, 0.003);
+        makeWindow(config);
+        openReference(writeWav(tone(lowHz, 8.0)));
+        if (QTest::currentTestFailed()) return;
+
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog && dialog->isVisible());
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        QPushButton *play = dialog->playButton();
+        QVERIFY(play->isVisible() && play->isEnabled());
+        QCOMPARE(play->text(), QString("Play"));
+
+        QTest::qWait(1000);
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        play->click();
+        QElapsedTimer quiet;
+        quiet.start();
+        QTRY_VERIFY_WITH_TIMEOUT(m_window->playSource()->isPlaying(), 2000);
+        QCOMPARE(play->text(), QString("Stop"));
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
+        QVERIFY2(quiet.elapsed() >= CheckInputLevelDialog::kQuietMs - 200,
+                 qPrintable(QString("the silence was read for %1 ms with "
+                                    "the music").arg(quiet.elapsed())));
+
+        // Stopped while singing, nothing is read again
+        play->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->playSource()->isPlaying(), 2000);
+        QCOMPARE(play->text(), QString("Play"));
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Singing);
+        dialog->reject();
+    }
+
+    // The device opened again under the check, as a phone's that failed
+    // is: it runs, and the check reads the silence again from it
+    void check_input_level_after_the_device_is_opened_again() {
+        FakeAudioIO::Config config;
+        config.inputChannels = 1;
+        config.reportLevels = true;
+        config.input = TestSignals::whiteNoise(int(10.0 * rate), 7, 0.003);
+        makeWindow(config);
+        m_window->checkInputLevelAction()->trigger();
+        CheckInputLevelDialog *dialog = m_window->checkInputLevelDialog();
+        QVERIFY(dialog);
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
+
+        const int opened = m_window->audioIOOpened();
+        m_window->doRecreateAudioIO();
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QCOMPARE(dialog->stage(), CheckInputLevelDialog::Stage::Quiet);
+        QVERIFY(m_window->fake() && !m_window->fake()->isSuspended());
+        QTRY_VERIFY_WITH_TIMEOUT
+            (dialog->stage() == CheckInputLevelDialog::Stage::Singing, 5000);
         dialog->reject();
     }
 
@@ -2837,9 +2950,12 @@ private slots:
         m_window->seekTo(sv::sv_frame_t(2.0 * rate));
         startTake();
         QCOMPARE(m_window->takeInputChannel(), InputChannel::kBoth);
+        QCOMPARE(m_window->inputLevels()->getChannel(), InputChannel::kBoth);
         waitForSomethingRecorded();
         stopTake();
         m_window->setAudioCheckTakes(false);
+        // After it the meter shows the input chosen again
+        QCOMPARE(m_window->inputLevels()->getChannel(), 1);
     }
 
     // On a phone the input device is the route's (the fake reports one,

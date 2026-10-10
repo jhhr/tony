@@ -416,9 +416,14 @@ and a clip light.
 - **20 readings a second** (`kIntervalMs`), each the peak since the one before, and drawn
   only when the bar or the hold has moved by half a dB or the light changed: a phone's
   GUI thread has little to spare during a take ([open-points.md](open-points.md)), and a
-  quiet input between takes draws nothing.
+  quiet input between takes draws nothing. **Only while the device runs with its input**
+  (`setRunning()`): a phone that sits with a song open, its device open for playback only
+  or suspended as idle, is not woken 20 times a second for a meter with nothing to show.
+  Stopped, the meter shows nothing but the clip light. Not tied to recording: the meter
+  reads between takes, and during Check Input Level, as long as the device runs.
 - **The input shown** is the take's (Input Channel's choice, or the louder of the two
-  inputs), as the device reports its first two inputs left and right.
+  inputs), as the device reports its first two inputs left and right; when a take stops,
+  the choice again (an audio check's takes are made of both).
 - **Hold and fall** (`InputLevel::Meter`, `tony_core`): the bar is the latest peak and
   falls from it at 20 dB a second; the hold is the highest peak, stays 1.5 s, then falls as
   fast. Between two readings the bar falls up to 1 dB, which a steady sound's next reading
@@ -485,6 +490,16 @@ loudest phrase and presses Done. The result (`InputLevel`, `tony_core`):
   is open, the device counts as busy, so that a phone does not suspend it as idle. It is
   shut during a take and a check, asks for the microphone on a phone first, and runs no
   event loop of its own (`open()`).
+- **The music**: the dialog's Play plays it, as the window behind is shut while the dialog
+  is open (and opening the input stops what played, if the device has to be opened
+  again). Started or stopped during the silence, the two seconds start again, so that
+  all of them are read as the singer will have it.
+- **An input that comes late**, after the dialog has said it delivered nothing, starts
+  the silence when it comes, by the clock started again with it. Closed, the dialog's
+  clock stops too.
+- **The device opened again under it** (a phone's that failed, `checkAudioDevice()`) is
+  run again, and a check under way starts from the silence, as it may be another
+  microphone now; a result stays.
 
 **Only digital clipping can be seen**, by the meter, the scan and the check alike: samples
 held at the converter's largest value. A microphone that distorts in its own electronics

@@ -37,7 +37,6 @@ InputLevelFeed::InputLevelFeed(ViewManager *viewManager,
     m_takeHighestLeft(0.f),
     m_takeHighestRight(0.f),
     m_haveTakeLevels(false),
-    m_lastInputMs(-1),
     m_shownBar(InputLevel::Meter::kFloorDb),
     m_shownHold(InputLevel::Meter::kFloorDb),
     m_shownClipped(false)
@@ -51,7 +50,6 @@ InputLevelFeed::InputLevelFeed(ViewManager *viewManager,
     }
 
     connect(&m_timer, &QTimer::timeout, this, &InputLevelFeed::poll);
-    m_timer.start(kIntervalMs);
 }
 
 InputLevelFeed::~InputLevelFeed()
@@ -82,10 +80,22 @@ InputLevelFeed::setClipped(bool clipped)
     emit changed();
 }
 
-bool
-InputLevelFeed::hasInput() const
+void
+InputLevelFeed::setRunning(bool running)
 {
-    return m_lastInputMs >= 0 && now() - m_lastInputMs < 1000;
+    if (running == m_timer.isActive()) return;
+    if (running) {
+        m_timer.start(kIntervalMs);
+        return;
+    }
+    m_timer.stop();
+
+    // What was read last would stay drawn, as though the input were
+    // still coming in
+    const bool clipped = m_meter.clipped();
+    m_meter = InputLevel::Meter();
+    m_meter.setClipped(clipped);
+    showMeter();
 }
 
 void
@@ -126,9 +136,16 @@ InputLevelFeed::poll()
     if (read) {
         const float peak = InputChannel::peakOf(m_channel, left, right);
         m_meter.peak(peak, ms);
-        m_lastInputMs = ms;
         emit levelRead(peak);
     }
+
+    showMeter();
+}
+
+void
+InputLevelFeed::showMeter()
+{
+    const std::int64_t ms = now();
 
     // Drawn only when what is shown has moved: a quiet input that stays
     // under the scale, as between takes, costs nothing more

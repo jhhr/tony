@@ -48,7 +48,10 @@ class ViewManager;
  *
  * Read every kIntervalMs, which is also as often as the meters are drawn
  * again, and only while something on them moves: a phone's GUI thread
- * has little to spare during a take.
+ * has little to spare during a take.  And only while the device runs
+ * with its input open (setRunning()): a phone that sits with a song
+ * open, its device open for playback only or suspended, is not woken
+ * 20 times a second for a meter with nothing to show.
  */
 class InputLevelFeed : public QObject
 {
@@ -67,6 +70,11 @@ public:
                    QObject *parent = nullptr);
     virtual ~InputLevelFeed();
 
+    /// Whether the device runs with its input open: read only then.
+    /// Stopped, the meters show nothing, but the clip light
+    void setRunning(bool running);
+    bool isRunning() const { return m_timer.isActive(); }
+
     /// The input shown (InputChannel): the one chosen, or both
     void setChannel(int channel);
     int getChannel() const { return m_channel; }
@@ -84,9 +92,6 @@ public:
     /// put out as a take starts or when the meter is clicked
     bool isClipped() const { return m_meter.clipped(); }
     void setClipped(bool clipped);
-
-    /// Whether the input has delivered anything in the last second
-    bool hasInput() const;
 
 signals:
     /// Something the meters show has changed
@@ -108,12 +113,12 @@ private:
     float m_takeHighestLeft;
     float m_takeHighestRight;
     bool m_haveTakeLevels;
-    std::int64_t m_lastInputMs;
     double m_shownBar;
     double m_shownHold;
     bool m_shownClipped;
 
     void poll();
+    void showMeter();
     void monitoringLevels(float left, float right);
 };
 

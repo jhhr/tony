@@ -42,6 +42,12 @@ class QPushButton;
  * it, and leaves both as they are after it, as after a take
  * (MainWindow::checkInputLevel()).  Shown with open(), never exec(): no
  * event loop of its own.
+ *
+ * Play starts and stops the music, for a singer who has it on speakers:
+ * the window behind is shut while the dialog is open.  The window plays
+ * it (playPressed()) and says whether it is playing (setPlaying()); a
+ * change while the silence is read starts the silence again, so that
+ * all of it is read with the music as the singer has it.
  */
 class CheckInputLevelDialog : public QDialog
 {
@@ -62,6 +68,15 @@ public:
     /// Begin again from the silence, the threshold now in use given
     void start(double currentThreshold);
 
+    /// The device opened again under the check: what was read is of
+    /// another stream, perhaps another microphone.  A check under way
+    /// starts again from the silence; a result stays
+    void deviceReopened();
+
+    /// Whether the music is playing, and whether there is any to play
+    void setPlaying(bool playing);
+    void setCanPlay(bool canPlay);
+
     Stage stage() const { return m_stage; }
 
     /// What the page says now, as plain text
@@ -76,10 +91,14 @@ public:
     QPushButton *doneButton() const { return m_done; }
     QPushButton *useThresholdButton() const { return m_useThreshold; }
     QPushButton *againButton() const { return m_again; }
+    QPushButton *playButton() const { return m_play; }
 
 signals:
     /// The suggested threshold, to be set
     void thresholdChosen(double dbfs);
+
+    /// Play or Stop pressed
+    void playPressed();
 
 private:
     QPointer<InputLevelFeed> m_feed;
@@ -88,6 +107,7 @@ private:
     QPushButton *m_done;
     QPushButton *m_useThreshold;
     QPushButton *m_again;
+    QPushButton *m_play;
     QPushButton *m_close;
     QTimer m_timer;
     QElapsedTimer m_clock;
@@ -98,6 +118,7 @@ private:
     std::vector<double> m_quietPeaks;
     float m_loudest;
     bool m_clipped;
+    bool m_playing;
 
     void levelRead(float peak);
     void tick();

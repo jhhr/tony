@@ -452,10 +452,19 @@ protected:
                 if (id > 0 && d.id == id) m_fakeConfig.route.input = d;
             }
         }
-        m_audioIO = new FakeAudioIO
-            (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
-             m_fakeConfig);
-        m_playSource->setSystemPlaybackTarget(m_audioIO);
+        // As svapp opens it: with its input once recording has been
+        // asked for, else for playback only
+        if (m_audioMode == AUDIO_PLAYBACK_AND_RECORD) {
+            m_audioIO = new FakeAudioIO
+                (m_recordTarget, m_playSource->getApplicationPlaybackSource(),
+                 m_fakeConfig);
+            m_playSource->setSystemPlaybackTarget(m_audioIO);
+        } else {
+            m_playTarget = new FakeAudioIO
+                (nullptr, m_playSource->getApplicationPlaybackSource(),
+                 m_fakeConfig);
+            m_playSource->setSystemPlaybackTarget(m_playTarget);
+        }
     }
 
     QStringList audioImplementationNames() const override {
@@ -561,8 +570,8 @@ protected:
         return true;
     }
 
-    // The base class deleteAudioIO() deletes m_audioIO, which is right
-    // for the fake as well
+    // The base class deleteAudioIO() deletes m_audioIO or m_playTarget,
+    // which is right for the fake as well
 
 private:
     FakeAudioIO::Config m_fakeConfig;

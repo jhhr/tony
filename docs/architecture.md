@@ -454,7 +454,10 @@ meter of its own, all drawing one feed's state: the clip light lit in one is lit
 the take's peak and clipped places in the status bar at Stop; Playback > Check Input
 Level, next to Input Channel. `MainWindow` owns the feed, made with the toolbar, and the
 dialog, made when first asked for, and deletes both in `~MainWindow` before the base class
-deletes the record target the feed reads.
+deletes the record target the feed reads. The feed reads only while the device runs with
+its input (`InputLevelFeed::setRunning()`, from `MainWindow::updateInputLevelReading()`):
+whatever is busy has resumed it, and it runs on until it is suspended as idle or opened
+again (`deleteAudioIO()`).
 
 **Touch** (`TouchGestures`, one per pane: an event filter in `main/`, not a change to
 svgui, so that synthetic touch events test it on the desktop). One finger is left to Qt,

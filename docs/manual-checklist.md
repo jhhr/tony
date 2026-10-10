@@ -518,7 +518,9 @@ been tried on a device yet.
    input volume for it at 100) and check again until it says the gain is right. Is the
    noise floor it gives plausible, and the threshold it suggests (Off, likely, for a
    headset in a quiet room)? Then a take at full voice: the status bar's "Take: peak"
-   near −10 dBFS.
+   near −10 dBFS. With the music on speakers: press Play in the dialog during the two
+   seconds: they start again, the button says Stop, and the threshold suggested is over
+   the music's level at the microphone.
 8. **The meter beside Record** during a take follows the voice without lag you can see,
    and shows input 1 with Input 1 chosen; between takes it shows the input as well. The
    tick sits at the voice threshold when one is set: are the voice's peaks well over it

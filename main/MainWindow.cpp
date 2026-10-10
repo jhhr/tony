@@ -293,7 +293,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_calibrateAudioAction(nullptr),
     m_latencyLineAction(nullptr),
     m_forgetLatencyAction(nullptr),
-    m_lastRecordingRate(0)
+    m_lastRecordingRate(0),
+    m_audioRunning(false)
 {
     setWindowTitle(QApplication::applicationName());
 
@@ -1883,29 +1884,32 @@ MainWindow::audioIdleSuspendMillis() const
 #endif
 }
 
+bool
+MainWindow::audioBusy() const
+{
+    return (m_playSource && m_playSource->isPlaying()) ||
+        (m_recordTarget && m_recordTarget->isRecording()) ||
+        m_checkingInputLevel;
+}
+
 void
 MainWindow::audioActivityChanged()
 {
-    bool busy = (m_playSource && m_playSource->isPlaying()) ||
-        (m_recordTarget && m_recordTarget->isRecording()) ||
-        m_checkingInputLevel;
+    bool busy = audioBusy();
     int idle = audioIdleSuspendMillis();
     if (busy || idle <= 0) {
         m_audioIdleTimer->stop();
     } else {
         m_audioIdleTimer->start(idle);
     }
+    updateInputLevelReading();
 }
 
 void
 MainWindow::suspendIdleAudio()
 {
     m_audioIdleTimer->stop();
-    if ((m_playSource && m_playSource->isPlaying()) ||
-        (m_recordTarget && m_recordTarget->isRecording()) ||
-        m_checkingInputLevel) {
-        return;
-    }
+    if (audioBusy()) return;
     if (!m_audioIO && !m_playTarget) return;
 
     // The next Play or Record resumes it, as the first did
@@ -1913,6 +1917,28 @@ MainWindow::suspendIdleAudio()
          << endl;
     if (m_audioIO) m_audioIO->suspend();
     else m_playTarget->suspend();
+    m_audioRunning = false;
+    updateInputLevelReading();
+}
+
+void
+MainWindow::deleteAudioIO()
+{
+    MainWindowBase::deleteAudioIO();
+    // One opened again starts suspended (createAudioIO())
+    m_audioRunning = false;
+    updateInputLevelReading();
+}
+
+void
+MainWindow::updateInputLevelReading()
+{
+    if (!m_inputLevels) return;
+    // Whatever is busy has resumed the device: playback, a take, Check
+    // Input Level.  It runs on after it, as Stop leaves it
+    // (suspendAudioOnStop()), until it idles long enough to be suspended
+    if (audioBusy()) m_audioRunning = true;
+    m_inputLevels->setRunning(m_audioIO && m_audioRunning);
 }
 
 #ifndef Q_OS_ANDROID
@@ -1937,6 +1963,7 @@ MainWindow::createAudioIO()
 
     // Another device may have another input chosen
     updateInputMeterChannel();
+    updateInputLevelReading();
 
     // Where the driver lists its inputs, as the tests' can
     reportInputDevice();
@@ -3962,6 +3989,7 @@ MainWindow::createAudioIO()
     // At the fader's volume, as the desktop's createAudioIO() has it
     applyMasterVolume(m_fader->getValue());
     updateInputMeterChannel();
+    updateInputLevelReading();
     reportInputDevice();
 
     if (m_audioIO) {
@@ -6172,6 +6200,9 @@ MainWindow::recordingStarted()
         updateAlternatePitchForTake();
         updateSingingTrackForTake();
         updateLayerStatuses();
+        // The meters show the input chosen again, not the take's: an
+        // audio check's takes are made of both inputs
+        updateInputMeterChannel();
         return;
     }
 
@@ -6714,6 +6745,13 @@ MainWindow::checkInputLevel()
     if (!m_checkInputLevelDialog) {
         m_checkInputLevelDialog =
             new CheckInputLevelDialog(m_inputLevels, this);
+        // The window behind is shut: the music is played from here
+        connect(m_checkInputLevelDialog, &CheckInputLevelDialog::playPressed,
+                this, [this]() { play(); });
+        connect(m_playSource, &AudioCallbackPlaySource::playStatusChanged,
+                m_checkInputLevelDialog, &CheckInputLevelDialog::setPlaying);
+        connect(this, &MainWindowBase::canPlay,
+                m_checkInputLevelDialog, &CheckInputLevelDialog::setCanPlay);
         connect(m_checkInputLevelDialog,
                 &CheckInputLevelDialog::thresholdChosen,
                 this, [this](double dbfs) {
@@ -6736,8 +6774,26 @@ MainWindow::checkInputLevel()
     // under it
     m_checkingInputLevel = true;
     audioActivityChanged();
+    m_checkInputLevelDialog->setPlaying
+        (m_playSource && m_playSource->isPlaying());
+    m_checkInputLevelDialog->setCanPlay
+        (m_playAction && m_playAction->isEnabled());
     m_checkInputLevelDialog->start(currentVoiceThreshold());
     m_checkInputLevelDialog->open();
+}
+
+void
+MainWindow::recreateAudioIO()
+{
+    MainWindowBase::recreateAudioIO();
+
+    // A phone's device that failed is opened again under the check
+    // (checkAudioDevice()): it runs, as the check opened it to, and the
+    // check reads it from the silence again
+    if (m_checkingInputLevel && m_checkInputLevelDialog && m_audioIO) {
+        m_audioIO->resume();
+        m_checkInputLevelDialog->deviceReopened();
+    }
 }
 
 void

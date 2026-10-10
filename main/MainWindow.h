@@ -227,6 +227,10 @@ signals:
 public slots:
     virtual bool commitData(bool mayAskUser); // on session shutdown
 
+    // As MainWindowBase's; under Check Input Level, the device opened
+    // again is run, and the check starts again from the silence
+    void recreateAudioIO() override;
+
 protected slots:
     // Override record() so that when a reference track is already loaded we
     // can switch to RecordCreateAdditionalModel before starting the capture,
@@ -1405,9 +1409,18 @@ protected:
     // Android, where the microphone stays open and the battery drains
     // while it runs, a couple of minutes; on desktop never
     virtual int audioIdleSuspendMillis() const;
+    bool audioBusy() const;
     void audioActivityChanged();
     void suspendIdleAudio();
     QTimer *m_audioIdleTimer;
+
+    // The input meter reads the device only while it runs with its input
+    // open (InputLevelFeed::setRunning()): while something is busy, and
+    // after it until the device is suspended or opened again, which is
+    // what m_audioRunning says
+    void deleteAudioIO() override;
+    void updateInputLevelReading();
+    bool m_audioRunning;
 
 #ifdef Q_OS_ANDROID
     // Android's file picker gives content:// URIs, which svcore's readers
