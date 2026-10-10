@@ -366,7 +366,10 @@ volume and the background music in `MainWindow`.
   alone brought a maximised window back as large as the screen but not maximised, and on
   Windows a little off it. `main()` puts it back (`restoreWindowGeometry()`) before it
   shows the window, never the constructor: every test window would then come back where
-  the one closed before it was.
+  the one closed before it was. On macOS the native window is made with the window
+  (`setUnifiedTitleAndToolBarOnMac()`), and a hidden window's geometry reaches it only
+  when it is shown, maximised by then: it kept Qt's default 640 x 480 as the size to
+  un-maximise to, so the restore gives it the normal geometry first.
 - A path, a URI or a name the user typed goes into a message in one `arg()` call with
   all the arguments (`arg(a, b)`), or the last of a chain: a `%1` or `%3A` in it (a take
   called "a %1", a `content://` URI) is taken for a placeholder by the `arg()` after it.

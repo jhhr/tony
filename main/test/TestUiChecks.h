@@ -131,8 +131,10 @@ class TestUiChecks : public QObject
     }
 
     // The window closed and opened again, as quitting and starting Tony
-    // do (main() restores what the close kept, then shows the window)
-    void reopenWindow() {
+    // do (main() restores what the close kept, then shows the window).
+    // Made early, its native window is made before the restore, as on
+    // macOS, where the window makes it itself
+    void reopenWindow(bool madeEarly = false) {
         QVERIFY(m_window->close());
         delete m_window;
         m_window = nullptr;
@@ -142,6 +144,7 @@ class TestUiChecks : public QObject
         QVERIFY(!settings.contains("MainWindow/position"));
 
         m_window = new TestMainWindow(FakeAudioIO::Config());
+        if (madeEarly) (void)m_window->winId();
         QVERIFY(m_window->restoreWindowGeometry());
         m_window->show();
         QVERIFY(QTest::qWaitForWindowExposed(m_window));
@@ -522,6 +525,41 @@ class TestUiChecks : public QObject
             box->button(button)->click();
             return true;
         };
+    }
+
+    // A window resized, maximised, closed and opened again comes back
+    // maximised, within the screen, and un-maximised at its size
+    void windowComesBackMaximised(bool madeEarly) {
+        {
+            TestMainWindow first{FakeAudioIO::Config()};
+            QVERIFY2(!first.restoreWindowGeometry(),
+                     "a window was restored with nothing kept");
+        }
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        // Within the offscreen platform's screen, 800 x 600
+        const QSize normal(640, 420);
+        m_window->resize(normal);
+        QTRY_COMPARE(m_window->size(), normal);
+        m_window->showMaximized();
+        QTRY_VERIFY(m_window->isMaximized());
+
+        reopenWindow(madeEarly);
+        if (QTest::currentTestFailed()) return;
+        QTRY_VERIFY2(m_window->isMaximized(),
+                     "the window was closed maximised and came back not");
+        const QRect screen = m_window->screen()->availableGeometry();
+        QVERIFY2(screen.contains(m_window->frameGeometry()),
+                 qPrintable(QString("the window is at (%1, %2) %3 x %4, "
+                                    "past the screen's %5 x %6")
+                            .arg(m_window->frameGeometry().x())
+                            .arg(m_window->frameGeometry().y())
+                            .arg(m_window->frameGeometry().width())
+                            .arg(m_window->frameGeometry().height())
+                            .arg(screen.width()).arg(screen.height())));
+
+        m_window->showNormal();
+        QTRY_COMPARE(m_window->size(), normal);
     }
 
 private slots:
@@ -1713,36 +1751,13 @@ private slots:
     // size and position, it came back as large as the screen but not
     // maximised, and on Windows a little off the screen
     void window_comes_back_maximised() {
-        {
-            TestMainWindow first{FakeAudioIO::Config()};
-            QVERIFY2(!first.restoreWindowGeometry(),
-                     "a window was restored with nothing kept");
-        }
-        makeWindow(FakeAudioIO::Config());
-        if (QTest::currentTestFailed()) return;
-        // Within the offscreen platform's screen, 800 x 600
-        const QSize normal(640, 420);
-        m_window->resize(normal);
-        QTRY_COMPARE(m_window->size(), normal);
-        m_window->showMaximized();
-        QTRY_VERIFY(m_window->isMaximized());
+        windowComesBackMaximised(false);
+    }
 
-        reopenWindow();
-        if (QTest::currentTestFailed()) return;
-        QTRY_VERIFY2(m_window->isMaximized(),
-                     "the window was closed maximised and came back not");
-        const QRect screen = m_window->screen()->availableGeometry();
-        QVERIFY2(screen.contains(m_window->frameGeometry()),
-                 qPrintable(QString("the window is at (%1, %2) %3 x %4, "
-                                    "past the screen's %5 x %6")
-                            .arg(m_window->frameGeometry().x())
-                            .arg(m_window->frameGeometry().y())
-                            .arg(m_window->frameGeometry().width())
-                            .arg(m_window->frameGeometry().height())
-                            .arg(screen.width()).arg(screen.height())));
-
-        m_window->showNormal();
-        QTRY_COMPARE(m_window->size(), normal);
+    // The same with the native window made before the restore, as on
+    // macOS: un-maximised, it came back at Qt's default 640 x 480
+    void window_made_early_comes_back_maximised() {
+        windowComesBackMaximised(true);
     }
 
     // Closed as it was, the window comes back where it was and as large

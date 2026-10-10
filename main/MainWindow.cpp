@@ -158,6 +158,7 @@
 #include <QEventLoop>
 #include <QTextStream>
 #include <QTemporaryDir>
+#include <QWindow>
 
 #include <algorithm>
 #include <iostream>
@@ -9042,7 +9043,22 @@ MainWindow::restoreWindowGeometry()
     settings.beginGroup("MainWindow");
     QByteArray geometry = settings.value("geometry").toByteArray();
     settings.endGroup();
-    return !geometry.isEmpty() && restoreGeometry(geometry);
+
+    // On macOS the native window is made with the window
+    // (setUnifiedTitleAndToolBarOnMac()), and a hidden window's geometry
+    // reaches it only once it is shown, by which time it is maximised: it
+    // kept the size it was made at, Qt's default, as the one to come back
+    // to.  Given the normal geometry while it is normal, it comes back to
+    // that.  A window made by restoreGeometry() itself is made at it
+    const bool madeBefore = testAttribute(Qt::WA_WState_Created);
+    if (geometry.isEmpty() || !restoreGeometry(geometry)) return false;
+    if (madeBefore && isMaximized() && windowHandle()) {
+        const QRect normal = normalGeometry();
+        setWindowState(windowState() & ~Qt::WindowMaximized);
+        windowHandle()->setGeometry(normal);
+        setWindowState(windowState() | Qt::WindowMaximized);
+    }
+    return true;
 }
 
 bool
