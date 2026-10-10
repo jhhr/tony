@@ -60,6 +60,10 @@ private slots:
         QVERIFY(!InputChannel::isSingle(InputChannel::kBoth));
         QVERIFY(InputChannel::isSingle(0));
         QVERIFY(InputChannel::isSingle(1));
+        QVERIFY(InputChannel::offered(InputChannel::kBoth));
+        QVERIFY(InputChannel::offered(1));
+        QVERIFY(!InputChannel::offered(2));
+        QVERIFY(!InputChannel::offered(-2));
     }
 
     // Nothing kept is Both, what a take was made of before there was a

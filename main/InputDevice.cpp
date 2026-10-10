@@ -12,6 +12,7 @@
 */
 
 #include "InputDevice.h"
+#include "SettingsKey.h"
 
 #include <QSettings>
 
@@ -26,14 +27,10 @@ const int typeUsbDevice = 11;
 const int typeBuiltinMic = 15;
 const int typeUsbHeadset = 22;
 
-// The driver as a key: QSettings takes "/" and "\" as the start of a
-// subgroup
+// The driver as a key
 QString keyOf(QString driver)
 {
-    driver.replace("%", "%25");
-    driver.replace("/", "%2F");
-    driver.replace("\\", "%5C");
-    return driver;
+    return SettingsKey::encoded(driver);
 }
 
 }

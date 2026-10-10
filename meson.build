@@ -1211,6 +1211,7 @@ tony_core_files = [
   'main/PopupArea.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/RecordingAlignment.cpp',
+  'main/SettingsKey.cpp',
   'main/SingingTakes.cpp',
   'main/SongScroll.cpp',
   'main/StatusLine.cpp',
@@ -1623,6 +1624,7 @@ if system != 'android'
     'main/test/TestVoiceGate.h',
     'main/test/TestUserText.h',
     'main/test/TestTakeReplacement.h',
+    'main/test/TestSettingsKey.h',
     'main/test/TestStatusLine.h',
     'main/test/TestRunSuite.h',
   ])

@@ -65,6 +65,9 @@ namespace InputChannel
     /// The choices offered: Both, Input 1, Input 2
     std::vector<int> choices();
 
+    /// Whether the channel is one of choices()
+    bool offered(int channel);
+
     /// "Both Inputs", "Input 1", "Input 2"
     QString label(int channel);
 

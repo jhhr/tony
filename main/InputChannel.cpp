@@ -13,6 +13,7 @@
 */
 
 #include "InputChannel.h"
+#include "SettingsKey.h"
 
 #include <QCoreApplication>
 #include <QSettings>
@@ -30,34 +31,15 @@ QString tr(const char *text)
     return QCoreApplication::translate("InputChannel", text);
 }
 
-// A name as part of a key, as LatencyCalibration encodes a device name:
-// QSettings takes "/" and "\" as the start of a subgroup, and "|"
-// separates the names
-QString encoded(QString name)
-{
-    name.replace("%", "%25");
-    name.replace("/", "%2F");
-    name.replace("\\", "%5C");
-    name.replace("|", "%7C");
-    return name;
-}
-
 QString keyOf(const Key &key)
 {
-    return encoded(key.driver) + "|" + encoded(key.recordDevice);
+    return SettingsKey::encoded(key.driver) + "|" +
+        SettingsKey::encoded(key.recordDevice);
 }
 
 QString lastInputKey(QString driver)
 {
-    return "last-input|" + encoded(driver);
-}
-
-bool offered(int channel)
-{
-    for (int c : choices()) {
-        if (c == channel) return true;
-    }
-    return false;
+    return "last-input|" + SettingsKey::encoded(driver);
 }
 
 }
@@ -66,6 +48,15 @@ std::vector<int>
 choices()
 {
     return { kBoth, 0, 1 };
+}
+
+bool
+offered(int channel)
+{
+    for (int c : choices()) {
+        if (c == channel) return true;
+    }
+    return false;
 }
 
 QString

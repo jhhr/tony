@@ -501,9 +501,7 @@ CalibrateAudioDialog::offeredInput() const
     }
     const std::vector<int> carrying = InputChannel::carrying(r.inputPeaks);
     if (carrying.size() != 1) return -1;
-    bool offered = false;
-    for (int c : InputChannel::choices()) offered |= (c == carrying[0]);
-    if (!offered) return -1;
+    if (!InputChannel::offered(carrying[0])) return -1;
     QSettings settings;
     if (InputChannel::channel(settings, r.inputKey) == carrying[0]) return -1;
     return carrying[0];

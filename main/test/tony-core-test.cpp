@@ -46,6 +46,7 @@
 #include "TestVoiceGate.h"
 #include "TestUserText.h"
 #include "TestTakeReplacement.h"
+#include "TestSettingsKey.h"
 #include "TestStatusLine.h"
 #include "TestRunSuite.h"
 
@@ -281,6 +282,12 @@ int main(int argc, char *argv[])
 
     {
         TestTakeReplacement t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestSettingsKey t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }
