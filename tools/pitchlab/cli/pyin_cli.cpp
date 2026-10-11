@@ -18,7 +18,12 @@
 // that variants of the pYIN sources can be compared offline.
 //
 //   pyin_cli in.wav outprefix [--start s] [--end s] [--param name=value]...
-//            [--block n] [--step n] [--candidates]
+//            [--block n] [--step n] [--candidates] [--no-normalise]
+//
+// The audio is scaled so that its peak over all channels and the whole
+// file is 1, as Tony reads every file (its "normalise audio"
+// preference), unless --no-normalise is given: pYIN's low-amplitude
+// suppression depends on the level.
 //
 // Writes outprefix.pitch.csv (time,f0; f0 < 0 is an unvoiced
 // estimate when outputunvoiced=2), outprefix.notes.csv
@@ -43,7 +48,8 @@ using std::vector;
 static void usage()
 {
     fprintf(stderr, "usage: pyin_cli in.wav outprefix [--start s] [--end s] "
-            "[--param name=value]... [--block n] [--step n] [--candidates]\n");
+            "[--param name=value]... [--block n] [--step n] [--candidates] "
+            "[--no-normalise]\n");
     exit(2);
 }
 
@@ -55,6 +61,7 @@ int main(int argc, char **argv)
     double startSec = 0, endSec = -1;
     int blockSize = 2048, stepSize = 256;
     bool candidates = false;
+    bool normalise = true;
 
     // Tony's Analyser::buildAnalysisTransforms() with its default settings
     std::map<string, float> params {
@@ -74,6 +81,7 @@ int main(int argc, char **argv)
         else if (a == "--block" && i + 1 < argc) blockSize = atoi(argv[++i]);
         else if (a == "--step" && i + 1 < argc) stepSize = atoi(argv[++i]);
         else if (a == "--candidates") candidates = true;
+        else if (a == "--no-normalise") normalise = false;
         else if (a == "--param" && i + 1 < argc) {
             string p = argv[++i];
             auto eq = p.find('=');
@@ -96,11 +104,26 @@ int main(int argc, char **argv)
     sf_count_t f1 = endSec > 0 ? std::min(total, sf_count_t(endSec * sr)) : total;
     if (f0 >= f1) { fprintf(stderr, "empty range\n"); return 1; }
 
+    // svcore's reader scales by the peak of every channel over the
+    // whole file, whatever part of it is analysed
+    float gain = 1.f;
+    vector<float> buf(size_t(4096) * channels);
+    if (normalise) {
+        float peak = 0.f;
+        sf_seek(sf, 0, SEEK_SET);
+        sf_count_t got;
+        while ((got = sf_readf_float(sf, buf.data(), 4096)) > 0) {
+            for (sf_count_t i = 0; i < got * channels; ++i) {
+                peak = std::max(peak, std::fabs(buf[i]));
+            }
+        }
+        if (peak > 0.f) gain = 1.f / peak;
+    }
+
     // The mean of the channels, as svcore's transformer gives a
     // one-channel plugin when the channel is -1
     vector<float> mono(f1 - f0);
     {
-        vector<float> buf(size_t(4096) * channels);
         sf_seek(sf, f0, SEEK_SET);
         sf_count_t pos = 0;
         while (pos < f1 - f0) {
@@ -110,7 +133,7 @@ int main(int argc, char **argv)
             for (sf_count_t i = 0; i < got; ++i) {
                 float s = 0;
                 for (int c = 0; c < channels; ++c) s += buf[i * channels + c];
-                mono[pos + i] = s / float(channels);
+                mono[pos + i] = gain * s / float(channels);
             }
             pos += got;
         }
