@@ -87,6 +87,7 @@
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPointer>
@@ -452,10 +453,10 @@ class TestRecordWorkflow : public QObject
              figure);
     }
 
-    // The Playback menu's line about the latency, as it reads when the
+    // The Devices menu's line about the latency, as it reads when the
     // menu is opened
     QString latencyLine() {
-        emit m_window->playbackMenu()->aboutToShow();
+        emit m_window->devicesMenu()->aboutToShow();
         return m_window->latencyLineAction()->text();
     }
 
@@ -1713,7 +1714,7 @@ class TestRecordWorkflow : public QObject
                  "recordings");
     }
 
-    // The voice threshold, as Playback > Voice Threshold sets it
+    // The voice threshold, as Record > Voice Threshold sets it
     static void setVoiceThreshold(double dbfs) {
         QSettings settings;
         VoiceThreshold::setThreshold(settings, dbfs);
@@ -1724,7 +1725,7 @@ class TestRecordWorkflow : public QObject
         return VoiceThreshold::threshold(settings);
     }
 
-    // Playback > Voice Threshold opened, as the user does before choosing
+    // Record > Voice Threshold opened, as the user does before choosing
     void openVoiceThresholdMenu() {
         emit m_window->voiceThresholdMenu()->menu()->aboutToShow();
     }
@@ -1821,7 +1822,7 @@ class TestRecordWorkflow : public QObject
         return m.captured(1).toDouble() * 60.0 + m.captured(2).toDouble();
     }
 
-    // Playback > Input Channel, as the user chooses from it
+    // Devices > Input Channel, as the user chooses from it
     void chooseInputChannel(int channel) {
         InputChannelMenu *menu = m_window->inputChannelMenu();
         QVERIFY(menu);
@@ -1836,7 +1837,7 @@ class TestRecordWorkflow : public QObject
         QFAIL(qPrintable(QString("no entry for input %1").arg(channel)));
     }
 
-    // The entry of Playback > Input Channel that is ticked, or -2 for none
+    // The entry of Devices > Input Channel that is ticked, or -2 for none
     int inputChannelTicked() {
         InputChannelMenu *menu = m_window->inputChannelMenu();
         if (!menu) return -2;
@@ -1849,7 +1850,7 @@ class TestRecordWorkflow : public QObject
         return -2;
     }
 
-    // Playback > Audio Input Device, as a phone lists it: its entries
+    // Devices > Audio Input Device, as a phone lists it: its entries
     QStringList inputDeviceEntries() {
         m_window->doRescanAudioDevices();
         QStringList texts;
@@ -2334,7 +2335,7 @@ private slots:
     }
 
     // A microphone on one input of two, the other input hearing
-    // something else, and that input chosen (Playback > Input Channel):
+    // something else, and that input chosen (Devices > Input Channel):
     // the take is mono, made of that input alone; the live dots and the
     // analysis hear it alone; and it plays in both ears. With both
     // inputs a take of a microphone on input 2 alone played silent
@@ -2684,7 +2685,7 @@ private slots:
                 InputLevelMeter::thresholdColour());
     }
 
-    // Playback > Check Input Level: the input opened and run with nothing
+    // Record > Check Input Level: the input opened and run with nothing
     // recorded, two seconds of silence read as the noise floor, then the
     // loudest phrase; Done gives the peak, the gain to change, the noise
     // floor and a voice threshold, which a button sets. The device is
@@ -2907,7 +2908,7 @@ private slots:
         dialog->reject();
     }
 
-    // Playback > Input Channel is kept for the input device the
+    // Devices > Input Channel is kept for the input device the
     // Preferences name, which its first line names; another device has
     // its own; it is shut during a take; and the audio check's takes are
     // made of both inputs whatever is chosen, as the runner sets them
@@ -3082,7 +3083,7 @@ private slots:
         QCOMPARE(m_window->audioRoute().input.id, 40);
     }
 
-    // A phone's Playback > Audio Input Device: the inputs Android lists
+    // A phone's Devices > Audio Input Device: the inputs Android lists
     // that a singer records from (not a Bluetooth call microphone), each
     // name once, the one in use named. A choice is kept by type and name
     // and opened by the id the device has now; unplugged, the phone's
@@ -5660,7 +5661,7 @@ private slots:
         QVERIFY(PlaybackSettings::backgroundMusicMix(settings));
     }
 
-    // After a relaunch the Playback menu's line shows the figure the
+    // After a relaunch the Devices menu's line shows the figure the
     // check kept for the devices, as the takes use it, and Forget drops
     // that one. The device records at 48 kHz, as most desktop devices do,
     // and the figure is kept at that rate, which nothing says before the
@@ -6472,7 +6473,134 @@ private slots:
                  "the redone recording was analysed without the threshold");
     }
 
-    // Playback > Voice Threshold, straight after Record, which it is for:
+    // A menu's entries as the user reads them: "-" for a separator, a
+    // submenu by its title
+    static QStringList entryNames(QMenu *menu) {
+        QStringList names;
+        for (QAction *a : menu->actions()) {
+            names << (a->isSeparator() ? QString("-") : a->text());
+        }
+        return names;
+    }
+
+    // The letter underlined in a menu's or an entry's text, upper case;
+    // a null QChar for none. "&&" is an ampersand, as Qt has it
+    static QChar underlined(const QString &text) {
+        for (int i = 0; i + 1 < text.size(); ++i) {
+            if (text[i] != '&') continue;
+            if (text[i + 1] == '&') {
+                ++i;
+                continue;
+            }
+            return text[i + 1].toUpper();
+        }
+        return QChar();
+    }
+
+    // The entries of those given, shown, that share a letter, as
+    // "Input &Channel / &Calibrate Audio..."; "" where none do
+    static QString letterClashes(const QList<QAction *> &actions) {
+        QMap<QChar, QStringList> byLetter;
+        for (QAction *a : actions) {
+            if (a->isSeparator() || !a->isVisible()) continue;
+            const QChar letter = underlined(a->text());
+            if (!letter.isNull()) byLetter[letter] << a->text();
+        }
+        QStringList clashes;
+        for (const QStringList &texts : byLetter) {
+            if (texts.size() > 1) clashes << texts.join(" / ");
+        }
+        return clashes.join("; ");
+    }
+
+    // The menus by subject: Playback plays and moves about, Record is the
+    // take and what is chosen for it, and Devices what Tony plays and
+    // records through, with the latency measured there. Record holds the
+    // bottom bar's recording buttons too, the same actions, which say
+    // what they do in the status bar: a menu shows no tooltips
+    void menus_by_subject() {
+        makeWindow(FakeAudioIO::Config());
+
+        QStringList titles;
+        for (QAction *a : m_window->menuBar()->actions()) titles << a->text();
+        QCOMPARE(titles, QStringList({ "&File", "&Edit", "&View", "&Analysis",
+                                       "Ta&kes", "Play&back", "&Record",
+                                       "&Devices", "&Help" }));
+
+        QCOMPARE(entryNames(m_window->playbackMenu()),
+                 QStringList({ "Play / Pause",
+                               "Constrain Playback to Selection",
+                               "Loop Playback", "-",
+                               "Rewind", "Fast Forward", "-",
+                               "Rewind to Start", "Fast Forward to End", "-",
+                               "&One Note Left", "O&ne Note Right",
+                               "&Select One Note Left",
+                               "S&elect One Note Right", "-",
+                               "Speed Up", "Slow Down",
+                               "Restore Normal Speed" }));
+
+        QMenu *record = m_window->recordMenu();
+        QCOMPARE(entryNames(record),
+                 QStringList({ "Record", "-",
+                               "Record into Selection", "Pre-roll",
+                               "Play Reference While Recording", "-",
+                               "Voice &Threshold",
+                               "Check Input &Level..." }));
+        const QList<QAction *> recording = record->actions();
+        QCOMPARE(recording[0], m_window->recordAction());
+        QCOMPARE(recording[2], m_window->recordIntoSelectionAction());
+        QCOMPARE(recording[3], m_window->preRollAction());
+        QCOMPARE(recording[4], m_window->playReferenceWhileRecordingAction());
+        QCOMPARE(recording[6],
+                 m_window->voiceThresholdMenu()->menu()->menuAction());
+        QCOMPARE(recording[7], m_window->checkInputLevelAction());
+        for (int i : { 2, 3, 4 }) {
+            QVERIFY2(!recording[i]->statusTip().isEmpty(),
+                     qPrintable(recording[i]->text()));
+            QCOMPARE(recording[i]->statusTip(), recording[i]->toolTip());
+        }
+
+        // The driver and its latency first (shown on Windows only), then
+        // the devices, which are the driver's own, and the input channel,
+        // which is kept for each input device
+        const QList<QAction *> devices = m_window->devicesMenu()->actions();
+        QCOMPARE(int(devices.size()), 9);
+        QCOMPARE(devices[0],
+                 m_window->audioDriverMenus()->driverMenu()->menuAction());
+        QCOMPARE(devices[1],
+                 m_window->audioDriverMenus()->latencyMenu()->menuAction());
+        QCOMPARE(devices[2], m_window->audioOutputMenu()->menuAction());
+        QCOMPARE(devices[3], m_window->audioInputMenu()->menuAction());
+        QCOMPARE(devices[4],
+                 m_window->inputChannelMenu()->menu()->menuAction());
+        QVERIFY(devices[5]->isSeparator());
+        QCOMPARE(devices[6], m_window->calibrateAudioAction());
+        QCOMPARE(devices[7], m_window->latencyLineAction());
+        QCOMPARE(devices[8], m_window->forgetLatencyAction());
+    }
+
+    // With a menu open, its entry's underlined letter chooses it, and a
+    // letter two entries share only moves between them: none is shared
+    // in Playback, Record or Devices, with the driver menus shown as on
+    // Windows, nor between two menus of the menu bar
+    void menus_have_a_letter_each() {
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations({ "port", "mme", "directsound",
+                                            "wasapi" });
+        m_window->doRebuildAudioDriverMenus();
+        QVERIFY(m_window->audioDriverMenus()->latencyMenu()->menuAction()
+                ->isVisible());
+
+        QCOMPARE(letterClashes(m_window->menuBar()->actions()), QString());
+        for (QMenu *menu : { m_window->playbackMenu(), m_window->recordMenu(),
+                             m_window->devicesMenu() }) {
+            const QString clashes = letterClashes(menu->actions());
+            QVERIFY2(clashes.isEmpty(),
+                     qPrintable(menu->title() + ": " + clashes));
+        }
+    }
+
+    // Record > Voice Threshold (where in the menu: menus_by_subject):
     // Off and then the thresholds, quietest first, by VoiceThreshold's
     // labels, one to be ticked at a time.  With none set, Off is
     void voice_threshold_menu_offers_the_choices() {
@@ -6483,11 +6611,8 @@ private slots:
         QVERIFY(menu->menuAction()->isEnabled());
         QVERIFY2(menu->menuAction()->statusTip().contains("speakers"),
                  qPrintable(menu->menuAction()->statusTip()));
-
-        const QList<QAction *> playback = m_window->playbackMenu()->actions();
-        const qsizetype recordAt = playback.indexOf(m_window->recordAction());
-        QVERIFY(recordAt >= 0);
-        QCOMPARE(playback.indexOf(menu->menuAction()), recordAt + 1);
+        QVERIFY(m_window->recordMenu()->actions()
+                .contains(menu->menuAction()));
 
         const std::vector<double> choices = VoiceThreshold::choices();
         const QList<QAction *> entries = menu->actions();

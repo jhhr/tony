@@ -29,7 +29,7 @@ class QLabel;
 class QPushButton;
 
 /**
- * Playback > Check Input Level: the input meter, large, with the input
+ * Record > Check Input Level: the input meter, large, with the input
  * open and nothing recorded.  The singer keeps quiet for kQuietMs, which
  * is read as the noise floor, then sings their loudest phrase and presses
  * Done.  The result: the loudest peak, how many dB to change the

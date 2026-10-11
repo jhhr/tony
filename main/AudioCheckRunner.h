@@ -250,7 +250,7 @@ public:
     explicit AudioCheckRunner(MainWindow *window);
     virtual ~AudioCheckRunner();
 
-    /// The plan of Playback > Calibrate Audio: four punch-ins of three
+    /// The plan of Devices > Calibrate Audio: four punch-ins of three
     /// events each on the calibration layout
     static Plan calibrationPlan();
 

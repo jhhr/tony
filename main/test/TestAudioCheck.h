@@ -310,7 +310,7 @@ class TestAudioCheck : public QObject
         return nullptr;
     }
 
-    // Playback > Audio Driver or Audio Latency opened, and an entry of it
+    // Devices > Audio Driver or Audio Latency opened, and an entry of it
     // chosen
     void chooseDriver(QString text) {
         QMenu *menu = m_window->audioDriverMenus()->driverMenu();
@@ -344,7 +344,7 @@ class TestAudioCheck : public QObject
             !menus->latencyMenu()->menuAction()->isEnabled();
     }
 
-    // Playback > Voice Threshold, greyed out with them: its takes are
+    // Record > Voice Threshold, greyed out with them: its takes are
     // recorded with none
     bool voiceThresholdMenuEnabled() {
         return m_window->voiceThresholdMenu()->menu()->menuAction()
@@ -394,14 +394,14 @@ class TestAudioCheck : public QObject
         return route;
     }
 
-    // The Playback menu's line about the latency, as it reads when the
+    // The Devices menu's line about the latency, as it reads when the
     // menu is opened
     QString latencyLine() {
-        emit m_window->playbackMenu()->aboutToShow();
+        emit m_window->devicesMenu()->aboutToShow();
         return m_window->latencyLineAction()->text();
     }
 
-    // Playback > Calibrate Audio chosen, and the dialog it shows, Start
+    // Devices > Calibrate Audio chosen, and the dialog it shows, Start
     // pressed on it with the short plan
     CalibrateAudioDialog *startCheckFromMenu() {
         m_window->calibrateAudioAction()->trigger();
@@ -932,7 +932,7 @@ private slots:
     // delay and the latencies it reports count its own frames: the round
     // trip it really has is roundTrip frames at 48 kHz, worked out here in
     // seconds. The figure is kept under the device's rate, not the
-    // reference's, and the Playback menu's line then shows it
+    // reference's, and the Devices menu's line then shows it
     void check_measures_the_round_trip_at_48000() {
         FakeAudioIO::Config config = loopback();
         config.sampleRate = int(otherRate);
@@ -1600,7 +1600,7 @@ private slots:
     // A round trip of the run's own: its takes are placed with it and
     // land where they belong, although another is kept for the devices
     // and the window places every other take with that. The one kept,
-    // and the Playback menu's line about it, are as they were. The take
+    // and the Devices menu's line about it, are as they were. The take
     // measured its own start gap, as the device says it was
     void check_uses_the_round_trip_it_is_given() {
         makeWindow(loopback());
@@ -1840,7 +1840,7 @@ private slots:
         QVERIFY(m_window->recordAction()->isEnabled());
     }
 
-    // Playback > Calibrate Audio: a dialog, not modal, that names the
+    // Devices > Calibrate Audio: a dialog, not modal, that names the
     // devices and the latency in use and starts a check. While the check
     // runs, neither it nor the device menus nor the voice threshold can
     // be chosen. Other devices
@@ -2199,7 +2199,7 @@ private slots:
         QVERIFY(dialog);
         const QString words = dialog->pageText();
         const QString input = "USB device (Wireless PRO RX), chosen under "
-            "Playback > Audio Input Device";
+            "Devices > Audio Input Device";
         QVERIFY2(words.contains(input), qPrintable(words));
     }
 
@@ -2393,7 +2393,7 @@ private slots:
         QVERIFY(indicator->isHidden());
     }
 
-    // Playback > Audio Driver: the drivers among the implementations
+    // Devices > Audio Driver: the drivers among the implementations
     // bqaudioio has, by the names the user knows, in their order, with
     // the one named ticked, and Audio Latency with it, both before the
     // device menus. One driver is no choice, and neither is shown
@@ -2417,13 +2417,13 @@ private slots:
         // WASAPI's own, none having been chosen
         QCOMPARE(ticked(latencies), QString("20 ms"));
 
-        const QList<QAction *> playback = m_window->playbackMenu()->actions();
-        const qsizetype driverAt = playback.indexOf(drivers->menuAction());
-        const qsizetype latencyAt = playback.indexOf(latencies->menuAction());
+        const QList<QAction *> devices = m_window->devicesMenu()->actions();
+        const qsizetype driverAt = devices.indexOf(drivers->menuAction());
+        const qsizetype latencyAt = devices.indexOf(latencies->menuAction());
         QVERIFY(driverAt >= 0);
         QCOMPARE(latencyAt, driverAt + 1);
         QVERIFY(latencyAt <
-                playback.indexOf(m_window->audioOutputMenu()->menuAction()));
+                devices.indexOf(m_window->audioOutputMenu()->menuAction()));
 
         // Ticked afresh as the menu opens
         setPreference("audio-target", "directsound");
@@ -2489,7 +2489,7 @@ private slots:
 
     // With no driver named, WASAPI is named before the first device is
     // opened, and the devices chosen before are WASAPI's; or before the
-    // Playback menu shows its device menus; MME where there is no WASAPI.
+    // Devices menu shows its device menus; MME where there is no WASAPI.
     // A driver named already is left alone
     void driver_named_by_default() {
         setDevices("Speakers", "Microphone");
@@ -2513,7 +2513,7 @@ private slots:
 
         forgetDriverPreferences();
         setPreference("audio-target", "auto");
-        emit m_window->playbackMenu()->aboutToShow();
+        emit m_window->devicesMenu()->aboutToShow();
         QCOMPARE(preference("audio-target"), QString("wasapi"));
 
         forgetDriverPreferences();
@@ -2526,7 +2526,7 @@ private slots:
 
         setPreference("audio-target", "directsound");
         m_window->recreateAudioIO();
-        emit m_window->playbackMenu()->aboutToShow();
+        emit m_window->devicesMenu()->aboutToShow();
         QCOMPARE(m_window->audioIOOpenedFor().implementation,
                  QString("directsound"));
         QCOMPARE(preference("audio-target"), QString("directsound"));
@@ -2535,7 +2535,7 @@ private slots:
         forgetDriverPreferences();
         m_window->setAudioImplementations({ "pulse", "port", "jack" });
         m_window->recreateAudioIO();
-        emit m_window->playbackMenu()->aboutToShow();
+        emit m_window->devicesMenu()->aboutToShow();
         QCOMPARE(m_window->audioIOOpenedFor().implementation, QString());
         QCOMPARE(preference("audio-target"), QString());
     }

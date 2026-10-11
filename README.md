@@ -23,13 +23,13 @@ Open a recording of the song with File -> Open. The pitch tracker follows one
 voice, so the reference works best as the vocal on its own, such as a stem
 separated from the mix. Tony analyses it and draws its pitch as a black line.
 
-In the toolbar, turn on the speaker button after "While recording:", which
-plays the reference while you record. Put on headphones (a microphone that
-hears the reference picks up its pitch as well as yours), then press Record
-(Ctrl+Space) and sing along. Your pitch appears as orange dots as you sing.
-When you press Stop, the recording is analysed in full and becomes an orange
-pitch track in the same pane as the reference's, so you can see where you were
-sharp, flat, early or late.
+In the toolbar, turn on the speaker button after "While recording:" (or
+Record -> Play Reference While Recording), which plays the reference while you
+record. Put on headphones (a microphone that hears the reference picks up its
+pitch as well as yours), then press Record (Ctrl+Space) and sing along. Your
+pitch appears as orange dots as you sing. When you press Stop, the recording
+is analysed in full and becomes an orange pitch track in the same pane as the
+reference's, so you can see where you were sharp, flat, early or late.
 
 
 Recording
@@ -41,42 +41,43 @@ Recording
    status bar counts you in, and nothing sung during the lead-in is kept
  * an optional "record into the selection only": select the phrase, and the
    recording starts and stops at the ends of the selection by itself. This
-   and the pre-roll are buttons in the toolbar, after "While recording:"
- * the microphone and the output are chosen in Playback -> Audio Input Device
-   and Playback -> Audio Output Device. On a phone, Audio Input Device lists the
+   and the pre-roll are buttons in the toolbar, after "While recording:", and
+   entries of the Record menu
+ * the microphone and the output are chosen in Devices -> Audio Input Device
+   and Devices -> Audio Output Device. On a phone, Audio Input Device lists the
    phone's microphone, a wired headset and a USB microphone (a wireless
    receiver, say), and the output is the phone's own choice. Android records
    from a USB or wired microphone by itself when one is plugged in; the menu
    is for choosing the phone's microphone instead, or one of two. A choice
    that is not plugged in records from the phone's choice, and the status bar
    says so
- * a microphone on one input of an interface with two: Playback -> Input
+ * a microphone on one input of an interface with two: Devices -> Input
    Channel -> Input 1 (or Input 2) makes each take from that input alone, so
    that it plays back in both ears and the live dots, the analysis and the
    voice threshold hear it at its own level. With Both Inputs, the default, a
    take of a microphone on one input plays in one ear only. The choice is kept
    for each input device
- * on Windows, Playback -> Audio Driver chooses MME, DirectSound or WASAPI, and
-   Playback -> Audio Latency how much latency is asked of it (10 to 200 ms);
+ * on Windows, Devices -> Audio Driver chooses MME, DirectSound or WASAPI, and
+   Devices -> Audio Latency how much latency is asked of it (10 to 200 ms);
    each driver keeps its own devices, latency and measured round trip. WASAPI
    at 20 ms is the default
  * the latency of the audio devices is taken off the start of each recording,
    so that it lines up with the reference. Drivers often report that latency
-   wrongly: Playback -> Calibrate Audio... measures it, with one earcup of
+   wrongly: Devices -> Calibrate Audio... measures it, with one earcup of
    wired headphones held against the microphone, and "Use this latency" places
-   every take with the measured figure. Playback -> Forget Measured Latency
+   every take with the measured figure. Devices -> Forget Measured Latency
    goes back to the figure the driver reports
  * the audio device is kept open between takes, so that the latency stays the
    same from one take to the next. The microphone therefore shows as in use
    from the first take until Tony quits
  * singing with the music on speakers instead of headphones: the microphone
    then hears the music as well, and its pitch would be drawn as yours.
-   Playback -> Voice Threshold sets a level (Off, or -50 to -15 dBFS) under
+   Record -> Voice Threshold sets a level (Off, or -50 to -15 dBFS) under
    which what the microphone hears is not taken for singing: it gets no dots
    while you record, and no pitch or notes when the take is analysed. The
    audio itself is recorded as it is. To choose it, record the music alone
    with the threshold Off, then raise it a step at a time until the music
-   alone gives no dots, or play the music in Playback -> Check Input Level's
+   alone gives no dots, or play the music in Record -> Check Input Level's
    silence and take the threshold it suggests. Your voice has to be well above that: a microphone of
    low sensitivity, sung into from close by, keeps the music far below it. A
    new threshold applies from the next take on; Analysis -> Analyse Now!
@@ -99,10 +100,10 @@ Microphone and levels
  * turn off the interface's processing: automatic level, noise reduction,
    compression. They change the take, and the level the meter and the voice
    threshold read; Windows' own audio enhancements likewise
- * a microphone on one input of an interface with two: Playback -> Input
+ * a microphone on one input of an interface with two: Devices -> Input
    Channel (see Recording above)
  * set the gain on the interface so that your loudest singing peaks around
-   -10 dBFS. Playback -> Check Input Level... listens to two seconds of
+   -10 dBFS. Record -> Check Input Level... listens to two seconds of
    silence and then your loudest phrase, and says how many dB to turn the gain
    up or down, the noise floor, and a voice threshold over it. The meter beside
    Record shows the input's peak as you sing, with a tick at the voice
@@ -117,14 +118,14 @@ Microphone and levels
    Windows): Bluetooth gives it only through a call's link, which puts the
    microphone and the headphones both at telephone quality
  * after changing the microphone, the interface, the headphones or the driver,
-   run Playback -> Calibrate Audio... again: each has its own latency
+   run Devices -> Calibrate Audio... again: each has its own latency
  * a wireless microphone, such as a headset on a RØDE Wireless PRO or GO
    transmitter, its receiver plugged in as a USB microphone or into an
    interface's input:
     * set the receiver to merged mode with no safety channel, so that the voice
       is on both channels at its own level. In split mode, or with the safety
       channel (a copy 10 dB quieter on the second channel), choose its channel
-      in Playback -> Input Channel: Both Inputs would average it with the other
+      in Devices -> Input Channel: Both Inputs would average it with the other
       channel and read it 6 or 3.6 dB low
     * turn GainAssist, or any automatic level, off: it changes the take's level
       as you sing, and the level the voice threshold reads
@@ -133,7 +134,7 @@ Microphone and levels
     * wear the transmitter at the front of your body, in sight of the receiver:
       its 2.4 GHz radio does not pass through a person, and a dropout is a gap
       of silence in the take
-    * run Playback -> Calibrate Audio... again for the wireless chain: the
+    * run Devices -> Calibrate Audio... again for the wireless chain: the
       radio adds its own latency
     * use one device for both the input and the headphones (the receiver's
       analog output into an interface, say). With the receiver as the input and

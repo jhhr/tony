@@ -1,6 +1,6 @@
 # Calibrate Audio and the development checks
 
-**Playback ▸ Calibrate Audio…**, in every build, measures the round trip of the audio path
+**Devices ▸ Calibrate Audio…**, in every build, measures the round trip of the audio path
 (from Tony handing a sound to the output device to the microphone's recording of it coming
 back) through the ordinary take path, with one earcup of wired headphones (or an earbud)
 held against the microphone, or a phone's own speaker and microphone in a quiet room.
@@ -25,7 +25,7 @@ measurements) was a separate report, not kept in the repository.
   reports. The start gap is measured and right; the reported pair comes from
   `Pa_GetStreamInfo()`, which on MME, DirectSound and WASAPI is buffer sizes only.
   Audacity measured it off by −5 to +155 ms. bqaudioio opens the stream with the
-  `suggestedLatency` chosen for the driver under Playback > Audio Latency on both sides,
+  `suggestedLatency` chosen for the driver under Devices > Audio Latency on both sides,
   0.2 s unless another is chosen ([recording.md](recording.md#latency)). On a phone the
   pair is Oboe's, estimated from timestamps, and moves by several ms from one start of the
   streams to the next (§5); a Bluetooth route is 100 to 200 ms longer than the speaker's.
@@ -42,7 +42,7 @@ measurements) was a separate report, not kept in the repository.
 
 ## 2. The button
 
-**The Playback menu**, after the two audio device submenus:
+**The Devices menu**, after the two audio device submenus and Input Channel:
 
 - **Calibrate Audio…**, disabled during any take and while a check runs;
 - a line that cannot be chosen, the latency takes are placed with now: "Latency: measured
@@ -277,7 +277,7 @@ says "out of date" until the first take. Whether a real device does so is not kn
 ([manual checklist](manual-checklist.md), 2.6).
 
 **On Android** there are no device settings but the input device chosen, if any
-(Playback > Audio Input Device, [port-android.md](port-android.md#choosing-the-input)):
+(Devices > Audio Input Device, [port-android.md](port-android.md#choosing-the-input)):
 `OboeAudioIO` opens whatever route the phone has, with that input, and reports it (`AudioRoute`, through `AudioRouteReporter`): each device's type and
 product name from `AudioManager`, the rate, and how each stream was opened. The key is
 then the driver `oboe` and the two devices' type and product name, never their ids, which
@@ -607,7 +607,7 @@ The open points are also in [open-points.md](open-points.md), briefly; this sect
 the reasons.
 
 **The driver project** (the user's decision, 2026-09-26, from the restart jitter below) is
-in [audio-drivers.md](audio-drivers.md): Playback > Audio Driver and Audio Latency put
+in [audio-drivers.md](audio-drivers.md): Devices > Audio Driver and Audio Latency put
 WASAPI and DirectSound next to MME, each with its own devices, latency and stored round
 trip. The user's runs on each made **WASAPI at 20 ms the default**. The device's rate came
 first, as WASAPI opens at the Windows mixer's rate. A recording is converted as it is
@@ -713,7 +713,7 @@ below).
 
 **Later candidates:**
 
-- A measured noise floor, and a suggested voice threshold, on the result page: Playback >
+- A measured noise floor, and a suggested voice threshold, on the result page: Record >
   Check Input Level measures the floor (with the music playing, if the singer plays it on
   speakers) and suggests a threshold ([recording.md](recording.md#the-input-level)), but
   Calibrate Audio does not: its silences between the sweeps hold the room as the
@@ -841,7 +841,7 @@ and the dev checks".
 | When a measured figure is used | After **Use this latency**, for the devices and rate it was measured on; a dev run uses the new figure for itself only |
 | The key on a phone | The route: `oboe` and each device's type and product name, never its id, which a headset changes at each plug-in |
 | When a phone's figure is stale | When a stream opened otherwise than when it was measured; not by the reported latencies, which move by several ms from start to start |
-| The Playback menu's line after a relaunch, before the first take | The kept figure, as the takes use it (the user, 2026-09-27): a stream not open is not compared, and the one rate kept for the devices is taken (§5) |
+| The Devices menu's line after a relaunch, before the first take | The kept figure, as the takes use it (the user, 2026-09-27): a stream not open is not compared, and the one rate kept for the devices is taken (§5) |
 | The dialog while a check runs | Hidden behind a bar and a line at the right end of the status bar, which covers nothing; back on a tap and at the run's end. Closing it still cancels |
 | Analysis limits on a phone | Four times a desktop's, a margin until a phone's times are known |
 | Dev mode | Any build type that does not start with `release` (`TONY_DEV_CHECKS`); no runtime flag. The Android build is `debugoptimized` and has them |

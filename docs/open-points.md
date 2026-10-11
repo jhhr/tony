@@ -366,7 +366,7 @@ The design is in [recording.md](recording.md#the-live-tracker) and
   does it was not found. It may slow the live tracker's YIN in the application as well;
   with the state clean the gate would take about 50 ms per 90 s.
 - **The menu's status tip is one line**, all the status bar shows, and a narrow window
-  cuts it short; the Playback menu shows no tooltips. How to choose a threshold, and that
+  cuts it short; the Record menu shows no tooltips. How to choose a threshold, and that
   it applies from the next take and to recorded takes through Analyse Now, is in the
   README only. On a phone nothing explains the entries, unless touch shows the status tip
   (not checked).

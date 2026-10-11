@@ -226,7 +226,7 @@ public:
     }
 #endif
 
-    // Playback > Calibrate Audio, the dialog it shows once it has been
+    // Devices > Calibrate Audio, the dialog it shows once it has been
     // chosen, the lines under it, and the device menus above it
     QAction *calibrateAudioAction() { return m_calibrateAudioAction; }
     CalibrateAudioDialog *calibrateAudioDialog() {
@@ -235,10 +235,12 @@ public:
     QAction *latencyLineAction() { return m_latencyLineAction; }
     QAction *forgetLatencyAction() { return m_forgetLatencyAction; }
     QMenu *playbackMenu() { return m_playbackMenu; }
+    QMenu *recordMenu() { return m_recordMenu; }
+    QMenu *devicesMenu() { return m_devicesMenu; }
     QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
     QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
 
-    // Playback > Audio Driver and Audio Latency, from the implementations
+    // Devices > Audio Driver and Audio Latency, from the implementations
     // given here: none unless a test gives some, whatever the platform
     // has. Rebuilt as the app rebuilds them when they open
     void setAudioImplementations(QStringList names) {
@@ -246,12 +248,12 @@ public:
     }
     AudioDriverMenus *audioDriverMenus() { return m_audioDriverMenus; }
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
-    // Playback > Voice Threshold, which is always shown
+    // Record > Voice Threshold, which is always shown
     VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
-    // Playback > Input Channel, likewise, and the device it is kept for
+    // Devices > Input Channel, likewise, and the device it is kept for
     InputChannelMenu *inputChannelMenu() { return m_inputChannelMenu; }
     InputChannel::Key doInputChannelKey() const { return inputChannelKey(); }
-    // The input meters' levels, the meter beside Record, and Playback >
+    // The input meters' levels, the meter beside Record, and Record >
     // Check Input Level with its dialog (made the first time it opens)
     InputLevelFeed *inputLevels() { return m_inputLevels; }
     InputLevelMeterAction *inputMeterAction() { return m_inputMeterAction; }

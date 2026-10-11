@@ -246,6 +246,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_loadingBackgroundMusic(false),
     m_mainMenusCreated(false),
     m_playbackMenu(0),
+    m_recordMenu(nullptr),
+    m_devicesMenu(nullptr),
     m_recentFilesMenu(0), 
     m_rightButtonMenu(0),
     m_rightButtonPlaybackMenu(0),
@@ -2178,92 +2180,6 @@ MainWindow::setupToolbars()
     menu->addAction(selectOneLeftAction);
     menu->addAction(selectOneRightAction);
     menu->addSeparator();
-    menu->addAction(recordAction);
-
-    // With Record, which it is for, and not with the driver menus below:
-    // the compact layout hides those on a phone, where this is wanted
-    // as much
-    m_voiceThresholdMenu = new VoiceThresholdMenu(menu, this);
-    // Here too, for the same reason: a phone with an interface plugged in
-    // needs it, and the device menus are hidden there
-    m_inputChannelMenu = new InputChannelMenu
-        (menu, [this]() { return inputChannelKey(); },
-         [](const InputChannel::Key &key) {
-             return key.recordDevice == "" ? tr("(System Default)") :
-                 key.recordDevice;
-         }, this);
-    connect(m_inputChannelMenu, &InputChannelMenu::channelChosen,
-            this, &MainWindow::inputChannelChosen);
-    connect(m_voiceThresholdMenu, &VoiceThresholdMenu::thresholdChosen,
-            m_inputLevels, &InputLevelFeed::setThreshold);
-    m_checkInputLevelAction = menu->addAction(tr("Check Input &Level..."));
-    m_checkInputLevelAction->setStatusTip
-        (tr("See the microphone's level without recording, and how far to "
-            "turn the interface's gain"));
-    connect(m_checkInputLevelAction, &QAction::triggered,
-            this, &MainWindow::checkInputLevel);
-    menu->addSeparator();
-
-    // The driver and the latency asked of it, before the devices, which
-    // are the driver's own
-    m_audioDriverMenus = new AudioDriverMenus
-        (menu, [this]() { return audioImplementationNames(); }, this);
-    connect(m_audioDriverMenus, &AudioDriverMenus::driverChosen,
-            this, &MainWindow::audioDriverChosen);
-    connect(m_audioDriverMenus, &AudioDriverMenus::latencyChosen,
-            this, &MainWindow::audioLatencyChosen);
-
-    // Before anything in this menu reads the driver: the device menus
-    // list its devices, and the latency line looks its figure up
-    connect(menu, &QMenu::aboutToShow,
-            this, &MainWindow::nameDefaultAudioDriver);
-
-    m_audioDeviceMenu = menu->addMenu(tr("Audio Output &Device"));
-    m_audioDeviceMenu->setStatusTip(tr("Choose which device Tony plays through"));
-    m_audioDeviceGroup = new QActionGroup(this);
-    m_audioDeviceGroup->setExclusive(true);
-
-    m_audioInputDeviceMenu = menu->addMenu(tr("Audio &Input Device"));
-    m_audioInputDeviceMenu->setStatusTip(tr("Choose which device Tony records from"));
-    m_audioInputDeviceGroup = new QActionGroup(this);
-    m_audioInputDeviceGroup->setExclusive(true);
-
-    for (QMenu *m: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
-        connect(m, SIGNAL(aboutToShow()), this, SLOT(rescanAudioDevices()));
-        // Placeholder so that the submenu is not empty: an empty submenu is
-        // drawn disabled and never emits aboutToShow, which is where the
-        // real device list is built.
-        m->addAction(tr("(Scanning...)"))->setEnabled(false);
-    }
-
-    for (QActionGroup *g: { m_audioDeviceGroup, m_audioInputDeviceGroup }) {
-        connect(g, SIGNAL(triggered(QAction *)),
-                this, SLOT(audioDeviceSelected(QAction *)));
-    }
-
-    // The audio check, and the latency takes are placed with: a line to
-    // read, never chosen, brought up to date whenever the menu opens
-    m_calibrateAudioAction = menu->addAction(tr("&Calibrate Audio..."));
-    m_calibrateAudioAction->setStatusTip
-        (tr("Measure how late recordings arrive through these devices, with "
-            "an earcup held against the microphone"));
-    connect(m_calibrateAudioAction, &QAction::triggered,
-            this, &MainWindow::calibrateAudio);
-
-    m_latencyLineAction = menu->addAction(QString());
-    m_latencyLineAction->setEnabled(false);
-
-    m_forgetLatencyAction = menu->addAction(tr("&Forget Measured Latency"));
-    m_forgetLatencyAction->setStatusTip
-        (tr("Place takes on these devices with the latency the driver "
-            "reports again"));
-    connect(m_forgetLatencyAction, &QAction::triggered,
-            this, [this]() { forgetMeasuredLatency(); });
-
-    connect(menu, &QMenu::aboutToShow,
-            this, &MainWindow::updateLatencyMenuLine);
-    updateLatencyMenuLine();
-    menu->addSeparator();
 
     m_rightButtonPlaybackMenu->addAction(playAction);
     m_rightButtonPlaybackMenu->addAction(psAction);
@@ -2488,6 +2404,8 @@ MainWindow::setupToolbars()
     m_playRefWhileRecording->setToolTip(
         tr("Play the reference track through speakers/headphones during recording "
            "so you can time your singing against it"));
+    // The same for the Record menu's entry, a menu showing no tooltips
+    m_playRefWhileRecording->setStatusTip(m_playRefWhileRecording->toolTip());
     connect(m_playRefWhileRecording, &QAction::toggled, this, [this](bool on) {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2511,6 +2429,7 @@ MainWindow::setupToolbars()
         tr("Play the reference from a few seconds before the recording "
            "position, counting down, so that you can come in in time. "
            "Nothing before the position is recorded over."));
+    m_preRoll->setStatusTip(m_preRoll->toolTip());
     connect(m_preRoll, &QAction::toggled, this, [this](bool on) {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2536,6 +2455,7 @@ MainWindow::setupToolbars()
         tr("Record into the selected range only: recording starts at the "
            "start of the selection, whatever the playhead says, and stops "
            "by itself at its end"));
+    m_recordIntoSelection->setStatusTip(m_recordIntoSelection->toolTip());
     connect(m_recordIntoSelection, &QAction::toggled, this, [this](bool on) {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2631,11 +2551,132 @@ MainWindow::setupToolbars()
     connect(m_showSpect, SIGNAL(triggered()), this, SLOT(showSpectToggled()));
     connect(this, SIGNAL(canPlay(bool)), m_showSpect, SLOT(setEnabled(bool)));
 
+    // Here, after the bottom bar, whose recording buttons the Record menu
+    // holds too; and so after Playback in the menu bar
+    setupRecordMenu();
+    setupDevicesMenu();
+
     Pane::registerShortcuts(*m_keyReference);
 
     updateLayerStatuses();
     
 //    QTimer::singleShot(500, this, SLOT(betaReleaseWarning()));
+}
+
+void
+MainWindow::setupRecordMenu()
+{
+    // The take and what is chosen for it.  What it is recorded through,
+    // and the latency measured there, are the Devices menu's
+    m_recordMenu = menuBar()->addMenu(tr("&Record"));
+    m_recordMenu->setTearOffEnabled(true);
+
+    m_recordMenu->addAction(m_recordAction);
+    m_recordMenu->addSeparator();
+
+    // The bottom bar's buttons, the same actions, so that the two always
+    // agree. A menu names them, and shows a shortcut, as a toolbar does not
+    m_recordMenu->addAction(m_recordIntoSelection);
+    m_recordMenu->addAction(m_preRoll);
+    m_recordMenu->addAction(m_playRefWhileRecording);
+    m_recordMenu->addSeparator();
+
+    // Not one of the compact layout's hidden actions: a phone on its own
+    // speaker needs it as much
+    m_voiceThresholdMenu = new VoiceThresholdMenu(m_recordMenu, this);
+    connect(m_voiceThresholdMenu, &VoiceThresholdMenu::thresholdChosen,
+            m_inputLevels, &InputLevelFeed::setThreshold);
+
+    // With the threshold, which its result offers to set
+    m_checkInputLevelAction =
+        m_recordMenu->addAction(tr("Check Input &Level..."));
+    m_checkInputLevelAction->setStatusTip
+        (tr("See the microphone's level without recording, and how far to "
+            "turn the interface's gain"));
+    connect(m_checkInputLevelAction, &QAction::triggered,
+            this, &MainWindow::checkInputLevel);
+}
+
+void
+MainWindow::setupDevicesMenu()
+{
+    // What Tony plays and records through, and the latency measured
+    // through it
+    QMenu *menu = m_devicesMenu = menuBar()->addMenu(tr("&Devices"));
+    menu->setTearOffEnabled(true);
+
+    // The driver and the latency asked of it, before the devices, which
+    // are the driver's own
+    m_audioDriverMenus = new AudioDriverMenus
+        (menu, [this]() { return audioImplementationNames(); }, this);
+    connect(m_audioDriverMenus, &AudioDriverMenus::driverChosen,
+            this, &MainWindow::audioDriverChosen);
+    connect(m_audioDriverMenus, &AudioDriverMenus::latencyChosen,
+            this, &MainWindow::audioLatencyChosen);
+
+    // Before anything in this menu reads the driver: the device menus
+    // list its devices, and the latency line looks its figure up
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::nameDefaultAudioDriver);
+
+    m_audioDeviceMenu = menu->addMenu(tr("Audio Output &Device"));
+    m_audioDeviceMenu->setStatusTip(tr("Choose which device Tony plays through"));
+    m_audioDeviceGroup = new QActionGroup(this);
+    m_audioDeviceGroup->setExclusive(true);
+
+    m_audioInputDeviceMenu = menu->addMenu(tr("Audio &Input Device"));
+    m_audioInputDeviceMenu->setStatusTip(tr("Choose which device Tony records from"));
+    m_audioInputDeviceGroup = new QActionGroup(this);
+    m_audioInputDeviceGroup->setExclusive(true);
+
+    for (QMenu *m: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        connect(m, SIGNAL(aboutToShow()), this, SLOT(rescanAudioDevices()));
+        // Placeholder so that the submenu is not empty: an empty submenu is
+        // drawn disabled and never emits aboutToShow, which is where the
+        // real device list is built.
+        m->addAction(tr("(Scanning...)"))->setEnabled(false);
+    }
+
+    for (QActionGroup *g: { m_audioDeviceGroup, m_audioInputDeviceGroup }) {
+        connect(g, SIGNAL(triggered(QAction *)),
+                this, SLOT(audioDeviceSelected(QAction *)));
+    }
+
+    // After the input device, as a choice is kept for each input device.
+    // Not one of the compact layout's hidden actions: a phone with an
+    // interface plugged in needs it
+    m_inputChannelMenu = new InputChannelMenu
+        (menu, [this]() { return inputChannelKey(); },
+         [](const InputChannel::Key &key) {
+             return key.recordDevice == "" ? tr("(System Default)") :
+                 key.recordDevice;
+         }, this);
+    connect(m_inputChannelMenu, &InputChannelMenu::channelChosen,
+            this, &MainWindow::inputChannelChosen);
+    menu->addSeparator();
+
+    // The audio check, and the latency takes are placed with: a line to
+    // read, never chosen, brought up to date whenever the menu opens
+    m_calibrateAudioAction = menu->addAction(tr("&Calibrate Audio..."));
+    m_calibrateAudioAction->setStatusTip
+        (tr("Measure how late recordings arrive through these devices, with "
+            "an earcup held against the microphone"));
+    connect(m_calibrateAudioAction, &QAction::triggered,
+            this, &MainWindow::calibrateAudio);
+
+    m_latencyLineAction = menu->addAction(QString());
+    m_latencyLineAction->setEnabled(false);
+
+    m_forgetLatencyAction = menu->addAction(tr("&Forget Measured Latency"));
+    m_forgetLatencyAction->setStatusTip
+        (tr("Place takes on these devices with the latency the driver "
+            "reports again"));
+    connect(m_forgetLatencyAction, &QAction::triggered,
+            this, [this]() { forgetMeasuredLatency(); });
+
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::updateLatencyMenuLine);
+    updateLatencyMenuLine();
 }
 
 void
@@ -6776,7 +6817,7 @@ MainWindow::reportTakeLevel(QString recordingPath, const TakeTiming &timing)
                 .arg(where);
         }
         message = tr("Take: clipped at %1. Turn the input gain down "
-                     "(Playback > Check Input Level)").arg(where);
+                     "(Record > Check Input Level)").arg(where);
         if (m_inputLevels) m_inputLevels->setClipped(true);
     }
 

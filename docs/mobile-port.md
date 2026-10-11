@@ -192,7 +192,8 @@ bqaudioio's resampler holding playback back about 1.1 ms at 48 kHz, unreported.
 
 ### The window
 
-- `MainWindow` has 7 menus: File, Edit, View, Analysis, Takes, Playback, Help.
+- `MainWindow` has 9 menus: File, Edit, View, Analysis, Takes, Playback, Record, Devices,
+  Help.
 - Its toolbars are File, Tools, Playback, Play Mode, Playback Controls (speed and gain) and
   the bottom "Show and Play" bar.
 - `menuBar()->setNativeMenuBar(false)` sits under `#ifdef Q_OS_LINUX`, and **Qt defines

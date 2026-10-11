@@ -401,6 +401,16 @@ after `openPath()`, and only then prune the extra pane — the imported waveform
 is the only reference to the model until `m_analyser2` has a layer of its own. It ends with
 `clearTakeHistory()`, which also disposes of the "Import" command for the pruned pane.
 
+**The menus by subject** (the user, 2026-10-11): Playback plays and moves the playhead,
+Record is the take and what is chosen for it, and Devices is what Tony plays and records
+through, with the latency measured there. Something new goes by that rule: chosen for the
+next take, Record; set for a device or a driver, Devices. Record holds the bottom bar's
+Record into Selection, Pre-roll and Play Reference While Recording too, as the same
+actions, never copies that would have to be kept in step; their status tips repeat their
+tooltips, as a menu shows no tooltips. No two entries of the three menus share an
+underlined letter, nor do two menus of the menu bar. The pane's right-button Playback
+submenu keeps Record.
+
 **Voice threshold** (`VoiceThreshold`, `VoiceGate`, `VoiceThresholdMenu`): for singing
 with the music on speakers, which the microphone hears as well. A level in dBFS under
 which what the microphone hears is not taken for singing: no live dots are drawn for it,
@@ -415,32 +425,32 @@ the gate in [takes.md](takes.md#the-voice-threshold)). pYIN's own `lowampsuppres
 not used for it: it only lowers the voicing probability, and `pyin` is upstream. A take
 keeps the threshold it started with; the audio check's takes have none.
 
-Playback > Voice Threshold sits straight after Record, which it is for, and not with the
-Audio Driver and Audio Latency menus after it: the compact layout hides those, while a
-phone on its own speaker needs this as much, so it is not among the compact layout's
-hidden actions and the menu button reaches it. It is greyed out during a take and while an
-audio check runs. The setting is QSettings `MainWindow/voicethreshold` in dBFS (Off is no
-key at all, and anything at or under the tracker's −60 dBFS floor reads as Off): one value
-for every driver and device, and not in the session. A choice only writes it: `record()`
-reads it at every Start, and Analyse Now and a redo that analyses again read it when they
-run.
+Record > Voice Threshold sits with Record, which it is for, and Check Input Level, which
+suggests one. A phone on its own speaker needs it as much as a desktop, so it is not among
+the compact layout's hidden actions, and the menu button reaches it. It is greyed out
+during a take and while an audio check runs. The setting is QSettings
+`MainWindow/voicethreshold` in dBFS (Off is no key at all, and anything at or under the
+tracker's −60 dBFS floor reads as Off): one value for every driver and device, and not in
+the session. A choice only writes it: `record()` reads it at every Start, and Analyse Now
+and a redo that analyses again read it when they run.
 
-**Input channel** (`InputChannel`, `InputChannelMenu`): Playback > Input Channel, for a
+**Input channel** (`InputChannel`, `InputChannelMenu`): Devices > Input Channel, for a
 microphone on one input of an interface with two. Both Inputs, the default, makes a stereo
 take of a two-input device, whose levels are the channels' average; Input 1 or Input 2
 makes the take mono, from that input alone, which the live tracker reads, the splice puts
 in, and pYIN and the voice threshold then hear at its own level. The design, and what a
 phone's Android does with a stereo device, are in
-[recording.md](recording.md#input-channels). Next to Voice Threshold, for the same
-reasons: with Record, reached on a phone from the menu button, greyed out during a take
-and a check. Kept per input device, as `LatencyCalibration` keys its figures (group
-`InputChannel`), and the menu's first line names that device. `record()` reads it after
+[recording.md](recording.md#input-channels). After Audio Input Device, as it is kept per
+input device, as `LatencyCalibration` keys its figures (group `InputChannel`), and the
+menu's first line names that device. Not among the compact layout's hidden actions, unlike
+the device menus around it: a phone with an interface plugged in needs it, and reaches it
+from the menu button. Greyed out during a take and a check. `record()` reads it after
 the base call, as a phone's input is known only then; the audio check's takes are made of
 both inputs. A choice on a phone opens the device again, as its input is opened otherwise
 for one input than for both (`OboeAudioIO`).
 
 **A phone's input device** (`InputDevice`;
-[port-android.md](port-android.md#choosing-the-input)): Playback > Audio Input Device,
+[port-android.md](port-android.md#choosing-the-input)): Devices > Audio Input Device,
 which on the desktop lists the driver's devices, lists on a phone the inputs Android's
 `AudioManager` lists (`MainWindow::listsInputDevices()`, `listedInputDevices()`, which
 the tests give a phone's), through `InputDeviceMenu`, made the first time the menu is
@@ -463,7 +473,7 @@ written again at once, as nothing else may write for a while.
 `CheckInputLevelDialog`; [recording.md](recording.md#the-input-level)): a meter beside
 Record, in the compact layout's toolbar too (a `QWidgetAction`, so that each toolbar has a
 meter of its own, all drawing one feed's state: the clip light lit in one is lit in all);
-the take's peak and clipped places in the status bar at Stop; Playback > Check Input
+the take's peak and clipped places in the status bar at Stop; Record > Check Input
 Level, next to Input Channel. `MainWindow` owns the feed, made with the toolbar, and the
 dialog, made when first asked for, and deletes both in `~MainWindow` before the base class
 deletes the record target the feed reads. The feed reads only while the device runs with

@@ -185,7 +185,7 @@ public:
 
     // Whether the input device is chosen from the inputs the driver
     // lists (Android's AudioManager), as on a phone, rather than from
-    // the Preferences' device names (Playback > Audio Input Device)
+    // the Preferences' device names (Devices > Audio Input Device)
     virtual bool listsInputDevices() const;
 
     // The input device chosen, as it is listed now (with its id), if one
@@ -408,20 +408,20 @@ protected slots:
     virtual void rescanAudioDevices();
     virtual void audioDeviceSelected(QAction *);
 
-    // Playback > Audio Driver or Audio Latency chosen, and written to the
+    // Devices > Audio Driver or Audio Latency chosen, and written to the
     // Preferences: the device is opened again, with it
     void audioDriverChosen(QString implementation);
     void audioLatencyChosen(double seconds);
 
-    // Playback > Input Channel chosen, and written to the settings: a
+    // Devices > Input Channel chosen, and written to the settings: a
     // phone opens its device again if the input is open otherwise
     void inputChannelChosen(int channel);
 
-    // Playback > Check Input Level: the input opened and run as a take's
+    // Record > Check Input Level: the input opened and run as a take's
     // is, nothing recorded, and the meter shown large
     void checkInputLevel();
 
-    // Playback > Calibrate Audio: the audio check's dialog, not modal
+    // Devices > Calibrate Audio: the audio check's dialog, not modal
     virtual void calibrateAudio();
 
     virtual void handleOSCMessage(const sv::OSCMessage &);
@@ -931,6 +931,10 @@ protected:
 
     bool           m_mainMenusCreated;
     QMenu         *m_playbackMenu;
+    // The take and what is chosen for it; what Tony plays and records
+    // through, and the latency measured there
+    QMenu         *m_recordMenu;
+    QMenu         *m_devicesMenu;
     QMenu         *m_recentFilesMenu;
     QMenu         *m_rightButtonMenu;
     QMenu         *m_rightButtonPlaybackMenu;
@@ -939,15 +943,16 @@ protected:
     QMenu         *m_audioInputDeviceMenu;
     QActionGroup  *m_audioInputDeviceGroup;
 
-    // Playback > Audio Driver and Audio Latency, before the device menus
+    // Devices > Audio Driver and Audio Latency, before the device menus
     AudioDriverMenus *m_audioDriverMenus;
 
-    // Playback > Voice Threshold and Input Channel, after Record
+    // Record > Voice Threshold, and Devices > Input Channel, after the
+    // input device
     VoiceThresholdMenu *m_voiceThresholdMenu;
     InputChannelMenu *m_inputChannelMenu;
 
     // The input meters' levels, the meter beside Record (in the compact
-    // layout's toolbar too), and Playback > Check Input Level, its dialog
+    // layout's toolbar too), and Record > Check Input Level, its dialog
     // and whether it is open (the device then counts as busy)
     InputLevelFeed *m_inputLevels;
     InputLevelMeterAction *m_inputMeterAction;
@@ -1044,6 +1049,10 @@ protected:
     virtual void setupAnalysisMenu();
     virtual void setupHelpMenu();
     virtual void setupToolbars();
+    // Called by setupToolbars(), as the Record menu holds buttons of the
+    // bottom bar too
+    void setupRecordMenu();
+    void setupDevicesMenu();
     virtual void buildAudioDeviceMenu(QMenu *menu,
                                       QActionGroup *group,
                                       const std::vector<std::string> &names,
@@ -1058,7 +1067,7 @@ protected:
     // input device chosen is kept under it
     static QString listingDriver() { return "oboe"; }
 
-    // Playback > Audio Input Device from listedInputDevices()
+    // Devices > Audio Input Device from listedInputDevices()
     // (InputDeviceMenu), made the first time it is listed; and what a
     // choice there opens
     InputDeviceMenu *m_inputDeviceMenu;
@@ -1077,13 +1086,13 @@ protected:
     void reportInputDevice();
 
     // The implementations bqaudioio has, of which the drivers are offered
-    // in Playback > Audio Driver.  Virtual so that the tests can give
+    // in Devices > Audio Driver.  Virtual so that the tests can give
     // drivers the platform they run on does not have
     virtual QStringList audioImplementationNames() const;
 
     // Where no driver is named and MME is built in, name it (and carry
     // the devices chosen before over to it): before a device is opened,
-    // and before the Playback menu shows the device menus
+    // and before the Devices menu shows the device menus
     void nameDefaultAudioDriver();
 
     // Helpers for the singing / second-track workflow.
@@ -1315,7 +1324,7 @@ protected:
     // The Record button (m_recordAction, with the compact layout's parts
     // above) is shut while audioCheckRunning()
 
-    // Playback > Calibrate Audio, made the first time it is chosen, and
+    // Devices > Calibrate Audio, made the first time it is chosen, and
     // the lines under it: the latency takes are placed with, and Forget
     // Measured Latency.  Calibrate Audio is shut while a take or a check
     // is being recorded, and so are the device menus while a check runs:

@@ -30,7 +30,8 @@ InputChannelMenu::InputChannelMenu(QMenu *menu, KeyFunction key,
         tr("For a microphone on one input of two: make takes from that "
            "input alone, in both ears and at its own level");
 
-    m_menu = menu->addMenu(tr("Input &Channel"));
+    // Not "Input &Channel": Calibrate Audio, in the same menu, has the C
+    m_menu = menu->addMenu(tr("Input C&hannel"));
     m_menu->menuAction()->setStatusTip(tip);
     m_menu->menuAction()->setToolTip(tip);
 

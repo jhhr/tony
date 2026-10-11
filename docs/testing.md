@@ -190,11 +190,11 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `TestDevChecks` in `test-tony-dev`): subclass of `MainWindow` that exposes protected
   operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
   and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
-  Playback menu's actions). The voice threshold the take started with is
-  `takeVoiceThreshold()`, and Playback > Voice Threshold is `voiceThresholdMenu()`; the
+  Record and Devices menus' actions). The voice threshold the take started with is
+  `takeVoiceThreshold()`, and Record > Voice Threshold is `voiceThresholdMenu()`; the
   input channel likewise `takeInputChannel()` and `inputChannelMenu()`, with the device a
   choice is kept for (`doInputChannelKey()`); the input meters' levels `inputLevels()`,
-  the meter's action `inputMeterAction()`, and Playback > Check Input Level
+  the meter's action `inputMeterAction()`, and Record > Check Input Level
   `checkInputLevelAction()` and `checkInputLevelDialog()`;
   `setAudioCheckTakes()` sets the check's override by hand, as the runner does before each
   of its takes, and the test that sets it clears it again, as the runner does. Made with the application's audio mode
@@ -268,7 +268,7 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   and a level set in code is not the user's action. `allSettings()` and
   `settingsChanged()` say which keys a step wrote; `settingsChangedByOpening()` leaves out
   the `FileFinder/` keys every Open writes. `storeRoundTrip()` keeps a measured figure at
-  a device rate, and `latencyLine()` reads the Playback menu's line as the menu shows it.
+  a device rate, and `latencyLine()` reads the Devices menu's line as the menu shows it.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. Check Input Level's dialog is
   an exception: its tests open it, drive it and close it. Replace Take Audio's progress

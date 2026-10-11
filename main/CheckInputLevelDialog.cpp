@@ -252,7 +252,7 @@ CheckInputLevelDialog::showStage(Stage stage)
     case Stage::NoInput:
         m_label->setText
             (tr("<p><b>The input has delivered nothing.</b> Check that the "
-                "microphone is allowed, and that Playback &gt; Audio Input "
+                "microphone is allowed, and that Devices &gt; Audio Input "
                 "Device is the interface it is plugged into, then press "
                 "Check Again.</p>"));
         break;
@@ -286,7 +286,7 @@ CheckInputLevelDialog::resultText() const
     } else if (peak < nothingHeardDb) {
         text += tr("<p><b>Hardly anything reached the input</b>: its loudest "
                    "peak was %1. Is the microphone plugged in, on the input "
-                   "chosen under Playback &gt; Input Channel, and its gain "
+                   "chosen under Devices &gt; Input Channel, and its gain "
                    "up?</p>").arg(UserText::dbfs(peak));
     } else {
         const double change = InputLevel::gainChange(peak);
