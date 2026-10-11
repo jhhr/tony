@@ -124,8 +124,8 @@ reached. Three scripts in `deploy/linux/` do the work:
   and NDK when `dl.google.com` is reachable, and spends what is left of four minutes filling
   ccache from a build of the libraries. Qt for Android and the Android build's C libraries
   are not in the snapshot: they take far longer than it allows. It also writes an
-  `autoMode` entry to `/root/.claude/settings.json` by which auto mode trusts four of the
-  library forks (all but `bqaudioio` and `pyin`) as it does Tony's own repository
+  `autoMode` entry to `/root/.claude/settings.json` by which auto mode trusts five of the
+  library forks (all but `bqaudioio`) as it does Tony's own repository
   ([forks.md](forks.md#changing-a-fork)): auto mode reads that from the user's settings,
   never from the repository's `.claude/settings.json`. The snapshot is kept only when the
   script ends within about five minutes, so any change to it has to keep to that. Its logs

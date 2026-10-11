@@ -43,7 +43,7 @@ library over a workaround in `main/`.
      push access.
    - Auto mode trusts only the repository the session started in and its remotes, and so
      blocks committing in a fork's checkout, attaching the fork and pushing to it. The
-     environment's setup script names four of the forks, all but `bqaudioio` and `pyin`, as trusted
+     environment's setup script names five of the forks, all but `bqaudioio`, as trusted
      as well, which the user chose ([building.md](building.md#building-on-linux));
      `claude auto-mode config`
      shows whether a session has that entry. Without it, the user's own message has to
