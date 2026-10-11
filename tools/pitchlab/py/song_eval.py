@@ -10,11 +10,11 @@
 
 """Scores a pitch track of a real song, which has no exact ground truth.
 
-Usage: song_eval.py EST.pitch.csv --lyrics lyrics.csv [--voices voices.csv]
+Usage: song_eval.py EST.pitch.csv [--lyrics lyrics.csv] [--voices voices.csv]
                     [--plots OUTDIR --wav song.wav [--sections 105-126,150-172]]
                     [--json out.json] [--name label]
 
-Without annotation, the timed lyrics say where someone sings:
+With timed lyrics, which say where someone sings:
   word_VR     share of frames inside a word that are voiced
   gap_VFA     share of frames more than 0.5 s from any word that are voiced
 
@@ -33,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import warnings
 
 import numpy as np
 
@@ -103,7 +104,7 @@ def passage_scores(e, V):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('est')
-    ap.add_argument('--lyrics', required=True)
+    ap.add_argument('--lyrics')
     ap.add_argument('--voices')
     ap.add_argument('--plots')
     ap.add_argument('--wav')
@@ -112,28 +113,32 @@ def main():
     ap.add_argument('--name', default='')
     a = ap.parse_args()
 
-    words = [(float(r[0]), float(r[1])) for r in csv.reader(open(a.lyrics))]
-    end = max(t + d for t, d in words) + 30
+    words = [(float(r[0]), float(r[1])) for r in csv.reader(open(a.lyrics))] if a.lyrics else []
+    est = load(a.est)
+    vd = np.loadtxt(a.voices, delimiter=',', ndmin=2) if a.voices else np.zeros((0, 4))
+    # The grid reaches past the last word, estimate and annotated frame
+    end = max([t0 + d for t0, d in words] + [est[-1, 0] if len(est) else 0] +
+              [vd[-1, 0] if len(vd) else 0]) + 5
     n = int((end * SR - OFFSET) / HOP) + 1
     t = (np.arange(n) * HOP + OFFSET) / SR
-    e = to_grid(load(a.est), n)
-    inword = np.zeros(n, bool)
-    near = np.zeros(n, bool)
-    for t0, d in words:
-        inword |= (t >= t0) & (t <= t0 + d)
-        near |= (t >= t0 - 0.5) & (t <= t0 + d + 0.5)
-    first, last = words[0][0] - 5, words[-1][0] + words[-1][1] + 5
-    span = (t >= first) & (t <= last)
-    out = {'name': a.name,
-           'word_VR': float((inword & (e > 0)).sum() / max(1, inword.sum())),
-           'gap_VFA': float((span & ~near & (e > 0)).sum() / max(1, (span & ~near).sum()))}
-    print('%s word_VR %.3f  gap_VFA %.3f' % (a.name, out['word_VR'], out['gap_VFA']))
+    e = to_grid(est, n)
+    out = {'name': a.name}
+    if words:
+        inword = np.zeros(n, bool)
+        near = np.zeros(n, bool)
+        for t0, d in words:
+            inword |= (t >= t0) & (t <= t0 + d)
+            near |= (t >= t0 - 0.5) & (t <= t0 + d + 0.5)
+        first, last = words[0][0] - 5, words[-1][0] + words[-1][1] + 5
+        span = (t >= first) & (t <= last)
+        out['word_VR'] = float((inword & (e > 0)).sum() / max(1, inword.sum()))
+        out['gap_VFA'] = float((span & ~near & (e > 0)).sum() / max(1, (span & ~near).sum()))
+        print('%s word_VR %.3f  gap_VFA %.3f' % (a.name, out['word_VR'], out['gap_VFA']))
 
     if a.voices:
-        vd = np.loadtxt(a.voices, delimiter=',', ndmin=2)
         idx = np.rint((vd[:, 0] * SR - OFFSET) / HOP).astype(int)
         V = vd[:, 1:]
-        ev = e[np.clip(idx, 0, n - 1)]
+        ev = e[idx]
         # passages: contiguous runs of annotated frames
         cut = np.flatnonzero(np.diff(idx) > 1) + 1
         parts = np.split(np.arange(len(idx)), cut)
@@ -141,7 +146,10 @@ def main():
         out['passages'] = {}
         print('%-14s %7s %7s %7s %7s %7s %7s %7s' % ('passage', 'RPA_any', 'RPA_low', 'RPA_hi', 'VR', 'VFA', 'sub', 'breaks'))
         for p in parts:
-            s = passage_scores(ev[p], V[p])
+            with warnings.catch_warnings():
+                # Frames with no voice make all-NaN rows, which count as none
+                warnings.simplefilter('ignore', RuntimeWarning)
+                s = passage_scores(ev[p], V[p])
             label = '%.0f-%.0f' % (vd[p[0], 0], vd[p[-1], 0])
             out['passages'][label] = {k: v for k, v in s.items() if k != '_c'}
             tot += np.array(s['_c'])
@@ -160,7 +168,9 @@ def main():
             s0, s1 = sec.split('-')
             png = os.path.join(a.plots, '%s_%s.png' % (a.name or 'est', sec))
             cmd = [sys.executable, '-I', os.path.join(HERE, 'plot_section.py'), a.wav, s0, s1, png,
-                   '%s:%s:red:3' % (a.name or 'est', a.est), '--lyrics', a.lyrics, '--title', '%s %s s' % (a.name, sec)]
+                   '%s:%s:red:3' % (a.name or 'est', a.est), '--title', '%s %s s' % (a.name, sec)]
+            if a.lyrics:
+                cmd += ['--lyrics', a.lyrics]
             if a.voices:
                 vtmp = os.path.join(a.plots, '_voices_%s.csv' % sec)
                 with open(vtmp, 'w') as f:
@@ -168,7 +178,7 @@ def main():
                         for v in row[1:]:
                             if v > 0:
                                 f.write('%.6f,%.4f\n' % (row[0], v))
-                cmd.insert(cmd.index('--lyrics'), 'annotated:%s:royalblue:0.6' % vtmp)
+                cmd.insert(cmd.index('--title'), 'annotated:%s:royalblue:0.6' % vtmp)
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
         print('plots in', a.plots)
     if a.json:
