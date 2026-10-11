@@ -21,6 +21,7 @@ directory of their own, editing the copy and building a runner from it.
 | `py/evaluate.py` | Scores a directory of `<condition>__<source>.pitch.csv` per condition: RPA, RPA_any (either voice), RCA, VR, VFA, OA, RPA_fv, sub (more than an octave below every voice), breaks/s, switches/s; dev split (bob, synm), test split (hb, synf) |
 | `py/song_eval.py` | Scores a real song's track: voicing inside and outside the lyrics' words, and, with an annotation of the voices, accuracy against any/lowest/highest voice; plots of chosen sections |
 | `py/plot_section.py` | Spectrogram of a section with tracks and lyrics on it |
+| `py/compare_section.py` | One panel per track over the same spectrogram, with an annotation of the voices on each: methods side by side |
 | `py/ton_tracks.py` | A `.ton` session's reference pitch, notes and lyrics as CSV |
 
 ## Conditions
