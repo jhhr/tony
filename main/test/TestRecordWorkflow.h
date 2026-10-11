@@ -6600,6 +6600,66 @@ private slots:
         }
     }
 
+    // Every action of the window that has a hotkey, the Edit menu's Undo
+    // and Redo among them, which are CommandHistory's. Static, as a slot
+    // here would be taken for a test
+    static QList<QAction *> hotkeyActions(QMainWindow *window) {
+        QList<QAction *> all = window->findChildren<QAction *>();
+        for (QAction *menu : window->menuBar()->actions()) {
+            if (!menu->menu()) continue;
+            for (QAction *a : menu->menu()->actions()) {
+                if (!all.contains(a)) all << a;
+            }
+        }
+        QList<QAction *> withKeys;
+        for (QAction *a : all) {
+            if (!a->shortcuts().isEmpty()) withKeys << a;
+        }
+        return withKeys;
+    }
+
+    // The recording toggles have Shift with a letter (S as S alone has
+    // the selection for playback), and Edit and Shift Lyrics Ctrl+L and
+    // Ctrl+Shift+L
+    void recording_toggles_and_lyrics_have_hotkeys() {
+        makeWindow(FakeAudioIO::Config());
+        QCOMPARE(m_window->recordIntoSelectionAction()->shortcut(),
+                 QKeySequence("Shift+S"));
+        QCOMPARE(m_window->preRollAction()->shortcut(),
+                 QKeySequence("Shift+P"));
+        QCOMPARE(m_window->playReferenceWhileRecordingAction()->shortcut(),
+                 QKeySequence("Shift+R"));
+        QCOMPARE(m_window->editLyricsAction()->shortcut(),
+                 QKeySequence("Ctrl+L"));
+        QCOMPARE(m_window->shiftLyricsAction()->shortcut(),
+                 QKeySequence("Ctrl+Shift+L"));
+    }
+
+    // A key two actions have does neither: Qt calls the press ambiguous
+    void no_two_actions_share_a_hotkey() {
+        makeWindow(FakeAudioIO::Config());
+        QMap<QString, QString> owner;
+        QStringList shared;
+        for (QAction *a : hotkeyActions(m_window)) {
+            for (const QKeySequence &key : a->shortcuts()) {
+                const QString text = key.toString(QKeySequence::PortableText);
+                if (owner.contains(text)) {
+                    shared << QString("%1: %2 / %3")
+                        .arg(text, owner[text], a->text());
+                } else {
+                    owner[text] = a->text();
+                }
+            }
+        }
+        QVERIFY2(shared.isEmpty(), qPrintable(shared.join("; ")));
+        // From every place that holds actions: CommandHistory (Undo), a
+        // toolbar (Play / Pause), the bottom bar (Record into Selection)
+        // and a menu (Edit Lyrics)
+        for (const char *key : { "Ctrl+Z", "Space", "Shift+S", "Ctrl+L" }) {
+            QVERIFY2(owner.contains(key), key);
+        }
+    }
+
     // Record > Voice Threshold (where in the menu: menus_by_subject):
     // Off and then the thresholds, quietest first, by VoiceThreshold's
     // labels, one to be ticked at a time.  With none set, Off is

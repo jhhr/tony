@@ -2100,6 +2100,54 @@ private slots:
                     ->haveRunningTransformers());
         }
     }
+
+    // The keys pressed: Shift with R, P and S toggles each recording
+    // option as its button does, the setting with it; Ctrl+L switches the
+    // lyrics' edit mode on and off, and Ctrl+Shift+L asks for a shift
+    void recording_and_lyrics_hotkeys() {
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        struct Toggle {
+            QAction *action;
+            QKeySequence key;
+            QString setting;
+        };
+        const QList<Toggle> toggles {
+            { m_window->playReferenceWhileRecordingAction(),
+              QKeySequence(Qt::SHIFT | Qt::Key_R), "playrefwhilerecording" },
+            { m_window->preRollAction(),
+              QKeySequence(Qt::SHIFT | Qt::Key_P), "preroll" },
+            { m_window->recordIntoSelectionAction(),
+              QKeySequence(Qt::SHIFT | Qt::Key_S), "recordintoselection" },
+        };
+        for (const Toggle &t : toggles) {
+            QVERIFY2(!t.action->isChecked(), qPrintable(t.action->text()));
+            press(t.key);
+            QVERIFY2(t.action->isChecked(), qPrintable(t.action->text()));
+            QVERIFY(QSettings().value("MainWindow/" + t.setting).toBool());
+            press(t.key);
+            QVERIFY2(!t.action->isChecked(), qPrintable(t.action->text()));
+            QVERIFY(!QSettings().value("MainWindow/" + t.setting).toBool());
+        }
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (QString(TONY_TEST_DATA_DIR) +
+                 "/lyrics/moises-exporter-words.lrc"));
+        QVERIFY(m_window->editLyricsAction()->isEnabled());
+        press(QKeySequence(Qt::CTRL | Qt::Key_L));
+        QVERIFY(m_window->editLyricsAction()->isChecked());
+        QVERIFY(m_window->lyricsEditor()->isEnabled());
+        press(QKeySequence(Qt::CTRL | Qt::Key_L));
+        QVERIFY(!m_window->editLyricsAction()->isChecked());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+
+        const int asked = m_window->lyricsShiftQuestions();
+        press(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
+        QCOMPARE(m_window->lyricsShiftQuestions(), asked + 1);
+    }
 };
 
 #endif

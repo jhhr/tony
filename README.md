@@ -24,12 +24,13 @@ voice, so the reference works best as the vocal on its own, such as a stem
 separated from the mix. Tony analyses it and draws its pitch as a black line.
 
 In the toolbar, turn on the speaker button after "While recording:" (or
-Record -> Play Reference While Recording), which plays the reference while you
-record. Put on headphones (a microphone that hears the reference picks up its
-pitch as well as yours), then press Record (Ctrl+Space) and sing along. Your
-pitch appears as orange dots as you sing. When you press Stop, the recording
-is analysed in full and becomes an orange pitch track in the same pane as the
-reference's, so you can see where you were sharp, flat, early or late.
+Record -> Play Reference While Recording, Shift+R), which plays the reference
+while you record. Put on headphones (a microphone that hears the reference
+picks up its pitch as well as yours), then press Record (Ctrl+Space) and sing
+along. Your pitch appears as orange dots as you sing. When you press Stop, the
+recording is analysed in full and becomes an orange pitch track in the same
+pane as the reference's, so you can see where you were sharp, flat, early or
+late.
 
 
 Recording
@@ -37,12 +38,13 @@ Recording
 
  * record from the playback position, not only from the start of the song, so
    you can practise one phrase without singing everything before it
- * an optional pre-roll: the reference starts a few seconds early and the
-   status bar counts you in, and nothing sung during the lead-in is kept
- * an optional "record into the selection only": select the phrase, and the
-   recording starts and stops at the ends of the selection by itself. This
-   and the pre-roll are buttons in the toolbar, after "While recording:", and
-   entries of the Record menu
+ * an optional pre-roll (Shift+P): the reference starts a few seconds early
+   and the status bar counts you in, and nothing sung during the lead-in is
+   kept
+ * an optional "record into the selection only" (Shift+S): select the phrase,
+   and the recording starts and stops at the ends of the selection by itself.
+   This and the pre-roll are buttons in the toolbar, after "While recording:",
+   and entries of the Record menu
  * the microphone and the output are chosen in Devices -> Audio Input Device
    and Devices -> Audio Output Device. On a phone, Audio Input Device lists the
    phone's microphone, a wired headset and a USB microphone (a wireless
@@ -200,12 +202,12 @@ Timed lyrics
    they are now, to a TTML file. The reference must be the recording the lyrics
    were timed to (a Moises stem and its original mix share a timeline)
  * the lyrics can be corrected by ear, with the song there to listen to: with
-   Edit -> Edit Lyrics on, drag the start or end of a word in its box,
+   Edit -> Edit Lyrics (Ctrl+L) on, drag the start or end of a word in its box,
    double-click a word to change its text, or right-click to delete a word or
    add one between words. Lyrics that are all early or late move together:
-   Shift-drag in the row, or Edit -> Shift Lyrics... by a number of seconds.
-   Each edit can be undone; the edits are saved with the session, and Export
-   Lyrics writes them
+   Shift-drag in the row, or Edit -> Shift Lyrics... (Ctrl+Shift+L) by a
+   number of seconds. Each edit can be undone; the edits are saved with the
+   session, and Export Lyrics writes them
  * lyrics can be exported from Moises with the Moises-Lyric-Exporter browser
    extension. Set it to TTML, word by word, with the offset at 0 (otherwise
    every line is 0.2 s early, and Tony cannot tell): TTML gives every word

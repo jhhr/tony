@@ -357,7 +357,7 @@ Not tried yet.
     shows the horizontal-resize cursor and nowhere else; the status bar says what the
     mouse does there and clears when the pointer leaves the row. A click still moves the
     playback cursor, and above the row, or with edit mode off, the mouse does what it
-    always did. Is Edit Lyrics easy to find, with no shortcut?
+    always did. Is Edit Lyrics easy to find? Ctrl+L switches it on and off.
 4.  **Dragging an edge**: where two words touch, just left of the line moves the earlier
     word's end and just right of it the later word's start. Is the grab (6 px each side)
     right? An edge stops at the neighbouring word and a word at 20 ms, without jumping;

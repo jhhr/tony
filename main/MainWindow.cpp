@@ -1157,24 +1157,29 @@ MainWindow::setupEditMenu()
 
     menu->addSeparator();
 
+    m_keyReference->setCategory(tr("Lyrics"));
+
     // A mode, not a tool: the lyrics are never the pane's top layer, which
-    // is what the tools act on.  Enabled and checked in updateMenuStates().
-    // No shortcut: it is not switched on and off in the middle of things
+    // is what the tools act on.  Enabled and checked in updateMenuStates()
     m_editLyricsAction = new QAction(tr("Edit L&yrics"), this);
     m_editLyricsAction->setCheckable(true);
+    m_editLyricsAction->setShortcut(tr("Ctrl+L"));
     m_editLyricsAction->setStatusTip(tr("Edit the words of the lyrics along the bottom of the pane: drag a start or end, Shift-drag to move all the words, double-click a word to change its text, right-click to add or delete one"));
     m_editLyricsAction->setEnabled(false);
     connect(m_editLyricsAction, &QAction::triggered,
             this, &MainWindow::editLyricsToggled);
+    m_keyReference->registerShortcut(m_editLyricsAction);
     menu->addAction(m_editLyricsAction);
 
     // The same shift as a Shift-drag in edit mode, by a number: for an
     // offset known beforehand, such as the lyrics exporter's
     m_shiftLyricsAction = new QAction(tr("S&hift Lyrics..."), this);
+    m_shiftLyricsAction->setShortcut(tr("Ctrl+Shift+L"));
     m_shiftLyricsAction->setStatusTip(tr("Move all the words of the lyrics earlier or later by a number of seconds"));
     m_shiftLyricsAction->setEnabled(false);
     connect(m_shiftLyricsAction, &QAction::triggered,
             this, &MainWindow::shiftLyrics);
+    m_keyReference->registerShortcut(m_shiftLyricsAction);
     menu->addAction(m_shiftLyricsAction);
 }
 
@@ -2394,6 +2399,10 @@ MainWindow::setupToolbars()
     m_playRefWhileRecording = toolbar->addAction(il.load("speaker"),
                                                   tr("Play Reference While Recording"));
     m_playRefWhileRecording->setCheckable(true);
+    // Each of the recording toggles has Shift with a letter: R for the
+    // reference, P for the pre-roll, and S for the selection, as S alone
+    // constrains playback to it
+    m_playRefWhileRecording->setShortcut(tr("Shift+R"));
     {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2419,6 +2428,7 @@ MainWindow::setupToolbars()
     // QSettings value MainWindow/prerollseconds, with no UI to change it.
     m_preRoll = toolbar->addAction(il.load("rewind"), tr("Pre-roll"));
     m_preRoll->setCheckable(true);
+    m_preRoll->setShortcut(tr("Shift+P"));
     {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2444,6 +2454,7 @@ MainWindow::setupToolbars()
     m_recordIntoSelection = toolbar->addAction(il.load("playselection"),
                                                tr("Record into Selection"));
     m_recordIntoSelection->setCheckable(true);
+    m_recordIntoSelection->setShortcut(tr("Shift+S"));
     {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2576,9 +2587,12 @@ MainWindow::setupRecordMenu()
 
     // The bottom bar's buttons, the same actions, so that the two always
     // agree. A menu names them, and shows a shortcut, as a toolbar does not
-    m_recordMenu->addAction(m_recordIntoSelection);
-    m_recordMenu->addAction(m_preRoll);
-    m_recordMenu->addAction(m_playRefWhileRecording);
+    m_keyReference->setCategory(tr("Playback and Transport Controls"));
+    for (QAction *toggle : { m_recordIntoSelection, m_preRoll,
+                             m_playRefWhileRecording }) {
+        m_recordMenu->addAction(toggle);
+        m_keyReference->registerShortcut(toggle);
+    }
     m_recordMenu->addSeparator();
 
     // Not one of the compact layout's hidden actions: a phone on its own

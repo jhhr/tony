@@ -407,9 +407,12 @@ through, with the latency measured there. Something new goes by that rule: chose
 next take, Record; set for a device or a driver, Devices. Record holds the bottom bar's
 Record into Selection, Pre-roll and Play Reference While Recording too, as the same
 actions, never copies that would have to be kept in step; their status tips repeat their
-tooltips, as a menu shows no tooltips. No two entries of the three menus share an
-underlined letter, nor do two menus of the menu bar. The pane's right-button Playback
-submenu keeps Record.
+tooltips, as a menu shows no tooltips. Their hotkeys are Shift with a letter (the user,
+2026-10-11): Shift+S for Record into Selection, as S alone constrains playback to the
+selection, Shift+P for the pre-roll and Shift+R for the reference. No two entries of the
+three menus share an underlined letter, nor do two menus of the menu bar, and no two
+actions of the window share a hotkey: Qt takes a key two actions have as ambiguous and
+does neither. The pane's right-button Playback submenu keeps Record.
 
 **Voice threshold** (`VoiceThreshold`, `VoiceGate`, `VoiceThresholdMenu`): for singing
 with the music on speakers, which the microphone hears as well. A level in dBFS under
