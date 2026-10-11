@@ -48,6 +48,9 @@
 #include "InputLevelFeed.h"
 #include "InputLevelMeter.h"
 #include "CheckInputLevelDialog.h"
+#include "HotkeyReference.h"
+#include "HotkeyTable.h"
+#include "HotkeysDialog.h"
 #include "StatusLine.h"
 
 #ifdef Q_OS_ANDROID
@@ -270,7 +273,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_rwdAction(0),
     m_intelligentActionOn(true), //GF: !!! temporary
     m_activityLog(new ActivityLog()),
-    m_keyReference(new KeyReference()),
+    m_keyReference(new HotkeyReference()),
+    m_hotkeys(nullptr),
+    m_configureHotkeysAction(nullptr),
     m_selectionAnchor(0),
     m_withSonification(withSonification),
     m_withSpectrogram(withSpectrogram),
@@ -591,9 +596,17 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(m_lyricsSize, &LyricsSize::textScaleChanged,
             m_lyrics, &LyricsTrack::setTextScale);
 
+    // Before the menus: their actions' hotkeys are added to it as they
+    // are made, which lists them in the key reference too
+    m_hotkeys = new HotkeyTable(m_keyReference, this);
+
     setupMenus();
     setupToolbars();
     setupHelpMenu();
+
+    // Every command is in the table now: the keys chosen for them, before
+    // finaliseMenus() copies some of the menus' keys (on macOS)
+    m_hotkeys->apply();
 
     statusBar();
 
@@ -788,7 +801,7 @@ MainWindow::setupFileMenu()
     action->setShortcut(tr("Ctrl+O"));
     action->setStatusTip(tr("Open a session or audio file"));
     connect(action, SIGNAL(triggered()), this, SLOT(openFile()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("open", action);
     menu->addAction(action);
     toolbar->addAction(action);
 
@@ -796,11 +809,18 @@ MainWindow::setupFileMenu()
     action->setShortcut(tr("Ctrl+Shift+O"));
     action->setStatusTip(tr("Open a file from a remote URL"));
     connect(action, SIGNAL(triggered()), this, SLOT(openLocation()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("open-location", action);
     menu->addAction(action);
 
     m_recentFilesMenu = menu->addMenu(tr("Open &Recent"));
     m_recentFilesMenu->setTearOffEnabled(true);
+    // The hotkey of the first of them, whichever file that is: listed
+    // here, once, and given to it whenever the list is made
+    m_hotkeys->add("reopen", tr("Re-open"),
+                   tr("Re-open the current or most recently opened file"),
+                   { QKeySequence(tr("Ctrl+R")) });
+    connect(m_hotkeys, &HotkeyTable::applied,
+            this, &MainWindow::setupRecentFilesMenu);
     setupRecentFilesMenu();
     connect(&m_recentFiles, SIGNAL(recentChanged()),
             this, SLOT(setupRecentFilesMenu()));
@@ -813,7 +833,7 @@ MainWindow::setupFileMenu()
     action->setStatusTip(tr("Save the current session into a %1 session file").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(saveSession()));
     connect(this, SIGNAL(canSave(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("save-session", action);
     menu->addAction(action);
     toolbar->addAction(action);
 	
@@ -823,6 +843,7 @@ MainWindow::setupFileMenu()
     action->setStatusTip(tr("Save the current session into a new %1 session file").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(saveSessionAs()));
     connect(this, SIGNAL(canSaveAs(bool)), action, SLOT(setEnabled(bool)));
+    m_hotkeys->add("save-session-as", action);
     menu->addAction(action);
     toolbar->addAction(action);
 
@@ -831,6 +852,7 @@ MainWindow::setupFileMenu()
     action->setStatusTip(tr("Save the current session into a %1 session file with the same filename as the audio but a .ton extension.").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(saveSessionInAudioPath()));
     connect(this, SIGNAL(canSaveAs(bool)), action, SLOT(setEnabled(bool)));
+    m_hotkeys->add("save-session-to-audio-path", action);
     menu->addAction(action);
 
     menu->addSeparator();
@@ -840,7 +862,7 @@ MainWindow::setupFileMenu()
     m_loadSingingTrackAction->setStatusTip(tr("Load a second audio file to analyse as the singing track, overlaid on the reference track"));
     connect(m_loadSingingTrackAction, SIGNAL(triggered()), this, SLOT(openSingingTrack()));
     connect(this, SIGNAL(canPlay(bool)), m_loadSingingTrackAction, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(m_loadSingingTrackAction);
+    m_hotkeys->add("load-singing-track", m_loadSingingTrackAction);
     menu->addAction(m_loadSingingTrackAction);
 
     m_loadBackgroundMusicAction = new QAction(il.load("fileopen"), tr("Load &Background Music..."), this);
@@ -901,7 +923,7 @@ MainWindow::setupFileMenu()
     action->setShortcut(tr("Ctrl+Q"));
     action->setStatusTip(tr("Exit %1").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(close()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("quit", action);
     menu->addAction(action);
 }
 
@@ -913,6 +935,16 @@ MainWindow::setupEditMenu()
     QMenu *menu = menuBar()->addMenu(tr("&Edit"));
     menu->setTearOffEnabled(true);
     CommandHistory::getInstance()->registerMenu(menu);
+
+    // Its Undo and Redo, which registerMenu() puts first.  Every window
+    // shares them, and their text names what would be undone, so their
+    // names and keys are given here
+    m_keyReference->setCategory(tr("Undo and Redo"));
+    const QList<QAction *> history = menu->actions();
+    m_hotkeys->add("undo", history.value(0), tr("Undo"),
+                   { QKeySequence(tr("Ctrl+Z")) });
+    m_hotkeys->add("redo", history.value(1), tr("Redo"),
+                   { QKeySequence(tr("Ctrl+Shift+Z")) });
     menu->addSeparator();
 
     m_keyReference->setCategory
@@ -947,7 +979,7 @@ MainWindow::setupEditMenu()
     connect(this, SIGNAL(replacedDocument()), action, SLOT(trigger()));
     group->addAction(action);
     menu->addAction(action);
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("navigate-tool", action);
     m_navigateToolAction = action;
 
     m_keyReference->setCategory
@@ -971,7 +1003,7 @@ MainWindow::setupEditMenu()
     connect(action, SIGNAL(triggered()), this, SLOT(toolEditSelected()));
     group->addAction(action);
     menu->addAction(action);
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("edit-tool", action);
     m_noteEditToolAction = action;
 
     m_keyReference->setCategory
@@ -1012,7 +1044,7 @@ MainWindow::setupEditMenu()
     action->setStatusTip(tr("Select the whole duration of the current session"));
     connect(action, SIGNAL(triggered()), this, SLOT(selectAll()));
     connect(this, SIGNAL(canSelect(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("select-all", action);
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
@@ -1023,8 +1055,7 @@ MainWindow::setupEditMenu()
     action->setStatusTip(tr("Clear the selection and abandon any pending pitch choices in it"));
     connect(action, SIGNAL(triggered()), this, SLOT(abandonSelection()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
-    m_keyReference->registerAlternativeShortcut(action, QKeySequence(tr("Ctrl+Esc")));
+    m_hotkeys->add("clear-selection", action);
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
@@ -1036,7 +1067,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Choose Higher Pitch"), this);
     action->setShortcut(tr("Ctrl+Up"));
     action->setStatusTip(tr("Move pitches up an octave, or to the next higher pitch candidate"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("higher-pitch", action);
     connect(action, SIGNAL(triggered()), this, SLOT(switchPitchUp()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1045,7 +1076,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Choose Lower Pitch"), this);
     action->setShortcut(tr("Ctrl+Down"));
     action->setStatusTip(tr("Move pitches down an octave, or to the next lower pitch candidate"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("lower-pitch", action);
     connect(action, SIGNAL(triggered()), this, SLOT(switchPitchDown()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1054,7 +1085,7 @@ MainWindow::setupEditMenu()
     m_showCandidatesAction = new QAction(tr("Show Pitch Candidates"), this);
     m_showCandidatesAction->setShortcut(tr("Ctrl+Return"));
     m_showCandidatesAction->setStatusTip(tr("Toggle the display of alternative pitch candidates for the selected region"));
-    m_keyReference->registerShortcut(m_showCandidatesAction);
+    m_hotkeys->add("pitch-candidates", m_showCandidatesAction);
     connect(m_showCandidatesAction, SIGNAL(triggered()), this, SLOT(togglePitchCandidates()));
     connect(this, SIGNAL(canClearSelection(bool)), m_showCandidatesAction, SLOT(setEnabled(bool)));
     menu->addAction(m_showCandidatesAction);
@@ -1063,7 +1094,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Remove Pitches"), this);
     action->setShortcut(tr("Ctrl+Backspace"));
     action->setStatusTip(tr("Remove all pitch estimates within the selected region, making it unvoiced"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("remove-pitches", action);
     connect(action, SIGNAL(triggered()), this, SLOT(clearPitches()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1077,7 +1108,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Split Note"), this);
     action->setShortcut(tr("/"));
     action->setStatusTip(tr("Split the note at the current playback position into two"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("split-note", action);
     connect(action, SIGNAL(triggered()), this, SLOT(splitNote()));
     connect(this, SIGNAL(canExportNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1086,7 +1117,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Merge Notes"), this);
     action->setShortcut(tr("\\"));
     action->setStatusTip(tr("Merge all notes within the selected region into a single note"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("merge-notes", action);
     connect(action, SIGNAL(triggered()), this, SLOT(mergeNotes()));
     connect(this, SIGNAL(canSnapNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1095,7 +1126,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Delete Notes"), this);
     action->setShortcut(tr("Backspace"));
     action->setStatusTip(tr("Delete all notes within the selected region"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("delete-notes", action);
     connect(action, SIGNAL(triggered()), this, SLOT(deleteNotes()));
     connect(this, SIGNAL(canSnapNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1104,7 +1135,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Form Note from Selection"), this);
     action->setShortcut(tr("="));
     action->setStatusTip(tr("Form a note spanning the selected region, splitting any existing notes at its boundaries"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("form-note", action);
     connect(action, SIGNAL(triggered()), this, SLOT(formNoteFromSelection()));
     connect(this, SIGNAL(canSnapNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1147,7 +1178,7 @@ MainWindow::setupEditMenu()
     m_eraseSingingAction->setIconText(tr("Erase"));
     m_eraseSingingAction->setStatusTip
         (tr("Remove the recorded singing within the selected region, leaving silence"));
-    m_keyReference->registerShortcut(m_eraseSingingAction);
+    m_hotkeys->add("erase-singing", m_eraseSingingAction);
     connect(m_eraseSingingAction, SIGNAL(triggered()),
             this, SLOT(eraseSingingInSelection()));
     connect(this, SIGNAL(canEraseSinging(bool)),
@@ -1169,7 +1200,7 @@ MainWindow::setupEditMenu()
     m_editLyricsAction->setEnabled(false);
     connect(m_editLyricsAction, &QAction::triggered,
             this, &MainWindow::editLyricsToggled);
-    m_keyReference->registerShortcut(m_editLyricsAction);
+    m_hotkeys->add("edit-lyrics", m_editLyricsAction);
     menu->addAction(m_editLyricsAction);
 
     // The same shift as a Shift-drag in edit mode, by a number: for an
@@ -1180,8 +1211,18 @@ MainWindow::setupEditMenu()
     m_shiftLyricsAction->setEnabled(false);
     connect(m_shiftLyricsAction, &QAction::triggered,
             this, &MainWindow::shiftLyrics);
-    m_keyReference->registerShortcut(m_shiftLyricsAction);
+    m_hotkeys->add("shift-lyrics", m_shiftLyricsAction);
     menu->addAction(m_shiftLyricsAction);
+
+    menu->addSeparator();
+
+    // The keys of every command above, and of the others' (HotkeysDialog)
+    m_configureHotkeysAction = new QAction(tr("&Configure Hotkeys..."), this);
+    m_configureHotkeysAction->setStatusTip
+        (tr("Choose the keys that do what the menus and buttons do"));
+    connect(m_configureHotkeysAction, &QAction::triggered,
+            this, &MainWindow::configureHotkeys);
+    menu->addAction(m_configureHotkeysAction);
 }
 
 void
@@ -1202,7 +1243,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Scroll the current pane to the left without changing the play position"));
     connect(action, SIGNAL(triggered()), this, SLOT(scrollLeft()));
     connect(this, SIGNAL(canScroll(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("peek-left", action);
     menu->addAction(action);
     
     action = new QAction(tr("Peek &Right"), this);
@@ -1210,7 +1251,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Scroll the current pane to the right without changing the play position"));
     connect(action, SIGNAL(triggered()), this, SLOT(scrollRight()));
     connect(this, SIGNAL(canScroll(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("peek-right", action);
     menu->addAction(action);
 
     menu->addSeparator();
@@ -1223,7 +1264,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Increase the zoom level"));
     connect(action, SIGNAL(triggered()), this, SLOT(zoomIn()));
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("zoom-in", action);
     menu->addAction(action);
     m_zoomInAction = action;
     
@@ -1233,7 +1274,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Decrease the zoom level"));
     connect(action, SIGNAL(triggered()), this, SLOT(zoomOut()));
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("zoom-out", action);
     menu->addAction(action);
     m_zoomOutAction = action;
     
@@ -1249,7 +1290,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Zoom to show the whole file"));
     connect(action, SIGNAL(triggered()), this, SLOT(zoomToFit()));
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("zoom-to-fit", action);
     menu->addAction(action);
 
     menu->addSeparator();
@@ -1565,14 +1606,14 @@ MainWindow::setupHelpMenu()
     action->setShortcut(tr("F1"));
     action->setStatusTip(tr("Open the %1 reference manual").arg(name)); 
     connect(action, SIGNAL(triggered()), this, SLOT(help()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("help-reference", action);
     menu->addAction(action);
 
     action = new QAction(tr("&Key and Mouse Reference"), this);
     action->setShortcut(tr("F2"));
     action->setStatusTip(tr("Open a window showing the keystrokes you can use in %1").arg(name));
     connect(action, SIGNAL(triggered()), this, SLOT(keyReference()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("key-reference", action);
     menu->addAction(action);
     
     action = new QAction(tr("What's &New In This Release?"), this); 
@@ -1613,13 +1654,7 @@ MainWindow::setupRecentFilesMenu()
         QAction *action = m_recentFilesMenu->addAction(path);
         action->setObjectName(path);
         connect(action, SIGNAL(triggered()), this, SLOT(openRecentFile()));
-        if (i == 0) {
-            action->setShortcut(tr("Ctrl+R"));
-            m_keyReference->registerShortcut
-                (tr("Re-open"),
-                 action->shortcut().toString(),
-                 tr("Re-open the current or most recently opened file"));
-        }
+        if (i == 0) action->setShortcuts(m_hotkeys->keys("reopen"));
     }
 }
 
@@ -2186,19 +2221,18 @@ MainWindow::setupToolbars()
     connect(selectOneRightAction, SIGNAL(triggered()), this, SLOT(selectOneNoteRight()));
     connect(this, SIGNAL(canScroll(bool)), selectOneRightAction, SLOT(setEnabled(bool)));
 
-    m_keyReference->registerShortcut(psAction);
-    m_keyReference->registerShortcut(plAction);
-    m_keyReference->registerShortcut(playAction);
-    m_keyReference->registerShortcut(recordAction);
-    m_keyReference->registerShortcut(m_rwdAction);
-    m_keyReference->registerShortcut(m_ffwdAction);
-    m_keyReference->registerShortcut(rwdStartAction);
-    m_keyReference->registerShortcut(ffwdEndAction);
-    m_keyReference->registerShortcut(recordAction);
-    m_keyReference->registerShortcut(oneLeftAction);
-    m_keyReference->registerShortcut(oneRightAction);
-    m_keyReference->registerShortcut(selectOneLeftAction);
-    m_keyReference->registerShortcut(selectOneRightAction);
+    m_hotkeys->add("constrain-to-selection", psAction);
+    m_hotkeys->add("loop", plAction);
+    m_hotkeys->add("play", playAction);
+    m_hotkeys->add("record", recordAction);
+    m_hotkeys->add("rewind", m_rwdAction);
+    m_hotkeys->add("fast-forward", m_ffwdAction);
+    m_hotkeys->add("rewind-to-start", rwdStartAction);
+    m_hotkeys->add("fast-forward-to-end", ffwdEndAction);
+    m_hotkeys->add("one-note-left", oneLeftAction);
+    m_hotkeys->add("one-note-right", oneRightAction);
+    m_hotkeys->add("select-one-note-left", selectOneLeftAction);
+    m_hotkeys->add("select-one-note-right", selectOneRightAction);
 
     menu->addAction(playAction);
     menu->addAction(psAction);
@@ -2252,9 +2286,9 @@ MainWindow::setupToolbars()
     connect(normalAction, SIGNAL(triggered()), this, SLOT(restoreNormalPlayback()));
     connect(this, SIGNAL(canChangePlaybackSpeed(bool)), normalAction, SLOT(setEnabled(bool)));
 
-    m_keyReference->registerShortcut(fastAction);
-    m_keyReference->registerShortcut(slowAction);
-    m_keyReference->registerShortcut(normalAction);
+    m_hotkeys->add("speed-up", fastAction);
+    m_hotkeys->add("slow-down", slowAction);
+    m_hotkeys->add("normal-speed", normalAction);
 
     m_rightButtonPlaybackMenu->addAction(fastAction);
     m_rightButtonPlaybackMenu->addAction(slowAction);
@@ -2618,11 +2652,12 @@ MainWindow::setupRecordMenu()
     // The bottom bar's buttons, the same actions, so that the two always
     // agree. A menu names them, and shows a shortcut, as a toolbar does not
     m_keyReference->setCategory(tr("Playback and Transport Controls"));
-    for (QAction *toggle : { m_recordIntoSelection, m_preRoll,
-                             m_playRefWhileRecording }) {
-        m_recordMenu->addAction(toggle);
-        m_keyReference->registerShortcut(toggle);
-    }
+    m_recordMenu->addAction(m_recordIntoSelection);
+    m_recordMenu->addAction(m_preRoll);
+    m_recordMenu->addAction(m_playRefWhileRecording);
+    m_hotkeys->add("record-into-selection", m_recordIntoSelection);
+    m_hotkeys->add("pre-roll", m_preRoll);
+    m_hotkeys->add("play-reference-while-recording", m_playRefWhileRecording);
     m_recordMenu->addSeparator();
 
     // Not one of the compact layout's hidden actions: a phone on its own
@@ -2698,7 +2733,7 @@ MainWindow::setupDevicesMenu()
     connect(m_previousOutputAction, &QAction::triggered,
             this, &MainWindow::switchToPreviousOutputDevice);
     addAction(m_previousOutputAction);
-    m_keyReference->registerShortcut(m_previousOutputAction);
+    m_hotkeys->add("previous-output-device", m_previousOutputAction);
 
     // After the input device, as a choice is kept for each input device.
     // Not one of the compact layout's hidden actions: a phone with an
@@ -2755,9 +2790,11 @@ MainWindow::setupCompactLayout()
 
     parts.panel = { m_playbackControlsToolBar, m_showAndPlayToolBar };
 
-    // Notes are edited on the desktop.  A phone has no output device to
-    // choose, Android's being the one; its input devices it lists
-    parts.hiddenActions = { m_navigateToolAction, m_noteEditToolAction };
+    // Notes are edited on the desktop, and hotkeys chosen there, a phone
+    // having no keyboard.  A phone has no output device to choose,
+    // Android's being the one; its input devices it lists
+    parts.hiddenActions = { m_navigateToolAction, m_noteEditToolAction,
+                            m_configureHotkeysAction };
     for (QMenu *menu: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (!menu) continue;
         if (menu == m_audioInputDeviceMenu && listsInputDevices()) continue;
@@ -2776,6 +2813,33 @@ MainWindow::setupCompactLayout()
     parts.shownWidgets = { m_songScroll };
 
     m_compactLayout->setParts(parts);
+}
+
+void
+MainWindow::configureHotkeys()
+{
+    if (m_hotkeysDialog) {
+        m_hotkeysDialog->raise();
+        return;
+    }
+    // Window-modal, and no event loop of its own (open()): the window
+    // carries on behind it
+    HotkeysDialog *dialog = new HotkeysDialog(m_hotkeys, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QDialog::accepted, this, &MainWindow::applyHotkeys);
+    m_hotkeysDialog = dialog;
+    dialog->open();
+}
+
+void
+MainWindow::applyHotkeys()
+{
+    m_hotkeys->apply();
+
+    // On macOS a single key that only a menu holds is made a shortcut of
+    // the application's own, with the key it had then
+    // (MainWindowBase::finaliseMenus()): those are made again
+    finaliseMenus();
 }
 
 void

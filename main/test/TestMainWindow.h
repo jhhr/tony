@@ -30,6 +30,9 @@
 #include "../InputLevelMeter.h"
 #include "../CheckInputLevelDialog.h"
 #include "../StatusLine.h"
+#include "../HotkeyReference.h"
+#include "../HotkeyTable.h"
+#include "../HotkeysDialog.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -245,6 +248,20 @@ public:
         chooseAudioDevice("audio-playback-device", name);
     }
     QAction *previousOutputAction() { return m_previousOutputAction; }
+
+    // The window's commands that have hotkeys, Edit > Configure Hotkeys
+    // with its dialog while it is open, and the key reference
+    HotkeyTable *hotkeys() { return m_hotkeys; }
+    QAction *configureHotkeysAction() { return m_configureHotkeysAction; }
+    HotkeysDialog *hotkeysDialog() { return m_hotkeysDialog; }
+    HotkeyReference *hotkeyReference() { return m_keyReference; }
+    // File > Open Recent, whose first file has the hotkey Re-open, and a
+    // file added to it, as opening one adds it
+    QMenu *recentFilesMenu() { return m_recentFilesMenu; }
+    void addRecentFile(QString path) { m_recentFiles.addFile(path); }
+    // The keys the settings keep given to the commands, as OK in the
+    // dialog has them given
+    void doApplyHotkeys() { applyHotkeys(); }
 
     // Devices > Audio Driver and Audio Latency, from the implementations
     // given here: none unless a test gives some, whatever the platform

@@ -49,6 +49,7 @@
 #include "TestSettingsKey.h"
 #include "TestStatusLine.h"
 #include "TestDeviceSwitch.h"
+#include "TestHotkeys.h"
 #include "TestRunSuite.h"
 
 #include "RunSuite.h"
@@ -301,6 +302,12 @@ int main(int argc, char *argv[])
 
     {
         TestDeviceSwitch t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestHotkeys t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

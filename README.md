@@ -232,6 +232,20 @@ Sizes and layout
    with it when given --compact on the command line
 
 
+Hotkeys
+-------
+
+ * Edit -> Configure Hotkeys... lists every command that has a hotkey, in the
+   groups of Help -> Key and Mouse Reference, with its keys. Choose one and
+   press a key in the box under the list; the second box takes another key
+   for the same command, a box's clear button takes its key away, and Default
+   puts the command's own back. A key two commands have is shown in red, and
+   OK waits until one of them is changed, as pressing it would do neither.
+   The keys are kept between launches; Restore Defaults puts back every
+   command's own
+ * Help -> Key and Mouse Reference (F2) lists the keys as they are now
+
+
 On Android
 ----------
 

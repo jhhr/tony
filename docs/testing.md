@@ -49,7 +49,9 @@ and the rest: [building.md](building.md#what-is-particular-about-this-mesonbuild
 `tony-dev-test.cpp` runs `TestDevChecks` alone, and its moc list is inside meson's `if
 dev_checks` with the `TONY_DEV_CHECKS` define for moc. A new test function in an existing
 suite needs nothing but itself (a private slot). **Every private slot runs as a test**, so
-helpers must not be slots; connect to lambdas instead. For access to private statics use
+helpers must not be slots; connect to lambdas instead. A static helper among the slots
+that takes no arguments counts as one too, whatever it returns: a sharded run passes its
+name to QtTest, which fails it as not found. For access to private statics use
 `friend class TestX;`, as `RealtimePitchTracker.h` does.
 
 Suites find the files in `testdata/` through `TONY_TEST_DATA_DIR`, which `meson.build`
@@ -271,7 +273,9 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   a device rate, and `latencyLine()` reads the Devices menu's line as the menu shows it.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. Check Input Level's dialog is
-  an exception: its tests open it, drive it and close it. Replace Take Audio's progress
+  an exception: its tests open it, drive it and close it; so is Configure Hotkeys'.
+  `init()` forgets the hotkeys chosen, there and in `TestUiChecks`, as a test that changed
+  one and failed would leave the next suite's keys changed. Replace Take Audio's progress
   dialog is another: its search closes it. `dialogsMatching()` is for the
   dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
   title macOS does not keep, so that there its text alone must tell it apart.

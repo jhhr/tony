@@ -28,6 +28,7 @@
 
 #include "../AlternatePitchTrack.h"
 #include "../TakeLayers.h"
+#include "../Hotkeys.h"
 
 #include "version.h"
 
@@ -610,6 +611,7 @@ private slots:
         settings.beginGroup("SingingAnalyser");
         settings.remove("");
         settings.endGroup();
+        Hotkeys::forgetAll(settings);
         SingingTakes::setOverwriteConfirmationWanted(true);
     }
 
@@ -2169,6 +2171,26 @@ private slots:
         QCOMPARE(settings.value("Preferences/audio-playback-device")
                  .toString(), QString("Speakers"));
         settings.remove("Preferences/audio-playback-device");
+    }
+
+    // A key chosen for a command (Edit > Configure Hotkeys keeps it so)
+    // does the command, and the command's own key no longer does
+    void chosen_hotkey_does_the_command() {
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "play", { "P" }, { "Space" });
+        }
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        press(QKeySequence(Qt::Key_Space));
+        QVERIFY(!m_window->playSource()->isPlaying());
+        press(QKeySequence(Qt::Key_P));
+        QVERIFY(m_window->playSource()->isPlaying());
+        press(QKeySequence(Qt::Key_P));
+        QVERIFY(!m_window->playSource()->isPlaying());
     }
 };
 

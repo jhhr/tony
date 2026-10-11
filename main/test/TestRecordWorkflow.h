@@ -37,6 +37,7 @@
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
 #include "../VoiceThreshold.h"
+#include "../Hotkeys.h"
 #include "../InputChannel.h"
 #include "../InputDevice.h"
 #include "../InputChannelMenu.h"
@@ -85,6 +86,7 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
@@ -96,6 +98,7 @@
 #include <QSettings>
 #include <QToolBar>
 #include <QTemporaryDir>
+#include <QTextEdit>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -103,6 +106,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <vector>
 
 class TestRecordWorkflow : public QObject
@@ -1994,6 +1998,22 @@ class TestRecordWorkflow : public QObject
         return result;
     }
 
+    // The text of Help > Key and Mouse Reference, as it is shown. Not
+    // a slot: QtTest would take it for a test
+    static QString keyReferenceText() {
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            auto dialog = qobject_cast<QDialog *>(w);
+            if (!dialog || !dialog->isVisible() ||
+                !dialog->windowTitle().endsWith("Key and Mouse Reference")) {
+                continue;
+            }
+            if (auto text = dialog->findChild<QTextEdit *>()) {
+                return text->toPlainText();
+            }
+        }
+        return "(not shown)";
+    }
+
     // Not a slot: QtTest would run it as a test
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -2003,6 +2023,9 @@ class TestRecordWorkflow : public QObject
         // Replace Take Audio from Recording, which its search closes
         if (qobject_cast<CheckInputLevelDialog *>(modal)) return;
         if (qobject_cast<QProgressDialog *>(modal)) return;
+        // Configure Hotkeys likewise is opened, driven and closed by its
+        // tests
+        if (qobject_cast<HotkeysDialog *>(modal)) return;
         QString description = modal->windowTitle();
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
@@ -2078,6 +2101,9 @@ private slots:
         // phone's input device
         settings.remove("InputChannel");
         settings.remove("InputDevice");
+        // Nor hotkeys chosen: a test that failed half way must not leave
+        // the next suite's keys changed
+        Hotkeys::forgetAll(settings);
 
         // The toggles of the reference's tracks and the singing track's;
         // a test that failed half way must not leave the next one's
@@ -6658,6 +6684,292 @@ private slots:
         for (const char *key : { "Ctrl+Z", "Space", "Shift+S", "Ctrl+L" }) {
             QVERIFY2(owner.contains(key), key);
         }
+    }
+
+    // A command of the window's hotkey table, by its id
+    static const HotkeyTable::Command *hotkeyCommand(HotkeyTable *table,
+                                                     QString id) {
+        for (const HotkeyTable::Command &c : table->commands()) {
+            if (c.id == id) return &c;
+        }
+        return nullptr;
+    }
+
+    static QList<QKeySequence> keyList(std::initializer_list<const char *> keys) {
+        QList<QKeySequence> list;
+        for (const char *key : keys) list << QKeySequence(key);
+        return list;
+    }
+
+    static QString native(const char *key) {
+        return QKeySequence(key).toString(QKeySequence::NativeText);
+    }
+
+    // Every action that has a hotkey can have it changed, but for the
+    // first of the recent files, which has Re-open's, a command without
+    // an action of its own. No two commands have one id or one default
+    // key, and the key reference lists each with its keys
+    void every_hotkey_is_configurable() {
+        makeWindow(FakeAudioIO::Config());
+        // A URL: RecentFiles leaves out a file in a temporary directory,
+        // which the tests' are
+        m_window->addRecentFile("file:///hotkeys/song.wav");
+
+        HotkeyTable *table = m_window->hotkeys();
+        QList<QAction *> configurable;
+        QStringList ids;
+        std::vector<Hotkeys::Command> defaults;
+        for (const HotkeyTable::Command &c : table->commands()) {
+            QVERIFY2(!ids.contains(c.id), qPrintable(c.id));
+            ids << c.id;
+            QVERIFY2(!c.defaults.isEmpty(), qPrintable(c.id));
+            if (c.action) configurable << c.action;
+            defaults.push_back({ c.id, HotkeyTable::portable(c.defaults) });
+            QVERIFY2(m_window->hotkeyReference()->listed(c.category, c.name)
+                     .size() == c.defaults.size(), qPrintable(c.id));
+        }
+        QVERIFY(Hotkeys::clashes(defaults).empty());
+
+        QAction *firstRecent = m_window->recentFilesMenu()->actions().value(0);
+        QVERIFY(firstRecent);
+        QCOMPARE(firstRecent->shortcuts(), keyList({ "Ctrl+R" }));
+        for (QAction *a : hotkeyActions(m_window)) {
+            if (configurable.contains(a)) continue;
+            QVERIFY2(a == firstRecent, qPrintable(a->text()));
+        }
+
+        for (const char *id : { "undo", "redo", "reopen", "save-session-as",
+                                "save-session-to-audio-path",
+                                "clear-selection", "record-into-selection",
+                                "edit-lyrics", "previous-output-device" }) {
+            QVERIFY2(ids.contains(id), id);
+        }
+    }
+
+    // The keys the settings keep are the commands' as the window opens:
+    // one command's other key, one's none, CommandHistory's Undo's, and
+    // Re-open's on the first recent file, as the key reference lists
+    // them. A window opened once they are forgotten has the defaults,
+    // Undo's too, which every window shares
+    void saved_hotkeys_given_at_start() {
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "play", { "P" }, { "Space" });
+            Hotkeys::setKeys(settings, "loop", {}, { "L" });
+            Hotkeys::setKeys(settings, "undo", { "Ctrl+U" }, { "Ctrl+Z" });
+            Hotkeys::setKeys(settings, "reopen", { "Ctrl+Shift+E" },
+                             { "Ctrl+R" });
+        }
+        makeWindow(FakeAudioIO::Config());
+        // A URL: RecentFiles leaves out a file in a temporary directory,
+        // which the tests' are
+        m_window->addRecentFile("file:///hotkeys/song.wav");
+        QVERIFY(!m_window->recentFilesMenu()->actions().isEmpty());
+
+        HotkeyTable *table = m_window->hotkeys();
+        const HotkeyTable::Command *play = hotkeyCommand(table, "play");
+        const HotkeyTable::Command *loop = hotkeyCommand(table, "loop");
+        const HotkeyTable::Command *undo = hotkeyCommand(table, "undo");
+        const HotkeyTable::Command *reopen = hotkeyCommand(table, "reopen");
+        QVERIFY(play && loop && undo && reopen);
+        QCOMPARE(play->action.data(), m_window->playAction());
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "P" }));
+        QVERIFY(loop->action->shortcuts().isEmpty());
+        QCOMPARE(undo->action->shortcuts(), keyList({ "Ctrl+U" }));
+        QCOMPARE(m_window->recentFilesMenu()->actions().value(0)->shortcuts(),
+                 keyList({ "Ctrl+Shift+E" }));
+
+        HotkeyReference *reference = m_window->hotkeyReference();
+        QCOMPARE(reference->listed(play->category, "Play / Pause"),
+                 QStringList({ native("P") }));
+        QCOMPARE(reference->listed(loop->category, "Loop Playback"),
+                 QStringList());
+        QCOMPARE(reference->listed(undo->category, "Undo"),
+                 QStringList({ native("Ctrl+U") }));
+        QCOMPARE(reference->listed(reopen->category, "Re-open"),
+                 QStringList({ native("Ctrl+Shift+E") }));
+
+        {
+            QSettings settings;
+            Hotkeys::forgetAll(settings);
+        }
+        makeWindow(FakeAudioIO::Config());
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "Space" }));
+        QCOMPARE(hotkeyCommand(m_window->hotkeys(), "undo")->action
+                 ->shortcuts(), keyList({ "Ctrl+Z" }));
+    }
+
+    // Edit > Configure Hotkeys. The command chosen has its keys in the
+    // boxes; a key pressed for it is its key, the first of a sequence
+    // only; a key another command has too shows both in red, a line names
+    // them, and OK is shut until Default puts the command's own back. OK
+    // keeps the keys chosen, and only those, and gives them to the
+    // commands and the key reference
+    void configure_hotkeys_dialog() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *configure = m_window->configureHotkeysAction();
+        QVERIFY(configure);
+        QMenu *edit = nullptr;
+        for (QAction *menu : m_window->menuBar()->actions()) {
+            if (menu->text() == "&Edit") edit = menu->menu();
+        }
+        QVERIFY(edit && edit->actions().contains(configure));
+
+        configure->trigger();
+        HotkeysDialog *dialog = m_window->hotkeysDialog();
+        QVERIFY(dialog);
+        QVERIFY(dialog->isVisible());
+        QCOMPARE(dialog->windowModality(), Qt::WindowModal);
+        QVERIFY(!dialog->keyBox(0)->isEnabled());
+
+        dialog->choose("play");
+        QVERIFY(dialog->keyBox(0)->isEnabled());
+        QCOMPARE(dialog->keyBox(0)->keySequence(), QKeySequence("Space"));
+        QVERIFY(dialog->keyBox(1)->keySequence().isEmpty());
+        QVERIFY(!dialog->defaultButton()->isEnabled());
+
+        dialog->pressKey(0, QKeySequence("L"));
+        QVERIFY(dialog->shownClashing("play"));
+        QVERIFY(dialog->shownClashing("loop"));
+        QVERIFY(!dialog->shownClashing("record"));
+        // The commands in the list's order, the key reference's
+        QVERIFY2(dialog->clashText().contains
+                 (native("L") + " is the key of Loop Playback and of Play / "
+                  "Pause."), qPrintable(dialog->clashText()));
+        QVERIFY(!dialog->okButton()->isEnabled());
+
+        QVERIFY(dialog->defaultButton()->isEnabled());
+        dialog->defaultButton()->click();
+        QCOMPARE(dialog->keys("play"), keyList({ "Space" }));
+        QVERIFY(!dialog->shownClashing("loop"));
+        QVERIFY(dialog->clashText().isEmpty());
+        QVERIFY(dialog->okButton()->isEnabled());
+
+        dialog->pressKey(0, QKeySequence("Ctrl+K, Ctrl+C"));
+        QCOMPARE(dialog->keys("play"), keyList({ "Ctrl+K" }));
+        dialog->pressKey(0, QKeySequence("P"));
+        QCOMPARE(dialog->listedKeys("play"), native("P"));
+
+        dialog->choose("clear-selection");
+        QCOMPARE(dialog->keyBox(0)->keySequence(), QKeySequence("Esc"));
+        QCOMPARE(dialog->keyBox(1)->keySequence(), QKeySequence("Ctrl+Esc"));
+        dialog->pressKey(1, QKeySequence());
+        QCOMPARE(dialog->keys("clear-selection"), keyList({ "Esc" }));
+
+        dialog->choose("undo");
+        dialog->pressKey(0, QKeySequence("Ctrl+U"));
+        dialog->choose("redo");
+        dialog->pressKey(1, QKeySequence("Ctrl+Y"));
+        QCOMPARE(dialog->keys("redo"), keyList({ "Ctrl+Shift+Z", "Ctrl+Y" }));
+        QCOMPARE(dialog->listedKeys("redo"),
+                 native("Ctrl+Shift+Z") + ", " + native("Ctrl+Y"));
+
+        dialog->okButton()->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->hotkeysDialog(), 5000);
+
+        QSettings settings;
+        settings.beginGroup(Hotkeys::kGroup);
+        QStringList kept = settings.childKeys();
+        kept.sort();
+        QCOMPARE(kept, QStringList({ "clear-selection", "play", "redo",
+                                     "undo" }));
+        QCOMPARE(settings.value("play").toString(), QString("P"));
+        QCOMPARE(settings.value("redo").toString(),
+                 QString("Ctrl+Shift+Z; Ctrl+Y"));
+        settings.endGroup();
+
+        HotkeyTable *table = m_window->hotkeys();
+        const HotkeyTable::Command *clear =
+            hotkeyCommand(table, "clear-selection");
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "P" }));
+        QCOMPARE(clear->action->shortcuts(), keyList({ "Esc" }));
+        QCOMPARE(hotkeyCommand(table, "undo")->action->shortcuts(),
+                 keyList({ "Ctrl+U" }));
+        QCOMPARE(hotkeyCommand(table, "redo")->action->shortcuts(),
+                 keyList({ "Ctrl+Shift+Z", "Ctrl+Y" }));
+        HotkeyReference *reference = m_window->hotkeyReference();
+        const HotkeyTable::Command *play = hotkeyCommand(table, "play");
+        QCOMPARE(reference->listed(play->category, play->name),
+                 QStringList({ native("P") }));
+        QCOMPARE(reference->listed(clear->category, clear->name),
+                 QStringList({ native("Esc") }));
+    }
+
+    // Help > Key and Mouse Reference lists the keys as they are, open or
+    // not when they change: a command with none is not there
+    void key_reference_lists_the_keys_as_they_are() {
+        makeWindow(FakeAudioIO::Config());
+        HotkeyReference *reference = m_window->hotkeyReference();
+        reference->show();
+        QString text = keyReferenceText();
+        QVERIFY2(text.contains("Loop Playback"), qPrintable(text));
+        QVERIFY2(!text.contains(native("Ctrl+Shift+F12")), qPrintable(text));
+
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "loop", {}, { "L" });
+            Hotkeys::setKeys(settings, "play", { "Ctrl+Shift+F12" },
+                             { "Space" });
+        }
+        m_window->doApplyHotkeys();
+        text = keyReferenceText();
+        QVERIFY2(!text.contains("Loop Playback"), qPrintable(text));
+        QVERIFY2(text.contains(native("Ctrl+Shift+F12")), qPrintable(text));
+        reference->hide();
+
+        // Not shown when they changed, and then shown
+        {
+            QSettings settings;
+            Hotkeys::forgetAll(settings);
+        }
+        m_window->doApplyHotkeys();
+        reference->show();
+        text = keyReferenceText();
+        QVERIFY2(text.contains("Loop Playback"), qPrintable(text));
+        QVERIFY2(!text.contains(native("Ctrl+Shift+F12")), qPrintable(text));
+        reference->hide();
+    }
+
+    // Restore Defaults puts back every command's own keys, which OK keeps
+    // as nothing at all; Cancel keeps nothing of what was changed
+    void configure_hotkeys_restore_defaults_and_cancel() {
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "play", { "P" }, { "Space" });
+            Hotkeys::setKeys(settings, "loop", {}, { "L" });
+        }
+        makeWindow(FakeAudioIO::Config());
+        m_window->configureHotkeysAction()->trigger();
+        HotkeysDialog *dialog = m_window->hotkeysDialog();
+        QVERIFY(dialog);
+        QCOMPARE(dialog->keys("play"), keyList({ "P" }));
+        QVERIFY(dialog->keys("loop").isEmpty());
+        QCOMPARE(dialog->listedKeys("loop"), QString());
+
+        dialog->restoreDefaultsButton()->click();
+        QCOMPARE(dialog->keys("play"), keyList({ "Space" }));
+        QCOMPARE(dialog->keys("loop"), keyList({ "L" }));
+        dialog->okButton()->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->hotkeysDialog(), 5000);
+        QSettings settings;
+        settings.beginGroup(Hotkeys::kGroup);
+        QVERIFY(settings.childKeys().isEmpty());
+        settings.endGroup();
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "Space" }));
+        QCOMPARE(hotkeyCommand(m_window->hotkeys(), "loop")->action
+                 ->shortcuts(), keyList({ "L" }));
+
+        m_window->configureHotkeysAction()->trigger();
+        dialog = m_window->hotkeysDialog();
+        QVERIFY(dialog);
+        dialog->choose("play");
+        dialog->pressKey(0, QKeySequence("P"));
+        dialog->reject();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->hotkeysDialog(), 5000);
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "Space" }));
+        settings.beginGroup(Hotkeys::kGroup);
+        QVERIFY(settings.childKeys().isEmpty());
+        settings.endGroup();
     }
 
     // Record > Voice Threshold (where in the menu: menus_by_subject):

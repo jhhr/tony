@@ -285,6 +285,12 @@ Not tried yet.
    then the speakers: O plays through the headphones again and O again through the
    speakers, the status bar naming each. Record after switching back to the headphones:
    the take sits in time by ear, as before. During a take O does nothing.
+14. **Edit > Configure Hotkeys.** Give Play / Pause the key P and press OK: P plays and
+   Space no longer does, and Help > Key and Mouse Reference lists P. Give Loop Playback the
+   key S: both rows turn red, a line names them, and OK is greyed until one is changed.
+   Quit and start Tony: the keys are as they were left. Restore Defaults, then OK, puts
+   every key back. A key typed with AltGr on the Finnish keyboard: is it taken, and does it
+   work? Is the dialog's size and wording right?
 
 ## 4. Lyrics
 

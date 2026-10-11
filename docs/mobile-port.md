@@ -249,8 +249,9 @@ it, which is how it is tested. It is not kept in the settings.
   widget holding its action or its menu: with only the hidden menu bar holding them, every
   shortcut that is only in a menu would stop working.
 - Hidden while compact: the Navigate and Note Edit tools (Navigate is selected first), the
-  audio device menus (and on Windows the driver and latency menus), the overview (the song
-  scroll bar takes its place) and the menus' tear-off handles, which a finger catches.
+  audio device menus (and on Windows the driver and latency menus), Edit > Configure
+  Hotkeys (a phone has no keyboard), the overview (the song scroll bar takes its place)
+  and the menus' tear-off handles, which a finger catches.
 - Kept: the status bar, for the pre-roll countdown and the sung note; the Edit menu's and
   the long-press menu's pitch and note actions (only the tool modes go); the spectrogram's
   toggle, in the bottom toolbars.

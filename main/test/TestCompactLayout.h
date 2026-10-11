@@ -92,11 +92,13 @@ public:
         return m_inputMeterAction;
     }
 
-    // What it hides: the note-editing tools and the audio device menus
+    // What it hides: the note-editing tools, the audio device menus and
+    // Configure Hotkeys, a phone having no keyboard
     QList<QAction *> hiddenActions() {
         return { m_navigateToolAction, m_noteEditToolAction,
                  m_audioDeviceMenu->menuAction(),
-                 m_audioInputDeviceMenu->menuAction() };
+                 m_audioInputDeviceMenu->menuAction(),
+                 m_configureHotkeysAction };
     }
 
     QAction *navigateTool() { return m_navigateToolAction; }
@@ -491,8 +493,8 @@ private slots:
         QCOMPARE(m_window->takeBox()->parentWidget(),
                  static_cast<QWidget *>(bar));
 
-        // The note-editing tools and the audio device menus hidden, and
-        // the tool the one that edits nothing
+        // The note-editing tools, the audio device menus and Configure
+        // Hotkeys hidden, and the tool the one that edits nothing
         for (QAction *action: m_window->hiddenActions()) {
             QVERIFY2(!action->isVisible(), qPrintable(action->text()));
         }

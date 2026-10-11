@@ -13,6 +13,13 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **Take operations clear the undo history with no prompt** (all but Rename).
 - **A shortcut for Show Lyrics?** There is none. Edit Lyrics and Shift Lyrics have
   Ctrl+L and Ctrl+Shift+L (the user, 2026-10-11).
+- **Configure Hotkeys lists only the commands that have a hotkey of their own.** One
+  without (Analyse Now!, New Empty Take, the bottom bar's track toggles, ...) cannot be
+  given one there; each would be an `m_hotkeys->add()` with no defaults, and
+  `every_hotkey_is_configurable` asks for defaults now.
+- **An Alt and letter key chosen for a command is not checked against the menu bar's
+  letters**: Alt+F would then be both File's and the command's. Which one it does is not
+  checked.
 - **The editing constants** were defaults taken without the user: the 20 ms shortest
   word, the 0.5 s new word, the 6 px grab on each side of an edge, the menu's wording,
   and Edit Lyrics living in the Edit menu.

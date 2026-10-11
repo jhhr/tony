@@ -41,8 +41,8 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `DeviceSwitch`, `Coverage`, `TakeAudio`, `RecordingAlignment`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `TakeRecordingSearch`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `DeviceSwitch`, `Hotkeys`, `Coverage`, `TakeAudio`, `RecordingAlignment`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `HotkeyTable`, `HotkeyReference`, `HotkeysDialog`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `TakeRecordingSearch`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
 Android-only code elsewhere is under `#ifdef Q_OS_ANDROID`; neither may change what the
@@ -413,6 +413,37 @@ selection, Shift+P for the pre-roll and Shift+R for the reference. No two entrie
 three menus share an underlined letter, nor do two menus of the menu bar, and no two
 actions of the window share a hotkey: Qt takes a key two actions have as ambiguous and
 does neither. The pane's right-button Playback submenu keeps Record.
+
+**Hotkeys** (`Hotkeys`, `HotkeyTable`, `HotkeyReference`, `HotkeysDialog`; the user,
+2026-10-11): every command that has a hotkey is in the window's `HotkeyTable`, under an id
+that the settings keep its keys by (group `Hotkeys`: a command not there has its defaults,
+one there with "" has none), and Edit > Configure Hotkeys changes them.
+
+- **An action gets its hotkey with `m_hotkeys->add(id, action)`** where it is made, in
+  place of registering it with the key reference, which `add()` does in the category set
+  then. Its keys then are its defaults. **Never rename an id**: the keys the user chose
+  are kept under it. `every_hotkey_is_configurable` fails for an action with a hotkey that
+  is not in the table.
+- **`apply()`** gives every command its keys from the settings once the menus are made,
+  before `finaliseMenus()`, and again after the dialog's OK, with `finaliseMenus()` after
+  it: on macOS that copies a key only a menu holds into a shortcut of the application's
+  own, with the key the action had then.
+- **CommandHistory's Undo and Redo** are one pair for every window, and their text names
+  the command to be undone: their names and defaults are given, never read off the
+  actions, and each window's `apply()` puts back the defaults another window changed.
+- **Re-open**, the first recent file's key, has no action of its own:
+  `setupRecentFilesMenu()` gives that file the table's keys each time it makes the list,
+  and the key reference lists Re-open once, in its category.
+- **`HotkeyReference`** is the window's key reference, held as one: svgui's `KeyReference`
+  writes an action's keys down when it is registered and builds its window once, so this
+  one lists them again whenever `apply()` runs, builds the window again (open or not), and
+  leaves out a command that has no key.
+- **The dialog** offers two keys per command, one key combination in each box (Qt 6.5's
+  `setMaximumSequenceLength(1)`; before that, the first of the keys pressed in a row is
+  kept), and shuts OK while two commands share a key. It keeps a command's keys only where
+  they are not its defaults, so that new defaults in a later build reach a command the user
+  never changed. It is window-modal and runs no event loop of its own (`open()`). The
+  compact layout hides Configure Hotkeys: a phone has no keyboard.
 
 **Switch to Previous Output Device** (`DeviceSwitch`; the user, 2026-10-11): the hotkey
 O goes back to the output device chosen before the one in use, and pressed again to that

@@ -39,6 +39,7 @@
 #include <functional>
 
 #include <QElapsedTimer>
+#include <QPointer>
 
 #include "data/model/SparseTimeValueModel.h"
 
@@ -65,6 +66,9 @@ class InputDeviceMenu;
 class InputLevelFeed;
 class InputLevelMeterAction;
 class CheckInputLevelDialog;
+class HotkeyReference;
+class HotkeyTable;
+class HotkeysDialog;
 class StatusLine;
 class CalibrateAudioDialog;
 #ifdef TONY_DEV_CHECKS
@@ -1042,7 +1046,16 @@ protected:
     sv::LevelPanToolButton *m_notesLPW;
     
     sv::ActivityLog   *m_activityLog;
-    sv::KeyReference  *m_keyReference;
+    // Help > Key and Mouse Reference, which lists the keys the commands
+    // have now; the commands that have hotkeys (HotkeyTable); and Edit >
+    // Configure Hotkeys, with its dialog while it is open
+    HotkeyReference   *m_keyReference;
+    HotkeyTable       *m_hotkeys;
+    QAction           *m_configureHotkeysAction;
+    QPointer<HotkeysDialog> m_hotkeysDialog;
+    void configureHotkeys();
+    // The keys kept in the settings given to the commands
+    void applyHotkeys();
     sv::VersionTester *m_versionTester;
     QString            m_newerVersionIs;
 
