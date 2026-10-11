@@ -41,7 +41,7 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `Coverage`, `TakeAudio`, `RecordingAlignment`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `DeviceSwitch`, `Coverage`, `TakeAudio`, `RecordingAlignment`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
 | `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `TakeRecordingSearch`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
@@ -413,6 +413,17 @@ selection, Shift+P for the pre-roll and Shift+R for the reference. No two entrie
 three menus share an underlined letter, nor do two menus of the menu bar, and no two
 actions of the window share a hotkey: Qt takes a key two actions have as ambiguous and
 does neither. The pane's right-button Playback submenu keeps Record.
+
+**Switch to Previous Output Device** (`DeviceSwitch`; the user, 2026-10-11): the hotkey
+O goes back to the output device chosen before the one in use, and pressed again to that
+one, for a singer who records in headphones and plays the take back on speakers. No menu
+or toolbar holds its action (the user's choice): the window does, so that its key works
+with the menu bar hidden as well. Every output device chosen, from the menu or by the key,
+goes through `chooseAudioDevice()`, which keeps the one left. It is kept with the
+Preferences key it was chosen under, so another driver has none to go back to, and in
+memory only: until a second device is chosen in a launch the key does nothing. It is shut
+during a take and while a check runs, as the driver menus are, and the status bar names
+the device it switched to, as nothing else on the screen does.
 
 **Voice threshold** (`VoiceThreshold`, `VoiceGate`, `VoiceThresholdMenu`): for singing
 with the music on speakers, which the microphone hears as well. A level in dBFS under

@@ -239,6 +239,12 @@ public:
     QMenu *devicesMenu() { return m_devicesMenu; }
     QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
     QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
+    // An output device chosen, as Devices > Audio Output Device chooses
+    // one, and Switch to Previous Output Device, which the window holds
+    void doChooseOutputDevice(QString name) {
+        chooseAudioDevice("audio-playback-device", name);
+    }
+    QAction *previousOutputAction() { return m_previousOutputAction; }
 
     // Devices > Audio Driver and Audio Latency, from the implementations
     // given here: none unless a test gives some, whatever the platform

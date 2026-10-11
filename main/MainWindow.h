@@ -30,6 +30,7 @@
 #include "LatencyCalibration.h"
 #include "LiveDotsFeed.h"
 #include "InputChannel.h"
+#include "DeviceSwitch.h"
 #include "TakeRecordingSearch.h"
 
 #include <vector>
@@ -407,6 +408,16 @@ protected slots:
 
     virtual void rescanAudioDevices();
     virtual void audioDeviceSelected(QAction *);
+
+    // A device chosen, as the device menus choose one: base is the start
+    // of its Preferences key, "audio-playback-device" or
+    // "audio-record-device", which the driver's name follows.  The device
+    // is opened again with it
+    void chooseAudioDevice(QString base, QString device);
+
+    // The hotkey Switch to Previous Output Device: back to the output
+    // device chosen before the one in use, if one was in this launch
+    void switchToPreviousOutputDevice();
 
     // Devices > Audio Driver or Audio Latency chosen, and written to the
     // Preferences: the device is opened again, with it
@@ -942,6 +953,11 @@ protected:
     QActionGroup  *m_audioDeviceGroup;
     QMenu         *m_audioInputDeviceMenu;
     QActionGroup  *m_audioInputDeviceGroup;
+
+    // What Switch to Previous Output Device goes back to, and its action,
+    // which no menu or toolbar holds: the window does, for its hotkey
+    DeviceSwitch   m_outputSwitch;
+    QAction       *m_previousOutputAction;
 
     // Devices > Audio Driver and Audio Latency, before the device menus
     AudioDriverMenus *m_audioDriverMenus;

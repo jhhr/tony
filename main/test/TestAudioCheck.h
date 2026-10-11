@@ -1899,6 +1899,7 @@ private slots:
         QVERIFY(!m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(!m_window->audioInputMenu()->menuAction()->isEnabled());
         QVERIFY(driverMenusDisabled());
+        QVERIFY(!m_window->previousOutputAction()->isEnabled());
         QVERIFY(!voiceThresholdMenuEnabled());
         QVERIFY2(dialog->pageText().contains("Recording punch-in 1 of 2"),
                  qPrintable(dialog->pageText()));
@@ -1919,6 +1920,7 @@ private slots:
         QVERIFY(m_window->audioOutputMenu()->menuAction()->isEnabled());
         QVERIFY(m_window->audioInputMenu()->menuAction()->isEnabled());
         QVERIFY(driverMenusEnabled());
+        QVERIFY(m_window->previousOutputAction()->isEnabled());
         QVERIFY(voiceThresholdMenuEnabled());
 
         // 12411 frames measured, 12288 reported, at 44.1 kHz
@@ -2213,11 +2215,13 @@ private slots:
         if (QTest::currentTestFailed()) return;
         QVERIFY(m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(driverMenusEnabled());
+        QVERIFY(m_window->previousOutputAction()->isEnabled());
 
         m_window->doRecord();
         QVERIFY(m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(driverMenusDisabled());
+        QVERIFY(!m_window->previousOutputAction()->isEnabled());
         QTest::qWait(300);
 
         m_window->doRecord();
@@ -2225,6 +2229,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT
             (m_window->calibrateAudioAction()->isEnabled(), 10000);
         QVERIFY(driverMenusEnabled());
+        QVERIFY(m_window->previousOutputAction()->isEnabled());
     }
 
     // Closing the dialog while its check runs cancels the check; opened
@@ -2538,6 +2543,88 @@ private slots:
         emit m_window->devicesMenu()->aboutToShow();
         QCOMPARE(m_window->audioIOOpenedFor().implementation, QString());
         QCOMPARE(preference("audio-target"), QString());
+    }
+
+    // Switch to Previous Output Device, which the window holds and no
+    // menu or toolbar does: nothing until a second output device is
+    // chosen in this launch; then back to the one before, and pressed
+    // again to the other, each opened again and named in the status bar.
+    // A choice from the Output Device menu counts. Nothing to go back to
+    // under another driver, which has devices of its own, nor after a
+    // relaunch
+    void switch_to_previous_output_device() {
+        setPreference("audio-target", "wasapi");
+        setDevices("Headphones", "Microphone", "wasapi");
+        makeWindow(FakeAudioIO::Config());
+        showDriverMenus(windowsImplementations());
+        QAction *back = m_window->previousOutputAction();
+        QVERIFY(back);
+        QCOMPARE(back->shortcut(), QKeySequence("O"));
+        QCOMPARE(back->associatedObjects(),
+                 QList<QObject *>({ m_window }));
+        QVERIFY(back->isEnabled());
+
+        m_window->recreateAudioIO();
+        int opened = m_window->audioIOOpened();
+        back->trigger();
+        QCOMPARE(m_window->audioIOOpened(), opened);
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Headphones"));
+
+        m_window->doChooseOutputDevice("Speakers");
+        QCOMPARE(m_window->audioIOOpenedFor().playbackDevice,
+                 QString("Speakers"));
+        opened = m_window->audioIOOpened();
+        back->trigger();
+        QCOMPARE(m_window->audioIOOpened(), opened + 1);
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Headphones"));
+        QCOMPARE(m_window->audioIOOpenedFor().playbackDevice,
+                 QString("Headphones"));
+        QCOMPARE(m_window->statusText(),
+                 QString("Playing through Headphones"));
+        back->trigger();
+        QCOMPARE(m_window->audioIOOpenedFor().playbackDevice,
+                 QString("Speakers"));
+        QCOMPARE(m_window->statusText(), QString("Playing through Speakers"));
+
+        // (System Default) chosen from the menu, as the user chooses it
+        QMenu *outputs = m_window->audioOutputMenu();
+        emit outputs->aboutToShow();
+        QAction *systemDefault = entry(outputs, "(System Default)");
+        QVERIFY2(systemDefault, qPrintable(entries(outputs).join(", ")));
+        systemDefault->trigger();
+        QCOMPARE(preference("audio-playback-device-wasapi"), QString());
+        back->trigger();
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Speakers"));
+        back->trigger();
+        QCOMPARE(preference("audio-playback-device-wasapi"), QString());
+        QCOMPARE(m_window->statusText(),
+                 QString("Playing through (System Default)"));
+
+        // MME's devices are its own: there is none of them to go back to
+        chooseDriver("MME");
+        setDevices("Speakers (MME)", "Mic (MME)", "mme");
+        opened = m_window->audioIOOpened();
+        back->trigger();
+        QCOMPARE(m_window->audioIOOpened(), opened);
+        QCOMPARE(preference("audio-playback-device-mme"),
+                 QString("Speakers (MME)"));
+        // and WASAPI has its own again
+        chooseDriver("WASAPI");
+        back->trigger();
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Speakers"));
+
+        makeWindow(FakeAudioIO::Config());
+        showDriverMenus(windowsImplementations());
+        m_window->recreateAudioIO();
+        opened = m_window->audioIOOpened();
+        m_window->previousOutputAction()->trigger();
+        QCOMPARE(m_window->audioIOOpened(), opened);
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Speakers"));
     }
 
     // The latency is chosen per driver, handed to bqaudioio as the device

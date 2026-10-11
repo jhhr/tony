@@ -280,6 +280,11 @@ Not tried yet.
    quit and start: it comes back there, as large. With two screens, closed on the second
    it comes back on the second. The first start of a build with this has nothing kept,
    and opens at its first-time size once.
+13. **Switch to Previous Output Device (O)**, with headphones and speakers. Just after
+   starting, O does nothing. Choose the headphones under Devices > Audio Output Device,
+   then the speakers: O plays through the headphones again and O again through the
+   speakers, the status bar naming each. Record after switching back to the headphones:
+   the take sits in time by ear, as before. During a take O does nothing.
 
 ## 4. Lyrics
 

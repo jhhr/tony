@@ -53,6 +53,10 @@ Recording
    is for choosing the phone's microphone instead, or one of two. A choice
    that is not plugged in records from the phone's choice, and the status bar
    says so
+ * O switches back to the output device chosen before the one in use, and
+   pressed again to that one: headphones to record, speakers to play the take
+   back, say. It has nothing to go back to until a second output device has
+   been chosen since Tony started
  * a microphone on one input of an interface with two: Devices -> Input
    Channel -> Input 1 (or Input 2) makes each take from that input alone, so
    that it plays back in both ears and the live dots, the analysis and the

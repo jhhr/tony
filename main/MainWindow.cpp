@@ -255,6 +255,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioDeviceGroup(0),
     m_audioInputDeviceMenu(0),
     m_audioInputDeviceGroup(0),
+    m_previousOutputAction(nullptr),
     m_audioDriverMenus(nullptr),
     m_voiceThresholdMenu(nullptr),
     m_inputChannelMenu(nullptr),
@@ -1796,13 +1797,23 @@ MainWindow::audioDeviceSelected(QAction *action)
 {
     if (!action) return;
 
-    QString key = audioDeviceSettingKey
-        (m_audioInputDeviceGroup->actions().contains(action) ?
-         "audio-record-device" : "audio-playback-device");
+    chooseAudioDevice(m_audioInputDeviceGroup->actions().contains(action) ?
+                      "audio-record-device" : "audio-playback-device",
+                      action->data().toString());
+}
+
+void
+MainWindow::chooseAudioDevice(QString base, QString device)
+{
+    QString key = audioDeviceSettingKey(base);
 
     QSettings settings;
     settings.beginGroup("Preferences");
-    settings.setValue(key, action->data().toString());
+    // The output device left is the one the hotkey goes back to
+    if (base == "audio-playback-device") {
+        m_outputSwitch.chosen(key, settings.value(key, "").toString(), device);
+    }
+    settings.setValue(key, device);
     settings.endGroup();
 
     if (m_playSource && m_playSource->isPlaying()) {
@@ -1813,6 +1824,25 @@ MainWindow::audioDeviceSelected(QAction *action)
     m_lastRecordingRate = 0;
 
     recreateAudioIO();
+}
+
+void
+MainWindow::switchToPreviousOutputDevice()
+{
+    // Its action is shut during a take and while a check runs, as the
+    // driver menus are: the device would open again under them
+    QString device;
+    if (!m_outputSwitch.previous
+        (audioDeviceSettingKey("audio-playback-device"), device)) {
+        return;
+    }
+    chooseAudioDevice("audio-playback-device", device);
+
+    // No menu or button shows the device in use, so the status bar says
+    m_statusLine->setNotice
+        (tr("Playing through %1")
+         .arg(device == "" ? tr("(System Default)") : device));
+    showStatusLine();
 }
 
 QStringList
@@ -2656,6 +2686,20 @@ MainWindow::setupDevicesMenu()
                 this, SLOT(audioDeviceSelected(QAction *)));
     }
 
+    // Back to the output device chosen before this one, for the singer
+    // who records in headphones and plays the take back on speakers.  No
+    // menu or toolbar holds it: the window does, for its hotkey to work
+    m_keyReference->setCategory(tr("Audio Devices"));
+    m_previousOutputAction =
+        new QAction(tr("Switch to Previous Output Device"), this);
+    m_previousOutputAction->setShortcut(tr("O"));
+    m_previousOutputAction->setStatusTip
+        (tr("Play through the output device chosen before the one in use"));
+    connect(m_previousOutputAction, &QAction::triggered,
+            this, &MainWindow::switchToPreviousOutputDevice);
+    addAction(m_previousOutputAction);
+    m_keyReference->registerShortcut(m_previousOutputAction);
+
     // After the input device, as a choice is kept for each input device.
     // Not one of the compact layout's hidden actions: a phone with an
     // interface plugged in needs it
@@ -2987,9 +3031,12 @@ MainWindow::updateMenuStates()
     if (m_calibrateAudioAction) {
         m_calibrateAudioAction->setEnabled(!inTake && !checking);
     }
-    // Choosing either opens the device afresh
+    // Choosing either opens the device afresh, and so does the switch
     if (m_audioDriverMenus) {
         m_audioDriverMenus->setEnabled(!inTake && !checking);
+    }
+    if (m_previousOutputAction) {
+        m_previousOutputAction->setEnabled(!inTake && !checking);
     }
     // A take keeps the threshold it started with, and the check's takes
     // have none: a choice made meanwhile would look as if it applied

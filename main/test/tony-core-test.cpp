@@ -48,6 +48,7 @@
 #include "TestTakeReplacement.h"
 #include "TestSettingsKey.h"
 #include "TestStatusLine.h"
+#include "TestDeviceSwitch.h"
 #include "TestRunSuite.h"
 
 #include "RunSuite.h"
@@ -294,6 +295,12 @@ int main(int argc, char *argv[])
 
     {
         TestStatusLine t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestDeviceSwitch t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

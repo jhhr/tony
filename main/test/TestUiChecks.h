@@ -2148,6 +2148,28 @@ private slots:
         press(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
         QCOMPARE(m_window->lyricsShiftQuestions(), asked + 1);
     }
+
+    // O goes back to the output device chosen before the one in use,
+    // though no menu or toolbar holds its action
+    void previous_output_device_hotkey() {
+        // The device the Preferences name, no driver being named; the
+        // fake device takes no notice
+        QSettings settings;
+        settings.setValue("Preferences/audio-playback-device", "Headphones");
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+
+        m_window->doChooseOutputDevice("Speakers");
+        QCOMPARE(settings.value("Preferences/audio-playback-device")
+                 .toString(), QString("Speakers"));
+        press(QKeySequence(Qt::Key_O));
+        QCOMPARE(settings.value("Preferences/audio-playback-device")
+                 .toString(), QString("Headphones"));
+        press(QKeySequence(Qt::Key_O));
+        QCOMPARE(settings.value("Preferences/audio-playback-device")
+                 .toString(), QString("Speakers"));
+        settings.remove("Preferences/audio-playback-device");
+    }
 };
 
 #endif

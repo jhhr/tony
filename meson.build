@@ -1195,6 +1195,7 @@ tony_core_files = [
   'main/AudioDriverSettings.cpp',
   'main/Coverage.cpp',
   'main/DecodedPcm.cpp',
+  'main/DeviceSwitch.cpp',
   'main/InputChannel.cpp',
   'main/InputDevice.cpp',
   'main/InputLevel.cpp',
@@ -1626,6 +1627,7 @@ if system != 'android'
     'main/test/TestTakeReplacement.h',
     'main/test/TestSettingsKey.h',
     'main/test/TestStatusLine.h',
+    'main/test/TestDeviceSwitch.h',
     'main/test/TestRunSuite.h',
   ])
 
