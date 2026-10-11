@@ -28,6 +28,7 @@
 
 #include "../AlternatePitchTrack.h"
 #include "../TakeLayers.h"
+#include "../Hotkeys.h"
 
 #include "version.h"
 
@@ -610,6 +611,7 @@ private slots:
         settings.beginGroup("SingingAnalyser");
         settings.remove("");
         settings.endGroup();
+        Hotkeys::forgetAll(settings);
         SingingTakes::setOverwriteConfirmationWanted(true);
     }
 
@@ -2099,6 +2101,96 @@ private slots:
             QVERIFY(!sv::ModelTransformerFactory::getInstance()
                     ->haveRunningTransformers());
         }
+    }
+
+    // The keys pressed: Shift with R, P and S toggles each recording
+    // option as its button does, the setting with it; Ctrl+L switches the
+    // lyrics' edit mode on and off, and Ctrl+Shift+L asks for a shift
+    void recording_and_lyrics_hotkeys() {
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        struct Toggle {
+            QAction *action;
+            QKeySequence key;
+            QString setting;
+        };
+        const QList<Toggle> toggles {
+            { m_window->playReferenceWhileRecordingAction(),
+              QKeySequence(Qt::SHIFT | Qt::Key_R), "playrefwhilerecording" },
+            { m_window->preRollAction(),
+              QKeySequence(Qt::SHIFT | Qt::Key_P), "preroll" },
+            { m_window->recordIntoSelectionAction(),
+              QKeySequence(Qt::SHIFT | Qt::Key_S), "recordintoselection" },
+        };
+        for (const Toggle &t : toggles) {
+            QVERIFY2(!t.action->isChecked(), qPrintable(t.action->text()));
+            press(t.key);
+            QVERIFY2(t.action->isChecked(), qPrintable(t.action->text()));
+            QVERIFY(QSettings().value("MainWindow/" + t.setting).toBool());
+            press(t.key);
+            QVERIFY2(!t.action->isChecked(), qPrintable(t.action->text()));
+            QVERIFY(!QSettings().value("MainWindow/" + t.setting).toBool());
+        }
+
+        QVERIFY(m_window->doImportLyricsFrom
+                (QString(TONY_TEST_DATA_DIR) +
+                 "/lyrics/moises-exporter-words.lrc"));
+        QVERIFY(m_window->editLyricsAction()->isEnabled());
+        press(QKeySequence(Qt::CTRL | Qt::Key_L));
+        QVERIFY(m_window->editLyricsAction()->isChecked());
+        QVERIFY(m_window->lyricsEditor()->isEnabled());
+        press(QKeySequence(Qt::CTRL | Qt::Key_L));
+        QVERIFY(!m_window->editLyricsAction()->isChecked());
+        QVERIFY(!m_window->lyricsEditor()->isEnabled());
+
+        const int asked = m_window->lyricsShiftQuestions();
+        press(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
+        QCOMPARE(m_window->lyricsShiftQuestions(), asked + 1);
+    }
+
+    // O goes back to the output device chosen before the one in use,
+    // though no menu or toolbar holds its action
+    void previous_output_device_hotkey() {
+        // The device the Preferences name, no driver being named; the
+        // fake device takes no notice
+        QSettings settings;
+        settings.setValue("Preferences/audio-playback-device", "Headphones");
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+
+        m_window->doChooseOutputDevice("Speakers");
+        QCOMPARE(settings.value("Preferences/audio-playback-device")
+                 .toString(), QString("Speakers"));
+        press(QKeySequence(Qt::Key_O));
+        QCOMPARE(settings.value("Preferences/audio-playback-device")
+                 .toString(), QString("Headphones"));
+        press(QKeySequence(Qt::Key_O));
+        QCOMPARE(settings.value("Preferences/audio-playback-device")
+                 .toString(), QString("Speakers"));
+        settings.remove("Preferences/audio-playback-device");
+    }
+
+    // A key chosen for a command (Edit > Configure Hotkeys keeps it so)
+    // does the command, and the command's own key no longer does
+    void chosen_hotkey_does_the_command() {
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "play", { "P" }, { "Space" });
+        }
+        makeWindow(FakeAudioIO::Config());
+        if (QTest::currentTestFailed()) return;
+        openReference(writeWav(tone(lowHz, 4.0)));
+        if (QTest::currentTestFailed()) return;
+
+        press(QKeySequence(Qt::Key_Space));
+        QVERIFY(!m_window->playSource()->isPlaying());
+        press(QKeySequence(Qt::Key_P));
+        QVERIFY(m_window->playSource()->isPlaying());
+        press(QKeySequence(Qt::Key_P));
+        QVERIFY(!m_window->playSource()->isPlaying());
     }
 };
 

@@ -37,7 +37,7 @@ class QScrollArea;
 class QStackedWidget;
 
 /**
- * Playback > Calibrate Audio: what the user sees of the audio check.
+ * Devices > Calibrate Audio: what the user sees of the audio check.
  * Three pages: what to do before it starts, with the devices and the
  * latency takes are placed with now; how far it has got, with Cancel;
  * and what it found, in plain words, with the fix for whatever went
@@ -128,7 +128,7 @@ public:
 
     /// The latency a take is placed with, and where it came from, in a
     /// few words: "measured 187 ms, 25 Sep" or "driver's figure, 400
-    /// ms".  The Playback menu's line says the same
+    /// ms".  The Devices menu's line says the same
     static QString describeLatency(const LatencyCalibration::InUse &inUse);
 
 #ifdef TONY_DEV_CHECKS

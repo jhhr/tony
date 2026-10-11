@@ -48,6 +48,9 @@
 #include "InputLevelFeed.h"
 #include "InputLevelMeter.h"
 #include "CheckInputLevelDialog.h"
+#include "HotkeyReference.h"
+#include "HotkeyTable.h"
+#include "HotkeysDialog.h"
 #include "StatusLine.h"
 
 #ifdef Q_OS_ANDROID
@@ -246,6 +249,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_loadingBackgroundMusic(false),
     m_mainMenusCreated(false),
     m_playbackMenu(0),
+    m_recordMenu(nullptr),
+    m_devicesMenu(nullptr),
     m_recentFilesMenu(0), 
     m_rightButtonMenu(0),
     m_rightButtonPlaybackMenu(0),
@@ -253,6 +258,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_audioDeviceGroup(0),
     m_audioInputDeviceMenu(0),
     m_audioInputDeviceGroup(0),
+    m_previousOutputAction(nullptr),
     m_audioDriverMenus(nullptr),
     m_voiceThresholdMenu(nullptr),
     m_inputChannelMenu(nullptr),
@@ -267,7 +273,9 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_rwdAction(0),
     m_intelligentActionOn(true), //GF: !!! temporary
     m_activityLog(new ActivityLog()),
-    m_keyReference(new KeyReference()),
+    m_keyReference(new HotkeyReference()),
+    m_hotkeys(nullptr),
+    m_configureHotkeysAction(nullptr),
     m_selectionAnchor(0),
     m_withSonification(withSonification),
     m_withSpectrogram(withSpectrogram),
@@ -588,9 +596,17 @@ MainWindow::MainWindow(AudioMode audioMode,
     connect(m_lyricsSize, &LyricsSize::textScaleChanged,
             m_lyrics, &LyricsTrack::setTextScale);
 
+    // Before the menus: their actions' hotkeys are added to it as they
+    // are made, which lists them in the key reference too
+    m_hotkeys = new HotkeyTable(m_keyReference, this);
+
     setupMenus();
     setupToolbars();
     setupHelpMenu();
+
+    // Every command is in the table now: the keys chosen for them, before
+    // finaliseMenus() copies some of the menus' keys (on macOS)
+    m_hotkeys->apply();
 
     statusBar();
 
@@ -785,7 +801,7 @@ MainWindow::setupFileMenu()
     action->setShortcut(tr("Ctrl+O"));
     action->setStatusTip(tr("Open a session or audio file"));
     connect(action, SIGNAL(triggered()), this, SLOT(openFile()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("open", action);
     menu->addAction(action);
     toolbar->addAction(action);
 
@@ -793,11 +809,18 @@ MainWindow::setupFileMenu()
     action->setShortcut(tr("Ctrl+Shift+O"));
     action->setStatusTip(tr("Open a file from a remote URL"));
     connect(action, SIGNAL(triggered()), this, SLOT(openLocation()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("open-location", action);
     menu->addAction(action);
 
     m_recentFilesMenu = menu->addMenu(tr("Open &Recent"));
     m_recentFilesMenu->setTearOffEnabled(true);
+    // The hotkey of the first of them, whichever file that is: listed
+    // here, once, and given to it whenever the list is made
+    m_hotkeys->add("reopen", tr("Re-open"),
+                   tr("Re-open the current or most recently opened file"),
+                   { QKeySequence(tr("Ctrl+R")) });
+    connect(m_hotkeys, &HotkeyTable::applied,
+            this, &MainWindow::setupRecentFilesMenu);
     setupRecentFilesMenu();
     connect(&m_recentFiles, SIGNAL(recentChanged()),
             this, SLOT(setupRecentFilesMenu()));
@@ -810,7 +833,7 @@ MainWindow::setupFileMenu()
     action->setStatusTip(tr("Save the current session into a %1 session file").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(saveSession()));
     connect(this, SIGNAL(canSave(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("save-session", action);
     menu->addAction(action);
     toolbar->addAction(action);
 	
@@ -820,6 +843,7 @@ MainWindow::setupFileMenu()
     action->setStatusTip(tr("Save the current session into a new %1 session file").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(saveSessionAs()));
     connect(this, SIGNAL(canSaveAs(bool)), action, SLOT(setEnabled(bool)));
+    m_hotkeys->add("save-session-as", action);
     menu->addAction(action);
     toolbar->addAction(action);
 
@@ -828,6 +852,7 @@ MainWindow::setupFileMenu()
     action->setStatusTip(tr("Save the current session into a %1 session file with the same filename as the audio but a .ton extension.").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(saveSessionInAudioPath()));
     connect(this, SIGNAL(canSaveAs(bool)), action, SLOT(setEnabled(bool)));
+    m_hotkeys->add("save-session-to-audio-path", action);
     menu->addAction(action);
 
     menu->addSeparator();
@@ -837,7 +862,7 @@ MainWindow::setupFileMenu()
     m_loadSingingTrackAction->setStatusTip(tr("Load a second audio file to analyse as the singing track, overlaid on the reference track"));
     connect(m_loadSingingTrackAction, SIGNAL(triggered()), this, SLOT(openSingingTrack()));
     connect(this, SIGNAL(canPlay(bool)), m_loadSingingTrackAction, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(m_loadSingingTrackAction);
+    m_hotkeys->add("load-singing-track", m_loadSingingTrackAction);
     menu->addAction(m_loadSingingTrackAction);
 
     m_loadBackgroundMusicAction = new QAction(il.load("fileopen"), tr("Load &Background Music..."), this);
@@ -898,7 +923,7 @@ MainWindow::setupFileMenu()
     action->setShortcut(tr("Ctrl+Q"));
     action->setStatusTip(tr("Exit %1").arg(QApplication::applicationName()));
     connect(action, SIGNAL(triggered()), this, SLOT(close()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("quit", action);
     menu->addAction(action);
 }
 
@@ -910,6 +935,16 @@ MainWindow::setupEditMenu()
     QMenu *menu = menuBar()->addMenu(tr("&Edit"));
     menu->setTearOffEnabled(true);
     CommandHistory::getInstance()->registerMenu(menu);
+
+    // Its Undo and Redo, which registerMenu() puts first.  Every window
+    // shares them, and their text names what would be undone, so their
+    // names and keys are given here
+    m_keyReference->setCategory(tr("Undo and Redo"));
+    const QList<QAction *> history = menu->actions();
+    m_hotkeys->add("undo", history.value(0), tr("Undo"),
+                   { QKeySequence(tr("Ctrl+Z")) });
+    m_hotkeys->add("redo", history.value(1), tr("Redo"),
+                   { QKeySequence(tr("Ctrl+Shift+Z")) });
     menu->addSeparator();
 
     m_keyReference->setCategory
@@ -944,7 +979,7 @@ MainWindow::setupEditMenu()
     connect(this, SIGNAL(replacedDocument()), action, SLOT(trigger()));
     group->addAction(action);
     menu->addAction(action);
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("navigate-tool", action);
     m_navigateToolAction = action;
 
     m_keyReference->setCategory
@@ -968,7 +1003,7 @@ MainWindow::setupEditMenu()
     connect(action, SIGNAL(triggered()), this, SLOT(toolEditSelected()));
     group->addAction(action);
     menu->addAction(action);
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("edit-tool", action);
     m_noteEditToolAction = action;
 
     m_keyReference->setCategory
@@ -1009,7 +1044,7 @@ MainWindow::setupEditMenu()
     action->setStatusTip(tr("Select the whole duration of the current session"));
     connect(action, SIGNAL(triggered()), this, SLOT(selectAll()));
     connect(this, SIGNAL(canSelect(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("select-all", action);
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
@@ -1020,8 +1055,7 @@ MainWindow::setupEditMenu()
     action->setStatusTip(tr("Clear the selection and abandon any pending pitch choices in it"));
     connect(action, SIGNAL(triggered()), this, SLOT(abandonSelection()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
-    m_keyReference->registerAlternativeShortcut(action, QKeySequence(tr("Ctrl+Esc")));
+    m_hotkeys->add("clear-selection", action);
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
@@ -1033,7 +1067,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Choose Higher Pitch"), this);
     action->setShortcut(tr("Ctrl+Up"));
     action->setStatusTip(tr("Move pitches up an octave, or to the next higher pitch candidate"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("higher-pitch", action);
     connect(action, SIGNAL(triggered()), this, SLOT(switchPitchUp()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1042,7 +1076,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Choose Lower Pitch"), this);
     action->setShortcut(tr("Ctrl+Down"));
     action->setStatusTip(tr("Move pitches down an octave, or to the next lower pitch candidate"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("lower-pitch", action);
     connect(action, SIGNAL(triggered()), this, SLOT(switchPitchDown()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1051,7 +1085,7 @@ MainWindow::setupEditMenu()
     m_showCandidatesAction = new QAction(tr("Show Pitch Candidates"), this);
     m_showCandidatesAction->setShortcut(tr("Ctrl+Return"));
     m_showCandidatesAction->setStatusTip(tr("Toggle the display of alternative pitch candidates for the selected region"));
-    m_keyReference->registerShortcut(m_showCandidatesAction);
+    m_hotkeys->add("pitch-candidates", m_showCandidatesAction);
     connect(m_showCandidatesAction, SIGNAL(triggered()), this, SLOT(togglePitchCandidates()));
     connect(this, SIGNAL(canClearSelection(bool)), m_showCandidatesAction, SLOT(setEnabled(bool)));
     menu->addAction(m_showCandidatesAction);
@@ -1060,7 +1094,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Remove Pitches"), this);
     action->setShortcut(tr("Ctrl+Backspace"));
     action->setStatusTip(tr("Remove all pitch estimates within the selected region, making it unvoiced"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("remove-pitches", action);
     connect(action, SIGNAL(triggered()), this, SLOT(clearPitches()));
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1074,7 +1108,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Split Note"), this);
     action->setShortcut(tr("/"));
     action->setStatusTip(tr("Split the note at the current playback position into two"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("split-note", action);
     connect(action, SIGNAL(triggered()), this, SLOT(splitNote()));
     connect(this, SIGNAL(canExportNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1083,7 +1117,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Merge Notes"), this);
     action->setShortcut(tr("\\"));
     action->setStatusTip(tr("Merge all notes within the selected region into a single note"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("merge-notes", action);
     connect(action, SIGNAL(triggered()), this, SLOT(mergeNotes()));
     connect(this, SIGNAL(canSnapNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1092,7 +1126,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Delete Notes"), this);
     action->setShortcut(tr("Backspace"));
     action->setStatusTip(tr("Delete all notes within the selected region"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("delete-notes", action);
     connect(action, SIGNAL(triggered()), this, SLOT(deleteNotes()));
     connect(this, SIGNAL(canSnapNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1101,7 +1135,7 @@ MainWindow::setupEditMenu()
     action = new QAction(tr("Form Note from Selection"), this);
     action->setShortcut(tr("="));
     action->setStatusTip(tr("Form a note spanning the selected region, splitting any existing notes at its boundaries"));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("form-note", action);
     connect(action, SIGNAL(triggered()), this, SLOT(formNoteFromSelection()));
     connect(this, SIGNAL(canSnapNotes(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
@@ -1144,7 +1178,7 @@ MainWindow::setupEditMenu()
     m_eraseSingingAction->setIconText(tr("Erase"));
     m_eraseSingingAction->setStatusTip
         (tr("Remove the recorded singing within the selected region, leaving silence"));
-    m_keyReference->registerShortcut(m_eraseSingingAction);
+    m_hotkeys->add("erase-singing", m_eraseSingingAction);
     connect(m_eraseSingingAction, SIGNAL(triggered()),
             this, SLOT(eraseSingingInSelection()));
     connect(this, SIGNAL(canEraseSinging(bool)),
@@ -1155,25 +1189,40 @@ MainWindow::setupEditMenu()
 
     menu->addSeparator();
 
+    m_keyReference->setCategory(tr("Lyrics"));
+
     // A mode, not a tool: the lyrics are never the pane's top layer, which
-    // is what the tools act on.  Enabled and checked in updateMenuStates().
-    // No shortcut: it is not switched on and off in the middle of things
+    // is what the tools act on.  Enabled and checked in updateMenuStates()
     m_editLyricsAction = new QAction(tr("Edit L&yrics"), this);
     m_editLyricsAction->setCheckable(true);
+    m_editLyricsAction->setShortcut(tr("Ctrl+L"));
     m_editLyricsAction->setStatusTip(tr("Edit the words of the lyrics along the bottom of the pane: drag a start or end, Shift-drag to move all the words, double-click a word to change its text, right-click to add or delete one"));
     m_editLyricsAction->setEnabled(false);
     connect(m_editLyricsAction, &QAction::triggered,
             this, &MainWindow::editLyricsToggled);
+    m_hotkeys->add("edit-lyrics", m_editLyricsAction);
     menu->addAction(m_editLyricsAction);
 
     // The same shift as a Shift-drag in edit mode, by a number: for an
     // offset known beforehand, such as the lyrics exporter's
     m_shiftLyricsAction = new QAction(tr("S&hift Lyrics..."), this);
+    m_shiftLyricsAction->setShortcut(tr("Ctrl+Shift+L"));
     m_shiftLyricsAction->setStatusTip(tr("Move all the words of the lyrics earlier or later by a number of seconds"));
     m_shiftLyricsAction->setEnabled(false);
     connect(m_shiftLyricsAction, &QAction::triggered,
             this, &MainWindow::shiftLyrics);
+    m_hotkeys->add("shift-lyrics", m_shiftLyricsAction);
     menu->addAction(m_shiftLyricsAction);
+
+    menu->addSeparator();
+
+    // The keys of every command above, and of the others' (HotkeysDialog)
+    m_configureHotkeysAction = new QAction(tr("&Configure Hotkeys..."), this);
+    m_configureHotkeysAction->setStatusTip
+        (tr("Choose the keys that do what the menus and buttons do"));
+    connect(m_configureHotkeysAction, &QAction::triggered,
+            this, &MainWindow::configureHotkeys);
+    menu->addAction(m_configureHotkeysAction);
 }
 
 void
@@ -1194,7 +1243,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Scroll the current pane to the left without changing the play position"));
     connect(action, SIGNAL(triggered()), this, SLOT(scrollLeft()));
     connect(this, SIGNAL(canScroll(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("peek-left", action);
     menu->addAction(action);
     
     action = new QAction(tr("Peek &Right"), this);
@@ -1202,7 +1251,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Scroll the current pane to the right without changing the play position"));
     connect(action, SIGNAL(triggered()), this, SLOT(scrollRight()));
     connect(this, SIGNAL(canScroll(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("peek-right", action);
     menu->addAction(action);
 
     menu->addSeparator();
@@ -1215,7 +1264,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Increase the zoom level"));
     connect(action, SIGNAL(triggered()), this, SLOT(zoomIn()));
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("zoom-in", action);
     menu->addAction(action);
     m_zoomInAction = action;
     
@@ -1225,7 +1274,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Decrease the zoom level"));
     connect(action, SIGNAL(triggered()), this, SLOT(zoomOut()));
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("zoom-out", action);
     menu->addAction(action);
     m_zoomOutAction = action;
     
@@ -1241,7 +1290,7 @@ MainWindow::setupViewMenu()
     action->setStatusTip(tr("Zoom to show the whole file"));
     connect(action, SIGNAL(triggered()), this, SLOT(zoomToFit()));
     connect(this, SIGNAL(canZoom(bool)), action, SLOT(setEnabled(bool)));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("zoom-to-fit", action);
     menu->addAction(action);
 
     menu->addSeparator();
@@ -1557,14 +1606,14 @@ MainWindow::setupHelpMenu()
     action->setShortcut(tr("F1"));
     action->setStatusTip(tr("Open the %1 reference manual").arg(name)); 
     connect(action, SIGNAL(triggered()), this, SLOT(help()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("help-reference", action);
     menu->addAction(action);
 
     action = new QAction(tr("&Key and Mouse Reference"), this);
     action->setShortcut(tr("F2"));
     action->setStatusTip(tr("Open a window showing the keystrokes you can use in %1").arg(name));
     connect(action, SIGNAL(triggered()), this, SLOT(keyReference()));
-    m_keyReference->registerShortcut(action);
+    m_hotkeys->add("key-reference", action);
     menu->addAction(action);
     
     action = new QAction(tr("What's &New In This Release?"), this); 
@@ -1605,13 +1654,7 @@ MainWindow::setupRecentFilesMenu()
         QAction *action = m_recentFilesMenu->addAction(path);
         action->setObjectName(path);
         connect(action, SIGNAL(triggered()), this, SLOT(openRecentFile()));
-        if (i == 0) {
-            action->setShortcut(tr("Ctrl+R"));
-            m_keyReference->registerShortcut
-                (tr("Re-open"),
-                 action->shortcut().toString(),
-                 tr("Re-open the current or most recently opened file"));
-        }
+        if (i == 0) action->setShortcuts(m_hotkeys->keys("reopen"));
     }
 }
 
@@ -1789,13 +1832,34 @@ MainWindow::audioDeviceSelected(QAction *action)
 {
     if (!action) return;
 
-    QString key = audioDeviceSettingKey
-        (m_audioInputDeviceGroup->actions().contains(action) ?
-         "audio-record-device" : "audio-playback-device");
+    chooseAudioDevice(m_audioInputDeviceGroup->actions().contains(action) ?
+                      "audio-record-device" : "audio-playback-device",
+                      action->data().toString());
+}
+
+bool
+MainWindow::chooseAudioDevice(QString base, QString device)
+{
+    // Its menus and the switch are shut while a take records and while a
+    // check runs.  A choice that arrives all the same (queued before they
+    // were shut, say) is not made: the device opened again would leave
+    // the take recording nothing
+    if ((m_recordTarget && m_recordTarget->isRecording()) ||
+        audioCheckRunning()) {
+        cerr << "MainWindow::chooseAudioDevice: a take or an audio check "
+             << "is running; the device is left as it is" << endl;
+        return false;
+    }
+
+    QString key = audioDeviceSettingKey(base);
 
     QSettings settings;
     settings.beginGroup("Preferences");
-    settings.setValue(key, action->data().toString());
+    // The output device left is the one the hotkey goes back to
+    if (base == "audio-playback-device") {
+        m_outputSwitch.chosen(key, settings.value(key, "").toString(), device);
+    }
+    settings.setValue(key, device);
     settings.endGroup();
 
     if (m_playSource && m_playSource->isPlaying()) {
@@ -1806,6 +1870,26 @@ MainWindow::audioDeviceSelected(QAction *action)
     m_lastRecordingRate = 0;
 
     recreateAudioIO();
+    return true;
+}
+
+void
+MainWindow::switchToPreviousOutputDevice()
+{
+    // Its action is shut during a take and while a check runs, as the
+    // device menus are: the device would open again under them
+    QString device;
+    if (!m_outputSwitch.previous
+        (audioDeviceSettingKey("audio-playback-device"), device)) {
+        return;
+    }
+    if (!chooseAudioDevice("audio-playback-device", device)) return;
+
+    // No menu or button shows the device in use, so the status bar says
+    m_statusLine->setNotice
+        (tr("Playing through %1")
+         .arg(device == "" ? tr("(System Default)") : device));
+    showStatusLine();
 }
 
 QStringList
@@ -2149,19 +2233,18 @@ MainWindow::setupToolbars()
     connect(selectOneRightAction, SIGNAL(triggered()), this, SLOT(selectOneNoteRight()));
     connect(this, SIGNAL(canScroll(bool)), selectOneRightAction, SLOT(setEnabled(bool)));
 
-    m_keyReference->registerShortcut(psAction);
-    m_keyReference->registerShortcut(plAction);
-    m_keyReference->registerShortcut(playAction);
-    m_keyReference->registerShortcut(recordAction);
-    m_keyReference->registerShortcut(m_rwdAction);
-    m_keyReference->registerShortcut(m_ffwdAction);
-    m_keyReference->registerShortcut(rwdStartAction);
-    m_keyReference->registerShortcut(ffwdEndAction);
-    m_keyReference->registerShortcut(recordAction);
-    m_keyReference->registerShortcut(oneLeftAction);
-    m_keyReference->registerShortcut(oneRightAction);
-    m_keyReference->registerShortcut(selectOneLeftAction);
-    m_keyReference->registerShortcut(selectOneRightAction);
+    m_hotkeys->add("constrain-to-selection", psAction);
+    m_hotkeys->add("loop", plAction);
+    m_hotkeys->add("play", playAction);
+    m_hotkeys->add("record", recordAction);
+    m_hotkeys->add("rewind", m_rwdAction);
+    m_hotkeys->add("fast-forward", m_ffwdAction);
+    m_hotkeys->add("rewind-to-start", rwdStartAction);
+    m_hotkeys->add("fast-forward-to-end", ffwdEndAction);
+    m_hotkeys->add("one-note-left", oneLeftAction);
+    m_hotkeys->add("one-note-right", oneRightAction);
+    m_hotkeys->add("select-one-note-left", selectOneLeftAction);
+    m_hotkeys->add("select-one-note-right", selectOneRightAction);
 
     menu->addAction(playAction);
     menu->addAction(psAction);
@@ -2177,92 +2260,6 @@ MainWindow::setupToolbars()
     menu->addAction(oneRightAction);
     menu->addAction(selectOneLeftAction);
     menu->addAction(selectOneRightAction);
-    menu->addSeparator();
-    menu->addAction(recordAction);
-
-    // With Record, which it is for, and not with the driver menus below:
-    // the compact layout hides those on a phone, where this is wanted
-    // as much
-    m_voiceThresholdMenu = new VoiceThresholdMenu(menu, this);
-    // Here too, for the same reason: a phone with an interface plugged in
-    // needs it, and the device menus are hidden there
-    m_inputChannelMenu = new InputChannelMenu
-        (menu, [this]() { return inputChannelKey(); },
-         [](const InputChannel::Key &key) {
-             return key.recordDevice == "" ? tr("(System Default)") :
-                 key.recordDevice;
-         }, this);
-    connect(m_inputChannelMenu, &InputChannelMenu::channelChosen,
-            this, &MainWindow::inputChannelChosen);
-    connect(m_voiceThresholdMenu, &VoiceThresholdMenu::thresholdChosen,
-            m_inputLevels, &InputLevelFeed::setThreshold);
-    m_checkInputLevelAction = menu->addAction(tr("Check Input &Level..."));
-    m_checkInputLevelAction->setStatusTip
-        (tr("See the microphone's level without recording, and how far to "
-            "turn the interface's gain"));
-    connect(m_checkInputLevelAction, &QAction::triggered,
-            this, &MainWindow::checkInputLevel);
-    menu->addSeparator();
-
-    // The driver and the latency asked of it, before the devices, which
-    // are the driver's own
-    m_audioDriverMenus = new AudioDriverMenus
-        (menu, [this]() { return audioImplementationNames(); }, this);
-    connect(m_audioDriverMenus, &AudioDriverMenus::driverChosen,
-            this, &MainWindow::audioDriverChosen);
-    connect(m_audioDriverMenus, &AudioDriverMenus::latencyChosen,
-            this, &MainWindow::audioLatencyChosen);
-
-    // Before anything in this menu reads the driver: the device menus
-    // list its devices, and the latency line looks its figure up
-    connect(menu, &QMenu::aboutToShow,
-            this, &MainWindow::nameDefaultAudioDriver);
-
-    m_audioDeviceMenu = menu->addMenu(tr("Audio Output &Device"));
-    m_audioDeviceMenu->setStatusTip(tr("Choose which device Tony plays through"));
-    m_audioDeviceGroup = new QActionGroup(this);
-    m_audioDeviceGroup->setExclusive(true);
-
-    m_audioInputDeviceMenu = menu->addMenu(tr("Audio &Input Device"));
-    m_audioInputDeviceMenu->setStatusTip(tr("Choose which device Tony records from"));
-    m_audioInputDeviceGroup = new QActionGroup(this);
-    m_audioInputDeviceGroup->setExclusive(true);
-
-    for (QMenu *m: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
-        connect(m, SIGNAL(aboutToShow()), this, SLOT(rescanAudioDevices()));
-        // Placeholder so that the submenu is not empty: an empty submenu is
-        // drawn disabled and never emits aboutToShow, which is where the
-        // real device list is built.
-        m->addAction(tr("(Scanning...)"))->setEnabled(false);
-    }
-
-    for (QActionGroup *g: { m_audioDeviceGroup, m_audioInputDeviceGroup }) {
-        connect(g, SIGNAL(triggered(QAction *)),
-                this, SLOT(audioDeviceSelected(QAction *)));
-    }
-
-    // The audio check, and the latency takes are placed with: a line to
-    // read, never chosen, brought up to date whenever the menu opens
-    m_calibrateAudioAction = menu->addAction(tr("&Calibrate Audio..."));
-    m_calibrateAudioAction->setStatusTip
-        (tr("Measure how late recordings arrive through these devices, with "
-            "an earcup held against the microphone"));
-    connect(m_calibrateAudioAction, &QAction::triggered,
-            this, &MainWindow::calibrateAudio);
-
-    m_latencyLineAction = menu->addAction(QString());
-    m_latencyLineAction->setEnabled(false);
-
-    m_forgetLatencyAction = menu->addAction(tr("&Forget Measured Latency"));
-    m_forgetLatencyAction->setStatusTip
-        (tr("Place takes on these devices with the latency the driver "
-            "reports again"));
-    connect(m_forgetLatencyAction, &QAction::triggered,
-            this, [this]() { forgetMeasuredLatency(); });
-
-    connect(menu, &QMenu::aboutToShow,
-            this, &MainWindow::updateLatencyMenuLine);
-    updateLatencyMenuLine();
     menu->addSeparator();
 
     m_rightButtonPlaybackMenu->addAction(playAction);
@@ -2301,9 +2298,9 @@ MainWindow::setupToolbars()
     connect(normalAction, SIGNAL(triggered()), this, SLOT(restoreNormalPlayback()));
     connect(this, SIGNAL(canChangePlaybackSpeed(bool)), normalAction, SLOT(setEnabled(bool)));
 
-    m_keyReference->registerShortcut(fastAction);
-    m_keyReference->registerShortcut(slowAction);
-    m_keyReference->registerShortcut(normalAction);
+    m_hotkeys->add("speed-up", fastAction);
+    m_hotkeys->add("slow-down", slowAction);
+    m_hotkeys->add("normal-speed", normalAction);
 
     m_rightButtonPlaybackMenu->addAction(fastAction);
     m_rightButtonPlaybackMenu->addAction(slowAction);
@@ -2478,6 +2475,10 @@ MainWindow::setupToolbars()
     m_playRefWhileRecording = toolbar->addAction(il.load("speaker"),
                                                   tr("Play Reference While Recording"));
     m_playRefWhileRecording->setCheckable(true);
+    // Each of the recording toggles has Shift with a letter: R for the
+    // reference, P for the pre-roll, and S for the selection, as S alone
+    // constrains playback to it
+    m_playRefWhileRecording->setShortcut(tr("Shift+R"));
     {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2488,6 +2489,8 @@ MainWindow::setupToolbars()
     m_playRefWhileRecording->setToolTip(
         tr("Play the reference track through speakers/headphones during recording "
            "so you can time your singing against it"));
+    // The same for the Record menu's entry, a menu showing no tooltips
+    m_playRefWhileRecording->setStatusTip(m_playRefWhileRecording->toolTip());
     connect(m_playRefWhileRecording, &QAction::toggled, this, [this](bool on) {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2501,6 +2504,7 @@ MainWindow::setupToolbars()
     // QSettings value MainWindow/prerollseconds, with no UI to change it.
     m_preRoll = toolbar->addAction(il.load("rewind"), tr("Pre-roll"));
     m_preRoll->setCheckable(true);
+    m_preRoll->setShortcut(tr("Shift+P"));
     {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2511,6 +2515,7 @@ MainWindow::setupToolbars()
         tr("Play the reference from a few seconds before the recording "
            "position, counting down, so that you can come in in time. "
            "Nothing before the position is recorded over."));
+    m_preRoll->setStatusTip(m_preRoll->toolTip());
     connect(m_preRoll, &QAction::toggled, this, [this](bool on) {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2525,6 +2530,7 @@ MainWindow::setupToolbars()
     m_recordIntoSelection = toolbar->addAction(il.load("playselection"),
                                                tr("Record into Selection"));
     m_recordIntoSelection->setCheckable(true);
+    m_recordIntoSelection->setShortcut(tr("Shift+S"));
     {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2536,6 +2542,7 @@ MainWindow::setupToolbars()
         tr("Record into the selected range only: recording starts at the "
            "start of the selection, whatever the playhead says, and stops "
            "by itself at its end"));
+    m_recordIntoSelection->setStatusTip(m_recordIntoSelection->toolTip());
     connect(m_recordIntoSelection, &QAction::toggled, this, [this](bool on) {
         QSettings settings;
         settings.beginGroup("MainWindow");
@@ -2631,11 +2638,150 @@ MainWindow::setupToolbars()
     connect(m_showSpect, SIGNAL(triggered()), this, SLOT(showSpectToggled()));
     connect(this, SIGNAL(canPlay(bool)), m_showSpect, SLOT(setEnabled(bool)));
 
+    // Here, after the bottom bar, whose recording buttons the Record menu
+    // holds too; and so after Playback in the menu bar
+    setupRecordMenu();
+    setupDevicesMenu();
+
     Pane::registerShortcuts(*m_keyReference);
 
     updateLayerStatuses();
     
 //    QTimer::singleShot(500, this, SLOT(betaReleaseWarning()));
+}
+
+void
+MainWindow::setupRecordMenu()
+{
+    // The take and what is chosen for it.  What it is recorded through,
+    // and the latency measured there, are the Devices menu's
+    m_recordMenu = menuBar()->addMenu(tr("&Record"));
+    m_recordMenu->setTearOffEnabled(true);
+
+    m_recordMenu->addAction(m_recordAction);
+    m_recordMenu->addSeparator();
+
+    // The bottom bar's buttons, the same actions, so that the two always
+    // agree. A menu names them, and shows a shortcut, as a toolbar does not
+    m_keyReference->setCategory(tr("Playback and Transport Controls"));
+    m_recordMenu->addAction(m_recordIntoSelection);
+    m_recordMenu->addAction(m_preRoll);
+    m_recordMenu->addAction(m_playRefWhileRecording);
+    m_hotkeys->add("record-into-selection", m_recordIntoSelection);
+    m_hotkeys->add("pre-roll", m_preRoll);
+    m_hotkeys->add("play-reference-while-recording", m_playRefWhileRecording);
+    m_recordMenu->addSeparator();
+
+    // Not one of the compact layout's hidden actions: a phone on its own
+    // speaker needs it as much
+    m_voiceThresholdMenu = new VoiceThresholdMenu(m_recordMenu, this);
+    connect(m_voiceThresholdMenu, &VoiceThresholdMenu::thresholdChosen,
+            m_inputLevels, &InputLevelFeed::setThreshold);
+
+    // With the threshold, which its result offers to set
+    m_checkInputLevelAction =
+        m_recordMenu->addAction(tr("Check Input &Level..."));
+    m_checkInputLevelAction->setStatusTip
+        (tr("See the microphone's level without recording, and how far to "
+            "turn the interface's gain"));
+    connect(m_checkInputLevelAction, &QAction::triggered,
+            this, &MainWindow::checkInputLevel);
+}
+
+void
+MainWindow::setupDevicesMenu()
+{
+    // What Tony plays and records through, and the latency measured
+    // through it
+    QMenu *menu = m_devicesMenu = menuBar()->addMenu(tr("&Devices"));
+    menu->setTearOffEnabled(true);
+
+    // The driver and the latency asked of it, before the devices, which
+    // are the driver's own
+    m_audioDriverMenus = new AudioDriverMenus
+        (menu, [this]() { return audioImplementationNames(); }, this);
+    connect(m_audioDriverMenus, &AudioDriverMenus::driverChosen,
+            this, &MainWindow::audioDriverChosen);
+    connect(m_audioDriverMenus, &AudioDriverMenus::latencyChosen,
+            this, &MainWindow::audioLatencyChosen);
+
+    // Before anything in this menu reads the driver: the device menus
+    // list its devices, and the latency line looks its figure up
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::nameDefaultAudioDriver);
+
+    m_audioDeviceMenu = menu->addMenu(tr("Audio Output &Device"));
+    m_audioDeviceMenu->setStatusTip(tr("Choose which device Tony plays through"));
+    m_audioDeviceGroup = new QActionGroup(this);
+    m_audioDeviceGroup->setExclusive(true);
+
+    m_audioInputDeviceMenu = menu->addMenu(tr("Audio &Input Device"));
+    m_audioInputDeviceMenu->setStatusTip(tr("Choose which device Tony records from"));
+    m_audioInputDeviceGroup = new QActionGroup(this);
+    m_audioInputDeviceGroup->setExclusive(true);
+
+    for (QMenu *m: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        connect(m, SIGNAL(aboutToShow()), this, SLOT(rescanAudioDevices()));
+        // Placeholder so that the submenu is not empty: an empty submenu is
+        // drawn disabled and never emits aboutToShow, which is where the
+        // real device list is built.
+        m->addAction(tr("(Scanning...)"))->setEnabled(false);
+    }
+
+    for (QActionGroup *g: { m_audioDeviceGroup, m_audioInputDeviceGroup }) {
+        connect(g, SIGNAL(triggered(QAction *)),
+                this, SLOT(audioDeviceSelected(QAction *)));
+    }
+
+    // Back to the output device chosen before this one, for the singer
+    // who records in headphones and plays the take back on speakers.  No
+    // menu or toolbar holds it: the window does, for its hotkey to work
+    m_keyReference->setCategory(tr("Audio Devices"));
+    m_previousOutputAction =
+        new QAction(tr("Switch to Previous Output Device"), this);
+    m_previousOutputAction->setShortcut(tr("O"));
+    m_previousOutputAction->setStatusTip
+        (tr("Play through the output device chosen before the one in use"));
+    connect(m_previousOutputAction, &QAction::triggered,
+            this, &MainWindow::switchToPreviousOutputDevice);
+    addAction(m_previousOutputAction);
+    m_hotkeys->add("previous-output-device", m_previousOutputAction);
+
+    // After the input device, as a choice is kept for each input device.
+    // Not one of the compact layout's hidden actions: a phone with an
+    // interface plugged in needs it
+    m_inputChannelMenu = new InputChannelMenu
+        (menu, [this]() { return inputChannelKey(); },
+         [](const InputChannel::Key &key) {
+             return key.recordDevice == "" ? tr("(System Default)") :
+                 key.recordDevice;
+         }, this);
+    connect(m_inputChannelMenu, &InputChannelMenu::channelChosen,
+            this, &MainWindow::inputChannelChosen);
+    menu->addSeparator();
+
+    // The audio check, and the latency takes are placed with: a line to
+    // read, never chosen, brought up to date whenever the menu opens
+    m_calibrateAudioAction = menu->addAction(tr("&Calibrate Audio..."));
+    m_calibrateAudioAction->setStatusTip
+        (tr("Measure how late recordings arrive through these devices, with "
+            "an earcup held against the microphone"));
+    connect(m_calibrateAudioAction, &QAction::triggered,
+            this, &MainWindow::calibrateAudio);
+
+    m_latencyLineAction = menu->addAction(QString());
+    m_latencyLineAction->setEnabled(false);
+
+    m_forgetLatencyAction = menu->addAction(tr("&Forget Measured Latency"));
+    m_forgetLatencyAction->setStatusTip
+        (tr("Place takes on these devices with the latency the driver "
+            "reports again"));
+    connect(m_forgetLatencyAction, &QAction::triggered,
+            this, [this]() { forgetMeasuredLatency(); });
+
+    connect(menu, &QMenu::aboutToShow,
+            this, &MainWindow::updateLatencyMenuLine);
+    updateLatencyMenuLine();
 }
 
 void
@@ -2656,9 +2802,11 @@ MainWindow::setupCompactLayout()
 
     parts.panel = { m_playbackControlsToolBar, m_showAndPlayToolBar };
 
-    // Notes are edited on the desktop.  A phone has no output device to
-    // choose, Android's being the one; its input devices it lists
-    parts.hiddenActions = { m_navigateToolAction, m_noteEditToolAction };
+    // Notes are edited on the desktop, and hotkeys chosen there, a phone
+    // having no keyboard.  A phone has no output device to choose,
+    // Android's being the one; its input devices it lists
+    parts.hiddenActions = { m_navigateToolAction, m_noteEditToolAction,
+                            m_configureHotkeysAction };
     for (QMenu *menu: { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
         if (!menu) continue;
         if (menu == m_audioInputDeviceMenu && listsInputDevices()) continue;
@@ -2677,6 +2825,33 @@ MainWindow::setupCompactLayout()
     parts.shownWidgets = { m_songScroll };
 
     m_compactLayout->setParts(parts);
+}
+
+void
+MainWindow::configureHotkeys()
+{
+    if (m_hotkeysDialog) {
+        m_hotkeysDialog->raise();
+        return;
+    }
+    // Window-modal, and no event loop of its own (open()): the window
+    // carries on behind it
+    HotkeysDialog *dialog = new HotkeysDialog(m_hotkeys, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QDialog::accepted, this, &MainWindow::applyHotkeys);
+    m_hotkeysDialog = dialog;
+    dialog->open();
+}
+
+void
+MainWindow::applyHotkeys()
+{
+    m_hotkeys->apply();
+
+    // On macOS a single key that only a menu holds is made a shortcut of
+    // the application's own, with the key it had then
+    // (MainWindowBase::finaliseMenus()): those are made again
+    finaliseMenus();
 }
 
 void
@@ -2932,9 +3107,18 @@ MainWindow::updateMenuStates()
     if (m_calibrateAudioAction) {
         m_calibrateAudioAction->setEnabled(!inTake && !checking);
     }
-    // Choosing either opens the device afresh
+    // Choosing a driver, a latency or a device opens the device afresh,
+    // and so does the switch: a take would go on recording nothing.  A
+    // phone's input device, which opens nothing during a take, is chosen
+    // between takes all the same: the take records from the one it opened
     if (m_audioDriverMenus) {
         m_audioDriverMenus->setEnabled(!inTake && !checking);
+    }
+    for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        if (m) m->menuAction()->setEnabled(!inTake && !checking);
+    }
+    if (m_previousOutputAction) {
+        m_previousOutputAction->setEnabled(!inTake && !checking);
     }
     // A take keeps the threshold it started with, and the check's takes
     // have none: a choice made meanwhile would look as if it applied
@@ -2951,14 +3135,6 @@ MainWindow::updateMenuStates()
             (!inTake && !checking && m_recordTarget &&
              (m_audioMode == AUDIO_PLAYBACK_AND_RECORD ||
               m_audioMode == AUDIO_PLAYBACK_NOW_RECORD_LATER));
-    }
-    for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
-        if (m) m->menuAction()->setEnabled(!checking);
-    }
-    // A phone's input device is chosen between takes: the take records
-    // from the one it opened
-    if (m_audioInputDeviceMenu && listsInputDevices() && inTake) {
-        m_audioInputDeviceMenu->menuAction()->setEnabled(false);
     }
     updateLatencyMenuLine();
 
@@ -6776,7 +6952,7 @@ MainWindow::reportTakeLevel(QString recordingPath, const TakeTiming &timing)
                 .arg(where);
         }
         message = tr("Take: clipped at %1. Turn the input gain down "
-                     "(Playback > Check Input Level)").arg(where);
+                     "(Record > Check Input Level)").arg(where);
         if (m_inputLevels) m_inputLevels->setClipped(true);
     }
 

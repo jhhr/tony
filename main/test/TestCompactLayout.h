@@ -92,11 +92,13 @@ public:
         return m_inputMeterAction;
     }
 
-    // What it hides: the note-editing tools and the audio device menus
+    // What it hides: the note-editing tools, the audio device menus and
+    // Configure Hotkeys, a phone having no keyboard
     QList<QAction *> hiddenActions() {
         return { m_navigateToolAction, m_noteEditToolAction,
                  m_audioDeviceMenu->menuAction(),
-                 m_audioInputDeviceMenu->menuAction() };
+                 m_audioInputDeviceMenu->menuAction(),
+                 m_configureHotkeysAction };
     }
 
     QAction *navigateTool() { return m_navigateToolAction; }
@@ -491,8 +493,8 @@ private slots:
         QCOMPARE(m_window->takeBox()->parentWidget(),
                  static_cast<QWidget *>(bar));
 
-        // The note-editing tools and the audio device menus hidden, and
-        // the tool the one that edits nothing
+        // The note-editing tools, the audio device menus and Configure
+        // Hotkeys hidden, and the tool the one that edits nothing
         for (QAction *action: m_window->hiddenActions()) {
             QVERIFY2(!action->isVisible(), qPrintable(action->text()));
         }
@@ -518,8 +520,9 @@ private slots:
         QVERIFY(popup);
 
         QList<QAction *> menus = m_window->menuBar()->actions();
-        QCOMPARE(int(menus.size()), 7); // File, Edit, View, Analysis,
-                                        // Takes, Playback, Help
+        QCOMPARE(int(menus.size()), 9); // File, Edit, View, Analysis,
+                                        // Takes, Playback, Record,
+                                        // Devices, Help
         QVERIFY2(popup->actions() == menus,
                  qPrintable(QString("the popup holds %1, the menu bar %2")
                             .arg(names(popup->actions())).arg(names(menus))));
@@ -535,19 +538,25 @@ private slots:
         }
         QVERIFY(haveSwitch);
 
-        // Playback > Calibrate Audio among them, on show: the device menus
-        // are hidden, not the check.  Nor Voice Threshold, the music being
-        // as likely on a phone's speaker as on any
+        // Devices > Calibrate Audio among them, on show: the device menus
+        // are hidden, not the check.  Nor Input Channel beside them, for
+        // an interface plugged into a phone; nor Record > Voice Threshold,
+        // the music being as likely on a phone's speaker as on any
         QAction *calibrate = nullptr;
+        QAction *inputChannel = nullptr;
         QAction *voiceThreshold = nullptr;
         for (QAction *action: menus) {
             for (QAction *item: action->menu()->actions()) {
                 if (item->text() == "&Calibrate Audio...") calibrate = item;
+                if (item->text() == "Input C&hannel") inputChannel = item;
                 if (item->text() == "Voice &Threshold") voiceThreshold = item;
             }
         }
         QVERIFY(calibrate);
         QVERIFY(calibrate->isVisible());
+        QVERIFY(inputChannel);
+        QVERIFY(inputChannel->menu());
+        QVERIFY(inputChannel->isVisible());
         QVERIFY(voiceThreshold);
         QVERIFY(voiceThreshold->menu());
         QVERIFY(voiceThreshold->isVisible());

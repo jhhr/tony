@@ -11,8 +11,15 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **No overwrite question when recording into a selection**: the selection is taken as the
   consent. Right in use?
 - **Take operations clear the undo history with no prompt** (all but Rename).
-- **A shortcut for Show Lyrics or Edit Lyrics?** There is none; one would have to be
-  checked against `KeyReference` for clashes first.
+- **A shortcut for Show Lyrics?** There is none. Edit Lyrics and Shift Lyrics have
+  Ctrl+L and Ctrl+Shift+L (the user, 2026-10-11).
+- **Configure Hotkeys lists only the commands that have a hotkey of their own.** One
+  without (Analyse Now!, New Empty Take, the bottom bar's track toggles, ...) cannot be
+  given one there; each would be an `m_hotkeys->add()` with no defaults, and
+  `every_hotkey_is_configurable` asks for defaults now.
+- **An Alt and letter key chosen for a command is not checked against the menu bar's
+  letters**: Alt+F would then be both File's and the command's. Which one it does is not
+  checked.
 - **The editing constants** were defaults taken without the user: the 20 ms shortest
   word, the 0.5 s new word, the 6 px grab on each side of an edge, the menu's wording,
   and Edit Lyrics living in the Edit menu.
@@ -366,7 +373,7 @@ The design is in [recording.md](recording.md#the-live-tracker) and
   does it was not found. It may slow the live tracker's YIN in the application as well;
   with the state clean the gate would take about 50 ms per 90 s.
 - **The menu's status tip is one line**, all the status bar shows, and a narrow window
-  cuts it short; the Playback menu shows no tooltips. How to choose a threshold, and that
+  cuts it short; the Record menu shows no tooltips. How to choose a threshold, and that
   it applies from the next take and to recorded takes through Analyse Now, is in the
   README only. On a phone nothing explains the entries, unless touch shows the status tip
   (not checked).

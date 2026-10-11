@@ -30,6 +30,9 @@
 #include "../InputLevelMeter.h"
 #include "../CheckInputLevelDialog.h"
 #include "../StatusLine.h"
+#include "../HotkeyReference.h"
+#include "../HotkeyTable.h"
+#include "../HotkeysDialog.h"
 
 #ifdef TONY_DEV_CHECKS
 #include "../dev/DevChecks.h"
@@ -226,7 +229,7 @@ public:
     }
 #endif
 
-    // Playback > Calibrate Audio, the dialog it shows once it has been
+    // Devices > Calibrate Audio, the dialog it shows once it has been
     // chosen, the lines under it, and the device menus above it
     QAction *calibrateAudioAction() { return m_calibrateAudioAction; }
     CalibrateAudioDialog *calibrateAudioDialog() {
@@ -235,10 +238,33 @@ public:
     QAction *latencyLineAction() { return m_latencyLineAction; }
     QAction *forgetLatencyAction() { return m_forgetLatencyAction; }
     QMenu *playbackMenu() { return m_playbackMenu; }
+    QMenu *recordMenu() { return m_recordMenu; }
+    QMenu *devicesMenu() { return m_devicesMenu; }
     QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
     QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
+    // An output device chosen, as Devices > Audio Output Device chooses
+    // one (false where it is not), and Switch to Previous Output Device,
+    // which the window holds
+    bool doChooseOutputDevice(QString name) {
+        return chooseAudioDevice("audio-playback-device", name);
+    }
+    QAction *previousOutputAction() { return m_previousOutputAction; }
 
-    // Playback > Audio Driver and Audio Latency, from the implementations
+    // The window's commands that have hotkeys, Edit > Configure Hotkeys
+    // with its dialog while it is open, and the key reference
+    HotkeyTable *hotkeys() { return m_hotkeys; }
+    QAction *configureHotkeysAction() { return m_configureHotkeysAction; }
+    HotkeysDialog *hotkeysDialog() { return m_hotkeysDialog; }
+    HotkeyReference *hotkeyReference() { return m_keyReference; }
+    // File > Open Recent, whose first file has the hotkey Re-open, and a
+    // file added to it, as opening one adds it
+    QMenu *recentFilesMenu() { return m_recentFilesMenu; }
+    void addRecentFile(QString path) { m_recentFiles.addFile(path); }
+    // The keys the settings keep given to the commands, as OK in the
+    // dialog has them given
+    void doApplyHotkeys() { applyHotkeys(); }
+
+    // Devices > Audio Driver and Audio Latency, from the implementations
     // given here: none unless a test gives some, whatever the platform
     // has. Rebuilt as the app rebuilds them when they open
     void setAudioImplementations(QStringList names) {
@@ -246,12 +272,12 @@ public:
     }
     AudioDriverMenus *audioDriverMenus() { return m_audioDriverMenus; }
     void doRebuildAudioDriverMenus() { m_audioDriverMenus->rebuild(); }
-    // Playback > Voice Threshold, which is always shown
+    // Record > Voice Threshold, which is always shown
     VoiceThresholdMenu *voiceThresholdMenu() { return m_voiceThresholdMenu; }
-    // Playback > Input Channel, likewise, and the device it is kept for
+    // Devices > Input Channel, likewise, and the device it is kept for
     InputChannelMenu *inputChannelMenu() { return m_inputChannelMenu; }
     InputChannel::Key doInputChannelKey() const { return inputChannelKey(); }
-    // The input meters' levels, the meter beside Record, and Playback >
+    // The input meters' levels, the meter beside Record, and Record >
     // Check Input Level with its dialog (made the first time it opens)
     InputLevelFeed *inputLevels() { return m_inputLevels; }
     InputLevelMeterAction *inputMeterAction() { return m_inputMeterAction; }

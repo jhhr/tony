@@ -192,7 +192,8 @@ bqaudioio's resampler holding playback back about 1.1 ms at 48 kHz, unreported.
 
 ### The window
 
-- `MainWindow` has 7 menus: File, Edit, View, Analysis, Takes, Playback, Help.
+- `MainWindow` has 9 menus: File, Edit, View, Analysis, Takes, Playback, Record, Devices,
+  Help.
 - Its toolbars are File, Tools, Playback, Play Mode, Playback Controls (speed and gain) and
   the bottom "Show and Play" bar.
 - `menuBar()->setNativeMenuBar(false)` sits under `#ifdef Q_OS_LINUX`, and **Qt defines
@@ -248,8 +249,9 @@ it, which is how it is tested. It is not kept in the settings.
   widget holding its action or its menu: with only the hidden menu bar holding them, every
   shortcut that is only in a menu would stop working.
 - Hidden while compact: the Navigate and Note Edit tools (Navigate is selected first), the
-  audio device menus (and on Windows the driver and latency menus), the overview (the song
-  scroll bar takes its place) and the menus' tear-off handles, which a finger catches.
+  audio device menus (and on Windows the driver and latency menus), Edit > Configure
+  Hotkeys (a phone has no keyboard), the overview (the song scroll bar takes its place)
+  and the menus' tear-off handles, which a finger catches.
 - Kept: the status bar, for the pre-roll countdown and the sung note; the Edit menu's and
   the long-press menu's pitch and note actions (only the tool modes go); the spectrogram's
   toggle, in the bottom toolbars.

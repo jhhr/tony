@@ -448,7 +448,7 @@ OboeAudioIO::openStreams()
             return opened;
         };
 
-        // The input device chosen (Playback > Audio Input Device), by the
+        // The input device chosen (Devices > Audio Input Device), by the
         // id it has now: 0 is Android's choice, as is one that cannot be
         // opened
         inputs = listDevices(true);

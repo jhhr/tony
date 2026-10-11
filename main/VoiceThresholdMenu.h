@@ -21,7 +21,7 @@ class QMenu;
 class QActionGroup;
 
 /**
- * Playback > Voice Threshold: the level under which what the microphone
+ * Record > Voice Threshold: the level under which what the microphone
  * hears is not taken for singing (VoiceThreshold), for a singer who has
  * the music on speakers.  One entry for each of VoiceThreshold::choices(),
  * with the one kept in the settings ticked.

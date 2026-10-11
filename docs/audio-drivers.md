@@ -1,7 +1,7 @@
 # Audio drivers: WASAPI next to MME
 
-On Windows, **Playback > Audio Driver** chooses which of Windows' audio APIs Tony plays and
-records through (MME, DirectSound or WASAPI), and **Playback > Audio Latency** how much
+On Windows, **Devices > Audio Driver** chooses which of Windows' audio APIs Tony plays and
+records through (MME, DirectSound or WASAPI), and **Devices > Audio Latency** how much
 latency it asks that driver for (10 to 200 ms). Each driver keeps its own devices, its own
 latency and its own measured round trip. WASAPI at 20 ms is the default where it is built
 in, and MME, which every stream went through before there was a choice, elsewhere: the
@@ -37,7 +37,7 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
 
 ## 2. What the user sees
 
-- **Audio Driver**, in the Playback menu before the two device submenus: MME, DirectSound,
+- **Audio Driver**, in the Devices menu before the two device submenus: MME, DirectSound,
   WASAPI, in that order, the one in use ticked. **Audio Latency** next to it: 10, 20, 50,
   100 and 200 ms, the one chosen for that driver ticked; where none has been, 20 ms on
   WASAPI and 200 ms on the others. Both are shown only where two drivers or more are built
@@ -52,14 +52,17 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
   latency. The device submenus then list that driver's devices and write its keys; going
   back to another driver finds its devices as they were left. **Choosing a latency** stops
   playback and opens the device again. Choosing what is ticked does nothing.
-- Both are **greyed out during a take and while a check runs**: either would open the
-  device again under the take.
+- Both are **greyed out during a take and while a check runs**, and so are the two device
+  submenus and Switch to Previous Output Device (O): each would open the device again
+  under the take. The new device starts suspended (svapp's `createAudioIO()`), so the
+  take would go on "recording" with nothing coming in. A device choice that comes all the
+  same is not made (`chooseAudioDevice()`).
 - **The first start with the menus** names WASAPI (MME where there is no WASAPI) and
   carries the devices chosen before over to it. A device name it does not list shows as
   "(not connected)", ticked, and its own default device opens instead. A driver already
   named, by the user or by an earlier build, is left as it is.
 - **A round trip measured before the menus** was kept under no driver, and is not carried
-  over as the devices are: the Playback menu's latency line reads "driver's figure" until
+  over as the devices are: the Devices menu's latency line reads "driver's figure" until
   Calibrate Audio is run, and its figure kept, on each driver used.
 - **The reports** name the driver: Calibrate Audio's instructions and result page
   ("Driver:"), and `DevChecks.txt`'s header ("Audio driver:", and "Latency asked for:"),
@@ -77,7 +80,7 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
 | A device at 48 kHz needs nothing more for placement | `feat/tonyandroid` | The recording is resampled to the reference's rate before the splice, and `TakeTiming` converts device frames; Calibrate Audio judges such a device like any other ([calibrate-audio.md](calibrate-audio.md), §1) |
 | The latency chosen per driver from 10, 20, 50, 100 and 200 ms; when unset, 20 on WASAPI and 200 on the others | lead, 2026-09-26; WASAPI's from the runs of §7 | 200 ms is what every stream asked for before; a choice lets the measurements compare |
 | The menus only with two drivers or more | lead | One driver is no choice; elsewhere the device menus are all there is |
-| The default named where no driver is, before the first device opens and before the Playback menu shows the device menus, not at start-up | lead | With four PortAudio implementations the device menus have no driver to list the devices of; the first device opens lazily, with the first file or take |
+| The default named where no driver is, before the first device opens and before the Devices menu shows the device menus, not at start-up | lead | With four PortAudio implementations the device menus have no driver to list the devices of; the first device opens lazily, with the first file or take |
 
 ## 4. Facts checked
 
@@ -132,7 +135,7 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   the streams opened after), then `openAudioIO()`, which opens the device as svapp does,
   then gives the device the master volume: a device opens at unity gain
   ([architecture.md](architecture.md#the-bottom-bars-settings)). Every device is opened
-  through it: the first, and each recreate. The Playback menu names the default too, as
+  through it: the first, and each recreate. The Devices menu names the default too, as
   it opens, before the device menus read the driver. On Android `createAudioIO()` opens
   `OboeAudioIO` instead, and none of this applies but the master volume.
 - **A choice** stops playback, forgets the device's rate when the driver changed (another
@@ -162,12 +165,13 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
 - **App** (`TestAudioCheck`): the menus from a given list, in order, with the ticks, before
   the device menus, and hidden with one driver; WASAPI chosen, its setting written, the
   device opened again with WASAPI's devices, MME's kept, and a device then chosen written
-  to WASAPI's key; the default named before the first device and as the Playback menu
+  to WASAPI's key; the default named before the first device and as the Devices menu
   opens, and a named driver left alone; the latency kept per driver and handed over at
   each opening; a round trip kept for MME not used under WASAPI, and used again on the way
   back, with the dialog naming the driver; both menus greyed out during a take and a
-  check. The drivers are given through `TestMainWindow` ([testing.md](testing.md)), as
-  Linux's bqaudioio has none.
+  check, with the device menus, and a device chosen all the same then not chosen, the
+  take recording on. The drivers are given through `TestMainWindow`
+  ([testing.md](testing.md)), as Linux's bqaudioio has none.
 - **Dev** (`TestDevChecks`): the report's header names the driver and the latency.
 - **The stream kept running**, with a fake whose loopback moves 10 ms at each restart:
   `TestAudioCheck`'s check lands its punch-ins 10 ms apart when the window suspends at
@@ -179,7 +183,8 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   after either, not while it plays for longer, and the next take resumes it; the
   application's idle time is never on desktop. Not tested: the suspend when Android sends
   Tony to the background, which no desktop build has.
-- Seen failing with the code broken: the default, the latency per driver, the greying;
+- Seen failing with the code broken: the default, the latency per driver, the greying
+  (the device menus' too), a device chosen during a take or before a check's first take;
   the kept-running check and dev run with the stream suspended at Stop (items 1, 2, 7 and
   13), and the check with the end of a take suspending again; the idle suspend with the
   take's playback or recording counted as idle.

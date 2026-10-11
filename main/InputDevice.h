@@ -25,7 +25,7 @@ class QSettings;
 /**
  * The input device chosen on a driver that lists its inputs, as a
  * phone's does (Android's AudioManager), where the Preferences name no
- * device: Playback > Audio Input Device there.  With none chosen the
+ * device: Devices > Audio Input Device there.  With none chosen the
  * driver opens the one Android chooses, which for Tony's input preset
  * is a wired headset, then a USB device, then the phone's microphone
  * (docs/port-android.md, "Choosing the input").

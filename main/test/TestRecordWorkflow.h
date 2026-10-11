@@ -37,6 +37,7 @@
 #include "../TakeLayers.h"
 #include "../TakesFile.h"
 #include "../VoiceThreshold.h"
+#include "../Hotkeys.h"
 #include "../InputChannel.h"
 #include "../InputDevice.h"
 #include "../InputChannelMenu.h"
@@ -85,8 +86,10 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPointer>
@@ -95,6 +98,7 @@
 #include <QSettings>
 #include <QToolBar>
 #include <QTemporaryDir>
+#include <QTextEdit>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -102,6 +106,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <vector>
 
 class TestRecordWorkflow : public QObject
@@ -452,10 +457,10 @@ class TestRecordWorkflow : public QObject
              figure);
     }
 
-    // The Playback menu's line about the latency, as it reads when the
+    // The Devices menu's line about the latency, as it reads when the
     // menu is opened
     QString latencyLine() {
-        emit m_window->playbackMenu()->aboutToShow();
+        emit m_window->devicesMenu()->aboutToShow();
         return m_window->latencyLineAction()->text();
     }
 
@@ -1713,7 +1718,7 @@ class TestRecordWorkflow : public QObject
                  "recordings");
     }
 
-    // The voice threshold, as Playback > Voice Threshold sets it
+    // The voice threshold, as Record > Voice Threshold sets it
     static void setVoiceThreshold(double dbfs) {
         QSettings settings;
         VoiceThreshold::setThreshold(settings, dbfs);
@@ -1724,7 +1729,7 @@ class TestRecordWorkflow : public QObject
         return VoiceThreshold::threshold(settings);
     }
 
-    // Playback > Voice Threshold opened, as the user does before choosing
+    // Record > Voice Threshold opened, as the user does before choosing
     void openVoiceThresholdMenu() {
         emit m_window->voiceThresholdMenu()->menu()->aboutToShow();
     }
@@ -1821,7 +1826,7 @@ class TestRecordWorkflow : public QObject
         return m.captured(1).toDouble() * 60.0 + m.captured(2).toDouble();
     }
 
-    // Playback > Input Channel, as the user chooses from it
+    // Devices > Input Channel, as the user chooses from it
     void chooseInputChannel(int channel) {
         InputChannelMenu *menu = m_window->inputChannelMenu();
         QVERIFY(menu);
@@ -1836,7 +1841,7 @@ class TestRecordWorkflow : public QObject
         QFAIL(qPrintable(QString("no entry for input %1").arg(channel)));
     }
 
-    // The entry of Playback > Input Channel that is ticked, or -2 for none
+    // The entry of Devices > Input Channel that is ticked, or -2 for none
     int inputChannelTicked() {
         InputChannelMenu *menu = m_window->inputChannelMenu();
         if (!menu) return -2;
@@ -1849,7 +1854,7 @@ class TestRecordWorkflow : public QObject
         return -2;
     }
 
-    // Playback > Audio Input Device, as a phone lists it: its entries
+    // Devices > Audio Input Device, as a phone lists it: its entries
     QStringList inputDeviceEntries() {
         m_window->doRescanAudioDevices();
         QStringList texts;
@@ -1993,6 +1998,22 @@ class TestRecordWorkflow : public QObject
         return result;
     }
 
+    // The text of Help > Key and Mouse Reference, as it is shown. Not
+    // a slot: QtTest would take it for a test
+    static QString keyReferenceText() {
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            auto dialog = qobject_cast<QDialog *>(w);
+            if (!dialog || !dialog->isVisible() ||
+                !dialog->windowTitle().endsWith("Key and Mouse Reference")) {
+                continue;
+            }
+            if (auto text = dialog->findChild<QTextEdit *>()) {
+                return text->toPlainText();
+            }
+        }
+        return "(not shown)";
+    }
+
     // Not a slot: QtTest would run it as a test
     void dismissDialog() {
         QWidget *modal = QApplication::activeModalWidget();
@@ -2002,6 +2023,9 @@ class TestRecordWorkflow : public QObject
         // Replace Take Audio from Recording, which its search closes
         if (qobject_cast<CheckInputLevelDialog *>(modal)) return;
         if (qobject_cast<QProgressDialog *>(modal)) return;
+        // Configure Hotkeys likewise is opened, driven and closed by its
+        // tests
+        if (qobject_cast<HotkeysDialog *>(modal)) return;
         QString description = modal->windowTitle();
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
@@ -2077,6 +2101,9 @@ private slots:
         // phone's input device
         settings.remove("InputChannel");
         settings.remove("InputDevice");
+        // Nor hotkeys chosen: a test that failed half way must not leave
+        // the next suite's keys changed
+        Hotkeys::forgetAll(settings);
 
         // The toggles of the reference's tracks and the singing track's;
         // a test that failed half way must not leave the next one's
@@ -2334,7 +2361,7 @@ private slots:
     }
 
     // A microphone on one input of two, the other input hearing
-    // something else, and that input chosen (Playback > Input Channel):
+    // something else, and that input chosen (Devices > Input Channel):
     // the take is mono, made of that input alone; the live dots and the
     // analysis hear it alone; and it plays in both ears. With both
     // inputs a take of a microphone on input 2 alone played silent
@@ -2684,7 +2711,7 @@ private slots:
                 InputLevelMeter::thresholdColour());
     }
 
-    // Playback > Check Input Level: the input opened and run with nothing
+    // Record > Check Input Level: the input opened and run with nothing
     // recorded, two seconds of silence read as the noise floor, then the
     // loudest phrase; Done gives the peak, the gain to change, the noise
     // floor and a voice threshold, which a button sets. The device is
@@ -2907,7 +2934,7 @@ private slots:
         dialog->reject();
     }
 
-    // Playback > Input Channel is kept for the input device the
+    // Devices > Input Channel is kept for the input device the
     // Preferences name, which its first line names; another device has
     // its own; it is shut during a take; and the audio check's takes are
     // made of both inputs whatever is chosen, as the runner sets them
@@ -3082,7 +3109,7 @@ private slots:
         QCOMPARE(m_window->audioRoute().input.id, 40);
     }
 
-    // A phone's Playback > Audio Input Device: the inputs Android lists
+    // A phone's Devices > Audio Input Device: the inputs Android lists
     // that a singer records from (not a Bluetooth call microphone), each
     // name once, the one in use named. A choice is kept by type and name
     // and opened by the id the device has now; unplugged, the phone's
@@ -5660,7 +5687,7 @@ private slots:
         QVERIFY(PlaybackSettings::backgroundMusicMix(settings));
     }
 
-    // After a relaunch the Playback menu's line shows the figure the
+    // After a relaunch the Devices menu's line shows the figure the
     // check kept for the devices, as the takes use it, and Forget drops
     // that one. The device records at 48 kHz, as most desktop devices do,
     // and the figure is kept at that rate, which nothing says before the
@@ -6472,7 +6499,480 @@ private slots:
                  "the redone recording was analysed without the threshold");
     }
 
-    // Playback > Voice Threshold, straight after Record, which it is for:
+    // A menu's entries as the user reads them: "-" for a separator, a
+    // submenu by its title
+    static QStringList entryNames(QMenu *menu) {
+        QStringList names;
+        for (QAction *a : menu->actions()) {
+            names << (a->isSeparator() ? QString("-") : a->text());
+        }
+        return names;
+    }
+
+    // The letter underlined in a menu's or an entry's text, upper case;
+    // a null QChar for none. "&&" is an ampersand, as Qt has it
+    static QChar underlined(const QString &text) {
+        for (int i = 0; i + 1 < text.size(); ++i) {
+            if (text[i] != '&') continue;
+            if (text[i + 1] == '&') {
+                ++i;
+                continue;
+            }
+            return text[i + 1].toUpper();
+        }
+        return QChar();
+    }
+
+    // The entries of those given, shown, that share a letter, as
+    // "Input &Channel / &Calibrate Audio..."; "" where none do
+    static QString letterClashes(const QList<QAction *> &actions) {
+        QMap<QChar, QStringList> byLetter;
+        for (QAction *a : actions) {
+            if (a->isSeparator() || !a->isVisible()) continue;
+            const QChar letter = underlined(a->text());
+            if (!letter.isNull()) byLetter[letter] << a->text();
+        }
+        QStringList clashes;
+        for (const QStringList &texts : byLetter) {
+            if (texts.size() > 1) clashes << texts.join(" / ");
+        }
+        return clashes.join("; ");
+    }
+
+    // The menus by subject: Playback plays and moves about, Record is the
+    // take and what is chosen for it, and Devices what Tony plays and
+    // records through, with the latency measured there. Record holds the
+    // bottom bar's recording buttons too, the same actions, which say
+    // what they do in the status bar: a menu shows no tooltips
+    void menus_by_subject() {
+        makeWindow(FakeAudioIO::Config());
+
+        QStringList titles;
+        for (QAction *a : m_window->menuBar()->actions()) titles << a->text();
+        QCOMPARE(titles, QStringList({ "&File", "&Edit", "&View", "&Analysis",
+                                       "Ta&kes", "Play&back", "&Record",
+                                       "&Devices", "&Help" }));
+
+        QCOMPARE(entryNames(m_window->playbackMenu()),
+                 QStringList({ "Play / Pause",
+                               "Constrain Playback to Selection",
+                               "Loop Playback", "-",
+                               "Rewind", "Fast Forward", "-",
+                               "Rewind to Start", "Fast Forward to End", "-",
+                               "&One Note Left", "O&ne Note Right",
+                               "&Select One Note Left",
+                               "S&elect One Note Right", "-",
+                               "Speed Up", "Slow Down",
+                               "Restore Normal Speed" }));
+
+        QMenu *record = m_window->recordMenu();
+        QCOMPARE(entryNames(record),
+                 QStringList({ "Record", "-",
+                               "Record into Selection", "Pre-roll",
+                               "Play Reference While Recording", "-",
+                               "Voice &Threshold",
+                               "Check Input &Level..." }));
+        const QList<QAction *> recording = record->actions();
+        QCOMPARE(recording[0], m_window->recordAction());
+        QCOMPARE(recording[2], m_window->recordIntoSelectionAction());
+        QCOMPARE(recording[3], m_window->preRollAction());
+        QCOMPARE(recording[4], m_window->playReferenceWhileRecordingAction());
+        QCOMPARE(recording[6],
+                 m_window->voiceThresholdMenu()->menu()->menuAction());
+        QCOMPARE(recording[7], m_window->checkInputLevelAction());
+        for (int i : { 2, 3, 4 }) {
+            QVERIFY2(!recording[i]->statusTip().isEmpty(),
+                     qPrintable(recording[i]->text()));
+            QCOMPARE(recording[i]->statusTip(), recording[i]->toolTip());
+        }
+
+        // The driver and its latency first (shown on Windows only), then
+        // the devices, which are the driver's own, and the input channel,
+        // which is kept for each input device
+        const QList<QAction *> devices = m_window->devicesMenu()->actions();
+        QCOMPARE(int(devices.size()), 9);
+        QCOMPARE(devices[0],
+                 m_window->audioDriverMenus()->driverMenu()->menuAction());
+        QCOMPARE(devices[1],
+                 m_window->audioDriverMenus()->latencyMenu()->menuAction());
+        QCOMPARE(devices[2], m_window->audioOutputMenu()->menuAction());
+        QCOMPARE(devices[3], m_window->audioInputMenu()->menuAction());
+        QCOMPARE(devices[4],
+                 m_window->inputChannelMenu()->menu()->menuAction());
+        QVERIFY(devices[5]->isSeparator());
+        QCOMPARE(devices[6], m_window->calibrateAudioAction());
+        QCOMPARE(devices[7], m_window->latencyLineAction());
+        QCOMPARE(devices[8], m_window->forgetLatencyAction());
+    }
+
+    // With a menu open, its entry's underlined letter chooses it, and a
+    // letter two entries share only moves between them: none is shared
+    // in Playback, Record or Devices, with the driver menus shown as on
+    // Windows, nor between two menus of the menu bar
+    void menus_have_a_letter_each() {
+        makeWindow(FakeAudioIO::Config());
+        m_window->setAudioImplementations({ "port", "mme", "directsound",
+                                            "wasapi" });
+        m_window->doRebuildAudioDriverMenus();
+        QVERIFY(m_window->audioDriverMenus()->latencyMenu()->menuAction()
+                ->isVisible());
+
+        QCOMPARE(letterClashes(m_window->menuBar()->actions()), QString());
+        for (QMenu *menu : { m_window->playbackMenu(), m_window->recordMenu(),
+                             m_window->devicesMenu() }) {
+            const QString clashes = letterClashes(menu->actions());
+            QVERIFY2(clashes.isEmpty(),
+                     qPrintable(menu->title() + ": " + clashes));
+        }
+    }
+
+    // Every action of the window that has a hotkey, the Edit menu's Undo
+    // and Redo among them, which are CommandHistory's. Static, as a slot
+    // here would be taken for a test
+    static QList<QAction *> hotkeyActions(QMainWindow *window) {
+        QList<QAction *> all = window->findChildren<QAction *>();
+        for (QAction *menu : window->menuBar()->actions()) {
+            if (!menu->menu()) continue;
+            for (QAction *a : menu->menu()->actions()) {
+                if (!all.contains(a)) all << a;
+            }
+        }
+        QList<QAction *> withKeys;
+        for (QAction *a : all) {
+            if (!a->shortcuts().isEmpty()) withKeys << a;
+        }
+        return withKeys;
+    }
+
+    // The recording toggles have Shift with a letter (S as S alone has
+    // the selection for playback), and Edit and Shift Lyrics Ctrl+L and
+    // Ctrl+Shift+L
+    void recording_toggles_and_lyrics_have_hotkeys() {
+        makeWindow(FakeAudioIO::Config());
+        QCOMPARE(m_window->recordIntoSelectionAction()->shortcut(),
+                 QKeySequence("Shift+S"));
+        QCOMPARE(m_window->preRollAction()->shortcut(),
+                 QKeySequence("Shift+P"));
+        QCOMPARE(m_window->playReferenceWhileRecordingAction()->shortcut(),
+                 QKeySequence("Shift+R"));
+        QCOMPARE(m_window->editLyricsAction()->shortcut(),
+                 QKeySequence("Ctrl+L"));
+        QCOMPARE(m_window->shiftLyricsAction()->shortcut(),
+                 QKeySequence("Ctrl+Shift+L"));
+    }
+
+    // A key two actions have does neither: Qt calls the press ambiguous
+    void no_two_actions_share_a_hotkey() {
+        makeWindow(FakeAudioIO::Config());
+        QMap<QString, QString> owner;
+        QStringList shared;
+        for (QAction *a : hotkeyActions(m_window)) {
+            for (const QKeySequence &key : a->shortcuts()) {
+                const QString text = key.toString(QKeySequence::PortableText);
+                if (owner.contains(text)) {
+                    shared << QString("%1: %2 / %3")
+                        .arg(text, owner[text], a->text());
+                } else {
+                    owner[text] = a->text();
+                }
+            }
+        }
+        QVERIFY2(shared.isEmpty(), qPrintable(shared.join("; ")));
+        // From every place that holds actions: CommandHistory (Undo), a
+        // toolbar (Play / Pause), the bottom bar (Record into Selection)
+        // and a menu (Edit Lyrics)
+        for (const char *key : { "Ctrl+Z", "Space", "Shift+S", "Ctrl+L" }) {
+            QVERIFY2(owner.contains(key), key);
+        }
+    }
+
+    // A command of the window's hotkey table, by its id
+    static const HotkeyTable::Command *hotkeyCommand(HotkeyTable *table,
+                                                     QString id) {
+        for (const HotkeyTable::Command &c : table->commands()) {
+            if (c.id == id) return &c;
+        }
+        return nullptr;
+    }
+
+    static QList<QKeySequence> keyList(std::initializer_list<const char *> keys) {
+        QList<QKeySequence> list;
+        for (const char *key : keys) list << QKeySequence(key);
+        return list;
+    }
+
+    static QString native(const char *key) {
+        return QKeySequence(key).toString(QKeySequence::NativeText);
+    }
+
+    // Every action that has a hotkey can have it changed, but for the
+    // first of the recent files, which has Re-open's, a command without
+    // an action of its own. No two commands have one id or one default
+    // key, and the key reference lists each with its keys
+    void every_hotkey_is_configurable() {
+        makeWindow(FakeAudioIO::Config());
+        // A URL: RecentFiles leaves out a file in a temporary directory,
+        // which the tests' are
+        m_window->addRecentFile("file:///hotkeys/song.wav");
+
+        HotkeyTable *table = m_window->hotkeys();
+        QList<QAction *> configurable;
+        QStringList ids;
+        std::vector<Hotkeys::Command> defaults;
+        for (const HotkeyTable::Command &c : table->commands()) {
+            QVERIFY2(!ids.contains(c.id), qPrintable(c.id));
+            ids << c.id;
+            QVERIFY2(!c.defaults.isEmpty(), qPrintable(c.id));
+            if (c.action) configurable << c.action;
+            defaults.push_back({ c.id, HotkeyTable::portable(c.defaults) });
+            QVERIFY2(m_window->hotkeyReference()->listed(c.category, c.name)
+                     .size() == c.defaults.size(), qPrintable(c.id));
+        }
+        QVERIFY(Hotkeys::clashes(defaults).empty());
+
+        QAction *firstRecent = m_window->recentFilesMenu()->actions().value(0);
+        QVERIFY(firstRecent);
+        QCOMPARE(firstRecent->shortcuts(), keyList({ "Ctrl+R" }));
+        for (QAction *a : hotkeyActions(m_window)) {
+            if (configurable.contains(a)) continue;
+            QVERIFY2(a == firstRecent, qPrintable(a->text()));
+        }
+
+        for (const char *id : { "undo", "redo", "reopen", "save-session-as",
+                                "save-session-to-audio-path",
+                                "clear-selection", "record-into-selection",
+                                "edit-lyrics", "previous-output-device" }) {
+            QVERIFY2(ids.contains(id), id);
+        }
+    }
+
+    // The keys the settings keep are the commands' as the window opens:
+    // one command's other key, one's none, CommandHistory's Undo's, and
+    // Re-open's on the first recent file, as the key reference lists
+    // them. A window opened once they are forgotten has the defaults,
+    // Undo's too, which every window shares
+    void saved_hotkeys_given_at_start() {
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "play", { "P" }, { "Space" });
+            Hotkeys::setKeys(settings, "loop", {}, { "L" });
+            Hotkeys::setKeys(settings, "undo", { "Ctrl+U" }, { "Ctrl+Z" });
+            Hotkeys::setKeys(settings, "reopen", { "Ctrl+Shift+E" },
+                             { "Ctrl+R" });
+        }
+        makeWindow(FakeAudioIO::Config());
+        // A URL: RecentFiles leaves out a file in a temporary directory,
+        // which the tests' are
+        m_window->addRecentFile("file:///hotkeys/song.wav");
+        QVERIFY(!m_window->recentFilesMenu()->actions().isEmpty());
+
+        HotkeyTable *table = m_window->hotkeys();
+        const HotkeyTable::Command *play = hotkeyCommand(table, "play");
+        const HotkeyTable::Command *loop = hotkeyCommand(table, "loop");
+        const HotkeyTable::Command *undo = hotkeyCommand(table, "undo");
+        const HotkeyTable::Command *reopen = hotkeyCommand(table, "reopen");
+        QVERIFY(play && loop && undo && reopen);
+        QCOMPARE(play->action.data(), m_window->playAction());
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "P" }));
+        QVERIFY(loop->action->shortcuts().isEmpty());
+        QCOMPARE(undo->action->shortcuts(), keyList({ "Ctrl+U" }));
+        QCOMPARE(m_window->recentFilesMenu()->actions().value(0)->shortcuts(),
+                 keyList({ "Ctrl+Shift+E" }));
+
+        HotkeyReference *reference = m_window->hotkeyReference();
+        QCOMPARE(reference->listed(play->category, "Play / Pause"),
+                 QStringList({ native("P") }));
+        QCOMPARE(reference->listed(loop->category, "Loop Playback"),
+                 QStringList());
+        QCOMPARE(reference->listed(undo->category, "Undo"),
+                 QStringList({ native("Ctrl+U") }));
+        QCOMPARE(reference->listed(reopen->category, "Re-open"),
+                 QStringList({ native("Ctrl+Shift+E") }));
+
+        {
+            QSettings settings;
+            Hotkeys::forgetAll(settings);
+        }
+        makeWindow(FakeAudioIO::Config());
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "Space" }));
+        QCOMPARE(hotkeyCommand(m_window->hotkeys(), "undo")->action
+                 ->shortcuts(), keyList({ "Ctrl+Z" }));
+    }
+
+    // Edit > Configure Hotkeys. The command chosen has its keys in the
+    // boxes; a key pressed for it is its key, the first of a sequence
+    // only; a key another command has too shows both in red, a line names
+    // them, and OK is shut until Default puts the command's own back. OK
+    // keeps the keys chosen, and only those, and gives them to the
+    // commands and the key reference
+    void configure_hotkeys_dialog() {
+        makeWindow(FakeAudioIO::Config());
+        QAction *configure = m_window->configureHotkeysAction();
+        QVERIFY(configure);
+        QMenu *edit = nullptr;
+        for (QAction *menu : m_window->menuBar()->actions()) {
+            if (menu->text() == "&Edit") edit = menu->menu();
+        }
+        QVERIFY(edit && edit->actions().contains(configure));
+
+        configure->trigger();
+        HotkeysDialog *dialog = m_window->hotkeysDialog();
+        QVERIFY(dialog);
+        QVERIFY(dialog->isVisible());
+        QCOMPARE(dialog->windowModality(), Qt::WindowModal);
+        QVERIFY(!dialog->keyBox(0)->isEnabled());
+
+        dialog->choose("play");
+        QVERIFY(dialog->keyBox(0)->isEnabled());
+        QCOMPARE(dialog->keyBox(0)->keySequence(), QKeySequence("Space"));
+        QVERIFY(dialog->keyBox(1)->keySequence().isEmpty());
+        QVERIFY(!dialog->defaultButton()->isEnabled());
+
+        dialog->pressKey(0, QKeySequence("L"));
+        QVERIFY(dialog->shownClashing("play"));
+        QVERIFY(dialog->shownClashing("loop"));
+        QVERIFY(!dialog->shownClashing("record"));
+        // The commands in the list's order, the key reference's
+        QVERIFY2(dialog->clashText().contains
+                 (native("L") + " is the key of Loop Playback and of Play / "
+                  "Pause."), qPrintable(dialog->clashText()));
+        QVERIFY(!dialog->okButton()->isEnabled());
+
+        QVERIFY(dialog->defaultButton()->isEnabled());
+        dialog->defaultButton()->click();
+        QCOMPARE(dialog->keys("play"), keyList({ "Space" }));
+        QVERIFY(!dialog->shownClashing("loop"));
+        QVERIFY(dialog->clashText().isEmpty());
+        QVERIFY(dialog->okButton()->isEnabled());
+
+        dialog->pressKey(0, QKeySequence("Ctrl+K, Ctrl+C"));
+        QCOMPARE(dialog->keys("play"), keyList({ "Ctrl+K" }));
+        dialog->pressKey(0, QKeySequence("P"));
+        QCOMPARE(dialog->listedKeys("play"), native("P"));
+
+        dialog->choose("clear-selection");
+        QCOMPARE(dialog->keyBox(0)->keySequence(), QKeySequence("Esc"));
+        QCOMPARE(dialog->keyBox(1)->keySequence(), QKeySequence("Ctrl+Esc"));
+        dialog->pressKey(1, QKeySequence());
+        QCOMPARE(dialog->keys("clear-selection"), keyList({ "Esc" }));
+
+        dialog->choose("undo");
+        dialog->pressKey(0, QKeySequence("Ctrl+U"));
+        dialog->choose("redo");
+        dialog->pressKey(1, QKeySequence("Ctrl+Y"));
+        QCOMPARE(dialog->keys("redo"), keyList({ "Ctrl+Shift+Z", "Ctrl+Y" }));
+        QCOMPARE(dialog->listedKeys("redo"),
+                 native("Ctrl+Shift+Z") + ", " + native("Ctrl+Y"));
+
+        dialog->okButton()->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->hotkeysDialog(), 5000);
+
+        QSettings settings;
+        settings.beginGroup(Hotkeys::kGroup);
+        QStringList kept = settings.childKeys();
+        kept.sort();
+        QCOMPARE(kept, QStringList({ "clear-selection", "play", "redo",
+                                     "undo" }));
+        QCOMPARE(settings.value("play").toString(), QString("P"));
+        QCOMPARE(settings.value("redo").toString(),
+                 QString("Ctrl+Shift+Z; Ctrl+Y"));
+        settings.endGroup();
+
+        HotkeyTable *table = m_window->hotkeys();
+        const HotkeyTable::Command *clear =
+            hotkeyCommand(table, "clear-selection");
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "P" }));
+        QCOMPARE(clear->action->shortcuts(), keyList({ "Esc" }));
+        QCOMPARE(hotkeyCommand(table, "undo")->action->shortcuts(),
+                 keyList({ "Ctrl+U" }));
+        QCOMPARE(hotkeyCommand(table, "redo")->action->shortcuts(),
+                 keyList({ "Ctrl+Shift+Z", "Ctrl+Y" }));
+        HotkeyReference *reference = m_window->hotkeyReference();
+        const HotkeyTable::Command *play = hotkeyCommand(table, "play");
+        QCOMPARE(reference->listed(play->category, play->name),
+                 QStringList({ native("P") }));
+        QCOMPARE(reference->listed(clear->category, clear->name),
+                 QStringList({ native("Esc") }));
+    }
+
+    // Help > Key and Mouse Reference lists the keys as they are, open or
+    // not when they change: a command with none is not there
+    void key_reference_lists_the_keys_as_they_are() {
+        makeWindow(FakeAudioIO::Config());
+        HotkeyReference *reference = m_window->hotkeyReference();
+        reference->show();
+        QString text = keyReferenceText();
+        QVERIFY2(text.contains("Loop Playback"), qPrintable(text));
+        QVERIFY2(!text.contains(native("Ctrl+Shift+F12")), qPrintable(text));
+
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "loop", {}, { "L" });
+            Hotkeys::setKeys(settings, "play", { "Ctrl+Shift+F12" },
+                             { "Space" });
+        }
+        m_window->doApplyHotkeys();
+        text = keyReferenceText();
+        QVERIFY2(!text.contains("Loop Playback"), qPrintable(text));
+        QVERIFY2(text.contains(native("Ctrl+Shift+F12")), qPrintable(text));
+        reference->hide();
+
+        // Not shown when they changed, and then shown
+        {
+            QSettings settings;
+            Hotkeys::forgetAll(settings);
+        }
+        m_window->doApplyHotkeys();
+        reference->show();
+        text = keyReferenceText();
+        QVERIFY2(text.contains("Loop Playback"), qPrintable(text));
+        QVERIFY2(!text.contains(native("Ctrl+Shift+F12")), qPrintable(text));
+        reference->hide();
+    }
+
+    // Restore Defaults puts back every command's own keys, which OK keeps
+    // as nothing at all; Cancel keeps nothing of what was changed
+    void configure_hotkeys_restore_defaults_and_cancel() {
+        {
+            QSettings settings;
+            Hotkeys::setKeys(settings, "play", { "P" }, { "Space" });
+            Hotkeys::setKeys(settings, "loop", {}, { "L" });
+        }
+        makeWindow(FakeAudioIO::Config());
+        m_window->configureHotkeysAction()->trigger();
+        HotkeysDialog *dialog = m_window->hotkeysDialog();
+        QVERIFY(dialog);
+        QCOMPARE(dialog->keys("play"), keyList({ "P" }));
+        QVERIFY(dialog->keys("loop").isEmpty());
+        QCOMPARE(dialog->listedKeys("loop"), QString());
+
+        dialog->restoreDefaultsButton()->click();
+        QCOMPARE(dialog->keys("play"), keyList({ "Space" }));
+        QCOMPARE(dialog->keys("loop"), keyList({ "L" }));
+        dialog->okButton()->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->hotkeysDialog(), 5000);
+        QSettings settings;
+        settings.beginGroup(Hotkeys::kGroup);
+        QVERIFY(settings.childKeys().isEmpty());
+        settings.endGroup();
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "Space" }));
+        QCOMPARE(hotkeyCommand(m_window->hotkeys(), "loop")->action
+                 ->shortcuts(), keyList({ "L" }));
+
+        m_window->configureHotkeysAction()->trigger();
+        dialog = m_window->hotkeysDialog();
+        QVERIFY(dialog);
+        dialog->choose("play");
+        dialog->pressKey(0, QKeySequence("P"));
+        dialog->reject();
+        QTRY_VERIFY_WITH_TIMEOUT(!m_window->hotkeysDialog(), 5000);
+        QCOMPARE(m_window->playAction()->shortcuts(), keyList({ "Space" }));
+        settings.beginGroup(Hotkeys::kGroup);
+        QVERIFY(settings.childKeys().isEmpty());
+        settings.endGroup();
+    }
+
+    // Record > Voice Threshold (where in the menu: menus_by_subject):
     // Off and then the thresholds, quietest first, by VoiceThreshold's
     // labels, one to be ticked at a time.  With none set, Off is
     void voice_threshold_menu_offers_the_choices() {
@@ -6483,11 +6983,8 @@ private slots:
         QVERIFY(menu->menuAction()->isEnabled());
         QVERIFY2(menu->menuAction()->statusTip().contains("speakers"),
                  qPrintable(menu->menuAction()->statusTip()));
-
-        const QList<QAction *> playback = m_window->playbackMenu()->actions();
-        const qsizetype recordAt = playback.indexOf(m_window->recordAction());
-        QVERIFY(recordAt >= 0);
-        QCOMPARE(playback.indexOf(menu->menuAction()), recordAt + 1);
+        QVERIFY(m_window->recordMenu()->actions()
+                .contains(menu->menuAction()));
 
         const std::vector<double> choices = VoiceThreshold::choices();
         const QList<QAction *> entries = menu->actions();

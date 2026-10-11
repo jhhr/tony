@@ -33,8 +33,8 @@ file, and compares the take before and after each punch-in.
 
 1. A development build: any build type but `release` (`build.bat` builds
    `debugoptimized`).
-2. On Windows, choose the driver and the latency under **Playback > Audio Driver** and
-   **Audio Latency** (section 2). Then the devices under **Playback > Audio Output
+2. On Windows, choose the driver and the latency under **Devices > Audio Driver** and
+   **Audio Latency** (section 2). Then the devices under **Devices > Audio Output
    Device** and **Audio Input Device**, which list that driver's (or leave the system
    default): the run records with them, as any take does.
 3. With wired headphones, hold one earcup against the microphone, off your ears; with
@@ -42,7 +42,7 @@ file, and compares the take before and after each punch-in.
    headset's microphone needs the earcup right against it: item 3 needs the tones over
    the live tracker's floor (−60 dBFS) where they reach the microphone, and when they
    were under it, it says so and gives their level.
-4. **Playback > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
+4. **Devices > Calibrate Audio...**, with **Run the dev checks after calibrating** on (it
    is by default), then **Start**. A few minutes; leave the window alone meanwhile (Cancel
    stops the run). The dev checks run only after a calibration that can be used (verdict
    Ok or Unsteady, whatever the device's rate). No signal, or a fading one,
@@ -175,7 +175,7 @@ delivers nothing the take is dropped quietly, no harm.
 Only on Windows, where the menus are shown. The design is in
 [audio-drivers.md](audio-drivers.md).
 
-1. **The first start** with a build that has them: **Playback > Audio Driver** lists MME,
+1. **The first start** with a build that has them: **Devices > Audio Driver** lists MME,
    DirectSound and WASAPI with WASAPI ticked, and **Audio Latency** lists 10 to 200 ms with
    20 ms ticked. (A driver chosen before, in an earlier build, stays ticked instead.)
    **Audio Output Device** and **Audio Input Device** tick the devices chosen before. One
@@ -190,7 +190,8 @@ Only on Windows, where the menus are shown. The design is in
    time what was playing stops, and the next play and take work. Note the figure in
    "Latency: driver's figure, …" at each latency, and whether 10 ms crackles.
 4. **Greyed out during a take**: while recording, and while Calibrate Audio runs, Audio
-   Driver and Audio Latency cannot be opened.
+   Driver, Audio Latency, Audio Output Device and Audio Input Device cannot be opened, and
+   O does nothing; after the take they open again, and the take plays back whole.
 5. **The reports name the driver.** Calibrate Audio's first page and its result page
    show "Driver: WASAPI"; `DevChecks.txt` has "Audio driver: WASAPI" and "Latency asked
    for: 20.0 ms" under the devices at its head.
@@ -255,7 +256,7 @@ Not tried yet.
    the session: it plays with the reference at that level, and during a take. Move the
    music file and open the session again: Tony asks where it is, and Locate file... finds
    it.
-10. **Music on speakers: Playback > Voice Threshold.** With the reference or the
+10. **Music on speakers: Record > Voice Threshold.** With the reference or the
    background music on speakers, at the volume you sing with, and the threshold Off:
    record the music alone, not singing, and see its dots and, after Stop, its pitch.
    Raise the threshold a step at a time, recording the music alone each time, until the
@@ -265,7 +266,7 @@ Not tried yet.
    with this microphone, and is soft singing kept? Then lower or raise it and choose
    Analysis > Analyse Now!: the take's pitch and notes change to match, and Play still
    plays what was recorded, the music included. The menu cannot be opened during a take.
-   Then Playback > Check Input Level with the music playing in its silence: is the
+   Then Record > Check Input Level with the music playing in its silence: is the
    threshold it suggests over the music, and under soft singing?
 11. **Hovering over notes.** Open a song, drag a selection and click away from it, then
    hover over the reference's notes inside and outside where it was: the box at the top
@@ -280,6 +281,17 @@ Not tried yet.
    quit and start: it comes back there, as large. With two screens, closed on the second
    it comes back on the second. The first start of a build with this has nothing kept,
    and opens at its first-time size once.
+13. **Switch to Previous Output Device (O)**, with headphones and speakers. Just after
+   starting, O does nothing. Choose the headphones under Devices > Audio Output Device,
+   then the speakers: O plays through the headphones again and O again through the
+   speakers, the status bar naming each. Record after switching back to the headphones:
+   the take sits in time by ear, as before. During a take O does nothing.
+14. **Edit > Configure Hotkeys.** Give Play / Pause the key P and press OK: P plays and
+   Space no longer does, and Help > Key and Mouse Reference lists P. Give Loop Playback the
+   key S: both rows turn red, a line names them, and OK is greyed until one is changed.
+   Quit and start Tony: the keys are as they were left. Restore Defaults, then OK, puts
+   every key back. A key typed with AltGr on the Finnish keyboard: is it taken, and does it
+   work? Is the dialog's size and wording right?
 
 ## 4. Lyrics
 
@@ -357,7 +369,7 @@ Not tried yet.
     shows the horizontal-resize cursor and nowhere else; the status bar says what the
     mouse does there and clears when the pointer leaves the row. A click still moves the
     playback cursor, and above the row, or with edit mode off, the mouse does what it
-    always did. Is Edit Lyrics easy to find, with no shortcut?
+    always did. Is Edit Lyrics easy to find? Ctrl+L switches it on and off.
 4.  **Dragging an edge**: where two words touch, just left of the line moves the earlier
     word's end and just right of it the later word's start. Is the grab (6 px each side)
     right? An edge stops at the neighbouring word and a word at 20 ms, without jumping;
@@ -423,7 +435,7 @@ The design is in [port-android.md](port-android.md) and
    correct itself?
 3. **Other routes**: wired or USB headphones with the phone's microphone, and the phone's
    own speaker and microphone in a quiet room. Calibrate Audio keeps a figure for each
-   route: the Playback menu's latency line changes with the route, and each figure places
+   route: the Devices menu's latency line changes with the route, and each figure places
    its takes.
 4. **Headphones plugged in or out** during playback and during a take: the take is kept as
    Stop keeps it, and the next Play or Record works on the new route.
@@ -458,7 +470,7 @@ The design is in [port-android.md](port-android.md) and
     a check, and a screen that goes off ends the take as Stop does. Does that get in the
     way in use?
 13. **Voice Threshold on the phone's own speaker**: from the compact layout's menu button,
-    Playback > Voice Threshold opens, shows which is ticked, and takes a tap; then
+    Record > Voice Threshold opens, shows which is ticked, and takes a tap; then
     section 3, item 10, with the reference on the phone's speaker. Nothing on the phone
     explains the entries: are "Off" and the dBFS figures clear enough there?
 
@@ -479,14 +491,14 @@ the AI-Micro gives the HS2 to both inputs at the same level, so Both Inputs is r
 there; on the phone its input opened mono, through AAudio's MMAP path. The rest has not
 been tried on a device yet.
 
-**On Windows**, with the AI-Micro chosen under Playback > Audio Input Device:
+**On Windows**, with the AI-Micro chosen under Devices > Audio Input Device:
 
 1. **Which input the HS2 is on.** Calibrate Audio, an earcup held to the HS2: the result
    page says "The microphone is on input 1 alone" and offers **Use Input 1**; its
    "Inputs:" line gives each input's peak (with the dev checks, item 5's "the mic is on"
    says the same). If it names neither, the AI-Micro feeds the one microphone to both
    inputs, and Both Inputs is right as it is.
-2. **Input Channel** (Playback > Input Channel): its first line names the AI-Micro (or
+2. **Input Channel** (Devices > Input Channel): its first line names the AI-Micro (or
    "(System Default)" if that is what Audio Input Device has ticked). Choose Input 1,
    record a short take and play it back: the voice in both ears, equally. Then a take with
    Both Inputs into a new take: the voice in the left ear only.
@@ -502,20 +514,20 @@ been tried on a device yet.
    two inputs (the hardware 2) or opened it with one (the hardware 1, or not said before
    Android 14), and the "input" stream line before it whether it got the low-latency
    path ("MMAP", "LowLatency").
-5. Playback > Input Channel names the AI-Micro (after a take, or as the input recorded
+5. Devices > Input Channel names the AI-Micro (after a take, or as the input recorded
    from last). Choose Input 1: the log says "the input opened at the device's own 2
    channels" (or why not). Record and play back: the voice in both ears; the dots as above.
    The latency line then says the measured figure is out of date: run Calibrate Audio
    again on this route.
 6. Unplug the AI-Micro: the phone's own microphone keeps Both Inputs, and records as
    before.
-7. After a fresh install (or with Tony's data cleared), before the first take: Playback >
+7. After a fresh install (or with Tony's data cleared), before the first take: Devices >
    Input Channel says the input is known once a take has started, its entries shut. After
    a take it names the input, and a choice made then is kept for it.
 
 **The input level, on Windows** (the design: [recording.md](recording.md#the-input-level)):
 
-8. **Check Input Level** (Playback menu) before the first take of a launch: the meter in
+8. **Check Input Level** (Record menu) before the first take of a launch: the meter in
    the dialog moves with the room in the two quiet seconds, and with your loudest phrase
    after them. Set the AI-Micro's gain as it says (in RØDE's own software, with Windows'
    input volume for it at 100) and check again until it says the gain is right. Is the
@@ -561,7 +573,7 @@ receiver's analog output into the AI-Micro instead. The designs:
 
 **The receiver as a USB microphone, on Windows (the desktop and the Surface)**:
 
-1. Playback > Audio Input Device lists the receiver under WASAPI. Choose it, and the
+1. Devices > Audio Input Device lists the receiver under WASAPI. Choose it, and the
    headphones' device as the output. In merged mode with no safety channel, Both Inputs:
    the take plays in both ears, and Check Input Level reads your voice. Then split mode
    with one transmitter: with Both, the take plays in one ear and reads 6 dB low;
@@ -607,7 +619,7 @@ receiver's analog output into the AI-Micro instead. The designs:
 
 **On the phone**:
 
-10. Plug the receiver in, with Bluetooth earphones on, then with the speaker: Playback >
+10. Plug the receiver in, with Bluetooth earphones on, then with the speaker: Devices >
     Audio Input Device's first line ("In use:") names the receiver once a take has
     started (Android's choice, as the research says). Choose the phone's microphone: the
     next take records from it (the log's route line), the receiver plugged in or not.
