@@ -280,6 +280,14 @@ Not tried yet.
    quit and start: it comes back there, as large. With two screens, closed on the second
    it comes back on the second. The first start of a build with this has nothing kept,
    and opens at its first-time size once.
+13. **The reference's track on separated vocals.** Open a song whose vocals were separated
+   from a mix, with harmonies, doubled parts or echoes (the pitch lab's three were
+   Nothing Else Matters, Pretty with a Pistol and Meidän on annettu pudota), from its
+   audio file or with Analysis > Analyse Now! (a session keeps the track it was saved
+   with). Where two or three voices sing together the black track follows one of them,
+   not a line an octave or two below them all; it breaks less often within a phrase; the
+   echoes after a phrase are not tracked. Is the voice it follows the one you would sing
+   (open points)? Then record a take: its orange track is pYIN's own analysis, as before.
 
 ## 4. Lyrics
 

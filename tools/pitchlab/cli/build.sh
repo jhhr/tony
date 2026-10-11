@@ -33,12 +33,18 @@ if [ ! -d "$sdk/vamp-sdk" ]; then
     exit 1
 fi
 
+# The fork's harmonic salience, which upstream's pYIN does not have
+fork=()
+if [ -f "$src/HarmonicSalience.cpp" ]; then
+    fork=("$src"/HarmonicSalience.cpp)
+fi
+
 c++ -O2 -std=c++17 -w \
     -I"$src" -I"$sdk" \
     "$here/pyin_cli.cpp" \
     "$src"/YinUtil.cpp "$src"/Yin.cpp "$src"/SparseHMM.cpp "$src"/MonoPitchHMM.cpp \
     "$src"/MonoNoteParameters.cpp "$src"/MonoNoteHMM.cpp "$src"/MonoNote.cpp \
-    "$src"/PYinVamp.cpp \
+    "$src"/PYinVamp.cpp ${fork[@]+"${fork[@]}"} \
     "$sdk"/src/vamp-sdk/FFT.cpp "$sdk"/src/vamp-sdk/RealTime.cpp \
     "$@" \
     -lsndfile -o "$out"

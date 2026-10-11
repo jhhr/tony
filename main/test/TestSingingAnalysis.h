@@ -761,6 +761,49 @@ private slots:
                  qPrintable(QString("secondary median %1 Hz").arg(s)));
     }
 
+    void harmony_tracked_in_the_reference_only() {
+        // Two voices a just fifth apart, E4 and B4, as in a song's vocals
+        // with a harmony part. pYIN's own analysis tracks the fundamental
+        // the two have in common, E3, an octave below both; the
+        // reference's, with the pyin fork's parameters for such vocals,
+        // tracks a voice. The singing's is pYIN's own: given the two
+        // voices, it tracks E3. Each analyser has a model of its own, so
+        // that neither takes over the other's layers
+        std::vector<float> harmony = tone(330.0, 2.0);
+        const std::vector<float> upper = tone(495.0, 2.0);
+        for (size_t i = 0; i < harmony.size(); ++i) {
+            harmony[i] = 0.5f * (harmony[i] + upper[i]);
+        }
+
+        Analyser reference(Analyser::PrimaryColors);
+        analyse(reference, addSingingModel(harmony));
+        if (QTest::currentTestFailed()) return;
+        Analyser singing(Analyser::SecondaryColors);
+        analyse(singing, addSingingModel(harmony));
+        if (QTest::currentTestFailed()) return;
+
+        const sv::sv_frame_t from = frameAt(0.25), to = frameAt(1.75);
+        int voiced = 0, onAVoice = 0;
+        for (const sv::Event &p : pitchEvents(reference)) {
+            if (p.getFrame() < from || p.getFrame() >= to) continue;
+            ++voiced;
+            if (std::abs(TestSignals::centsBetween(p.getValue(), 330.0)) < 50.0 ||
+                std::abs(TestSignals::centsBetween(p.getValue(), 495.0)) < 50.0) {
+                ++onAVoice;
+            }
+        }
+        const int hops = int((to - from) / hop);
+        QVERIFY2(voiced >= hops * 9 / 10 && onAVoice == voiced,
+                 qPrintable(QString("the reference: %1 pitch events of %2 hops, "
+                                    "%3 on a voice")
+                            .arg(voiced).arg(hops).arg(onAVoice)));
+
+        const double median = medianHz(pitchEvents(singing));
+        QVERIFY2(std::abs(TestSignals::centsBetween(median, 165.0)) < 50.0,
+                 qPrintable(QString("the singing: median %1 Hz, where pYIN's "
+                                    "own analysis gives 165 Hz").arg(median)));
+    }
+
     void secondary_waveform_is_own_model() {
         // The secondary analyser must show the singing audio, not
         // make a second layer on the document's main model

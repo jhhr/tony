@@ -44,6 +44,12 @@ venv/bin/python tools/pitchlab/py/run_testset.py testset out/base -j 2 -- bin/py
 venv/bin/python tools/pitchlab/py/evaluate.py testset out/base
 ```
 
+The pyin fork's parameters for vocals with harmonies, doubled parts and echoes
+([docs/forks.md](../../docs/forks.md#pyin)) are off by default, so a runner built from
+`pyin/` is pYIN 1.2 as it stands. Tony's analysis of the reference is that runner with
+`--param salmode=1 --param candidaterule=1 --param commonf0=0.8 --param levelfloor=13
+--param voicedfloor=0.2 --param voicehold=3`.
+
 The ground truth of the real sources is pYIN's own track on the clean audio, so the
 `clean` condition measures how a variant departs from baseline pYIN rather than from the
 truth; the synthetic sources' f0 is exact.

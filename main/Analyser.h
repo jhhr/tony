@@ -296,6 +296,17 @@ public:
     void setRangedMergeHeld(bool held);
 
     /**
+     * For the tests only: analyse with pYIN's own parameters, as the
+     * singing's analyser does, though this is the reference's.  A test
+     * that checks where a take was placed by comparing its pitch steps
+     * with the reference's needs the two analysed alike: at a leap the
+     * reference's analysis glides to the new note and reaches it two or
+     * three hops before pYIN's own (docs/open-points.md).  Never set in
+     * the application.
+     */
+    void setPlainAnalysis(bool plain) { m_plainAnalysis = plain; }
+
+    /**
      * What the last ranged merge took out of and put into the pitch
      * track and the notes.  Reversing these two changes undoes the
      * merge, which is how the recording that asked for it is made
@@ -465,6 +476,9 @@ protected:
 
     // Set only by a test (setRangedMergeHeld())
     bool m_rangedMergeHeld;
+
+    // Set only by a test (setPlainAnalysis())
+    bool m_plainAnalysis;
 
     // What the last merge did, for the undo command of the recording
     // that asked for the analysis (see getRangedPitchChange())

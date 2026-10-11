@@ -255,6 +255,46 @@ On the fork branch `tony-customizations`, which upstream's `default` does not ha
   smoothing off and on, against `test/regression/expected-*.csv` to within their six
   significant digits. A change to what the analysis gives at its defaults fails it; a
   change meant to alter that brings new expected files with it, as upstream's did.
+- **Parameters for vocals with harmonies, doubled parts and echoes**, as vocals separated
+  from a mix have. On those pYIN's own analysis goes wrong in four ways: two or three
+  voices together make YIN's deepest dip at the period they share, an octave or two below
+  them all; its candidate rule (see the known defects) lets the dip at twice a rough low
+  note's period win; the pitch HMM breaks the track wherever one frame has no candidate
+  near it; and echo tails, as periodic as the voice, are tracked. Each parameter is 0 by
+  default, which is pYIN 1.2 exactly (the plugin version stays 3):
+  - `salmode` 1: the candidates come from a harmonic salience of the spectrum
+    (`HarmonicSalience`), which peaks at each voice's own f0, its negative lobes between
+    the harmonics keeping it off the octave above. YIN still runs: its probability that
+    the frame is voiced is what the candidates share, by salience to the fourth power,
+    with a floor from the salience's harmonicity, since YIN's aperiodicity stays high
+    where several harmonic voices sound at once.
+  - `candidaterule` 1: YIN's dips get their probabilities in order of period, mostly the
+    first below each threshold (`YinUtil::yinProbOrdered()`). With `salmode` it only
+    changes the probability that the frame is voiced.
+  - `commonf0`: a salience candidate with two others at multiples of it and no partial of
+    its own, the common fundamental of a fifth or a fourth, loses this share of its
+    salience.
+  - `levelfloor`: frames more than this many dB below the level of the last ten seconds'
+    singing fade out of voicing over 6 dB (`LevelGate`): echo and reverb tails are
+    quieter than what they repeat.
+  - `voicedfloor`: every voiced state's observation is at least this times an unvoiced
+    state's (less in frames the level floor fades), so that the track crosses a few
+    frames with no candidate near it rather than breaking; such a frame keeps its state's
+    pitch.
+  - `voicehold`: an unvoiced state's moves to another pitch cost 1 + this times more, so
+    that after a gap the track comes back near the voice it left.
+
+  Tony sets them for the reference's analysis only ([architecture.md](architecture.md#who-owns-what)):
+  `salmode` 1, `candidaterule` 1, `commonf0` 0.8, `levelfloor` 13, `voicedfloor` 0.2,
+  `voicehold` 3. These values and the fixed tuning in the code were chosen in the pitch
+  lab (`tools/pitchlab/`) on a test set of real and synthetic singing with harmonies,
+  echo, reverb and separation damage, and checked on three songs' separated vocals
+  annotated by hand: the share of sung frames within 50 cents of a sung voice went from
+  0.72 to 0.97 on the test set and from 0.24, 0.58 and 0.46 to 0.93, 0.96 and 0.96 on the
+  songs, for about twice pYIN's time. `TestPYinVamp` checks them end to end on a fifth, a
+  third, a period-doubled tone and an echo, each of which pYIN's own analysis gets
+  wrong; `TestHarmonicSalience`, `TestLevelGate`, `TestMonoPitchHMM` and `TestYinUtil`
+  check the parts.
 
 A `pyin/` cloned from `c4dm` before the fork does not have the pin: `git remote add jhhr
 https://github.com/jhhr/pyin`, `git fetch jhhr`, then `git checkout -B tony-customizations
@@ -285,7 +325,8 @@ cloud session.
   share of the probability, where the published pYIN gives each threshold's share to the
   first dip below it (the paper's code is still in the function, commented out). So the
   sub-harmonic dips of a voice compete with its own period, and only the HMM's continuity
-  keeps the octave.
+  keeps the octave. Left as it is for the defaults, which are pYIN 1.2; `candidaterule` 1
+  gives the fork's ordered rule instead, which the reference's analysis uses.
 - `YinUtil::fastDifference()` keeps its running power term one sample out (it brings in
   `x[tau + half]` where the window ends at `x[tau + half - 1]`), so the difference
   departs a little from YIN's; harmless for pitch at pYIN's window. Tony's live tracker

@@ -3645,6 +3645,9 @@ private slots:
         config.inputDelay = K;
         config.inputFollowsPlayback = true;
         makeWindow(config);
+        // The take's pitch steps against the reference's, both from
+        // pYIN's own analysis (Analyser::setPlainAnalysis())
+        m_window->analyser()->setPlainAnalysis(true);
         m_window->setPlayReferenceWhileRecording(true);
         openReference(writeWav(melody(0.75)));
         if (QTest::currentTestFailed()) return;
@@ -3708,6 +3711,9 @@ private slots:
         config.inputFollowsPlayback = true;
         storeRoundTrip(K, reportedOut, reportedIn);
         makeWindow(config);
+        // The take's pitch steps against the reference's, both from
+        // pYIN's own analysis (Analyser::setPlainAnalysis())
+        m_window->analyser()->setPlainAnalysis(true);
         m_window->setPlayReferenceWhileRecording(true);
         openReference(writeWav(melody(0.75)));
         if (QTest::currentTestFailed()) return;
@@ -4225,6 +4231,9 @@ private slots:
         // start gap
         config.blockSize = 2048;
         makeWindow(config);
+        // The take's pitch steps against the reference's, both from
+        // pYIN's own analysis (Analyser::setPlainAnalysis())
+        m_window->analyser()->setPlainAnalysis(true);
         m_window->setPlayReferenceWhileRecording(true);
 
         // The reference steps 0.75 s after the take's position, as the

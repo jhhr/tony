@@ -43,9 +43,34 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **The thresholds** of the sweep finder, the verdicts and the dev checks are starting
   values, to be tuned from the report files of real runs (what to send back:
   [calibrate-audio.md](calibrate-audio.md), §8).
+- **Which voice of a harmony the reference's track follows**: the strongest at each moment,
+  as chosen for now, so it changes voice where their levels cross, about once a second in
+  the choruses of the pitch lab's first song. A preference for the lower voice was tried
+  in the lab (`lowervoice`): it kept the lower voice more often and changed voice more
+  often too; not ported.
+- **After a leap a take's pitch reaches the new note later than the reference's.** The
+  pitch HMM moves at most a semitone a frame: the reference's analysis glides across a
+  leap and reaches the new note within a hop of where it is sung, while pYIN's own, the
+  takes', goes unvoiced over it and comes back two or three hops (12 to 17 ms) later. A
+  take sung exactly in time so shows its leaps that much behind the reference's.
+  Analysing takes as the reference is would remove it, at the cost on a clean voice that
+  the weak spot on the reference's analysis gives; the latency tests compare the two
+  analysed alike (`Analyser::setPlainAnalysis()`).
 
 ## Not built
 
+- **Show Pitch Candidates still offers pYIN's own candidates**: the Shift-drag
+  re-analysis (`LocalCandidatePYIN`) does not have the fork's parameters for vocals with
+  harmonies ([forks.md](forks.md#pyin)), so in a harmony its candidates are the voices'
+  common period and its multiples rather than the voices. Offering each sung voice, from
+  the salience, is the next step, left for later.
+- **An echo canceller ahead of pYIN**: the pitch lab's front end found the wrong delay on
+  the second song (0.16 s, where the repeats are at 0.48 and 0.96 s) and made its track a
+  little worse. It would need a delay estimate that holds first.
+- **FCPE**, a neural pitch tracker (MIT licence, 22 MB of weights, about 500 lines to port
+  to C++), did as well as the fork's analysis in the pitch lab (0.96 of sung frames on a
+  voice on the test set, 0.92 to 0.97 on the songs), but tracks reverb tails and changes
+  voice two or three times a second. A candidate for an optional analysis.
 - **Beyond the three drivers** ([audio-drivers.md](audio-drivers.md), §8): WASAPI's
   exclusive mode and WDM-KS, lower still but taking the device from every other program.
 - Showing two takes at once, or any comparison of takes other than switching.
@@ -91,6 +116,16 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   is not known. `TestUiChecks::grabPaneRedrawn()` works around it.
 - With no audio device at all, "Couldn't open audio device" is shown again for every file
   opened (`MainWindowBase::createAudioIO()` tries each time).
+- **The reference's analysis of separated vocals** ([forks.md](forks.md#pyin)) still goes
+  wrong in places. Across a leap, and where the voiced floor carries the track from one
+  voice to another across a gap, it draws a short line through the pitches between. A
+  low voice whose fundamental the separation took away was tracked two octaves up (the
+  third song, 57 to 59 s). A rough low note whose partials between the harmonics come
+  within about 16 dB of them is tracked an octave down, as pYIN's own analysis does.
+  Echoes less than 13 dB below the singing's level are still tracked. And on one clean
+  voice it does a little worse than pYIN's own analysis (in the pitch lab, 0.984 of sung
+  frames on the voice against 0.998, half of it the level floor cutting the quiet ends of
+  notes short), which is why takes keep pYIN's own.
 - **If pYIN fails part-way, the live dots wait for ever**: they are removed on
   `initialAnalysisCompleted`, which then never comes.
 - **`Analyser::newFileLoaded()` error path for the singing track** (pYIN plugin missing):

@@ -67,6 +67,13 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
 - `MainWindow` has two `Analyser`s: `m_analyser` for the reference (the document's main
   model) and `m_analyser2` for the **active** singing take. `Analyser` takes a
   `ColorScheme`; the secondary one makes no spectrogram and mutes its pitch and notes.
+- **The two run pYIN differently.** The primary one gives it the pyin fork's parameters
+  for vocals with harmonies, doubled parts and echoes ([forks.md](forks.md#pyin)), which
+  a song's vocals separated from a mix have; the secondary one runs pYIN's own analysis.
+  A take is one clean voice, which those parameters would only cut a little short at the
+  end of each note, and a take's ranged run must give what a whole-file run gives, which
+  the level floor, judged on the ten seconds before each frame, would not. A recording
+  made with no reference becomes the reference, and is analysed as one.
 - **Both analysers share pane 0.** Pane 1 is the time ruler. Never put the singing track
   in a pane of its own.
 - An `Analyser` recognises a pitch or notes layer as its own when the layer's model has

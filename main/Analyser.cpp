@@ -77,6 +77,7 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedClippedEnd(false),
     m_rangedGate(VoiceThreshold::kOff, VoiceGate::windowOffset()),
     m_rangedMergeHeld(false),
+    m_plainAnalysis(false),
     m_waveformFaded(false)
 {
     QSettings settings;
@@ -683,6 +684,23 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
     } else {
         cerr << "setting parameters for no duration pruning" << endl;
         t.setParameter("prunethresh", 0.0f);
+    }
+
+    // The reference is a song's vocals, often separated from a mix, with
+    // harmonies, doubled parts and echoes, in which pYIN's own analysis
+    // tracks the period two voices share, an octave or two below both,
+    // and tracks the echo tails as if sung: the fork's parameters for
+    // such vocals (docs/forks.md).  The singing is one clean voice, which
+    // they would only cut a little short at the end of each note, so its
+    // analyser keeps pYIN's own (and so a take's ranged run,
+    // analyseRange(), still gives what the whole-file run gives)
+    if (m_colorScheme != SecondaryColors && !m_plainAnalysis) {
+        t.setParameter("salmode", 1);
+        t.setParameter("candidaterule", 1);
+        t.setParameter("commonf0", 0.8f);
+        t.setParameter("levelfloor", 13);
+        t.setParameter("voicedfloor", 0.2f);
+        t.setParameter("voicehold", 3);
     }
 
     transforms.push_back(t);
