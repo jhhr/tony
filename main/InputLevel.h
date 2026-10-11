@@ -25,7 +25,7 @@
 /**
  * The level of what the microphone gives: the peak of a recording and
  * where it clipped (Scanner, scanFile()), the input meter's hold and
- * decay (Meter), and what Playback > Check Input Level makes of a
+ * decay (Meter), and what Record > Check Input Level makes of a
  * silence and a loudest phrase (gainChange(), noiseFloor(),
  * suggestedThreshold()).
  *

@@ -1383,7 +1383,7 @@ private slots:
         QCOMPARE(m_finished, 0);
     }
 
-    // Playback > Calibrate Audio with the checkbox on, as it is by
+    // Devices > Calibrate Audio with the checkbox on, as it is by
     // default. A calibration that cannot be used (cancelled) is shown
     // with a word that the dev checks did not run. Check Again, run to
     // the end: the dev checks carry on from it, with the round trip it

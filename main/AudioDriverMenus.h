@@ -24,7 +24,7 @@ class QMenu;
 class QActionGroup;
 
 /**
- * Playback > Audio Driver and Audio Latency: the driver the device is
+ * Devices > Audio Driver and Audio Latency: the driver the device is
  * opened through (MME, DirectSound, WASAPI) and the latency asked of it,
  * each kept in the Preferences (AudioDriverSettings).  Both are shown
  * only where more than one driver is built in, which is on Windows.

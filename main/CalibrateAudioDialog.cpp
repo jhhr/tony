@@ -1003,7 +1003,7 @@ CalibrateAudioDialog::instructionsHtml() const
     } else if (phone && !route.hasInput) {
         AudioRoute::Device chosen;
         if (m_window->chosenInputDevice(chosen)) {
-            input = tr("%1, chosen under Playback > Audio Input Device")
+            input = tr("%1, chosen under Devices > Audio Input Device")
                 .arg(AudioRoute::deviceName(chosen));
         } else {
             input = (devices.recordDevice != "" ?
@@ -1092,7 +1092,7 @@ CalibrateAudioDialog::calibrationHtml() const
             tr("Turn the volume up, and hold the earcup right against "
                "the microphone.") + "</li><li>" +
             tr("Check that the microphone is not muted, and that it is "
-               "the one Tony records from (Playback ▸ Audio Input "
+               "the one Tony records from (Devices ▸ Audio Input "
                "Device).") + "</li><li>" +
             tr("In Windows, turn off Sound settings ▸ your microphone ▸ "
                "Audio enhancements.") + "</li><li>" +
@@ -1187,7 +1187,7 @@ CalibrateAudioDialog::calibrationHtml() const
                    "alone, in both ears and at its own level.").arg(on + 1);
         } else if (offeredInput() == on) {
             words += " " + tr("Press Use Input %1 to make your takes from it "
-                              "alone (Playback ▸ Input Channel): in both "
+                              "alone (Devices ▸ Input Channel): in both "
                               "ears, and at its own level for the live dots "
                               "and the voice threshold.").arg(on + 1);
         }

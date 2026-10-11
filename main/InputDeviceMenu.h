@@ -27,7 +27,7 @@ class QActionGroup;
 class QMenu;
 
 /**
- * Playback > Audio Input Device on a driver that lists its inputs, as a
+ * Devices > Audio Input Device on a driver that lists its inputs, as a
  * phone's does (InputDevice): a line naming the input in use, then
  * "(System Default)", the driver's own choice, then each input the
  * driver lists that is offered (InputDevice::choices()), with the one

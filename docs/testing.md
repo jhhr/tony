@@ -50,7 +50,9 @@ and the rest: [building.md](building.md#what-is-particular-about-this-mesonbuild
 `tony-dev-test.cpp` runs `TestDevChecks` alone, and its moc list is inside meson's `if
 dev_checks` with the `TONY_DEV_CHECKS` define for moc. A new test function in an existing
 suite needs nothing but itself (a private slot). **Every private slot runs as a test**, so
-helpers must not be slots; connect to lambdas instead. For access to private statics use
+helpers must not be slots; connect to lambdas instead. A static helper among the slots
+that takes no arguments counts as one too, whatever it returns: a sharded run passes its
+name to QtTest, which fails it as not found. For access to private statics use
 `friend class TestX;`, as `RealtimePitchTracker.h` does.
 
 Suites find the files in `testdata/` through `TONY_TEST_DATA_DIR`, which `meson.build`
@@ -191,11 +193,11 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `TestDevChecks` in `test-tony-dev`): subclass of `MainWindow` that exposes protected
   operations as `doRecord()`, `doSwitchToTake()`, `seekTo()`, `selectRange()` and so on,
   and the audio check's parts (`audioCheck()`, `devChecks()`, `takeLatency()`, the
-  Playback menu's actions). The voice threshold the take started with is
-  `takeVoiceThreshold()`, and Playback > Voice Threshold is `voiceThresholdMenu()`; the
+  Record and Devices menus' actions). The voice threshold the take started with is
+  `takeVoiceThreshold()`, and Record > Voice Threshold is `voiceThresholdMenu()`; the
   input channel likewise `takeInputChannel()` and `inputChannelMenu()`, with the device a
   choice is kept for (`doInputChannelKey()`); the input meters' levels `inputLevels()`,
-  the meter's action `inputMeterAction()`, and Playback > Check Input Level
+  the meter's action `inputMeterAction()`, and Record > Check Input Level
   `checkInputLevelAction()` and `checkInputLevelDialog()`;
   `setAudioCheckTakes()` sets the check's override by hand, as the runner does before each
   of its takes, and the test that sets it clears it again, as the runner does. Made with the application's audio mode
@@ -269,10 +271,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   and a level set in code is not the user's action. `allSettings()` and
   `settingsChanged()` say which keys a step wrote; `settingsChangedByOpening()` leaves out
   the `FileFinder/` keys every Open writes. `storeRoundTrip()` keeps a measured figure at
-  a device rate, and `latencyLine()` reads the Playback menu's line as the menu shows it.
+  a device rate, and `latencyLine()` reads the Devices menu's line as the menu shows it.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. Check Input Level's dialog is
-  an exception: its tests open it, drive it and close it. Replace Take Audio's progress
+  an exception: its tests open it, drive it and close it; so is Configure Hotkeys'.
+  `init()` forgets the hotkeys chosen, there and in `TestUiChecks`, as a test that changed
+  one and failed would leave the next suite's keys changed. Replace Take Audio's progress
   dialog is another: its search closes it. `dialogsMatching()` is for the
   dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
   title macOS does not keep, so that there its text alone must tell it apart.

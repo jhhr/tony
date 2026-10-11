@@ -27,7 +27,7 @@ class QActionGroup;
 class QMenu;
 
 /**
- * Playback > Input Channel: which input of the device a take is made
+ * Devices > Input Channel: which input of the device a take is made
  * from (InputChannel), for a microphone on one input of an interface
  * with two.  A line naming the input device the choice is kept for,
  * then one entry for each of InputChannel::choices(), with the one kept

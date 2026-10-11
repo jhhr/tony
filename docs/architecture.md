@@ -41,8 +41,8 @@ test is built.
 
 | Library | Rule | Contents |
 | --- | --- | --- |
-| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `Coverage`, `TakeAudio`, `RecordingAlignment`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
-| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `TakeRecordingSearch`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
+| `tony_core` | No GUI, no document, no layers. Unit-tested without a window. | `RealtimePitchTracker`, `LiveDotsFeed`, `OctaveSlips`, `VoiceThreshold`, `VoiceGate`, `InputChannel`, `InputDevice`, `InputLevel`, `DeviceSwitch`, `Hotkeys`, `Coverage`, `TakeAudio`, `RecordingAlignment`, `TakeEvents`, `SingingTakes`, `TakesFile`, `TakeTiming`, `TakeDiff`, `Lyrics`, `LyricsTtml`, `LyricsEdit`, `LatencyUtils.h`, `LatencyCheck`, `LatencyCalibration`, `AudioDriverSettings`, `PlaybackSettings`, `AudioRoute`, `StreamLatency`, `PinchZoom`, `VerticalZoom`, `SongScroll`, `PopupArea`, `AndroidFiles`, `DecodedPcm`, `LogFile`; on Android only, `AndroidMediaReadStream` |
+| `tony_app` | Anything that touches a `Document`, a `Layer` or a window. | `MainWindow`, `Analyser`, `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`, `LyricsEditor`, `LyricsSize`, `PlotSize`, `TakeCommands`, `TakeLayers`, `PaneUtils`, `AudioCheckRunner`, `CalibrateAudioDialog`, `AudioCheckIndicator`, `AudioDriverMenus`, `VoiceThresholdMenu`, `InputChannelMenu`, `HotkeyTable`, `HotkeyReference`, `HotkeysDialog`, `InputLevelFeed`, `InputLevelMeter`, `CheckInputLevelDialog`, `TakeRecordingSearch`, `CompactLayout`, `SongScrollBar`, `TouchGestures`, `TouchMenuStyle`; on Android only, `OboeAudioIO`, `AndroidStorage`, `AndroidScreen`; in development builds only, `main/dev/` (`DevChecks`, `TakeObserver`) |
 
 Android-only files are in the `if system == 'android'` additions to those lists, and
 Android-only code elsewhere is under `#ifdef Q_OS_ANDROID`; neither may change what the
@@ -408,6 +408,61 @@ after `openPath()`, and only then prune the extra pane — the imported waveform
 is the only reference to the model until `m_analyser2` has a layer of its own. It ends with
 `clearTakeHistory()`, which also disposes of the "Import" command for the pruned pane.
 
+**The menus by subject** (the user, 2026-10-11): Playback plays and moves the playhead,
+Record is the take and what is chosen for it, and Devices is what Tony plays and records
+through, with the latency measured there. Something new goes by that rule: chosen for the
+next take, Record; set for a device or a driver, Devices. Record holds the bottom bar's
+Record into Selection, Pre-roll and Play Reference While Recording too, as the same
+actions, never copies that would have to be kept in step; their status tips repeat their
+tooltips, as a menu shows no tooltips. Their hotkeys are Shift with a letter (the user,
+2026-10-11): Shift+S for Record into Selection, as S alone constrains playback to the
+selection, Shift+P for the pre-roll and Shift+R for the reference. No two entries of the
+three menus share an underlined letter, nor do two menus of the menu bar, and no two
+actions of the window share a hotkey: Qt takes a key two actions have as ambiguous and
+does neither. The pane's right-button Playback submenu keeps Record.
+
+**Hotkeys** (`Hotkeys`, `HotkeyTable`, `HotkeyReference`, `HotkeysDialog`; the user,
+2026-10-11): every command that has a hotkey is in the window's `HotkeyTable`, under an id
+that the settings keep its keys by (group `Hotkeys`: a command not there has its defaults,
+one there with "" has none), and Edit > Configure Hotkeys changes them.
+
+- **An action gets its hotkey with `m_hotkeys->add(id, action)`** where it is made, in
+  place of registering it with the key reference, which `add()` does in the category set
+  then. Its keys then are its defaults. **Never rename an id**: the keys the user chose
+  are kept under it. `every_hotkey_is_configurable` fails for an action with a hotkey that
+  is not in the table.
+- **`apply()`** gives every command its keys from the settings once the menus are made,
+  before `finaliseMenus()`, and again after the dialog's OK, with `finaliseMenus()` after
+  it: on macOS that copies a key only a menu holds into a shortcut of the application's
+  own, with the key the action had then.
+- **CommandHistory's Undo and Redo** are one pair for every window, and their text names
+  the command to be undone: their names and defaults are given, never read off the
+  actions, and each window's `apply()` puts back the defaults another window changed.
+- **Re-open**, the first recent file's key, has no action of its own:
+  `setupRecentFilesMenu()` gives that file the table's keys each time it makes the list,
+  and the key reference lists Re-open once, in its category.
+- **`HotkeyReference`** is the window's key reference, held as one: svgui's `KeyReference`
+  writes an action's keys down when it is registered and builds its window once, so this
+  one lists them again whenever `apply()` runs, builds the window again (open or not), and
+  leaves out a command that has no key.
+- **The dialog** offers two keys per command, one key combination in each box (Qt 6.5's
+  `setMaximumSequenceLength(1)`; before that, the first of the keys pressed in a row is
+  kept), and shuts OK while two commands share a key. It keeps a command's keys only where
+  they are not its defaults, so that new defaults in a later build reach a command the user
+  never changed. It is window-modal and runs no event loop of its own (`open()`). The
+  compact layout hides Configure Hotkeys: a phone has no keyboard.
+
+**Switch to Previous Output Device** (`DeviceSwitch`; the user, 2026-10-11): the hotkey
+O goes back to the output device chosen before the one in use, and pressed again to that
+one, for a singer who records in headphones and plays the take back on speakers. No menu
+or toolbar holds its action (the user's choice): the window does, so that its key works
+with the menu bar hidden as well. Every output device chosen, from the menu or by the key,
+goes through `chooseAudioDevice()`, which keeps the one left. It is kept with the
+Preferences key it was chosen under, so another driver has none to go back to, and in
+memory only: until a second device is chosen in a launch the key does nothing. It is shut
+during a take and while a check runs, as the device and driver menus are, and the status
+bar names the device it switched to, as nothing else on the screen does.
+
 **Voice threshold** (`VoiceThreshold`, `VoiceGate`, `VoiceThresholdMenu`): for singing
 with the music on speakers, which the microphone hears as well. A level in dBFS under
 which what the microphone hears is not taken for singing: no live dots are drawn for it,
@@ -422,32 +477,32 @@ the gate in [takes.md](takes.md#the-voice-threshold)). pYIN's own `lowampsuppres
 not used for it: it only lowers the voicing probability. A take
 keeps the threshold it started with; the audio check's takes have none.
 
-Playback > Voice Threshold sits straight after Record, which it is for, and not with the
-Audio Driver and Audio Latency menus after it: the compact layout hides those, while a
-phone on its own speaker needs this as much, so it is not among the compact layout's
-hidden actions and the menu button reaches it. It is greyed out during a take and while an
-audio check runs. The setting is QSettings `MainWindow/voicethreshold` in dBFS (Off is no
-key at all, and anything at or under the tracker's −60 dBFS floor reads as Off): one value
-for every driver and device, and not in the session. A choice only writes it: `record()`
-reads it at every Start, and Analyse Now and a redo that analyses again read it when they
-run.
+Record > Voice Threshold sits with Record, which it is for, and Check Input Level, which
+suggests one. A phone on its own speaker needs it as much as a desktop, so it is not among
+the compact layout's hidden actions, and the menu button reaches it. It is greyed out
+during a take and while an audio check runs. The setting is QSettings
+`MainWindow/voicethreshold` in dBFS (Off is no key at all, and anything at or under the
+tracker's −60 dBFS floor reads as Off): one value for every driver and device, and not in
+the session. A choice only writes it: `record()` reads it at every Start, and Analyse Now
+and a redo that analyses again read it when they run.
 
-**Input channel** (`InputChannel`, `InputChannelMenu`): Playback > Input Channel, for a
+**Input channel** (`InputChannel`, `InputChannelMenu`): Devices > Input Channel, for a
 microphone on one input of an interface with two. Both Inputs, the default, makes a stereo
 take of a two-input device, whose levels are the channels' average; Input 1 or Input 2
 makes the take mono, from that input alone, which the live tracker reads, the splice puts
 in, and pYIN and the voice threshold then hear at its own level. The design, and what a
 phone's Android does with a stereo device, are in
-[recording.md](recording.md#input-channels). Next to Voice Threshold, for the same
-reasons: with Record, reached on a phone from the menu button, greyed out during a take
-and a check. Kept per input device, as `LatencyCalibration` keys its figures (group
-`InputChannel`), and the menu's first line names that device. `record()` reads it after
+[recording.md](recording.md#input-channels). After Audio Input Device, as it is kept per
+input device, as `LatencyCalibration` keys its figures (group `InputChannel`), and the
+menu's first line names that device. Not among the compact layout's hidden actions, unlike
+the device menus around it: a phone with an interface plugged in needs it, and reaches it
+from the menu button. Greyed out during a take and a check. `record()` reads it after
 the base call, as a phone's input is known only then; the audio check's takes are made of
 both inputs. A choice on a phone opens the device again, as its input is opened otherwise
 for one input than for both (`OboeAudioIO`).
 
 **A phone's input device** (`InputDevice`;
-[port-android.md](port-android.md#choosing-the-input)): Playback > Audio Input Device,
+[port-android.md](port-android.md#choosing-the-input)): Devices > Audio Input Device,
 which on the desktop lists the driver's devices, lists on a phone the inputs Android's
 `AudioManager` lists (`MainWindow::listsInputDevices()`, `listedInputDevices()`, which
 the tests give a phone's), through `InputDeviceMenu`, made the first time the menu is
@@ -470,7 +525,7 @@ written again at once, as nothing else may write for a while.
 `CheckInputLevelDialog`; [recording.md](recording.md#the-input-level)): a meter beside
 Record, in the compact layout's toolbar too (a `QWidgetAction`, so that each toolbar has a
 meter of its own, all drawing one feed's state: the clip light lit in one is lit in all);
-the take's peak and clipped places in the status bar at Stop; Playback > Check Input
+the take's peak and clipped places in the status bar at Stop; Record > Check Input
 Level, next to Input Channel. `MainWindow` owns the feed, made with the toolbar, and the
 dialog, made when first asked for, and deletes both in `~MainWindow` before the base class
 deletes the record target the feed reads. The feed reads only while the device runs with

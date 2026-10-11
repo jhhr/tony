@@ -167,7 +167,7 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
   44.1 kHz. `computeRecordingLatency()` is no longer used here; the tests keep it as the
   reported sum to compare with.
 - A run of the audio check may bring a round trip of its own for its takes (the dev checks,
-  with the one the calibration before them measured). Nothing is stored, and the Playback
+  with the one the calibration before them measured). Nothing is stored, and the Devices
   menu goes on describing the window's own figure.
 - **Start gap estimate** (same place): `m_recordTarget->getFramesReceived()` just before
   `play()`, the part of the recording made before the reference began to play.
@@ -229,7 +229,7 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
   whether it was measured. The audio check reads it for each of its takes.
 - **The latency asked for** is not part of L: it is what bqaudioio asks the driver for on
   each side (PortAudio's `suggestedLatency`), which sets the driver's buffers, and the
-  round trip with them. It is chosen per driver under Playback > Audio Latency (10 to
+  round trip with them. It is chosen per driver under Devices > Audio Latency (10 to
   200 ms, `Preferences/audio-latency-<driver>`; 200 ms where none is chosen, what every
   stream asked for before there was a choice), and `MainWindow::createAudioIO()` hands it
   to bqaudioio before each device is opened; choosing one opens the device again.
@@ -237,13 +237,13 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
   trip is kept per driver, not per latency: a figure measured at another latency is told
   apart only by the staleness fingerprint ([calibrate-audio.md](calibrate-audio.md), §5),
   when the reported pair moves with the buffers.
-- **The driver** (Playback > Audio Driver: MME, DirectSound, WASAPI, shown where more than
+- **The driver** (Devices > Audio Driver: MME, DirectSound, WASAPI, shown where more than
   one is built in, which is on Windows) is `Preferences/audio-target`. Where none is named,
   `MainWindow::createAudioIO()` names WASAPI (MME where there is no WASAPI) before the
-  first device is opened, and the Playback menu before it shows the device menus, carrying
+  first device is opened, and the Devices menu before it shows the device menus, carrying
   the devices chosen before over to its keys: bqaudioio lists no devices for no driver when
-  it has several. Choosing a driver or a latency is shut during a take and while a check runs
-  ([audio-drivers.md](audio-drivers.md)).
+  it has several. Choosing a driver, a latency or a device is shut during a take and while
+  a check runs ([audio-drivers.md](audio-drivers.md)).
 
 ## A device at another rate
 
@@ -274,7 +274,7 @@ reference's: the recording is at the device's rate. A desktop device whose defau
 ## Input channels
 
 What a take is made of when the microphone is on one input of an interface with two (a
-headset on input 1 of a two-input USB interface, say), and **Playback > Input Channel**,
+headset on input 1 of a two-input USB interface, say), and **Devices > Input Channel**,
 which chooses. Found on the fake device (`FakeAudioIO`, two input channels, the input on
 channel 1 or 2 only) and by reading the code; the Android part from the platform's
 source, as no test can run it.
@@ -467,7 +467,7 @@ scanned for its peak and for runs of samples at full scale.
   They would need a model and a layer of their own per take, and a style in the svgui fork
   to draw them ([open-points.md](open-points.md)).
 
-**Playback > Check Input Level** (`CheckInputLevelDialog`): the meter, large, with the input
+**Record > Check Input Level** (`CheckInputLevelDialog`): the meter, large, with the input
 open and nothing recorded. Two seconds of silence are read first, as the noise floor (with
 the music playing, for a singer who has it on speakers); then the singer sings their
 loudest phrase and presses Done. The result (`InputLevel`, `tony_core`):
@@ -592,10 +592,10 @@ is:
   level, unless that input is chosen, which the tracker then reads alone.
 
 A microphone whose noise is louder than −60 dBFS still gives such dots, unless the voice
-threshold below is set over it; Playback > Check Input Level measures that noise and
+threshold below is set over it; Record > Check Input Level measures that noise and
 suggests one ([The input level](#the-input-level)).
 
-**The voice threshold** (Playback > Voice Threshold; `VoiceThreshold`) raises the floor for
+**The voice threshold** (Record > Voice Threshold; `VoiceThreshold`) raises the floor for
 a singer with the music on speakers, which the microphone hears as well: set over the level
 the music reaches the microphone at, and under the voice, the music draws no dots. The
 tracker's floor is the higher of −60 dBFS and the threshold the take started with (Start,
