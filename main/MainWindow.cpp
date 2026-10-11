@@ -1837,9 +1837,20 @@ MainWindow::audioDeviceSelected(QAction *action)
                       action->data().toString());
 }
 
-void
+bool
 MainWindow::chooseAudioDevice(QString base, QString device)
 {
+    // Its menus and the switch are shut while a take records and while a
+    // check runs.  A choice that arrives all the same (queued before they
+    // were shut, say) is not made: the device opened again would leave
+    // the take recording nothing
+    if ((m_recordTarget && m_recordTarget->isRecording()) ||
+        audioCheckRunning()) {
+        cerr << "MainWindow::chooseAudioDevice: a take or an audio check "
+             << "is running; the device is left as it is" << endl;
+        return false;
+    }
+
     QString key = audioDeviceSettingKey(base);
 
     QSettings settings;
@@ -1859,19 +1870,20 @@ MainWindow::chooseAudioDevice(QString base, QString device)
     m_lastRecordingRate = 0;
 
     recreateAudioIO();
+    return true;
 }
 
 void
 MainWindow::switchToPreviousOutputDevice()
 {
     // Its action is shut during a take and while a check runs, as the
-    // driver menus are: the device would open again under them
+    // device menus are: the device would open again under them
     QString device;
     if (!m_outputSwitch.previous
         (audioDeviceSettingKey("audio-playback-device"), device)) {
         return;
     }
-    chooseAudioDevice("audio-playback-device", device);
+    if (!chooseAudioDevice("audio-playback-device", device)) return;
 
     // No menu or button shows the device in use, so the status bar says
     m_statusLine->setNotice
@@ -3095,9 +3107,15 @@ MainWindow::updateMenuStates()
     if (m_calibrateAudioAction) {
         m_calibrateAudioAction->setEnabled(!inTake && !checking);
     }
-    // Choosing either opens the device afresh, and so does the switch
+    // Choosing a driver, a latency or a device opens the device afresh,
+    // and so does the switch: a take would go on recording nothing.  A
+    // phone's input device, which opens nothing during a take, is chosen
+    // between takes all the same: the take records from the one it opened
     if (m_audioDriverMenus) {
         m_audioDriverMenus->setEnabled(!inTake && !checking);
+    }
+    for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
+        if (m) m->menuAction()->setEnabled(!inTake && !checking);
     }
     if (m_previousOutputAction) {
         m_previousOutputAction->setEnabled(!inTake && !checking);
@@ -3117,14 +3135,6 @@ MainWindow::updateMenuStates()
             (!inTake && !checking && m_recordTarget &&
              (m_audioMode == AUDIO_PLAYBACK_AND_RECORD ||
               m_audioMode == AUDIO_PLAYBACK_NOW_RECORD_LATER));
-    }
-    for (QMenu *m : { m_audioDeviceMenu, m_audioInputDeviceMenu }) {
-        if (m) m->menuAction()->setEnabled(!checking);
-    }
-    // A phone's input device is chosen between takes: the take records
-    // from the one it opened
-    if (m_audioInputDeviceMenu && listsInputDevices() && inTake) {
-        m_audioInputDeviceMenu->menuAction()->setEnabled(false);
     }
     updateLatencyMenuLine();
 

@@ -416,8 +416,9 @@ protected slots:
     // A device chosen, as the device menus choose one: base is the start
     // of its Preferences key, "audio-playback-device" or
     // "audio-record-device", which the driver's name follows.  The device
-    // is opened again with it
-    void chooseAudioDevice(QString base, QString device);
+    // is opened again with it.  False, and nothing chosen, while a take
+    // records or a check runs
+    bool chooseAudioDevice(QString base, QString device);
 
     // The hotkey Switch to Previous Output Device: back to the output
     // device chosen before the one in use, if one was in this launch

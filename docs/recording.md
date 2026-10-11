@@ -242,8 +242,8 @@ L is the **round trip** plus the **start gap**, both in frames of the recording.
   `MainWindow::createAudioIO()` names WASAPI (MME where there is no WASAPI) before the
   first device is opened, and the Devices menu before it shows the device menus, carrying
   the devices chosen before over to its keys: bqaudioio lists no devices for no driver when
-  it has several. Choosing a driver or a latency is shut during a take and while a check runs
-  ([audio-drivers.md](audio-drivers.md)).
+  it has several. Choosing a driver, a latency or a device is shut during a take and while
+  a check runs ([audio-drivers.md](audio-drivers.md)).
 
 ## A device at another rate
 

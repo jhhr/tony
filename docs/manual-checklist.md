@@ -190,7 +190,8 @@ Only on Windows, where the menus are shown. The design is in
    time what was playing stops, and the next play and take work. Note the figure in
    "Latency: driver's figure, …" at each latency, and whether 10 ms crackles.
 4. **Greyed out during a take**: while recording, and while Calibrate Audio runs, Audio
-   Driver and Audio Latency cannot be opened.
+   Driver, Audio Latency, Audio Output Device and Audio Input Device cannot be opened, and
+   O does nothing; after the take they open again, and the take plays back whole.
 5. **The reports name the driver.** Calibrate Audio's first page and its result page
    show "Driver: WASAPI"; `DevChecks.txt` has "Audio driver: WASAPI" and "Latency asked
    for: 20.0 ms" under the devices at its head.

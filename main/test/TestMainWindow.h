@@ -243,9 +243,10 @@ public:
     QMenu *audioOutputMenu() { return m_audioDeviceMenu; }
     QMenu *audioInputMenu() { return m_audioInputDeviceMenu; }
     // An output device chosen, as Devices > Audio Output Device chooses
-    // one, and Switch to Previous Output Device, which the window holds
-    void doChooseOutputDevice(QString name) {
-        chooseAudioDevice("audio-playback-device", name);
+    // one (false where it is not), and Switch to Previous Output Device,
+    // which the window holds
+    bool doChooseOutputDevice(QString name) {
+        return chooseAudioDevice("audio-playback-device", name);
     }
     QAction *previousOutputAction() { return m_previousOutputAction; }
 

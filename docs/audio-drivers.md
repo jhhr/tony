@@ -52,8 +52,11 @@ to try by hand, in [manual-checklist.md](manual-checklist.md), sections 1 and 2.
   latency. The device submenus then list that driver's devices and write its keys; going
   back to another driver finds its devices as they were left. **Choosing a latency** stops
   playback and opens the device again. Choosing what is ticked does nothing.
-- Both are **greyed out during a take and while a check runs**: either would open the
-  device again under the take.
+- Both are **greyed out during a take and while a check runs**, and so are the two device
+  submenus and Switch to Previous Output Device (O): each would open the device again
+  under the take. The new device starts suspended (svapp's `createAudioIO()`), so the
+  take would go on "recording" with nothing coming in. A device choice that comes all the
+  same is not made (`chooseAudioDevice()`).
 - **The first start with the menus** names WASAPI (MME where there is no WASAPI) and
   carries the devices chosen before over to it. A device name it does not list shows as
   "(not connected)", ticked, and its own default device opens instead. A driver already
@@ -166,8 +169,9 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   opens, and a named driver left alone; the latency kept per driver and handed over at
   each opening; a round trip kept for MME not used under WASAPI, and used again on the way
   back, with the dialog naming the driver; both menus greyed out during a take and a
-  check. The drivers are given through `TestMainWindow` ([testing.md](testing.md)), as
-  Linux's bqaudioio has none.
+  check, with the device menus, and a device chosen all the same then not chosen, the
+  take recording on. The drivers are given through `TestMainWindow`
+  ([testing.md](testing.md)), as Linux's bqaudioio has none.
 - **Dev** (`TestDevChecks`): the report's header names the driver and the latency.
 - **The stream kept running**, with a fake whose loopback moves 10 ms at each restart:
   `TestAudioCheck`'s check lands its punch-ins 10 ms apart when the window suspends at
@@ -179,7 +183,8 @@ is checked by cross-compiling ([building.md](building.md#checking-the-forks-wind
   after either, not while it plays for longer, and the next take resumes it; the
   application's idle time is never on desktop. Not tested: the suspend when Android sends
   Tony to the background, which no desktop build has.
-- Seen failing with the code broken: the default, the latency per driver, the greying;
+- Seen failing with the code broken: the default, the latency per driver, the greying
+  (the device menus' too), a device chosen during a take or before a check's first take;
   the kept-running check and dev run with the stream suspended at Stop (items 1, 2, 7 and
   13), and the check with the end of a take suspending again; the idle suspend with the
   take's playback or recording counted as idle.

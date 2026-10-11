@@ -344,6 +344,18 @@ class TestAudioCheck : public QObject
             !menus->latencyMenu()->menuAction()->isEnabled();
     }
 
+    // Devices > Audio Output Device and Audio Input Device, greyed out
+    // with them: choosing a device opens it again as well
+    bool deviceMenusEnabled() {
+        return m_window->audioOutputMenu()->menuAction()->isEnabled() &&
+            m_window->audioInputMenu()->menuAction()->isEnabled();
+    }
+
+    bool deviceMenusDisabled() {
+        return !m_window->audioOutputMenu()->menuAction()->isEnabled() &&
+            !m_window->audioInputMenu()->menuAction()->isEnabled();
+    }
+
     // Record > Voice Threshold, greyed out with them: its takes are
     // recorded with none
     bool voiceThresholdMenuEnabled() {
@@ -1882,6 +1894,16 @@ private slots:
         dialog->startCheck();
         QVERIFY(m_window->audioCheck()->isRunning());
         QVERIFY(dialog->page() == CalibrateAudioDialog::Page::Progress);
+        // Shut from its first step on, before its first take as during
+        // one: a device chosen all the same, as one queued before the
+        // menus were shut would come, is not
+        QTRY_VERIFY(deviceMenusDisabled());
+        QVERIFY(!m_window->recordTarget()->isRecording());
+        const int opened = m_window->audioIOOpened();
+        QVERIFY(!m_window->doChooseOutputDevice("Speakers C"));
+        QCOMPARE(m_window->audioIOOpened(), opened);
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Speakers A"));
         setDevices("Speakers B", "Microphone B", "wasapi");
 
         // Small while the check runs: the dialog hidden, and its
@@ -2206,29 +2228,47 @@ private slots:
     }
 
     // Not while an ordinary take is being recorded: the check records
-    // takes of its own. Nor can the driver or its latency be chosen,
-    // which would open the device again under the take
+    // takes of its own. Nor can the driver, its latency or a device be
+    // chosen, which would open the device again under the take: it would
+    // go on recording nothing. A device chosen all the same is not
     void calibrate_audio_not_during_a_take() {
+        setPreference("audio-target", "wasapi");
+        setDevices("Speakers", "Microphone", "wasapi");
         makeWindow(FakeAudioIO::Config());
         showDriverMenus(windowsImplementations());
         openSong();
         if (QTest::currentTestFailed()) return;
         QVERIFY(m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(driverMenusEnabled());
+        QVERIFY(deviceMenusEnabled());
         QVERIFY(m_window->previousOutputAction()->isEnabled());
 
         m_window->doRecord();
         QVERIFY(m_window->recordTarget()->isRecording());
         QVERIFY(!m_window->calibrateAudioAction()->isEnabled());
         QVERIFY(driverMenusDisabled());
+        QVERIFY(deviceMenusDisabled());
         QVERIFY(!m_window->previousOutputAction()->isEnabled());
-        QTest::qWait(300);
+
+        // As a choice queued before the menus were shut would come: the
+        // take records on, 0.3 s of it
+        const int opened = m_window->audioIOOpened();
+        QVERIFY(!m_window->doChooseOutputDevice("Headphones"));
+        QCOMPARE(m_window->audioIOOpened(), opened);
+        QCOMPARE(preference("audio-playback-device-wasapi"),
+                 QString("Speakers"));
+        const sv::sv_frame_t received =
+            m_window->recordTarget()->getFramesReceived();
+        QTRY_VERIFY_WITH_TIMEOUT
+            (m_window->recordTarget()->getFramesReceived() >
+             received + 13230, 10000);
 
         m_window->doRecord();
         QVERIFY(!m_window->recordTarget()->isRecording());
         QTRY_VERIFY_WITH_TIMEOUT
             (m_window->calibrateAudioAction()->isEnabled(), 10000);
         QVERIFY(driverMenusEnabled());
+        QVERIFY(deviceMenusEnabled());
         QVERIFY(m_window->previousOutputAction()->isEnabled());
     }
 

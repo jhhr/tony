@@ -453,8 +453,8 @@ with the menu bar hidden as well. Every output device chosen, from the menu or b
 goes through `chooseAudioDevice()`, which keeps the one left. It is kept with the
 Preferences key it was chosen under, so another driver has none to go back to, and in
 memory only: until a second device is chosen in a launch the key does nothing. It is shut
-during a take and while a check runs, as the driver menus are, and the status bar names
-the device it switched to, as nothing else on the screen does.
+during a take and while a check runs, as the device and driver menus are, and the status
+bar names the device it switched to, as nothing else on the screen does.
 
 **Voice threshold** (`VoiceThreshold`, `VoiceGate`, `VoiceThresholdMenu`): for singing
 with the music on speakers, which the microphone hears as well. A level in dBFS under

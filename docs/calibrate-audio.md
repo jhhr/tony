@@ -54,7 +54,8 @@ measurements) was a separate report, not kept in the repository.
   rate the line looks up (§5), stale or not.
 
 While a check runs, Record, the driver and latency menus, both device submenus and Voice
-Threshold are disabled as well.
+Threshold are disabled as well, and all of them but Record during any take too
+([audio-drivers.md](audio-drivers.md), [recording.md](recording.md)).
 
 **The dialog** is not modal: the check's session is in the window and can be looked at
 meanwhile. It is about 64 characters wide and as tall as its page's text, never more than
@@ -784,6 +785,7 @@ below).
   expanded by a tap and at the end. The driver and latency menus are tested here too, as
   they open the device again: a driver chosen, WASAPI (or MME) named by default, the
   latency and the round trip kept per driver, both greyed out during a take and a check
+  with the device menus, and a device chosen all the same then not chosen
   ([audio-drivers.md](audio-drivers.md), §6). On a fake whose loopback moves 10 ms at each
   restart, a check whose window suspends at Stop lands its punch-ins 10 ms apart
   (Unsteady), and one kept running, as the application keeps it, lands them alike (Ok),
