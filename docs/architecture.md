@@ -412,7 +412,7 @@ throughout, the level of the half window whose frames YIN compares to find a pit
 window's first half, and in pYIN's Unbiased Timing its middle half), the channels'
 average, as the live tracker's floor has it ([recording.md](recording.md#the-live-tracker);
 the gate in [takes.md](takes.md#the-voice-threshold)). pYIN's own `lowampsuppression` is
-not used for it: it only lowers the voicing probability, and `pyin` is upstream. A take
+not used for it: it only lowers the voicing probability. A take
 keeps the threshold it started with; the audio check's takes have none.
 
 Playback > Voice Threshold sits straight after Record, which it is for, and not with the

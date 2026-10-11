@@ -312,7 +312,7 @@ fi
 if [ "$build" = "yes" ]; then
     echo
     echo "Building"
-    ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app
+    ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-pyin
 fi
 
 echo

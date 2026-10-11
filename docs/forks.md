@@ -1,7 +1,7 @@
 # Dependency forks
 
 Tony's libraries are separate repositories checked out into the top-level directories by
-[repoint](../repoint-project.json) and **gitignored in this repository**. Five of them are
+[repoint](../repoint-project.json) and **gitignored in this repository**. Six of them are
 forks under `github.com/jhhr` that exist only for this Tony fork:
 
 | Directory | Fork branch | Why it is forked |
@@ -11,8 +11,9 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
 | `bqaudioio/` | `jhhr/bqaudioio` `tony-customizations` | See below. Upstream is Mercurial on sourcehut; the fork started from its GitHub mirror. |
+| `pyin/` | `jhhr/pyin` `tony-customizations` | See below: its own tests run with Tony's, and it is where the pitch analysis changes. Upstream is `c4dm/pyin`. |
 
-`pyin/` and the rest are upstream and must stay untouched.
+`chp/` and the rest are upstream and must stay untouched.
 
 Every fork's branch for Tony is `tony-customizations` (bqaudiostream, which has no such
 branch, stays on `master`), and `repoint-lock.json` pins their heads. The fork branches
@@ -33,15 +34,16 @@ library over a workaround in `main/`.
    which reaches the fork branch when the Tony branch is merged. Commit messages there
    follow that repository's style: `area: what`.
 2. Push to the remote named **`jhhr`**. In `svcore`, `svgui` and `svapp`, `origin` is
-   upstream sonic-visualiser, and in a `bqaudioio` cloned from its mirror it is
-   breakfastquay's — do not push there. In a cloud session the checkouts are
+   upstream sonic-visualiser, in a `bqaudioio` cloned from its mirror it is
+   breakfastquay's, and in a `pyin` cloned before the fork it is `c4dm`'s — do not push
+   there. In a cloud session the checkouts are
    `container-setup.sh`'s, whose `origin` is the fork, and two checks stand in the way:
    - The session's git proxy refuses a push to a repository not attached to the session,
      a new branch included (HTTP 403). The session's add-repository tool attaches it, with
      push access.
    - Auto mode trusts only the repository the session started in and its remotes, and so
      blocks committing in a fork's checkout, attaching the fork and pushing to it. The
-     environment's setup script names four of the forks, all but `bqaudioio`, as trusted
+     environment's setup script names four of the forks, all but `bqaudioio` and `pyin`, as trusted
      as well, which the user chose ([building.md](building.md#building-on-linux));
      `claude auto-mode config`
      shows whether a session has that entry. Without it, the user's own message has to
@@ -236,6 +238,29 @@ A `bqaudioio/` cloned from the mirror before the fork was pinned does not have t
 `git checkout -B tony-customizations jhhr/tony-customizations`. `container-setup.sh`
 does the equivalent by itself in a cloud session.
 
+### pyin
+
+On the fork branch `tony-customizations`, which upstream's `default` does not have:
+
+- **Its tests run with Tony's.** They build as one executable on Boost.Test's
+  header-only variant (`test/TestMain.cpp`), so they need nothing but the Boost headers
+  the plugin needs already; upstream built four of its five test files as executables
+  of their own, linked to Boost's library, and `TestYinUtil` (ported here to the current
+  `YinUtil`) not at all. Tony's meson builds them as `test-pyin`, which `meson test` runs
+  as `pyin` ([testing.md](testing.md)); `PYIN_SOURCE_DIR` says where `testdata/` and
+  `test/` are.
+- **The regression test needs no host.** `TestRegression` does in-process what
+  `test/regression/regression.sh` did through sonic-annotator: the plugin, at its
+  defaults, on `testdata/bob_02.wav`, its smoothed pitch track and notes with fixed-lag
+  smoothing off and on, against `test/regression/expected-*.csv` to within their six
+  significant digits. A change to what the analysis gives at its defaults fails it; a
+  change meant to alter that brings new expected files with it, as upstream's did.
+
+A `pyin/` cloned from `c4dm` before the fork does not have the pin: `git remote add jhhr
+https://github.com/jhhr/pyin`, `git fetch jhhr`, then `git checkout -B tony-customizations
+jhhr/tony-customizations`. `container-setup.sh` moves `origin` to the fork by itself in a
+cloud session.
+
 ## Known defects in the forks, not fixed
 
 - `svapp/audio/AudioCallbackRecordTarget.cpp` connects to `SIGNAL(aboutToBeDeleted())`,
@@ -252,6 +277,19 @@ does the equivalent by itself in a cloud session.
   `getPlayParameters()`) while the GUI thread adds and removes playables. Seen once as a
   crash of `test-tony-app` in the fill thread, in a sharded run whose processes shared
   their settings; not seen otherwise.
+- pYIN in fixed-lag mode (the default, and what Tony runs) stamps one frame of every run
+  twice: the last frame `process()` emits comes again as the first of
+  `getRemainingFeatures()`. `Analyser::mergeRangedAnalysis()` drops it; a fix in the fork
+  would remove that workaround, and change the fixed-lag expected files.
+- pYIN's `YinUtil::yinProb()` gives every dip of the difference function below 1 a
+  share of the probability, where the published pYIN gives each threshold's share to the
+  first dip below it (the paper's code is still in the function, commented out). So the
+  sub-harmonic dips of a voice compete with its own period, and only the HMM's continuity
+  keeps the octave.
+- `YinUtil::fastDifference()` keeps its running power term one sample out (it brings in
+  `x[tau + half]` where the window ends at `x[tau + half - 1]`), so the difference
+  departs a little from YIN's; harmless for pitch at pYIN's window. Tony's live tracker
+  does the same on purpose, to stay in step: `TestRealtimeYin` says so and allows for it.
 
 ## Changes considered but not made
 
@@ -269,5 +307,3 @@ does the equivalent by itself in a cloud session.
   replace `MainWindow::adoptTakeLayers()` setting source models by hand.
 - A hook in `MainWindowBase::toXml()` would save `MainWindow::toXml()` buffering the whole
   document to insert `<takes>`.
-- Fixing pYIN's doubled frame in fixed-lag mode would remove the workaround in
-  `Analyser::mergeRangedAnalysis()`; `pyin` is not a fork today.

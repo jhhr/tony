@@ -35,7 +35,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -125,7 +125,7 @@ reached. Three scripts in `deploy/linux/` do the work:
   ccache from a build of the libraries. Qt for Android and the Android build's C libraries
   are not in the snapshot: they take far longer than it allows. It also writes an
   `autoMode` entry to `/root/.claude/settings.json` by which auto mode trusts four of the
-  library forks (all but `bqaudioio`) as it does Tony's own repository
+  library forks (all but `bqaudioio` and `pyin`) as it does Tony's own repository
   ([forks.md](forks.md#changing-a-fork)): auto mode reads that from the user's settings,
   never from the repository's `.claude/settings.json`. The snapshot is kept only when the
   script ends within about five minutes, so any change to it has to keep to that. Its logs
@@ -166,15 +166,17 @@ The environment's settings:
 Then, from the repository root:
 
 ```sh
-ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-tony-dev > tmp/build.log 2>&1
+ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-tony-dev test-pyin > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 deploy/linux/run-tests.sh test-tony-core     # a few seconds
 deploy/linux/run-tests.sh test-tony-app      # under two minutes
 deploy/linux/run-tests.sh test-tony-dev      # when AGENTS.md says to run it; two minutes
+build/test-pyin > tmp/test-pyin.log 2>&1; echo "exit:$?"   # when pyin/ changed; seconds
 ```
 
 No `.exe` on Linux; the plugin target is `pyin.so`. `run-tests.sh` runs an executable as
-several processes, each with a shard of every suite ([testing.md](testing.md#running)).
+several processes, each with a shard of every suite ([testing.md](testing.md#running));
+`test-pyin` is Boost.Test, not QtTest, and is run as it is.
 The one-process runs of AGENTS.md work too, from `build/`.
 
 Measured on 2026-09-26 (the sharded runs on 2026-09-27 as well):

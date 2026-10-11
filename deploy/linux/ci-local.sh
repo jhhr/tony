@@ -165,7 +165,7 @@ linux_job() {
         done
         logged "$logs/linux-svcore.log" \
                meson test -C "$build" --no-rebuild --print-errorlogs \
-               svcore-base svcore-system svcore-data-model svcore-data-fileio ||
+               svcore-base svcore-system svcore-data-model svcore-data-fileio pyin ||
             status=1
     else
         echo "Testing: every meson test in one process, as the workflow (log: tmp/ci-local/linux-test.log)"

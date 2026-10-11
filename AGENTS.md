@@ -20,7 +20,7 @@ code.
 | [docs/takes.md](docs/takes.md) | touching takes, the audio swap, ranged analysis, undo, the coverage strip, save/restore, Replace Take Audio from Recording |
 | [docs/calibrate-audio.md](docs/calibrate-audio.md) | touching Calibrate Audio (`AudioCheckRunner`, `CalibrateAudioDialog`), the dev checks (`main/dev/`) or the measured latency (`LatencyCheck`, `LatencyCalibration`) |
 | [docs/audio-drivers.md](docs/audio-drivers.md) | touching the Audio Driver or Audio Latency menus (`AudioDriverSettings`, `AudioDriverMenus`), how the device is opened (`MainWindow::createAudioIO()`), or the bqaudioio fork |
-| [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/`, `bqaudioio/` |
+| [docs/forks.md](docs/forks.md) | needing a change in `svcore/`, `svgui/`, `svapp/`, `bqaudiostream/`, `bqaudioio/`, `pyin/` |
 | [docs/open-points.md](docs/open-points.md), [docs/manual-checklist.md](docs/manual-checklist.md) | choosing what to do next, or saying what the user should try by hand |
 | [docs/mobile-port.md](docs/mobile-port.md), then [docs/port-android.md](docs/port-android.md) or [docs/port-sailfish.md](docs/port-sailfish.md) | starting or working on a phone port |
 
@@ -31,7 +31,7 @@ from sh. A Linux cloud session builds otherwise: see the end of this section.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 ```
 
@@ -49,6 +49,7 @@ TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-core.exe > ../tmp/test.log 2>&1; echo "e
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe  > ../tmp/test.log 2>&1; echo "exit:$?"   # ~12 min, real time
 TONY_TEST_LOG_DIR=../tmp/tl ./test-tony-app.exe undo_two_takes_in_order > ../tmp/test.log 2>&1
 grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
+./test-pyin.exe > ../tmp/test-pyin.log 2>&1; echo "exit:$?"; tail -3 ../tmp/test-pyin.log
 ```
 
 - Read results from the per-suite files in `TONY_TEST_LOG_DIR`, not from stdout.
@@ -59,6 +60,9 @@ grep -a "^FAIL\|^   Loc\|^Totals" ../tmp/tl/*.txt
   about nine minutes of real-time takes. Run it as well, whole, when a change touches
   the take path (`record()`, Stop, latency, pre-roll), `AudioCheckRunner`,
   `CalibrateAudioDialog` or `main/dev/`; "both whole suites" then means all three.
+- `test-pyin.exe` holds pYIN's own tests, from the fork's `test/` (Boost.Test, not
+  QtTest): seconds. Its result is the end of its output and its exit status; it writes
+  nothing to `TONY_TEST_LOG_DIR`. Run it as well, whole, when a change touches `pyin/`.
 - From PowerShell or cmd, `.\build.bat test` runs everything through `meson test`.
 - Give the app suite a tool timeout of 20 minutes, or run it in the background.
 
@@ -78,7 +82,7 @@ first). The rest is in [docs/building.md](docs/building.md#building-on-linux).
   Never read them whole: search, then read a range.
 - `svcore/`, `svgui/`, `svapp/`, `pyin/` and the other top-level library directories are
   **separate git repositories, gitignored here**, so ripgrep-based search tools skip them
-  unless given the directory explicitly. Five are forks that may be changed
+  unless given the directory explicitly. Six are forks that may be changed
   ([docs/forks.md](docs/forks.md)); the rest are upstream and stay untouched. A sub-agent
   does not edit a fork: it reports the change it needs.
 

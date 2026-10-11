@@ -1582,6 +1582,48 @@ if system != 'android'
     win_subsystem: 'console'
   )
 
+  # pYIN's own tests, from the fork's test/: its unit tests and the
+  # regression test that runs the plugin on testdata/bob_02.wav and
+  # compares its pitch track and notes with test/regression. Boost.Test,
+  # header-only, so nothing beyond the Boost headers the plugin already
+  # needs. PYIN_SOURCE_DIR is where it finds testdata/ and test/.
+
+  pyin_test_exe = executable(
+    'test-pyin',
+    'pyin/test/TestMain.cpp',
+    'pyin/test/TestMeanFilter.cpp',
+    'pyin/test/TestFFT.cpp',
+    'pyin/test/TestYin.cpp',
+    'pyin/test/TestYinUtil.cpp',
+    'pyin/test/TestMonoNote.cpp',
+    'pyin/test/TestRegression.cpp',
+    'pyin/YinUtil.cpp',
+    'pyin/Yin.cpp',
+    'pyin/SparseHMM.cpp',
+    'pyin/MonoPitchHMM.cpp',
+    'pyin/MonoNoteParameters.cpp',
+    'pyin/MonoNoteHMM.cpp',
+    'pyin/MonoNote.cpp',
+    'pyin/YinVamp.cpp',
+    'pyin/PYinVamp.cpp',
+    'pyin/LocalCandidatePYIN.cpp',
+    'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
+    'vamp-plugin-sdk/src/vamp-sdk/RealTime.cpp',
+    include_directories: [
+      'pyin',
+      'vamp-plugin-sdk',
+    ],
+    cpp_args: [
+      general_defines,
+      '-DPYIN_SOURCE_DIR="' + import('fs').as_posix(meson.current_source_dir() / 'pyin') + '"',
+    ],
+    link_args: [
+      general_link_args,
+    ],
+    dependencies: boost_dep,
+    win_subsystem: 'console'
+  )
+
   # Tony's own tests. Two executables here, because they differ in cost
   # and in what they link: test-tony-core needs no GUI and no audio
   # device; test-tony-app creates widgets (offscreen) and links svgui and
@@ -1767,6 +1809,8 @@ if system != 'android'
        args: [
          '--testdir', meson.current_source_dir() / 'svcore/data/fileio/test'
        ])
+  test('pyin', pyin_test_exe,
+       timeout: 120)
 
 endif # system
 
