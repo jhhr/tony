@@ -104,7 +104,8 @@ echo "exit:$?" >> tmp/build.log
   and build it: it must compile with no `main/dev/` file
   ([calibrate-audio.md](calibrate-audio.md), §6).
 - Windows headers define macros named `near` and `far` (empty), `min`, `max`, `ERROR`, `IN`
-  and `OUT`. Do not use them as identifiers: a build on Linux does not catch it.
+  and `OUT`. Do not use them as identifiers: a build on Linux does not catch it, but
+  compiling a file there with `-Dnear= -Dfar=` does, for those two.
 - The macOS SDK's `MacTypes.h` declares `normal`, `bold`, `italic`, `underline`,
   `outline`, `shadow`, `condense` and `extend` in the global namespace. A function of one
   of those names, even in an anonymous namespace, makes each unqualified call to it
