@@ -284,6 +284,13 @@ protected slots:
     virtual void switchPitchUp();
     virtual void switchPitchDown();
 
+    // Edit > Prefer Lower Voice / Prefer Higher Voice: the reference's
+    // pitch track in the selection becomes its lowest (highest) pitch
+    // candidate, which in a harmony follows the lower (upper) voice all
+    // through, however often the track changed voice there
+    virtual void preferLowerVoice();
+    virtual void preferHigherVoice();
+
     // Editing the singing of a take: what is in the selection is erased
     // from its audio, and the coverage range at the playhead can be
     // selected to erase a whole recording (spec 5.2)
@@ -1066,6 +1073,16 @@ protected:
     bool m_withSpectrogram;
 
     Analyser::FrequencyRange m_pendingConstraint;
+
+    // A Prefer Lower Voice (-1) or Prefer Higher Voice (1) asked for
+    // before the selection's candidates were there, and the selection
+    // it is for; 0 for none
+    int m_pendingVoice;
+    sv::Selection m_pendingVoiceSelection;
+    void switchPitch(bool up);
+    void preferVoice(bool lower);
+    void applyVoicePreference(bool lower);
+    void pitchCandidatesReady();
 
     QString exportToSVL(QString path, sv::Layer *layer);
     FileOpenStatus importPitchLayer(sv::FileSource source);

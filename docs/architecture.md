@@ -313,6 +313,23 @@ volume and the background music in `MainWindow`.
 - Making any selection starts `Analyser::reAnalyseSelection()` on the reference, so a
   transformer is usually running afterwards. Tests cannot assert
   `!haveRunningTransformers()` after selecting.
+- **The reference's pitch candidates are its own analysis**, run over the selection and a
+  quarter of a second either side, once for each of `Analyser::voiceSettings()`
+  (`reAnalyseVoices()`); only a Shift-drag's range, and a test of plain analysis, still
+  use pYIN's `LocalCandidatePYIN` and CHP. One creation of derived layers runs all its
+  transforms in one plugin instance, which takes transforms that differ in output only:
+  settings that differ in parameters need a creation each.
+  - The layers exist before their models are filled: `havePitchCandidatesFor()` and
+    `pitchCandidatesReady()` wait for every model to complete, then drop the candidates
+    that are the same line in the selection (`PitchCandidates::distinct()`).
+  - Choose Higher Pitch and Choose Lower Pitch go to the next candidate above or below
+    what the track holds in the selection now, not after the last one chosen
+    (`PitchCandidates::step()`): the track may have been edited, and from a track that
+    changes voice, the next one up is the upper voice. Where there is none, the pitches
+    move an octave, as with the candidates hidden.
+  - Prefer Lower Voice and Prefer Higher Voice put the lowest or highest candidate into
+    the selection the candidates are of, and nowhere else; asked for before the
+    candidates are ready, they wait for them (`MainWindow::pitchCandidatesReady()`).
 
 ### Drawing
 

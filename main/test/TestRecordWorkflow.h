@@ -958,6 +958,42 @@ class TestRecordWorkflow : public QObject
         return name;
     }
 
+    // A layer's voiced pitches within the selection
+    static std::vector<double> pitchesIn(sv::Layer *layer, sv::Selection sel) {
+        std::vector<double> hz;
+        auto model = layer ?
+            sv::ModelById::getAs<sv::SparseTimeValueModel>(layer->getModel()) :
+            nullptr;
+        if (!model) return hz;
+        for (const sv::Event &e : model->getEventsStartingWithin
+                 (sel.getStartFrame(), sel.getEndFrame() - sel.getStartFrame())) {
+            if (e.getValue() > 0) hz.push_back(e.getValue());
+        }
+        return hz;
+    }
+
+    // The analyser's pitch candidates in its pane
+    static std::vector<sv::Layer *> candidateLayers(Analyser *a) {
+        std::vector<sv::Layer *> found;
+        sv::Pane *pane = a->getPane();
+        for (int i = 0; i < pane->getLayerCount(); ++i) {
+            sv::Layer *layer = pane->getLayer(i);
+            if (layer->getLayerPresentationName() == "candidate") {
+                found.push_back(layer);
+            }
+        }
+        return found;
+    }
+
+    // Selects from start to end, in seconds, alone, as the user does
+    sv::Selection selectSeconds(double start, double end) {
+        m_window->clearSelections();
+        m_window->selectRange(sv::sv_frame_t(start * rate),
+                              sv::sv_frame_t(end * rate));
+        auto selections = m_window->selections();
+        return selections.empty() ? sv::Selection() : *selections.begin();
+    }
+
     // Everything about the singing of a take that an undo or a redo has
     // to restore exactly
     struct TakeSnapshot {
@@ -7557,6 +7593,128 @@ private slots:
             QVERIFY2(!layer, "clearing the re-analysis left its candidates "
                      "alive");
         }
+    }
+
+    // A selection's pitch candidates on the reference are the reference's
+    // own analysis run over the selection (Analyser::reAnalyseVoices()).
+    // On two voices a fifth apart they hold a voice, where pYIN's own
+    // candidates hold the period the voices share, an octave below both
+    // (see TestSingingAnalysis::harmony_tracked_in_the_reference_only)
+    void reference_candidates_are_its_own_analysis() {
+        makeWindow(FakeAudioIO::Config());
+        std::vector<float> harmony = tone(330.0, 2.0);
+        const std::vector<float> upper = tone(495.0, 2.0);
+        for (size_t i = 0; i < harmony.size(); ++i) {
+            harmony[i] = 0.5f * (harmony[i] + upper[i]);
+        }
+        openReference(writeWav(harmony));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+
+        const sv::Selection sel = selectSeconds(0.5, 1.5);
+        QVERIFY(!sel.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(a->havePitchCandidatesFor(sel), 30000);
+
+        const std::vector<sv::Layer *> candidates = candidateLayers(a);
+        QVERIFY(!candidates.empty());
+        const int hops = int((sel.getEndFrame() - sel.getStartFrame()) / hop);
+        for (sv::Layer *layer : candidates) {
+            int voiced = 0, onAVoice = 0;
+            for (double hz : pitchesIn(layer, sel)) {
+                ++voiced;
+                if (std::abs(TestSignals::centsBetween(hz, 330.0)) < 50.0 ||
+                    std::abs(TestSignals::centsBetween(hz, 495.0)) < 50.0) {
+                    ++onAVoice;
+                }
+            }
+            QVERIFY2(voiced >= hops * 9 / 10 && onAVoice == voiced,
+                     qPrintable(QString("a candidate: %1 pitches in %2 hops, "
+                                        "%3 on a voice")
+                                .arg(voiced).arg(hops).arg(onAVoice)));
+        }
+    }
+
+    // Prefer Lower Voice and Prefer Higher Voice put the lowest (the
+    // highest) candidate into the selection, as one command. Asked for
+    // before the candidates are there, as right after the selection is
+    // made, they wait for them. On one voice the only candidate is the
+    // reference's own analysis, which both put back where the pitches
+    // were removed
+    void prefer_voice_waits_for_the_candidates() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+
+        for (bool lower : { true, false }) {
+            const sv::Selection sel = lower ? selectSeconds(0.5, 1.2) :
+                selectSeconds(0.8, 1.5);
+            QVERIFY(!sel.isEmpty());
+            // Nothing of the re-analysis is back before the event loop runs
+            QVERIFY(!a->havePitchCandidatesFor(sel));
+
+            m_window->doClearPitches();
+            QVERIFY(pitchesIn(pitch, sel).empty());
+
+            m_window->doPreferVoice(lower);
+            QVERIFY2(pitchesIn(pitch, sel).empty(),
+                     "a candidate went in before there were any");
+            QTRY_VERIFY_WITH_TIMEOUT(!pitchesIn(pitch, sel).empty(), 30000);
+            QVERIFY(a->havePitchCandidatesFor(sel));
+            for (double hz : pitchesIn(pitch, sel)) {
+                QVERIFY2(std::abs(TestSignals::centsBetween(hz, lowHz)) < 50.0,
+                         qPrintable(QString("%1 Hz").arg(hz)));
+            }
+
+            QCOMPARE(undoOnce(), lower ? QString("Prefer Lower Voice") :
+                     QString("Prefer Higher Voice"));
+            QVERIFY(pitchesIn(pitch, sel).empty());
+        }
+    }
+
+    // Choose Higher Pitch and Choose Lower Pitch go to the next candidate
+    // up or down from what the track holds in the selection, and up or
+    // down an octave where there is none: on one voice the only
+    // candidate is the track itself
+    void choose_pitch_steps_by_pitch() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+
+        const sv::Selection sel = selectSeconds(0.5, 1.5);
+        QVERIFY(!sel.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(a->havePitchCandidatesFor(sel), 30000);
+        m_window->doTogglePitchCandidates();
+        QVERIFY(a->arePitchCandidatesShown());
+
+        auto allNear = [&](double target) {
+            std::vector<double> hz = pitchesIn(pitch, sel);
+            if (hz.empty()) return false;
+            for (double h : hz) {
+                if (std::abs(TestSignals::centsBetween(h, target)) >= 50.0) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        QVERIFY(allNear(lowHz));
+
+        // No candidate above the track: an octave up
+        m_window->doSwitchPitch(true);
+        QVERIFY2(allNear(2 * lowHz), "Choose Higher Pitch went nowhere");
+        QCOMPARE(undoOnce(), QString("Choose Higher Octave"));
+        QVERIFY(allNear(lowHz));
+        m_window->doSwitchPitch(true);
+        QVERIFY(allNear(2 * lowHz));
+
+        // From an octave up, the candidate is the next one down
+        m_window->doSwitchPitch(false);
+        QVERIFY2(allNear(lowHz), "Choose Lower Pitch did not go to the candidate");
+        QCOMPARE(undoOnce(), QString("Choose Lower Pitch Candidate"));
+        QVERIFY(allNear(2 * lowHz));
     }
 
     void load_background_music() {

@@ -66,11 +66,13 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 
 ## Not built
 
-- **Show Pitch Candidates still offers pYIN's own candidates**: the Shift-drag
-  re-analysis (`LocalCandidatePYIN`) does not have the fork's parameters for vocals with
-  harmonies ([forks.md](forks.md#pyin)), so in a harmony its candidates are the voices'
-  common period and its multiples rather than the voices. Offering each sung voice, from
-  the salience, is the next step, left for later.
+- **Show Pitch Candidates offers one voice**: a selection's candidates on the reference
+  are its own analysis run over the selection once for each of
+  `Analyser::voiceSettings()`, and there is one setting so far, the analysis as it is,
+  which follows the strongest voice. So in a harmony they do not offer the other voices
+  yet, and Prefer Lower Voice and Prefer Higher Voice only put that analysis back. The
+  settings that follow one voice are being worked out in the pitch lab
+  (`tools/pitchlab/py/voice_follow.py`, `make_voicesets.py`).
 - **An echo canceller ahead of pYIN**: the pitch lab's front end found the wrong delay on
   the second song (0.16 s, where the repeats are at 0.48 and 0.96 s) and made its track a
   little worse. It would need a delay estimate that holds first.

@@ -279,6 +279,7 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_selectionAnchor(0),
     m_withSonification(withSonification),
     m_withSpectrogram(withSpectrogram),
+    m_pendingVoice(0),
     m_inputDeviceMenu(nullptr),
     m_recordingInProgress(false),
     m_recordingAsSingingTrack(false),
@@ -552,6 +553,8 @@ MainWindow::MainWindow(AudioMode audioMode,
             this, &MainWindow::syncSongScrollBar);
     connect(m_analyser, &Analyser::rangedAnalysisMerged,
             this, &MainWindow::syncSongScrollBar);
+    connect(m_analyser, &Analyser::pitchCandidatesReady,
+            this, &MainWindow::pitchCandidatesReady);
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
@@ -1078,6 +1081,24 @@ MainWindow::setupEditMenu()
     action->setStatusTip(tr("Move pitches down an octave, or to the next lower pitch candidate"));
     m_hotkeys->add("lower-pitch", action);
     connect(action, SIGNAL(triggered()), this, SLOT(switchPitchDown()));
+    connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
+    menu->addAction(action);
+    m_rightButtonMenu->addAction(action);
+
+    action = new QAction(tr("Prefer Higher Voice"), this);
+    action->setShortcut(tr("Ctrl+Shift+Up"));
+    action->setStatusTip(tr("Make the pitch track follow the highest voice all through the selected region"));
+    m_hotkeys->add("prefer-higher-voice", action);
+    connect(action, &QAction::triggered, this, &MainWindow::preferHigherVoice);
+    connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
+    menu->addAction(action);
+    m_rightButtonMenu->addAction(action);
+
+    action = new QAction(tr("Prefer Lower Voice"), this);
+    action->setShortcut(tr("Ctrl+Shift+Down"));
+    action->setStatusTip(tr("Make the pitch track follow the lowest voice all through the selected region"));
+    m_hotkeys->add("prefer-lower-voice", action);
+    connect(action, &QAction::triggered, this, &MainWindow::preferLowerVoice);
     connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
@@ -9968,49 +9989,114 @@ MainWindow::togglePitchCandidates()
 void
 MainWindow::switchPitchUp()
 {
-    if (m_analyser->arePitchCandidatesShown()) {
-        if (m_analyser->haveHigherPitchCandidate()) {
-
-            CommandHistory::getInstance()->startCompoundOperation
-                (tr("Choose Higher Pitch Candidate"), true);
-
-            MultiSelection::SelectionList selections = m_viewManager->getSelections();
-
-            for (MultiSelection::SelectionList::iterator k = selections.begin();
-                 k != selections.end(); ++k) {
-                m_analyser->switchPitchCandidate(*k, true);
-                auxSnapNotes(*k);
-            }
-
-            CommandHistory::getInstance()->endCompoundOperation();
-        }
-    } else {
-        octaveShift(true);
-    }
+    switchPitch(true);
 }
 
 void
 MainWindow::switchPitchDown()
 {
-    if (m_analyser->arePitchCandidatesShown()) {
-        if (m_analyser->haveLowerPitchCandidate()) {
+    switchPitch(false);
+}
 
-            CommandHistory::getInstance()->startCompoundOperation
-                (tr("Choose Lower Pitch Candidate"), true);
+void
+MainWindow::switchPitch(bool up)
+{
+    MultiSelection::SelectionList selections = m_viewManager->getSelections();
 
-            MultiSelection::SelectionList selections = m_viewManager->getSelections();
-            
-            for (MultiSelection::SelectionList::iterator k = selections.begin();
-                 k != selections.end(); ++k) {
-                m_analyser->switchPitchCandidate(*k, false);
-                auxSnapNotes(*k);
-            }
-
-            CommandHistory::getInstance()->endCompoundOperation();
-        }
-    } else {
-        octaveShift(false);
+    // The next candidate up (down) from what the track holds in the
+    // selection the candidates are of. With none there -- the candidates
+    // hidden, or none above (below) the track, as in a solo, whose one
+    // candidate is the track itself -- the pitches go up (down) an octave
+    int index = -1;
+    if (m_analyser->arePitchCandidatesShown() && !selections.empty()) {
+        index = m_analyser->pitchCandidateStep(*selections.begin(), up);
     }
+    if (index < 0) {
+        octaveShift(up);
+        return;
+    }
+
+    CommandHistory::getInstance()->startCompoundOperation
+        (up ? tr("Choose Higher Pitch Candidate") :
+         tr("Choose Lower Pitch Candidate"), true);
+
+    for (MultiSelection::SelectionList::iterator k = selections.begin();
+         k != selections.end(); ++k) {
+        m_analyser->chooseCandidate(*k, index);
+        auxSnapNotes(*k);
+    }
+
+    CommandHistory::getInstance()->endCompoundOperation();
+}
+
+void
+MainWindow::preferLowerVoice()
+{
+    preferVoice(true);
+}
+
+void
+MainWindow::preferHigherVoice()
+{
+    preferVoice(false);
+}
+
+void
+MainWindow::preferVoice(bool lower)
+{
+    MultiSelection::SelectionList selections = m_viewManager->getSelections();
+    if (selections.empty()) return;
+
+    // The candidates are worked out from the moment the selection is
+    // made (selectionChangedByUser()). Until they are there, the choice
+    // waits for them: pitchCandidatesReady() makes it
+    Selection sel = *selections.begin();
+    if (!m_analyser->havePitchCandidatesFor(sel)) {
+        m_pendingVoice = (lower ? -1 : 1);
+        m_pendingVoiceSelection = sel;
+        return;
+    }
+
+    m_pendingVoice = 0;
+    applyVoicePreference(lower);
+}
+
+void
+MainWindow::applyVoicePreference(bool lower)
+{
+    MultiSelection::SelectionList selections = m_viewManager->getSelections();
+    if (selections.empty()) return;
+
+    int index = m_analyser->voiceCandidate(lower);
+    if (index < 0) return;
+
+    // Into the selection the candidates are of only: they hold nothing
+    // anywhere else, and a candidate pasted over another selection
+    // would leave it empty
+    Selection sel = *selections.begin();
+
+    CommandHistory::getInstance()->startCompoundOperation
+        (lower ? tr("Prefer Lower Voice") : tr("Prefer Higher Voice"), true);
+    m_analyser->chooseCandidate(sel, index);
+    auxSnapNotes(sel);
+    CommandHistory::getInstance()->endCompoundOperation();
+}
+
+void
+MainWindow::pitchCandidatesReady()
+{
+    if (m_pendingVoice == 0) return;
+
+    bool lower = (m_pendingVoice < 0);
+    Selection sel = m_pendingVoiceSelection;
+    m_pendingVoice = 0;
+
+    // Asked for a selection the user has since left
+    MultiSelection::SelectionList selections = m_viewManager->getSelections();
+    if (selections.empty() || !(*selections.begin() == sel)) return;
+    if (!m_analyser->havePitchCandidatesFor(sel)) return;
+
+    applyVoicePreference(lower);
 }
 
 void

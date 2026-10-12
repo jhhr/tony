@@ -120,6 +120,15 @@ public:
     // Editing the singing of a take, as the two Edit menu actions do
     void doEraseSingingInSelection() { eraseSingingInSelection(); }
     void doSelectRecordingAtPlayhead() { selectRecordingAtPlayhead(); }
+
+    // The Edit menu's commands on the reference's pitch track in the
+    // selection
+    void doClearPitches() { clearPitches(); }
+    void doTogglePitchCandidates() { togglePitchCandidates(); }
+    void doSwitchPitch(bool up) { if (up) switchPitchUp(); else switchPitchDown(); }
+    void doPreferVoice(bool lower) {
+        if (lower) preferLowerVoice(); else preferHigherVoice();
+    }
     QAction *eraseSingingAction() { return m_eraseSingingAction; }
     QAction *selectRecordingAction() { return m_selectRecordingAction; }
     void doUpdateMenuStates() { updateMenuStates(); }

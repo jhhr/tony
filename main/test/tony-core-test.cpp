@@ -15,6 +15,7 @@
 #include "TestRealtimeYin.h"
 #include "TestRealtimePitchTracker.h"
 #include "TestOctaveSlips.h"
+#include "TestPitchCandidates.h"
 #include "TestLatencyShift.h"
 #include "TestCoverage.h"
 #include "TestDecodedPcm.h"
@@ -98,6 +99,12 @@ int main(int argc, char *argv[])
 
     {
         TestOctaveSlips t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestPitchCandidates t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

@@ -343,10 +343,39 @@ public:
 
     /**
      * If a re-analysis has been activated, switch the selected area
-     * of the main pitch track to a different candidate from the
-     * analysis results.
+     * of the main pitch track to the candidate a step up or down from
+     * what it holds now (pitchCandidateStep()). Nothing changes if
+     * there is none.
      */
     void switchPitchCandidate(sv::Selection sel, bool up);
+
+    /**
+     * The candidate a step up (or down) from what the pitch track holds
+     * in the selection: the lowest of the candidates above it (the
+     * highest of those below), as PitchCandidates::step() compares
+     * them. -1 if there is none, or no candidates yet.
+     */
+    int pitchCandidateStep(sv::Selection sel, bool up) const;
+
+    /**
+     * The lowest (or the highest) of the candidates by pitch: in a
+     * harmony, the lower (upper) voice through the whole selection.
+     * -1 if there are no candidates.
+     */
+    int voiceCandidate(bool lower) const;
+
+    /**
+     * Put candidate index into the pitch track within the selection, in
+     * place of what it held there. Makes the edit commands of the pitch
+     * track's layer: the caller wraps them in a compound command.
+     */
+    void chooseCandidate(sv::Selection sel, int index);
+
+    /**
+     * True once the re-analysis of this selection has finished, with
+     * candidates or without; pitchCandidatesReady() is emitted then.
+     */
+    bool havePitchCandidatesFor(sv::Selection sel) const;
 
     /**
      * Return true if it is possible to switch up to another pitch
@@ -427,12 +456,17 @@ signals:
     // changed.  Emitted before initialAnalysisCompleted()
     void rangedAnalysisMerged();
 
+    // The re-analysis of the selection has finished: its pitch
+    // candidates, if it found any, are there to choose from
+    void pitchCandidatesReady();
+
 protected slots:
     void layerAboutToBeDeleted(sv::Layer *);
     void layerCompletionChanged(sv::ModelId);
     void reAnalyseRegion(sv::sv_frame_t, sv::sv_frame_t, float, float);
     void materialiseReAnalysis();
     void rangedAnalysisCompletionChanged(sv::ModelId);
+    void candidateCompletionChanged(sv::ModelId);
 
 protected:
     ColorScheme m_colorScheme;
@@ -449,6 +483,7 @@ protected:
     FrequencyRange m_reAnalysingRange;
     std::vector<sv::Layer *> m_reAnalysisCandidates;
     int m_currentCandidate;
+    bool m_reAnalysisDone;
     bool m_candidatesVisible;
     sv::Document::LayerCreationAsyncHandle m_currentAsyncHandle;
     QMutex m_asyncMutex;
@@ -540,7 +575,24 @@ protected:
     void connectAnalysisLayers();
 
     void discardPitchCandidates();
-    
+
+    // The reference's re-analysis of a selection: its own analysis run
+    // over it once for each of voiceSettings()
+    QString reAnalyseVoices(sv::Selection sel, sv::sv_samplerate_t rate);
+
+    // Whether a selection's pitch candidates are the voices: the
+    // reference's own analysis run over the selection once for each
+    // voice it can follow (voiceSettings()). Otherwise they are pYIN's
+    // own, LocalCandidatePYIN's, as in a test of plain analysis
+    bool offersVoices() const;
+
+    // What each of those runs sets besides the reference's parameters
+    static std::vector<std::vector<std::pair<QString, float>>> voiceSettings();
+
+    // Drop the candidates that are the same line in the selection as one
+    // before them
+    void dropRepeatedCandidates();
+
     // Document::LayerCreationHandler method
     void layersCreated(sv::Document::LayerCreationAsyncHandle,
                        std::vector<sv::Layer *>, std::vector<sv::Layer *>);
