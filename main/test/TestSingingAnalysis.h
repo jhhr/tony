@@ -139,6 +139,28 @@ class TestSingingAnalysis : public QObject
         return TestSignals::sawtooth(hz, rate, int(seconds * rate), quietGain);
     }
 
+    // A phrase that grows a decibel louder over its length, up to the
+    // level it was made at.  A tone that repeats exactly repeats at two
+    // and three periods as exactly as at one, and in vague time which of
+    // those pYIN takes is down to the rounding of its FFT, which differs
+    // from build to build: of the loud phrase the Linux build took the
+    // last 8 hops for 98 Hz and macOS's arm64 build the last 28, a note
+    // of their own, and both took the quiet phrase for 73.5 Hz.  Growing,
+    // the waveform is further from itself the more periods on, and the
+    // period is the best match in every block, on every build.  Louder
+    // and not quieter: pYIN's power term is a sample off (testing.md),
+    // which adds to the difference at a multiple of the period what one
+    // sample's square has grown by over it, and for a tone that grows
+    // quieter that is less than nothing, the more the further on
+    static std::vector<float> swelling(std::vector<float> phrase) {
+        const double length = double(phrase.size());
+        for (size_t i = 0; i < phrase.size(); ++i) {
+            const double db = double(i) / length - 1.0;
+            phrase[i] *= float(std::pow(10.0, db / 20.0));
+        }
+        return phrase;
+    }
+
     // The loud phrase at 0.6 to 1.1 s, the quiet one at 1.7 to 2.2 s,
     // 0.6 s of silence around each
     static constexpr double loudFrom = 0.6, loudTo = 1.1;
@@ -147,10 +169,10 @@ class TestSingingAnalysis : public QObject
     static std::vector<float> loudThenQuiet() {
         std::vector<float> data;
         appendSilence(data, loudFrom);
-        auto loud = tone(singingHz, loudTo - loudFrom);
+        auto loud = swelling(tone(singingHz, loudTo - loudFrom));
         data.insert(data.end(), loud.begin(), loud.end());
         appendSilence(data, quietFrom - loudTo);
-        auto quiet = quietTone(referenceHz, quietTo - quietFrom);
+        auto quiet = swelling(quietTone(referenceHz, quietTo - quietFrom));
         data.insert(data.end(), quiet.begin(), quiet.end());
         appendSilence(data, 0.6);
         return data;

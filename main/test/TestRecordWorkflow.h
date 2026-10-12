@@ -1455,13 +1455,21 @@ class TestRecordWorkflow : public QObject
         return changed;
     }
 
-    // As settingsChanged() up to now, but for the file finder's keys:
-    // opening a file keeps the folder it is in, for the next Open
+    // As settingsChanged() up to now, but for what opening a file keeps
+    // of where the user has been: the folder it is in, for the next Open
+    // (the file finder's keys), and the file, in Open Recent.  svcore
+    // leaves a file in a temporary directory out of Open Recent, as the
+    // tests' are, but it knows one only by its name: /tmp and Windows'
+    // Temp, not macOS's /var/folders/.../T, where every new file opened
+    // goes to the top of the list
     static QStringList settingsChangedByOpening
     (const QMap<QString, QString> &before) {
         QStringList changed;
         for (const QString &change : settingsChanged(before, allSettings())) {
-            if (!change.startsWith("FileFinder/")) changed << change;
+            if (!change.startsWith("FileFinder/") &&
+                !change.startsWith("RecentFiles/")) {
+                changed << change;
+            }
         }
         return changed;
     }
@@ -5528,8 +5536,8 @@ private slots:
     }
 
     // Opening a file writes no setting (but the folder the next Open is
-    // to start in): the settings are what the user chose, and a load is
-    // no choice. Nor does Analyse Now, nor what the
+    // to start in, and Open Recent): the settings are what the user
+    // chose, and a load is no choice. Nor does Analyse Now, nor what the
     // command line leaves out, which the analyser keeps off through
     // Analyse Now as well: a window without the spectrogram (as every
     // test window is) keeps it hidden though the user showed it in a

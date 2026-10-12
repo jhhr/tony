@@ -317,6 +317,11 @@ cloud session.
   `getPlayParameters()`) while the GUI thread adds and removes playables. Seen once as a
   crash of `test-tony-app` in the fill thread, in a sharded run whose processes shared
   their settings; not seen otherwise.
+- `svcore/base/RecentFiles.cpp` leaves a file in a temporary directory out of Open Recent,
+  as a preference that is on by default asks, but knows such a directory only by a `tmp`
+  or `temp` in its path. macOS's own, `/var/folders/…/T`, has neither, so a file opened
+  from there goes into the list. Checking against `QDir::tempPath()` as well would cover
+  it. The tests allow for it ([testing.md](testing.md), `settingsChangedByOpening()`).
 - pYIN in fixed-lag mode (the default, and what Tony runs) stamps one frame of every run
   twice: the last frame `process()` emits comes again as the first of
   `getRemainingFeatures()`. `Analyser::mergeRangedAnalysis()` drops it; a fix in the fork
