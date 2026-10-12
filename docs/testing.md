@@ -269,8 +269,12 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   `dragFader()` drags the fader, as the user does: the fader's `setValue()` says nothing,
   and a level set in code is not the user's action. `allSettings()` and
   `settingsChanged()` say which keys a step wrote; `settingsChangedByOpening()` leaves out
-  the `FileFinder/` keys every Open writes. `storeRoundTrip()` keeps a measured figure at
-  a device rate, and `latencyLine()` reads the Devices menu's line as the menu shows it.
+  what an Open keeps of where the user has been: the folder (`FileFinder/`) and Open
+  Recent (`RecentFiles/`). svcore keeps a file in a temporary directory, as the tests'
+  are, out of Open Recent only where it knows the directory by its name (`/tmp`, Windows'
+  `Temp`); macOS's `/var/folders/…/T` it does not, and there each new file opened goes
+  into the list. `storeRoundTrip()` keeps a measured figure at a device rate, and
+  `latencyLine()` reads the Devices menu's line as the menu shows it.
 - A **dialog watchdog**: a 50 ms timer closes any modal dialog and records it, and
   `cleanup()` fails the test for one that was not expected. Check Input Level's dialog is
   an exception: its tests open it, drive it and close it; so is Configure Hotkeys'.
