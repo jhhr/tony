@@ -57,3 +57,4 @@ tmp
 # shared settings, with the cloud session's hook, are tracked
 .claude/*
 !.claude/settings.json
+__pycache__/

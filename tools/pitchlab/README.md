@@ -23,6 +23,8 @@ directory of their own, editing the copy and building a runner from it.
 | `py/plot_section.py` | Spectrogram of a section with tracks and lyrics on it |
 | `py/compare_section.py` | One panel per track over the same spectrogram, with an annotation of the voices on each: methods side by side |
 | `py/ton_tracks.py` | A `.ton` session's reference pitch, notes and lyrics as CSV |
+| `py/make_voicesets.py` | Builds the voice-role set: synthetic harmonies whose voices sing lines of their own (thirds, sixths, fifths, octaves, a trio whose top voice comes and goes) at levels that change, so that the louder voice changes from phrase to phrase, as in a song; a column of f0 per voice and each voice's own level. Dev split synm, test split synf |
+| `py/voice_follow.py` | Which voice a track follows where two or more sing: the share on the lowest, a middle and the highest voice, and changes of voice per minute (a voice entering or leaving is no change), for a song's annotation or a set's two-voice files |
 
 ## Conditions
 

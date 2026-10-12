@@ -87,12 +87,25 @@ VOWELS = {  # F1, F2, F3, F4 in Hz (roughly, adult)
 }
 
 
+SCALE = [4, 6, 7, 9, 11, 12, 14]  # E minor degrees (semitones from C)
+
+
+def scale_pool(low_midi, high_midi):
+    return [m for m in range(low_midi, high_midi + 1) if (m % 12) in [s % 12 for s in SCALE]]
+
+
 def synth_voice(rng, dur, low_midi, high_midi, formant_shift=1.0):
     """A sung melody in E minor with portamento, vibrato, drift,
     jitter, vowels and breath. Returns audio and exact f0 on the grid."""
+    pool = scale_pool(low_midi, high_midi)
+    midi, amp, vowel_w = melody(rng, dur, pool)
+    return render(rng, midi, amp, vowel_w, pool[len(pool) // 2], formant_shift)
+
+
+def melody(rng, dur, pool):
+    """A melody on the notes of pool, in phrases: target pitch (0 =
+    rest), amplitude and vowel weights per sample."""
     n = int(dur * SR)
-    scale = [4, 6, 7, 9, 11, 12, 14]  # E minor degrees (semitones from C)
-    pool = [m for m in range(low_midi, high_midi + 1) if (m % 12) in [s % 12 for s in scale]]
     midi = np.zeros(n)  # target pitch per sample, 0 = rest
     amp = np.zeros(n)
     vowel_w = {v: np.zeros(n) for v in VOWELS}
@@ -121,12 +134,20 @@ def synth_voice(rng, dur, low_midi, high_midi, formant_shift=1.0):
             amp[a:b] = env * rng.uniform(0.7, 1.0)
             tp += nd
         t = tp + rng.uniform(0.3, 1.2)
+    return midi, amp, vowel_w
+
+
+def render(rng, midi, amp, vowel_w, rest_midi, formant_shift=1.0):
+    """Sings a melody: portamento, vibrato, drift, jitter, vowels and
+    breath, starting from rest_midi. Returns audio and exact f0 on the
+    grid."""
+    n = len(midi)
     voiced = midi > 0
     # Fill rests with neighbouring pitch so that glides are continuous
     idx = np.where(voiced, np.arange(n), 0)
     np.maximum.accumulate(idx, out=idx)
     pitch = midi[idx]
-    pitch[pitch == 0] = pool[len(pool) // 2]
+    pitch[pitch == 0] = rest_midi
     # portamento: smooth the step function with a ~60 ms raised cosine
     k = int(0.06 * SR)
     win = np.hanning(2 * k + 1)
@@ -161,8 +182,9 @@ def synth_voice(rng, dur, low_midi, high_midi, formant_shift=1.0):
     sm /= sm.sum()
     amp = sps.fftconvolve(amp, sm, mode='same')
     tot = np.zeros(n)
+    vowel_w = {v: sps.fftconvolve(w, np.hanning(int(0.05 * SR)) / (0.025 * SR), mode='same')
+               for v, w in vowel_w.items()}
     for v in VOWELS:
-        vowel_w[v] = sps.fftconvolve(vowel_w[v], np.hanning(int(0.05 * SR)) / (0.025 * SR), mode='same')
         tot += vowel_w[v]
     tot[tot < 1e-6] = 1
     phase = 2 * np.pi * np.cumsum(f0) / SR
