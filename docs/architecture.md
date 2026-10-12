@@ -316,9 +316,12 @@ volume and the background music in `MainWindow`.
 - **The reference's pitch candidates are its own analysis**, run over the selection and a
   quarter of a second either side, once for each of `Analyser::voiceSettings()`
   (`reAnalyseVoices()`); only a Shift-drag's range, and a test of plain analysis, still
-  use pYIN's `LocalCandidatePYIN` and CHP. One creation of derived layers runs all its
-  transforms in one plugin instance, which takes transforms that differ in output only:
-  settings that differ in parameters need a creation each.
+  use pYIN's `LocalCandidatePYIN` and CHP. Each setting has a creation of derived layers
+  of its own: one creation runs all its transforms in one plugin instance, which takes
+  transforms that differ in output only.
+  - A creation's handle is gone once it has reported back to `layersCreated()`, wanted or
+    not (a cancelled one still reports, with layers that have no models): the analyser
+    lets go of it there, or the next selection cancels a deleted creation.
   - The layers exist before their models are filled: `havePitchCandidatesFor()` and
     `pitchCandidatesReady()` wait for every model to complete, then drop the candidates
     that are the same line in the selection (`PitchCandidates::distinct()`).

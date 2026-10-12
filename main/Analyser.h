@@ -378,6 +378,14 @@ public:
     bool havePitchCandidatesFor(sv::Selection sel) const;
 
     /**
+     * A re-analysis of a selection is on its way: the layers of one or
+     * more of its transforms have not come back yet.
+     */
+    bool isReAnalysing() const {
+        return m_currentAsyncHandle || !m_voiceHandles.empty();
+    }
+
+    /**
      * Return true if it is possible to switch up to another pitch
      * candidate. This may mean that the currently selected pitch
      * candidate is not the highest, or it may mean that no alternate
@@ -486,6 +494,12 @@ protected:
     bool m_reAnalysisDone;
     bool m_candidatesVisible;
     sv::Document::LayerCreationAsyncHandle m_currentAsyncHandle;
+
+    // The creations of reAnalyseVoices(), one for each setting, that
+    // have not reported back yet. A handle is gone once layersCreated()
+    // has been called for it, so it leaves this list (or
+    // m_currentAsyncHandle) then, whether its layers are wanted or not
+    std::vector<sv::Document::LayerCreationAsyncHandle> m_voiceHandles;
     QMutex m_asyncMutex;
 
     // A ranged analysis in progress (analyseRange()). The layers are

@@ -1080,9 +1080,17 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
 
     if (sel.isEmpty()) return "";
 
+    // What is still on its way is of no use now. A cancelled creation
+    // still reports back, with layers that have no models, and
+    // layersCreated() deletes them as unwanted
     if (m_currentAsyncHandle) {
         m_document->cancelAsyncLayerCreation(m_currentAsyncHandle);
+        m_currentAsyncHandle = 0;
     }
+    for (auto handle : m_voiceHandles) {
+        m_document->cancelAsyncLayerCreation(handle);
+    }
+    m_voiceHandles.clear();
 
     if (!m_reAnalysisCandidates.empty()) {
         discardPitchCandidates();
@@ -1207,23 +1215,23 @@ Analyser::reAnalyseVoices(Selection sel, sv_samplerate_t rate)
         return "";
     }
 
-    Transforms transforms;
-    for (const auto &setting : voiceSettings()) {
+    // A creation each: one runs all its transforms in one instance of
+    // the plugin, which takes transforms that differ in output only
+    const auto settings = voiceSettings();
+    for (const auto &setting : settings) {
         Transform t = built.front();
         for (const auto &p : setting) {
             t.setParameter(p.first, p.second);
         }
         t.setStartTime(RealTime::frame2RealTime(from, rate));
         t.setDuration(RealTime::frame2RealTime(to - from, rate));
-        transforms.push_back(t);
+        m_voiceHandles.push_back
+            (m_document->createDerivedLayersAsync({ t }, m_fileModel, this));
     }
 
-    cerr << "Analyser::reAnalyseVoices: " << transforms.size()
+    cerr << "Analyser::reAnalyseVoices: " << settings.size()
          << " run(s) from " << from << " to " << to << " for the selection "
          << sel.getStartFrame() << " to " << sel.getEndFrame() << endl;
-
-    m_currentAsyncHandle =
-        m_document->createDerivedLayersAsync(transforms, m_fileModel, this);
 
     return "";
 }
@@ -1237,11 +1245,7 @@ Analyser::offersVoices() const
 std::vector<std::vector<std::pair<QString, float>>>
 Analyser::voiceSettings()
 {
-    // The reference's analysis as it is, following the strongest voice.
-    // One creation of derived layers runs all its transforms in one
-    // instance of the plugin, which takes transforms that differ in
-    // their output only: settings that differ in their parameters need
-    // a creation each, or one output of the plugin that has every voice
+    // The reference's analysis as it is, following the strongest voice
     return { {} };
 }
 
@@ -1815,7 +1819,16 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
     {
         QMutexLocker locker(&m_asyncMutex);
 
-        if (handle != m_currentAsyncHandle || 
+        // The handle is gone once this returns: whatever happens to the
+        // layers, it is no longer ours to cancel
+        auto voice = std::find(m_voiceHandles.begin(), m_voiceHandles.end(),
+                               handle);
+        const bool isVoice = (voice != m_voiceHandles.end());
+        const bool isCurrent = (handle && handle == m_currentAsyncHandle);
+        if (isVoice) m_voiceHandles.erase(voice);
+        if (isCurrent) m_currentAsyncHandle = 0;
+
+        if ((!isVoice && !isCurrent) ||
             m_reAnalysingSelection == Selection()) {
             // We don't want these!
             for (int i = 0; i < (int)primary.size(); ++i) {
@@ -1826,13 +1839,15 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
             }
             return;
         }
-        m_currentAsyncHandle = 0;
 
         // Like every layer of our own, the candidates make no undo
         // commands. An undo could otherwise take them out of the pane
         // while they stay on our list, and removing them again later
-        // left a command holding a layer already deleted
-        m_reAnalysisCandidates.clear();
+        // left a command holding a layer already deleted. The voices'
+        // runs report one by one, and add to the list
+        if (!isVoice) {
+            m_reAnalysisCandidates.clear();
+        }
 
         vector<Layer *> all;
         for (int i = 0; i < (int)primary.size(); ++i) {
@@ -1890,7 +1905,7 @@ void
 Analyser::candidateCompletionChanged(ModelId)
 {
     if (m_reAnalysisDone || m_reAnalysingSelection.isEmpty() ||
-        m_currentAsyncHandle) {
+        isReAnalysing()) {
         return;
     }
 

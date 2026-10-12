@@ -7725,6 +7725,35 @@ private slots:
         QVERIFY(allNear(2 * lowHz));
     }
 
+    // A re-analysis cleared while it runs still reports back, and its
+    // layers are deleted then. Nothing of it may stay pending: the next
+    // selection cancelled what it took for a run still on its way, a
+    // creation that had already deleted itself
+    void cleared_reanalysis_leaves_nothing_pending() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+
+        const sv::Selection first(sv::sv_frame_t(0.5 * rate),
+                                  sv::sv_frame_t(1.5 * rate));
+        QString error = a->reAnalyseSelection(first, Analyser::FrequencyRange());
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(a->isReAnalysing());
+        a->clearReAnalysis();
+        QTRY_VERIFY_WITH_TIMEOUT(!a->isReAnalysing(), 30000);
+        QCoreApplication::processEvents();
+        QVERIFY2(candidateLayers(a).empty(),
+                 "the cleared re-analysis left its layers in the pane");
+
+        const sv::Selection second(sv::sv_frame_t(0.8 * rate),
+                                   sv::sv_frame_t(1.6 * rate));
+        error = a->reAnalyseSelection(second, Analyser::FrequencyRange());
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(a->havePitchCandidatesFor(second), 30000);
+        QVERIFY(!candidateLayers(a).empty());
+    }
+
     void load_background_music() {
         makeWindow(FakeAudioIO::Config());
         openReference(writeWav(tone(lowHz, 1.0)));
