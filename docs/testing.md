@@ -391,7 +391,14 @@ it first, or break the code for a moment (mark the line `MUTATION`, and check
   came out an octave low after a step, or not, as the step fell between frames). Even
   whole, **a tone that repeats exactly** repeats at two and three periods as exactly as at
   one, pYIN weighs those alike, and it took some for a subharmonic (294 Hz as 73.5): a
-  slight vibrato, as Calibrate Audio's tones have, leaves the period the best match.
+  slight vibrato, as Calibrate Audio's tones have, leaves the period the best match. Which
+  multiple pYIN takes for such a tone in vague time is down to the rounding of its FFT, so
+  it differs from build to build (compiler, processor, maths library): macOS's arm64 build
+  made a note of a 98 Hz tail of a 294 Hz phrase that the Linux build kept too short for
+  one. A tone that grows a little louder leaves the period the best match in every block,
+  on every build (`swelling()` in `TestSingingAnalysis`); one that grows quieter does not,
+  as pYIN's off-by-one in the power term (below) then makes the further multiples look the
+  closer.
 - **A repaint from elsewhere can hide a missing connection.** The song scroll bar's
   contour, rebuilt late, repainted the strip and so hid that it was never told of the
   playback frame, until the test first waited for the rebuild
