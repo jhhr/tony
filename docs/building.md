@@ -19,10 +19,10 @@ no pull request is not built.
 ## From cmd or PowerShell: `build.bat`
 
 ```
-.\build.bat           build Tony.exe
+.\build.bat           build Tony.exe and pyin.dll
 .\build.bat run       build, then launch
 .\build.bat launch    launch without building
-.\build.bat test      meson test: tony-core, tony-app, tony-dev and four svcore suites
+.\build.bat test      meson test: tony-core, tony-app, tony-dev, pyin and four svcore suites
 .\build.bat clean     wipe build_mingw and reconfigure (only for a broken build directory)
 ```
 
@@ -35,7 +35,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe pyin.dll test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -63,6 +63,10 @@ Each part of that is there because of something that went wrong:
 - **Write ninja's exit status into the log.** The status of a `ninja ...; tail ...` chain
   is that of `tail`.
 - **Targets carry the extension**: `test-tony-app.exe`, not `test-tony-app`.
+- **`pyin.dll` is named too.** `Tony.exe` and the app tests load the pYIN plugin beside
+  them, and none of them links it, so nothing else rebuilds it: after a change in
+  `pyin/` they would run the old one, which ignores, without a word, an analysis
+  parameter it does not have. `build.bat` builds it with `Tony.exe`.
 - `Tony.exe` cannot be relinked while it is running. Close the app first.
 
 Success is `[N/N] Linking target ...` and `exit:0`; nothing to do is `ninja: no work to
@@ -75,7 +79,7 @@ Reconfigure from scratch (rarely needed):
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 4 -C build_mingw Tony.exe >> tmp/build.log 2>&1
+meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 4 -C build_mingw Tony.exe pyin.dll >> tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 ```
 
