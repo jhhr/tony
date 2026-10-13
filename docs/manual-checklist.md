@@ -292,34 +292,6 @@ Not tried yet.
    Quit and start Tony: the keys are as they were left. Restore Defaults, then OK, puts
    every key back. A key typed with AltGr on the Finnish keyboard: is it taken, and does it
    work? Is the dialog's size and wording right?
-15. **The reference's track on separated vocals.** Open a song whose vocals were separated
-   from a mix, with harmonies, doubled parts or echoes (the pitch lab's three were
-   Nothing Else Matters, Pretty with a Pistol and Meidän on annettu pudota), from its
-   audio file or with Analysis > Analyse Now! (a session keeps the track it was saved
-   with). Where two or three voices sing together the black track follows one of them,
-   not a line an octave or two below them all; it breaks less often within a phrase; the
-   echoes after a phrase are not tracked. With Analysis > Voice to Follow at Strongest
-   Voice, the default, it follows the louder voice, so it changes voice where their levels
-   cross. Then record a take: its orange track is pYIN's own analysis, as before.
-16. **Analysis > Voice to Follow > Lower Voice**, then Analysis > Analyse Now! on the same
-   songs. Where two or three voices sing (Nothing Else Matters 105 to 144 s and 160 to
-   182 s, Pretty with a Pistol 54 to 61 s and 131 to 143 s), the black track stays on
-   the lowest voice through each phrase; where one voice sings it is as before, and
-   Meidän on annettu pudota looks as it did. The analysis takes about a quarter longer,
-   and the track still grows as it runs. Quit and start Tony: Lower Voice is still
-   chosen; Reset Options to Defaults puts Strongest Voice back. Is the lower voice the
-   one you would sing in these songs, and is one setting for every song right (open
-   points)?
-17. **A harmony's voices, a selection at a time.** With Strongest Voice, select a phrase
-   where two voices sing and turn on Edit > Show Pitch Candidates (Ctrl+Return): after
-   a moment there is a line on each voice, and on a phrase of one voice, one line.
-   Choose Higher Pitch and Choose Lower Pitch (Ctrl+Up, Ctrl+Down) move the black track
-   in the selection to the upper and the lower voice, and an octave where there is no
-   line beyond. Straight after selecting, Edit > Prefer Lower Voice (Ctrl+Shift+Down) and
-   Prefer Higher Voice (Ctrl+Shift+Up) put the lower or the upper voice in the selection,
-   each undone in one step. Where three sing (Pretty with a Pistol, 54 to 61 s), Prefer
-   Higher Voice is expected to find the middle voice, not the top one an octave above the
-   lowest, which no candidate may follow (open points): is the middle one of use there?
 
 ## 4. Lyrics
 
