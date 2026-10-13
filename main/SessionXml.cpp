@@ -52,3 +52,16 @@ SessionXml::read(QString sessionPath,
 
     return true;
 }
+
+bool
+SessionXml::readElements(QString sessionPath,
+                         const std::map<QString, ElementReader> &readers)
+{
+    return read(sessionPath, [&](QXmlStreamReader &reader) {
+        while (!reader.atEnd()) {
+            if (reader.readNext() != QXmlStreamReader::StartElement) continue;
+            auto it = readers.find(reader.name().toString().toLower());
+            if (it != readers.end()) it->second(reader);
+        }
+    });
+}

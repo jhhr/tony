@@ -33,6 +33,7 @@
 #include "PlaybackSettings.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
+#include "SessionXml.h"
 #include "TakesFile.h"
 #include "TouchGestures.h"
 #include "VoiceThreshold.h"
@@ -281,7 +282,6 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_selectionAnchor(0),
     m_withSonification(withSonification),
     m_withSpectrogram(withSpectrogram),
-    m_pendingVoice(0),
     m_inputDeviceMenu(nullptr),
     m_recordingInProgress(false),
     m_recordingAsSingingTrack(false),
@@ -559,8 +559,10 @@ MainWindow::MainWindow(AudioMode audioMode,
             this, &MainWindow::syncSongScrollBar);
     connect(m_analyser, &Analyser::rangedAnalysisMerged,
             this, &MainWindow::syncSongScrollBar);
-    connect(m_analyser, &Analyser::pitchCandidatesReady,
-            this, &MainWindow::pitchCandidatesReady);
+    // Prefer Lower Voice and Prefer Higher Voice wait for the voice
+    // tracks, which the analysis makes as it finishes
+    connect(m_analyser, &Analyser::voiceTracksChanged,
+            this, [this]() { updateMenuStates(); });
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
@@ -1091,12 +1093,15 @@ MainWindow::setupEditMenu()
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
+    // Enabled in updateMenuStates(): with a selection, once the
+    // reference's voice tracks are there
     action = new QAction(tr("Prefer Higher Voice"), this);
     action->setShortcut(tr("Ctrl+Shift+Up"));
     action->setStatusTip(tr("Make the pitch track follow the highest voice all through the selected region"));
     m_hotkeys->add("prefer-higher-voice", action);
     connect(action, &QAction::triggered, this, &MainWindow::preferHigherVoice);
-    connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
+    action->setEnabled(false);
+    m_preferHigherVoiceAction = action;
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
@@ -1105,7 +1110,8 @@ MainWindow::setupEditMenu()
     action->setStatusTip(tr("Make the pitch track follow the lowest voice all through the selected region"));
     m_hotkeys->add("prefer-lower-voice", action);
     connect(action, &QAction::triggered, this, &MainWindow::preferLowerVoice);
-    connect(this, SIGNAL(canClearSelection(bool)), action, SLOT(setEnabled(bool)));
+    action->setEnabled(false);
+    m_preferLowerVoiceAction = action;
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
@@ -3067,6 +3073,17 @@ MainWindow::updateMenuStates()
     emit canExportPitchTrack(havePitchTrack);
     emit canExportNotes(haveNotes);
     emit canSnapNotes(haveSelection && haveNotes);
+
+    // The voices to prefer are the reference's voice tracks, which its
+    // analysis makes as it finishes: before that, a voice put into the
+    // pitch track would be added to by the analysis still writing there
+    bool canPreferVoice = haveSelection && m_analyser->haveVoiceTracks();
+    if (m_preferHigherVoiceAction) {
+        m_preferHigherVoiceAction->setEnabled(canPreferVoice);
+    }
+    if (m_preferLowerVoiceAction) {
+        m_preferLowerVoiceAction->setEnabled(canPreferVoice);
+    }
 
     emit canPlayWaveform(haveWaveform && haveMainModel && havePlayTarget);
     emit canPlayPitch(havePitchTrack && haveMainModel && havePlayTarget);
@@ -7982,11 +7999,14 @@ MainWindow::toXml(QTextStream &out, bool asTemplate)
         << TakesFile::toXml(*m_takes, m_savingSessionPath);
 
     // The options the reference was analysed with, where they are known
-    // (AnalysisSettings): not those chosen since without analysing again
+    // (AnalysisSettings): not those chosen since without analysing again.
+    // And its voice tracks, once they are made (VoiceTracks): a session
+    // saved during the analysis has them made again when it is opened
     if (m_analyser) {
         if (auto options = m_analyser->getAnalysedWith()) {
             out << AnalysisSettings::toXml(*options);
         }
+        out << m_analyser->getVoiceTracks().toXml();
     }
 
     out << document.mid(closing);
@@ -7995,11 +8015,20 @@ MainWindow::toXml(QTextStream &out, bool asTemplate)
 MainWindow::FileOpenStatus
 MainWindow::openSession(FileSource source)
 {
-    // The options the session's reference was analysed with, for
-    // analyseNewMainModel(), which the base class calls before it
-    // returns (sessionLoaded())
-    m_sessionAnalysis = AnalysisSettings::read
-        (source.getLocalFilename(), Analyser::getAnalysisSettings());
+    // The options the session's reference was analysed with, and its
+    // voice tracks, in one reading of the file, for analyseNewMainModel(),
+    // which the base class calls before it returns (sessionLoaded())
+    const AnalysisSettings::Values defaults = Analyser::getAnalysisSettings();
+    m_sessionAnalysis = AnalysisSettings::Stored();
+    m_sessionAnalysis.values = defaults;
+    m_sessionVoiceTracks = VoiceTracks();
+    SessionXml::readElements(source.getLocalFilename(), {
+        { "analysis", [&](QXmlStreamReader &reader) {
+            m_sessionAnalysis = AnalysisSettings::fromElement(reader, defaults);
+        } },
+        { "voicetracks", [&](QXmlStreamReader &reader) {
+            m_sessionVoiceTracks = VoiceTracks::fromElement(reader);
+        } } });
 
     // m_restoringSession: modelAdded() queues a call that would make a take
     // of the audio model the document carries, and restoreTakes() is what
@@ -8008,6 +8037,7 @@ MainWindow::openSession(FileSource source)
     FileOpenStatus status = MainWindowBase::openSession(source);
     m_restoringSession = false;
     m_sessionAnalysis = AnalysisSettings::Stored();
+    m_sessionVoiceTracks = VoiceTracks();
 
     if (status != FileOpenSucceeded) return status;
 
@@ -10049,9 +10079,14 @@ MainWindow::switchPitch(bool up)
     // The next candidate up (down) from what the track holds in the
     // selection the candidates are of. With none there -- the candidates
     // hidden, or none above (below) the track, as in a solo, whose one
-    // candidate is the track itself -- the pitches go up (down) an octave
+    // candidate is the track itself -- the pitches go up (down) an octave.
+    // With the candidates shown but not yet there (the voice tracks still
+    // being made, or a frequency range still being analysed) there is
+    // nothing to step to, and no octave either: the step would have
+    // been to a voice
     int index = -1;
     if (m_analyser->arePitchCandidatesShown() && !selections.empty()) {
+        if (!m_analyser->havePitchCandidatesFor(*selections.begin())) return;
         index = m_analyser->pitchCandidateStep(*selections.begin(), up);
     }
     if (index < 0) {
@@ -10087,59 +10122,23 @@ MainWindow::preferHigherVoice()
 void
 MainWindow::preferVoice(bool lower)
 {
+    // The voices are the reference's voice tracks, the whole song's, from
+    // its analysis: until it has made them there is none, and the action
+    // is greyed out
+    if (!m_analyser->haveVoiceTracks()) return;
+
     MultiSelection::SelectionList selections = m_viewManager->getSelections();
     if (selections.empty()) return;
-
-    // The candidates are worked out from the moment the selection is
-    // made (selectionChangedByUser()). Until they are there, the choice
-    // waits for them: pitchCandidatesReady() makes it
-    Selection sel = *selections.begin();
-    if (!m_analyser->havePitchCandidatesFor(sel)) {
-        m_pendingVoice = (lower ? -1 : 1);
-        m_pendingVoiceSelection = sel;
-        return;
-    }
-
-    m_pendingVoice = 0;
-    applyVoicePreference(lower);
-}
-
-void
-MainWindow::applyVoicePreference(bool lower)
-{
-    MultiSelection::SelectionList selections = m_viewManager->getSelections();
-    if (selections.empty()) return;
-
-    int index = m_analyser->voiceCandidate(lower);
-    if (index < 0) return;
-
-    // Into the selection the candidates are of only: they hold nothing
-    // anywhere else, and a candidate pasted over another selection
-    // would leave it empty
-    Selection sel = *selections.begin();
 
     CommandHistory::getInstance()->startCompoundOperation
         (lower ? tr("Prefer Lower Voice") : tr("Prefer Higher Voice"), true);
-    m_analyser->chooseCandidate(sel, index);
-    auxSnapNotes(sel);
+    for (MultiSelection::SelectionList::iterator k = selections.begin();
+         k != selections.end(); ++k) {
+        m_analyser->chooseVoice(*k, lower ? VoiceTracks::Lower :
+                                VoiceTracks::Higher);
+        auxSnapNotes(*k);
+    }
     CommandHistory::getInstance()->endCompoundOperation();
-}
-
-void
-MainWindow::pitchCandidatesReady()
-{
-    if (m_pendingVoice == 0) return;
-
-    bool lower = (m_pendingVoice < 0);
-    Selection sel = m_pendingVoiceSelection;
-    m_pendingVoice = 0;
-
-    // Asked for a selection the user has since left
-    MultiSelection::SelectionList selections = m_viewManager->getSelections();
-    if (selections.empty() || !(*selections.begin() == sel)) return;
-    if (!m_analyser->havePitchCandidatesFor(sel)) return;
-
-    applyVoicePreference(lower);
 }
 
 void
@@ -10775,6 +10774,20 @@ MainWindow::analyseNewMainModel()
 
         QString error = m_analyser->newFileLoaded
             (m_document, getMainModelId(), m_paneStack, pane);
+
+        // The voice tracks of the pitch track a session brought back: as
+        // it kept them, or, from a session saved before they were kept or
+        // while they were still being made, made again in the background.
+        // A new song's analysis is making them already
+        if (error == "" && m_restoringSession &&
+            !m_analyser->isMakingVoiceTracks()) {
+            if (m_sessionVoiceTracks.isComplete()) {
+                m_analyser->setVoiceTracks(m_sessionVoiceTracks);
+            } else {
+                error = m_analyser->analyseVoiceTracks();
+            }
+        }
+
         if (error != "") {
             QMessageBox::warning
                 (this,

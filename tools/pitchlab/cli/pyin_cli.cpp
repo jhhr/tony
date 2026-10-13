@@ -28,7 +28,9 @@
 // Writes outprefix.pitch.csv (time,f0; f0 < 0 is an unvoiced
 // estimate when outputunvoiced=2), outprefix.notes.csv
 // (time,duration,f0) and, with --candidates,
-// outprefix.cands.csv (time,f0,prob,f0,prob,...).
+// outprefix.cands.csv (time,f0,prob,f0,prob,...). With the fork's
+// voicetracks=1, each voice's track as well: outprefix.strongestvoice.csv,
+// .lowervoice.csv and .highervoice.csv, as the pitch track.
 
 #include "PYinVamp.h"
 
@@ -151,6 +153,20 @@ int main(int argc, char **argv)
     std::map<string, int> index;
     for (int i = 0; i < int(outputs.size()); ++i) index[outputs[i].identifier] = i;
 
+    // The voices' tracks, where the plugin has them and is asked for them
+    std::map<string, FILE *> voiceOut;
+    if (params.count("voicetracks") && params["voicetracks"] > 0.5f) {
+        for (const char *v : { "strongestvoice", "lowervoice", "highervoice" }) {
+            if (!index.count(v)) continue;
+            FILE *f = fopen((prefix + "." + v + ".csv").c_str(), "w");
+            if (!f) {
+                fprintf(stderr, "cannot write outputs\n");
+                return 1;
+            }
+            voiceOut[v] = f;
+        }
+    }
+
     FILE *pitchOut = fopen((prefix + ".pitch.csv").c_str(), "w");
     FILE *notesOut = fopen((prefix + ".notes.csv").c_str(), "w");
     FILE *candOut = candidates ? fopen((prefix + ".cands.csv").c_str(), "w") : nullptr;
@@ -165,6 +181,13 @@ int main(int argc, char **argv)
             if (f.values.empty()) continue;
             double t = f.timestamp.sec + f.timestamp.nsec * 1e-9 + offsetSec;
             fprintf(pitchOut, "%.6f,%.6f\n", t, f.values[0]);
+        }
+        for (auto &vo : voiceOut) {
+            for (auto &f : fs[index[vo.first]]) {
+                if (f.values.empty()) continue;
+                double t = f.timestamp.sec + f.timestamp.nsec * 1e-9 + offsetSec;
+                fprintf(vo.second, "%.6f,%.6f\n", t, f.values[0]);
+            }
         }
         for (auto &f : fs[index["notes"]]) {
             if (f.values.empty()) continue;
@@ -202,6 +225,7 @@ int main(int argc, char **argv)
     auto rest = plugin.getRemainingFeatures();
     write(rest);
 
+    for (auto &vo : voiceOut) fclose(vo.second);
     fclose(pitchOut);
     fclose(notesOut);
     if (candOut) fclose(candOut);

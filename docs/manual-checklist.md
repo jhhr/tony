@@ -292,6 +292,15 @@ Not tried yet.
    Quit and start Tony: the keys are as they were left. Restore Defaults, then OK, puts
    every key back. A key typed with AltGr on the Finnish keyboard: is it taken, and does it
    work? Is the dialog's size and wording right?
+15. **The voices of a song with harmonies.** Open a song whose vocals have a harmony
+   part. While it is analysed, Edit > Prefer Lower Voice and Prefer Higher Voice are
+   greyed out; once it is done, select a passage where two voices sing and show the pitch
+   candidates: they are there at once, an orange line on each voice. Choose Higher and
+   Choose Lower Pitch step between them, and Prefer Lower and Higher Voice put each voice
+   into every selection. Do they hold the voice you hear, where the harmony comes in and
+   where the two cross? Save, close and open the session: the candidates are there at once
+   again. The analysis takes a quarter to a third longer than before (the log's "voice
+   tracks are made" line comes with its end).
 
 ## 4. Lyrics
 

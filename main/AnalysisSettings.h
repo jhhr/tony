@@ -77,6 +77,9 @@ public:
 
     /// The pass itself, over a document that is open already
     static Stored readFrom(QXmlStreamReader &reader, const Values &defaults);
+
+    /// The `<analysis>` element the reader is at the start of
+    static Stored fromElement(QXmlStreamReader &reader, const Values &defaults);
 };
 
 #endif

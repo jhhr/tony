@@ -264,7 +264,11 @@ On the fork branch `tony-customizations`, which upstream's `default` does not ha
   default, which is pYIN 1.2 exactly (the plugin version stays 3):
   - `salmode` 1: the candidates come from a harmonic salience of the spectrum
     (`HarmonicSalience`), which peaks at each voice's own f0, its negative lobes between
-    the harmonics keeping it off the octave above. YIN still runs: its probability that
+    the harmonics keeping it off the octave above. A partial is a peak that stands out
+    from the window's leakage of any stronger one near it, so that the skirt of a rumble
+    or a kick below the voice is not taken for one; and a candidate's pitch is the median
+    of what each of its harmonics' peaks says, as a louder voice's partial next to one of
+    them would pull a single estimate off. YIN still runs: its probability that
     the frame is voiced is what the candidates share, by salience to the fourth power,
     with a floor from the salience's harmonicity, since YIN's aperiodicity stays high
     where several harmonic voices sound at once.
@@ -276,11 +280,14 @@ On the fork branch `tony-customizations`, which upstream's `default` does not ha
     salience.
   - `levelfloor`: frames more than this many dB below the level of the last ten seconds'
     singing fade out of voicing over 6 dB (`LevelGate`): echo and reverb tails are
-    quieter than what they repeat.
+    quieter than what they repeat. The singing's level is that of the frames pYIN finds
+    sung (a voiced probability of a quarter or more in all), so that rests and silence do
+    not lower it; with none in the ten seconds, nothing fades.
   - `voicedfloor`: every voiced state's observation is at least this times an unvoiced
-    state's (less in frames the level floor fades), so that the track crosses a few
-    frames with no candidate near it rather than breaking; such a frame keeps its state's
-    pitch.
+    state's, so that the track crosses a few frames with no candidate near it rather than
+    breaking; such a frame keeps its state's pitch. Less in frames the level floor fades;
+    without a level floor, less in frames quieter than 0.04 RMS (about -28 dBFS), down to
+    none at 0.02, so that it bridges no rest.
   - `voicehold`: an unvoiced state's moves to another pitch cost 1 + this times more, so
     that after a gap the track comes back near the voice it left.
   - `voicefollow` (with `salmode` only): where two or three voices sing, the track follows
@@ -294,18 +301,25 @@ On the fork branch `tony-customizations`, which upstream's `default` does not ha
     four fifths of the voiced frames have a second voice 1 to 9.5 semitones from the
     first path's, widened by a second each way. Its voicing is the first path's
     everywhere, so that a solo's echo or bleed below the voice is not taken for a lower
-    voice. An entry comes out at most 2.6 s after its frame, so that a host still sees
-    the track grow as the analysis runs.
+    voice, and a frame's pitch is that of its own candidate nearest the path, not of a
+    neighbour's filled in. An entry comes out at most 2.6 s after its frame, so that a
+    host still sees the track grow as the analysis runs.
+  - `voicetracks` 1 (with `salmode`): three outputs more, `strongestvoice`, `lowervoice`
+    and `highervoice`, the track as it would be following each, from the same run: a
+    follower for each voice the main output does not follow already. On the first song
+    the run took 23.1 s with them against 17.2 s without (following the lower voice, 23.9
+    against 19.8), where pYIN's own takes 8.3.
 
   Tony sets them for the reference's analysis only ([architecture.md](architecture.md#who-owns-what)):
   `salmode` 1, `candidaterule` 1, `commonf0` 0.8, `levelfloor` 13, `voicedfloor` 0.2,
-  `voicehold` 3, and `voicefollow` 0 or 1 by Analysis > Voice to Follow; a selection's
-  pitch candidates are its analysis with `voicefollow` 0, 1 and 2. These values and the
-  fixed tuning in the code were chosen in the pitch lab (`tools/pitchlab/`) on a test
-  set of real and synthetic singing with harmonies, echo, reverb and separation damage,
-  and checked on three songs' separated vocals annotated by hand: the share of sung
-  frames within 50 cents of a sung voice went from 0.72 to 0.97 on the test set and from
-  0.24, 0.58 and 0.46 to 0.93, 0.96 and 0.96 on the songs, for about twice pYIN's time.
+  `voicehold` 3, `voicefollow` 0 or 1 by Analysis > Voice to Follow, and `voicetracks` 1,
+  from which a selection's pitch candidates and Prefer Lower and Higher Voice come. These
+  values and the fixed tuning in the code were chosen in the pitch lab (`tools/pitchlab/`)
+  on a test set of real and synthetic singing with harmonies, echo, reverb and separation
+  damage, and checked on three songs' separated vocals annotated by hand: the share of
+  sung frames within 50 cents of a sung voice went from 0.72 to 0.97 on the test set and
+  from 0.24, 0.58 and 0.46 to 0.93, 0.96 and 0.96 on the songs, for about twice pYIN's
+  time.
   `TestPYinVamp` checks them end to end on a fifth, a third, a period-doubled tone and an
   echo, each of which pYIN's own analysis gets wrong; `TestHarmonicSalience`,
   `TestLevelGate`, `TestMonoPitchHMM` and `TestYinUtil` check the parts.

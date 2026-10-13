@@ -15,7 +15,7 @@ directory of their own, editing the copy and building a runner from it.
 
 | Path | What |
 | --- | --- |
-| `cli/pyin_cli.cpp`, `cli/build.sh` | `pyin_cli in.wav outprefix [--param name=value]... [--candidates]`: writes `outprefix.pitch.csv` (time,f0), `.notes.csv`, and with `--candidates` `.cands.csv`. `build.sh <pyin source dir> <binary>` builds one per variant against `vamp-plugin-sdk/` |
+| `cli/pyin_cli.cpp`, `cli/build.sh` | `pyin_cli in.wav outprefix [--param name=value]... [--candidates]`: writes `outprefix.pitch.csv` (time,f0), `.notes.csv`, with `--candidates` `.cands.csv`, and with `--param voicetracks=1` each voice's track, `.strongestvoice.csv`, `.lowervoice.csv` and `.highervoice.csv`. `build.sh <pyin source dir> <binary>` builds one per variant against `vamp-plugin-sdk/` |
 | `py/make_testset.py` | Builds the test set: 4 sources (two real clean recordings, f0 from clean pYIN; two synthetic voices, exact f0) x 12 conditions, stereo, at a stem's level, with `time,lead f0,second voice f0` ground truth |
 | `py/run_testset.py` | Runs any tracker over the test set in parallel: `run_testset.py TESTSET OUTDIR -j 2 -- cmd {in} {out} ...` |
 | `py/evaluate.py` | Scores a directory of `<condition>__<source>.pitch.csv` per condition: RPA, RPA_any (either voice), RCA, VR, VFA, OA, RPA_fv, sub (more than an octave below every voice), breaks/s, switches/s; dev split (bob, synm), test split (hb, synf) |
@@ -52,7 +52,8 @@ The pyin fork's parameters for vocals with harmonies, doubled parts and echoes
 `--param salmode=1 --param candidaterule=1 --param commonf0=0.8 --param levelfloor=13
 --param voicedfloor=0.2 --param voicehold=3`, and with Analysis > Voice to Follow at
 Lower Voice `--param voicefollow=1` as well (2 the higher voice, 3 the middle, which
-Tony offers per selection or not at all). `voice_follow.py` scores which voice a track
+Tony offers per selection or not at all), and `--param voicetracks=1` for the voice
+tracks a selection's candidates are cut from. `voice_follow.py` scores which voice a track
 keeps, on the voice-role set or a song's annotation of its voices:
 
 ```sh

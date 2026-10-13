@@ -90,8 +90,8 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   - Voice to Follow is one of them, the fork's `voicefollow`, for the reference only: the
     strongest voice, as pYIN, or the lower one where two or three sing. The menu offers
     no higher or middle voice, which the fork has but which do not hold through a whole
-    song ([open-points.md](open-points.md)); a selection's pitch candidates offer the
-    higher.
+    song ([open-points.md](open-points.md)); a selection's pitch candidates and Prefer
+    Higher Voice offer the higher, from the voice tracks (below).
 - **Both analysers share pane 0.** Pane 1 is the time ruler. Never put the singing track
   in a pane of its own.
 - An `Analyser` recognises a pitch or notes layer as its own when the layer's model has
@@ -329,30 +329,45 @@ volume and the background music in `MainWindow`.
   pane, every layer above that one is drawn at every paint, as the lit layer is kept out
   of the view's cache: about 13 ms a paint on the cloud machine with a 15 s take in view,
   against 2 ms on a note of the take.
-- Making any selection starts `Analyser::reAnalyseSelection()` on the reference, so a
-  transformer is usually running afterwards. Tests cannot assert
-  `!haveRunningTransformers()` after selecting.
-- **The reference's pitch candidates are its own analysis**, run over the selection and a
-  quarter of a second either side, once for each of `Analyser::voiceSettings()`
-  (`reAnalyseVoices()`): following the strongest voice, the lower and the higher,
-  whatever Voice to Follow is set to. Only a Shift-drag's range, and a test of plain
-  analysis, still use pYIN's `LocalCandidatePYIN` and CHP. Each setting has a creation
-  of derived layers of its own: one creation runs all its transforms in one plugin
-  instance, which takes transforms that differ in output only.
-  - A creation's handle is gone once it has reported back to `layersCreated()`, wanted or
-    not (a cancelled one still reports, with layers that have no models): the analyser
-    lets go of it there, or the next selection cancels a deleted creation.
-  - The layers exist before their models are filled: `havePitchCandidatesFor()` and
-    `pitchCandidatesReady()` wait for every model to complete, then drop the candidates
-    that are the same line in the selection (`PitchCandidates::distinct()`).
+- Making any selection starts `Analyser::reAnalyseSelection()` on the reference. Its
+  candidates are cut from the voice tracks, at once; only a frequency range (a Shift-drag's
+  box, or a note dragged up or down) starts a transformer, and a test cannot assert
+  `!haveRunningTransformers()` after one.
+- **The reference's pitch candidates are its voice tracks** (`VoiceTracks`): the tracks
+  its analysis gives in the same run as its pitch track, following the strongest voice,
+  the lower and the higher where two or three sing, over the whole song (the fork's
+  `voicetracks`), whatever Voice to Follow is set to. A selection's candidates are those
+  tracks within it, with all the context the whole song gives: the follower's gate looks
+  two seconds and a second each way for a second voice, and the level floor at the ten
+  seconds before a frame, which an analysis of the selection alone did not have. Only a
+  frequency range still analyses, with CHP.
+  - The voice tracks are made as the analysis finishes. Until then a selection's
+    candidates wait for them (`havePitchCandidatesFor()` is false), Choose Higher Pitch
+    and Choose Lower Pitch with the candidates shown do nothing, as the step would have
+    been to a voice, and Prefer Lower Voice and Prefer Higher Voice are greyed out.
+  - Of a voice's track and the strongest's that are the same line in the selection, the
+    voice's is the candidate kept: the lower and the higher go first, and
+    `PitchCandidates::distinct()` keeps the first of a line. The strongest's may leave the
+    voice for a moment where the other is louder.
+  - pYIN's fixed-lag decoding gives one frame of a run twice, a hundred hops before its
+    end; the voice tracks keep it once, so that what is put in from them has one pitch a
+    frame.
+  - A session keeps them, in a `<voicetracks>` element, and opening it brings them back at
+    once. A session saved before they were kept has them made in a run of their own
+    (`Analyser::analyseVoiceTracks()`) whose pitch track and notes are thrown away: the
+    session's, edits and all, stay. The candidates are neither saved nor undoable: they
+    are of a selection, and made again from the tracks.
+  - A creation's handle (a frequency range's) is gone once it has reported back to
+    `layersCreated()`, wanted or not (a cancelled one still reports, with layers that have
+    no models): the analyser lets go of it there, or the next selection cancels a deleted
+    creation.
   - Choose Higher Pitch and Choose Lower Pitch go to the next candidate above or below
     what the track holds in the selection now, not after the last one chosen
     (`PitchCandidates::step()`): the track may have been edited, and from a track that
     changes voice, the next one up is the upper voice. Where there is none, the pitches
-    move an octave, as with the candidates hidden.
-  - Prefer Lower Voice and Prefer Higher Voice put the lowest or highest candidate into
-    the selection the candidates are of, and nowhere else; asked for before the
-    candidates are ready, they wait for them (`MainWindow::pitchCandidatesReady()`).
+    move an octave, as with the candidates hidden. The candidate goes into the selection
+    the candidates are of, and nowhere else: another, made with Ctrl, keeps its pitches.
+  - Prefer Lower Voice and Prefer Higher Voice put the voice's track into every selection.
 
 ### Drawing
 
@@ -391,10 +406,10 @@ volume and the background music in `MainWindow`.
 - A layer with `setSavedInSession(false)` (svgui/svapp forks) is left out, as is a model
   that only such layers show. Used for layers Tony makes again by itself on load.
 - `SVFileReader` only warns about unknown elements, which is what lets the `.ton` carry
-  Tony's `<takes>` and `<analysis>` elements, read afterwards by passes of Tony's own
-  (`SessionXml`).
-- An event's value is written with six significant figures. After a round trip compare
-  frames exactly and values with a tolerance.
+  Tony's `<takes>`, `<analysis>` and `<voicetracks>` elements, read afterwards by passes
+  of Tony's own (`TakesFile`, and `SessionXml::readElements()` for the other two in one).
+- An event's value is written with six significant figures, a voice track's pitch with
+  seven. After a round trip compare frames exactly and values with a tolerance.
 - Layer **object names carry identity** across a save: `"Alternate Pitch Track -1"` holds
   the octave count, `"Take 2 Pitch"` links a layer to its take, `"Lyrics"` marks the
   lyrics, `"Background Music"` the background music. They are not translated.

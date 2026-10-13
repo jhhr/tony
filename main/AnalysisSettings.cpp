@@ -90,17 +90,24 @@ AnalysisSettings::readFrom(QXmlStreamReader &reader, const Values &defaults)
     while (!reader.atEnd()) {
         if (reader.readNext() != QXmlStreamReader::StartElement) continue;
         if (reader.name().toString().toLower() != "analysis") continue;
-
-        stored.found = true;
-        const QXmlStreamAttributes attributes = reader.attributes();
-        for (const auto &d : defaults) {
-            if (attributes.hasAttribute(d.first)) {
-                stored.values[d.first] =
-                    asTypeOf(attributes.value(d.first).toString(), d.second);
-            }
-        }
-        break;
+        return fromElement(reader, defaults);
     }
 
+    return stored;
+}
+
+AnalysisSettings::Stored
+AnalysisSettings::fromElement(QXmlStreamReader &reader, const Values &defaults)
+{
+    Stored stored;
+    stored.values = defaults;
+    stored.found = true;
+    const QXmlStreamAttributes attributes = reader.attributes();
+    for (const auto &d : defaults) {
+        if (attributes.hasAttribute(d.first)) {
+            stored.values[d.first] =
+                asTypeOf(attributes.value(d.first).toString(), d.second);
+        }
+    }
     return stored;
 }

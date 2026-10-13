@@ -7685,34 +7685,61 @@ private slots:
         }
     }
 
-    // Prefer Lower Voice and Prefer Higher Voice put the lowest (the
-    // highest) candidate into the selection, as one command. Asked for
-    // before the candidates are there, as right after the selection is
-    // made, they wait for them. On one voice the only candidate is the
-    // reference's own analysis, which both put back where the pitches
-    // were removed
-    void prefer_voice_waits_for_the_candidates() {
+    // Prefer Lower Voice and Prefer Higher Voice put a voice's track
+    // into the selection, as one command. The voices are the reference's
+    // voice tracks, which its analysis makes as it finishes: until then
+    // the two are greyed out and do nothing. A voice put in before then
+    // had the analysis's own pitches added on the same frames when it got
+    // there: two pitches to a frame, drawn as a zigzag and saved so. On
+    // one voice the voice is the track itself, which both put back where
+    // the pitches were removed
+    void prefer_voice_waits_for_the_analysis() {
         makeWindow(FakeAudioIO::Config());
-        openReference(writeWav(tone(lowHz, 2.0)));
-        if (QTest::currentTestFailed()) return;
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(writeWav(tone(lowHz, 60.0)),
+                                    MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
         Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->getLayer(Analyser::PitchTrack), 30000);
         sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+
+        // Near the end, where the analysis has not been yet
+        const sv::Selection late = selectSeconds(50.0, 53.0);
+        QVERIFY(!late.isEmpty());
+        QVERIFY2(!a->haveVoiceTracks(),
+                 "the race was not set up: the analysis had finished");
+        for (bool lower : { true, false }) {
+            QVERIFY(!m_window->preferVoiceAction(lower)->isEnabled());
+            m_window->doPreferVoice(lower);
+        }
+
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a) && a->haveVoiceTracks(), 120000);
+        auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+            (pitch->getModel());
+        QVERIFY(model);
+        std::map<sv::sv_frame_t, int> perFrame;
+        for (const sv::Event &e : model->getEventsStartingWithin
+                 (late.getStartFrame(),
+                  late.getEndFrame() - late.getStartFrame())) {
+            ++perFrame[e.getFrame()];
+        }
+        QVERIFY(!perFrame.empty());
+        for (const auto &f : perFrame) {
+            QVERIFY2(f.second == 1, qPrintable(QString("frame %1 holds %2 pitches")
+                                               .arg(f.first).arg(f.second)));
+        }
 
         for (bool lower : { true, false }) {
             const sv::Selection sel = lower ? selectSeconds(0.5, 1.2) :
                 selectSeconds(0.8, 1.5);
             QVERIFY(!sel.isEmpty());
-            // Nothing of the re-analysis is back before the event loop runs
-            QVERIFY(!a->havePitchCandidatesFor(sel));
+            QVERIFY(m_window->preferVoiceAction(lower)->isEnabled());
 
             m_window->doClearPitches();
             QVERIFY(pitchesIn(pitch, sel).empty());
 
             m_window->doPreferVoice(lower);
-            QVERIFY2(pitchesIn(pitch, sel).empty(),
-                     "a candidate went in before there were any");
-            QTRY_VERIFY_WITH_TIMEOUT(!pitchesIn(pitch, sel).empty(), 30000);
-            QVERIFY(a->havePitchCandidatesFor(sel));
+            QVERIFY(!pitchesIn(pitch, sel).empty());
             for (double hz : pitchesIn(pitch, sel)) {
                 QVERIFY2(std::abs(TestSignals::centsBetween(hz, lowHz)) < 50.0,
                          qPrintable(QString("%1 Hz").arg(hz)));
@@ -7722,6 +7749,11 @@ private slots:
                      QString("Prefer Higher Voice"));
             QVERIFY(pitchesIn(pitch, sel).empty());
         }
+
+        // Greyed out again without a selection
+        m_window->clearSelections();
+        m_window->doUpdateMenuStates();
+        QVERIFY(!m_window->preferVoiceAction(true)->isEnabled());
     }
 
     // Choose Higher Pitch and Choose Lower Pitch go to the next candidate
@@ -7768,32 +7800,49 @@ private slots:
         QVERIFY(allNear(2 * lowHz));
     }
 
-    // A re-analysis cleared while it runs still reports back, and its
-    // layers are deleted then. Nothing of it may stay pending: the next
-    // selection cancelled what it took for a run still on its way, a
-    // creation that had already deleted itself
-    void cleared_reanalysis_leaves_nothing_pending() {
+    // A selection's candidates are cut from the voice tracks, which the
+    // analysis makes as it finishes: a selection made before then has
+    // none, and gets them when the tracks are made. One given up in the
+    // meantime gets none, and leaves nothing pending; the next has its own
+    void candidates_wait_for_the_voice_tracks() {
         makeWindow(FakeAudioIO::Config());
-        openReference(writeWav(tone(lowHz, 2.0)));
-        if (QTest::currentTestFailed()) return;
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(writeWav(tone(lowHz, 30.0)),
+                                    MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
         Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->getLayer(Analyser::PitchTrack), 30000);
 
-        const sv::Selection first(sv::sv_frame_t(0.5 * rate),
-                                  sv::sv_frame_t(1.5 * rate));
-        QString error = a->reAnalyseSelection(first, Analyser::FrequencyRange());
-        QVERIFY2(error.isEmpty(), qPrintable(error));
-        QVERIFY(a->isReAnalysing());
+        const sv::Selection sel = selectSeconds(1.0, 2.0);
+        QVERIFY2(!a->haveVoiceTracks(),
+                 "the race was not set up: the analysis had finished");
+        QVERIFY(!a->havePitchCandidatesFor(sel));
+        QVERIFY(candidateLayers(a).empty());
+        QVERIFY2(!a->isReAnalysing(), "a selection's candidates were analysed "
+                 "rather than cut from the voice tracks");
+
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a) && a->haveVoiceTracks(), 60000);
+        QTRY_VERIFY_WITH_TIMEOUT(a->havePitchCandidatesFor(sel), 5000);
+        QVERIFY(!candidateLayers(a).empty());
+
+        // Analysed again: the voice tracks go with the analysis they were
+        // of, and come with the new one
+        m_window->discardModifications();
+        m_window->doAnalyseNow();
+        QVERIFY(!a->haveVoiceTracks());
+        QVERIFY(candidateLayers(a).empty());
+        const sv::Selection given = selectSeconds(3.0, 4.0);
+        QVERIFY(!a->havePitchCandidatesFor(given));
         a->clearReAnalysis();
-        QTRY_VERIFY_WITH_TIMEOUT(!a->isReAnalysing(), 30000);
+        m_window->clearSelections();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a) && a->haveVoiceTracks(), 60000);
         QCoreApplication::processEvents();
         QVERIFY2(candidateLayers(a).empty(),
-                 "the cleared re-analysis left its layers in the pane");
+                 "a selection given up on got its candidates all the same");
 
-        const sv::Selection second(sv::sv_frame_t(0.8 * rate),
-                                   sv::sv_frame_t(1.6 * rate));
-        error = a->reAnalyseSelection(second, Analyser::FrequencyRange());
-        QVERIFY2(error.isEmpty(), qPrintable(error));
-        QTRY_VERIFY_WITH_TIMEOUT(a->havePitchCandidatesFor(second), 30000);
+        const sv::Selection next = selectSeconds(5.0, 6.0);
+        QVERIFY2(a->havePitchCandidatesFor(next),
+                 "the candidates were not there at once with the voice tracks");
         QVERIFY(!candidateLayers(a).empty());
     }
 
@@ -7894,6 +7943,346 @@ private slots:
         QSettings().setValue("Analyser/voice-to-follow", int(Analyser::FollowHigher));
         QCOMPARE(Analyser::voiceToFollow(Analyser::getUserAnalysisSettings()),
                  int(Analyser::FollowStrongest));
+    }
+
+    // The reference's analysis makes its voice tracks in the same run:
+    // the lower and the higher hold their voices through the crossing,
+    // where the strongest, which the pitch track follows, changes voice;
+    // a selection's candidates are those tracks within it, there at once
+    void voice_tracks_are_the_analysis_voices() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        const VoiceTracks &tracks = a->getVoiceTracks();
+        const sv::Selection whole(sv::sv_frame_t(0.5 * rate),
+                                  sv::sv_frame_t(3.5 * rate));
+        auto hzOf = [&](VoiceTracks::Voice voice) {
+            std::vector<double> hz;
+            for (const auto &p : tracks.within(voice, whole.getStartFrame(),
+                                               whole.getEndFrame())) {
+                hz.push_back(p.hz);
+            }
+            return hz;
+        };
+        const int hops = int((whole.getEndFrame() - whole.getStartFrame()) / hop);
+        QVERIFY(int(hzOf(VoiceTracks::Lower).size()) >= hops * 9 / 10);
+        QVERIFY2(shareNear(hzOf(VoiceTracks::Lower), lowHz) >= 0.9,
+                 qPrintable(QString::number(shareNear(hzOf(VoiceTracks::Lower), lowHz))));
+        QVERIFY2(shareNear(hzOf(VoiceTracks::Higher), thirdHz) >= 0.9,
+                 qPrintable(QString::number(shareNear(hzOf(VoiceTracks::Higher), thirdHz))));
+        // The pitch track a frame once: fixed-lag decoding gives one frame
+        // near the end twice (voices_put_in_once_a_frame())
+        std::vector<double> track;
+        {
+            auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>
+                (a->getLayer(Analyser::PitchTrack)->getModel());
+            QVERIFY(model);
+            sv::sv_frame_t last = -1;
+            for (const sv::Event &e : model->getEventsStartingWithin
+                     (whole.getStartFrame(),
+                      whole.getEndFrame() - whole.getStartFrame())) {
+                if (!(e.getValue() > 0) || e.getFrame() == last) continue;
+                last = e.getFrame();
+                track.push_back(e.getValue());
+            }
+        }
+        QVERIFY2(hzOf(VoiceTracks::Strongest) == track,
+                 "the strongest voice's track is not the pitch track that "
+                 "follows it");
+
+        const sv::Selection sel = selectSeconds(0.5, 3.5);
+        QVERIFY2(a->havePitchCandidatesFor(sel),
+                 "the candidates were not there at once");
+        QCOMPARE(int(candidateLayers(a).size()), 3);
+    }
+
+    // The voices of a selection are the whole song's analysis's: with
+    // all the context its follower's gate needs (two seconds and a
+    // second each way), where a harmony comes in, and its level floor
+    // (ten seconds back), over an echo tail. A selection analysed over
+    // itself and a quarter of a second had neither, and put the upper
+    // voice in for the lower, and voiced the tail the analysis left out
+    void voices_see_the_whole_song() {
+        makeWindow(FakeAudioIO::Config());
+        {
+            std::vector<float> upper = tone(thirdHz, 5.0), lower = tone(lowHz, 5.0);
+            std::vector<float> m(upper.size());
+            for (size_t i = 0; i < m.size(); ++i) {
+                const bool both = double(i) / rate >= 3.0;
+                m[i] = 0.6f * upper[i] + (both ? 0.3f * lower[i] : 0.0f);
+            }
+            m_window->doChooseVoiceToFollow(true);
+            openReference(writeWav(m));
+            if (QTest::currentTestFailed()) return;
+        }
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+        const sv::Selection harmony(sv::sv_frame_t(3.1 * rate),
+                                    sv::sv_frame_t(3.5 * rate));
+        const double wholeFile = shareNear(pitchesIn(pitch, harmony), lowHz);
+        QVERIFY(wholeFile >= 0.9);
+        selectSeconds(2.5, 3.5);
+        m_window->doPreferVoice(true);
+        const double preferred = shareNear(pitchesIn(pitch, harmony), lowHz);
+        QVERIFY2(preferred >= 0.9,
+                 qPrintable(QString("Prefer Lower Voice where the harmony comes "
+                                    "in: %1 on the lower, the analysis had %2")
+                            .arg(preferred).arg(wholeFile)));
+
+        m_window->doChooseVoiceToFollow(false);
+        {
+            std::vector<float> loud = tone(lowHz, 2.0), quiet = tone(lowHz, 1.5);
+            for (float &x : quiet) x *= 0.1f;
+            loud.insert(loud.end(), quiet.begin(), quiet.end());
+            openReference(writeWav(loud));
+            if (QTest::currentTestFailed()) return;
+        }
+        a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        pitch = a->getLayer(Analyser::PitchTrack);
+        const sv::Selection tail = selectSeconds(2.3, 3.4);
+        const size_t before = pitchesIn(pitch, tail).size();
+        m_window->doPreferVoice(true);
+        const size_t after = pitchesIn(pitch, tail).size();
+        QVERIFY2(after <= before + 5,
+                 qPrintable(QString("Prefer Lower Voice voiced %1 frames of a "
+                                    "tail the analysis left at %2")
+                            .arg(after).arg(before)));
+    }
+
+    // With the voice tracks the whole song's, Prefer Lower Voice and
+    // Prefer Higher Voice put the voice into every selection, each as the
+    // song's analysis has it there
+    void prefer_voice_in_every_selection() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+        m_window->clearSelections();
+        const sv::Selection first(sv::sv_frame_t(0.5 * rate), sv::sv_frame_t(1.5 * rate));
+        const sv::Selection second(sv::sv_frame_t(2.5 * rate), sv::sv_frame_t(3.5 * rate));
+        m_window->selectRange(first.getStartFrame(), first.getEndFrame());
+        m_window->selectRange(second.getStartFrame(), second.getEndFrame());
+        QCOMPARE(int(m_window->selections().size()), 2);
+        // The strongest is the upper in the first and the lower in the
+        // second
+        QVERIFY(shareNear(pitchesIn(pitch, first), thirdHz) >= 0.9);
+        QVERIFY(shareNear(pitchesIn(pitch, second), lowHz) >= 0.9);
+
+        m_window->doPreferVoice(false);
+        QVERIFY(shareNear(pitchesIn(pitch, first), thirdHz) >= 0.9);
+        QVERIFY2(shareNear(pitchesIn(pitch, second), thirdHz) >= 0.9,
+                 "Prefer Higher Voice left the second selection alone");
+        QCOMPARE(undoOnce(), QString("Prefer Higher Voice"));
+        QVERIFY(shareNear(pitchesIn(pitch, second), lowHz) >= 0.9);
+
+        m_window->doPreferVoice(true);
+        QVERIFY(shareNear(pitchesIn(pitch, first), lowHz) >= 0.9);
+        QVERIFY(shareNear(pitchesIn(pitch, second), lowHz) >= 0.9);
+    }
+
+    // Of a voice's track and the strongest's that are the same line in a
+    // selection, the voice's is the candidate kept: the strongest's may
+    // leave the voice for a moment where the other is louder. From the
+    // upper voice, Choose Lower Pitch then goes to the lower voice all
+    // through, not to the strongest's line with its jump in it
+    void candidates_keep_a_voice_over_the_strongest() {
+        makeWindow(FakeAudioIO::Config());
+        std::vector<float> lower = tone(lowHz, 6.0), upper = tone(thirdHz, 6.0);
+        std::vector<float> m(lower.size());
+        for (size_t i = 0; i < m.size(); ++i) {
+            const double t = double(i) / rate;
+            const bool swapped = (t >= 2.9 && t < 3.15);
+            m[i] = (swapped ? 0.25f : 0.6f) * lower[i] + (swapped ? 0.6f : 0.25f) * upper[i];
+        }
+        openReference(writeWav(m));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+        const sv::Selection jump(sv::sv_frame_t(2.93 * rate), sv::sv_frame_t(3.12 * rate));
+
+        // The strongest, the track, jumps to the upper voice
+        QVERIFY(shareNear(pitchesIn(pitch, jump), thirdHz) >= 0.5);
+
+        const sv::Selection sel = selectSeconds(1.5, 4.5);
+        QVERIFY(a->havePitchCandidatesFor(sel));
+        m_window->doTogglePitchCandidates();
+        QVERIFY(a->arePitchCandidatesShown());
+        m_window->doSwitchPitch(true);
+        QVERIFY(shareNear(pitchesIn(pitch, sel), thirdHz) >= 0.9);
+        m_window->doSwitchPitch(false);
+        QVERIFY2(shareNear(pitchesIn(pitch, jump), lowHz) >= 0.9,
+                 qPrintable(QString("Choose Lower Pitch from the upper voice: "
+                                    "%1 on the lower where the strongest jumps")
+                            .arg(shareNear(pitchesIn(pitch, jump), lowHz))));
+        QVERIFY(shareNear(pitchesIn(pitch, sel), lowHz) >= 0.9);
+
+        // and Prefer Lower Voice takes the jump out
+        undoOnce();
+        undoOnce();
+        QVERIFY(shareNear(pitchesIn(pitch, jump), thirdHz) >= 0.5);
+        m_window->doPreferVoice(true);
+        QVERIFY(shareNear(pitchesIn(pitch, jump), lowHz) >= 0.9);
+    }
+
+    // Choose Higher Pitch with the candidates shown, but not there yet --
+    // the analysis is still making the voice tracks -- does nothing: the
+    // step would have been to a voice. It went up an octave
+    void choose_pitch_waits_for_the_candidates() {
+        makeWindow(FakeAudioIO::Config());
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(writeWav(tone(lowHz, 60.0)),
+                                    MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->getLayer(Analyser::PitchTrack), 30000);
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+        const sv::Selection sel(sv::sv_frame_t(1.0 * rate), sv::sv_frame_t(2.0 * rate));
+        QTRY_VERIFY_WITH_TIMEOUT(int(pitchesIn(pitch, sel).size()) >=
+                                 int(1.0 * rate / hop) * 9 / 10, 30000);
+        QVERIFY2(!a->haveVoiceTracks(),
+                 "the race was not set up: the analysis had finished");
+        QCOMPARE(selectSeconds(1.0, 2.0), sel);
+        m_window->doTogglePitchCandidates();
+        QVERIFY(a->arePitchCandidatesShown());
+        QVERIFY(!a->havePitchCandidatesFor(sel));
+        const std::vector<double> before = pitchesIn(pitch, sel);
+        m_window->doSwitchPitch(true);
+        QVERIFY2(pitchesIn(pitch, sel) == before,
+                 "Choose Higher Pitch moved the pitches before the candidates "
+                 "were there");
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a) && a->haveVoiceTracks(), 120000);
+    }
+
+    // The candidates are of the first selection: with a second one made
+    // with Ctrl, Choose Lower Pitch changes the first and leaves the
+    // second as it is. It took the second's pitches out and put none in
+    void choose_pitch_leaves_other_selections() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+        m_window->clearSelections();
+        const sv::Selection first(sv::sv_frame_t(0.5 * rate), sv::sv_frame_t(1.5 * rate));
+        const sv::Selection second(sv::sv_frame_t(2.5 * rate), sv::sv_frame_t(3.5 * rate));
+        m_window->selectRange(first.getStartFrame(), first.getEndFrame());
+        m_window->selectRange(second.getStartFrame(), second.getEndFrame());
+        QCOMPARE(int(m_window->selections().size()), 2);
+        QVERIFY(a->havePitchCandidatesFor(first));
+        m_window->doTogglePitchCandidates();
+        const std::vector<double> secondBefore = pitchesIn(pitch, second);
+        QVERIFY(!secondBefore.empty());
+        m_window->doSwitchPitch(false);
+        QVERIFY(shareNear(pitchesIn(pitch, first), lowHz) >= 0.9);
+        QVERIFY2(pitchesIn(pitch, second) == secondBefore,
+                 qPrintable(QString("Choose Lower Pitch left %1 of the second "
+                                    "selection's %2 pitches")
+                            .arg(pitchesIn(pitch, second).size())
+                            .arg(secondBefore.size())));
+    }
+
+    // One pitch to a frame, whatever a voice is put in from: fixed-lag
+    // decoding gives one frame twice, a hundred hops before the end of a
+    // run, which the voice tracks keep once
+    void voices_put_in_once_a_frame() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+        auto onceAFrame = [&](sv::Layer *layer, sv::Selection s) {
+            auto model = sv::ModelById::getAs<sv::SparseTimeValueModel>(layer->getModel());
+            if (!model) return false;
+            std::set<sv::sv_frame_t> frames;
+            for (const sv::Event &e : model->getEventsStartingWithin
+                     (s.getStartFrame(), s.getEndFrame() - s.getStartFrame())) {
+                if (!frames.insert(e.getFrame()).second) return false;
+            }
+            return !frames.empty();
+        };
+        const sv::Selection sel = selectSeconds(2.0, 4.0);
+        for (sv::Layer *layer : candidateLayers(a)) {
+            QVERIFY(onceAFrame(layer, sel));
+        }
+        m_window->doTogglePitchCandidates();
+        m_window->doSwitchPitch(true);
+        QVERIFY(onceAFrame(pitch, sel));
+        m_window->doPreferVoice(true);
+        QVERIFY(onceAFrame(pitch, sel));
+        m_window->doPreferVoice(false);
+        QVERIFY(onceAFrame(pitch, sel));
+    }
+
+    // A song's session keeps the voice tracks, and opening it brings them
+    // back at once, as they were. A session saved before they were kept
+    // has them made again when it is opened, in a run of their own that
+    // leaves the pitch track as the session had it, edits and all
+    void session_keeps_the_voice_tracks() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QTRY_VERIFY_WITH_TIMEOUT(a->haveVoiceTracks(), 5000);
+        const VoiceTracks made = a->getVoiceTracks();
+        // The file has seven significant figures: the frames as they were,
+        // the pitches within a hundredth of a cent
+        auto asMade = [&](const VoiceTracks &read) {
+            if (!read.isComplete()) return false;
+            for (int v = 0; v < VoiceTracks::voiceCount; ++v) {
+                const VoiceTracks::Track &x = read.get(VoiceTracks::Voice(v));
+                const VoiceTracks::Track &y = made.get(VoiceTracks::Voice(v));
+                if (x.size() != y.size()) return false;
+                for (size_t i = 0; i < x.size(); ++i) {
+                    if (x[i].frame != y[i].frame ||
+                        std::abs(1200 * std::log2(x[i].hz / y[i].hz)) >= 0.01) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        const sv::Selection edited = selectSeconds(1.0, 1.5);
+        m_window->doClearPitches();
+        QVERIFY(pitchesIn(a->getLayer(Analyser::PitchTrack), edited).empty());
+        const QString session = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(session));
+
+        m_window->doCloseSession();
+        QVERIFY(!m_window->analyser()->haveVoiceTracks());
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        a = m_window->analyser();
+        QVERIFY2(a->haveVoiceTracks() && !a->isMakingVoiceTracks(),
+                 "the session's voice tracks were not there when it opened");
+        QVERIFY(asMade(a->getVoiceTracks()));
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a), 30000);
+        QVERIFY(pitchesIn(a->getLayer(Analyser::PitchTrack), edited).empty());
+
+        QString error = removeFromSession(session, "<voicetracks>", "</voicetracks>");
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        m_window->doCloseSession();
+        m_window->discardModifications();
+        QCOMPARE(m_window->openPath(session, MainWindow::ReplaceSession),
+                 MainWindow::FileOpenSucceeded);
+        a = m_window->analyser();
+        QVERIFY2(!a->haveVoiceTracks() && a->isMakingVoiceTracks(),
+                 "a session without voice tracks did not have them made");
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(a) && a->haveVoiceTracks(), 30000);
+        QVERIFY2(a->getVoiceTracks() == made,
+                 "the voice tracks made again are not those of the analysis");
+        QVERIFY2(pitchesIn(a->getLayer(Analyser::PitchTrack), edited).empty(),
+                 "making the voice tracks changed the session's pitch track");
     }
 
     // A song's session keeps the analysis options its reference was

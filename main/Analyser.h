@@ -27,6 +27,7 @@
 
 #include "AnalysisSettings.h"
 #include "TakeEvents.h"
+#include "VoiceTracks.h"
 #include "VoiceGate.h"
 #include "VoiceThreshold.h"
 
@@ -264,11 +265,52 @@ public:
     }
 
     /**
-     * Analyse the selection and schedule asynchronous adds of
-     * candidate layers for the region it contains. Returns "" on
-     * success or a user-readable error string on failure. If the
-     * frequency range isConstrained(), analysis will be constrained
-     * to that range.
+     * The reference's voice tracks (VoiceTracks.h): its pitch track as
+     * the whole-file analysis gave it following each voice, made in the
+     * same run, or kept by the session that brought the track back.
+     * They are there once that run has finished; until then, and for the
+     * singing's analyser always, a selection has no candidates of its
+     * own and there is no voice to prefer.
+     */
+    bool haveVoiceTracks() const { return m_voiceTracks.isComplete(); }
+    const VoiceTracks &getVoiceTracks() const { return m_voiceTracks; }
+
+    /**
+     * The voice tracks a session kept, for the pitch track and notes
+     * this analyser has just claimed from it.
+     */
+    void setVoiceTracks(const VoiceTracks &tracks);
+
+    /**
+     * Make the voice tracks of a pitch track that was analysed before
+     * they were kept, as a session saved then brings it back: a run of
+     * the whole-file analysis that gives the voices' tracks alone, and
+     * leaves the pitch track and notes as they are. Nothing if there are
+     * tracks, a run is on its way, or there is no pitch track. "" or a
+     * user-readable error string.
+     */
+    QString analyseVoiceTracks();
+
+    /// A run that makes the voice tracks is on its way
+    bool isMakingVoiceTracks() const { return !m_voiceLayers.empty(); }
+
+    /**
+     * Put a voice's track into the pitch track within the selection, in
+     * place of what it held there: Prefer Lower Voice and Prefer Higher
+     * Voice. Nothing without the voice tracks. Makes the edit commands
+     * of the pitch track's layer: the caller wraps them in a compound
+     * command.
+     */
+    void chooseVoice(sv::Selection sel, VoiceTracks::Voice voice);
+
+    /**
+     * Make the pitch candidates for a selection, and keep what the pitch
+     * track holds there for abandonReAnalysis(). Those of the reference
+     * are its voice tracks within the selection, made at once (or as
+     * soon as the voice tracks are, if they are still being made); those
+     * of a frequency range (isConstrained()) are analysed, and come
+     * asynchronously. Returns "" on success or a user-readable error
+     * string on failure.
      */
     QString reAnalyseSelection(sv::Selection sel, FrequencyRange range);
 
@@ -411,16 +453,11 @@ public:
     int pitchCandidateStep(sv::Selection sel, bool up) const;
 
     /**
-     * The lowest (or the highest) of the candidates by pitch: in a
-     * harmony, the lower (upper) voice through the whole selection.
-     * -1 if there are no candidates.
-     */
-    int voiceCandidate(bool lower) const;
-
-    /**
      * Put candidate index into the pitch track within the selection, in
-     * place of what it held there. Makes the edit commands of the pitch
-     * track's layer: the caller wraps them in a compound command.
+     * place of what it held there, as far as the selection is the one
+     * the candidates are of: they hold nothing elsewhere. Makes the edit
+     * commands of the pitch track's layer: the caller wraps them in a
+     * compound command.
      */
     void chooseCandidate(sv::Selection sel, int index);
 
@@ -431,11 +468,11 @@ public:
     bool havePitchCandidatesFor(sv::Selection sel) const;
 
     /**
-     * A re-analysis of a selection is on its way: the layers of one or
-     * more of its transforms have not come back yet.
+     * A re-analysis of a frequency range is on its way: the layers of
+     * its transform have not come back yet.
      */
     bool isReAnalysing() const {
-        return m_currentAsyncHandle || !m_voiceHandles.empty();
+        return m_currentAsyncHandle != 0;
     }
 
     /**
@@ -521,6 +558,10 @@ signals:
     // candidates, if it found any, are there to choose from
     void pitchCandidatesReady();
 
+    // The voice tracks have been made, or set from a session, or have
+    // gone with the analysis they were of (haveVoiceTracks())
+    void voiceTracksChanged();
+
 protected slots:
     void layerAboutToBeDeleted(sv::Layer *);
     void layerCompletionChanged(sv::ModelId);
@@ -528,6 +569,7 @@ protected slots:
     void materialiseReAnalysis();
     void rangedAnalysisCompletionChanged(sv::ModelId);
     void candidateCompletionChanged(sv::ModelId);
+    void voiceTracksCompletionChanged(sv::ModelId);
 
 protected:
     ColorScheme m_colorScheme;
@@ -547,13 +589,16 @@ protected:
     bool m_reAnalysisDone;
     bool m_candidatesVisible;
     sv::Document::LayerCreationAsyncHandle m_currentAsyncHandle;
-
-    // The creations of reAnalyseVoices(), one for each setting, that
-    // have not reported back yet. A handle is gone once layersCreated()
-    // has been called for it, so it leaves this list (or
-    // m_currentAsyncHandle) then, whether its layers are wanted or not
-    std::vector<sv::Document::LayerCreationAsyncHandle> m_voiceHandles;
     QMutex m_asyncMutex;
+
+    // See haveVoiceTracks()
+    VoiceTracks m_voiceTracks;
+
+    // The voices' outputs of a run that is making the voice tracks, by
+    // VoiceTracks::Voice: registered with the document, so that deleting
+    // them releases their models, and in no view, as a ranged
+    // analysis's are. Empty when no run is on its way
+    std::vector<sv::Layer *> m_voiceLayers;
 
     // A ranged analysis in progress (analyseRange()). The layers are
     // registered with the document but added to no view, so nothing
@@ -619,8 +664,23 @@ protected:
     // The two pYIN transforms of a full analysis (smoothed pitch track
     // and notes) with the parameters the settings ask for. Shared with
     // analyseRange(), which must produce within its range just what a
-    // whole-file analysis produces. "" on success, else an error string
-    QString buildAnalysisTransforms(sv::Transforms &transforms);
+    // whole-file analysis produces. With voiceTracks, for the reference,
+    // the three voices' track outputs follow, from the same run, where
+    // the plugin has them (see VoiceTracks). "" on success, else an error
+    // string
+    QString buildAnalysisTransforms(sv::Transforms &transforms,
+                                    bool voiceTracks = false);
+
+    // Take the layers of the voices' outputs of a run just started, by
+    // VoiceTracks::Voice, and listen for its end
+    void startVoiceRun(const std::vector<sv::Layer *> &layers);
+
+    // Stop a run making the voice tracks, if one is going, and delete
+    // its layers
+    void discardVoiceRun();
+
+    // Forget the voice tracks, saying so if there were any
+    void clearVoiceTracks();
 
     // Merge a finished ranged analysis into the pitch and notes models
     // and delete the temporaries
@@ -647,22 +707,18 @@ protected:
 
     void discardPitchCandidates();
 
-    // The reference's re-analysis of a selection: its own analysis run
-    // over it once for each of voiceSettings()
-    QString reAnalyseVoices(sv::Selection sel, sv::sv_samplerate_t rate);
-
-    // Whether a selection's pitch candidates are the voices: the
-    // reference's own analysis run over the selection once for each
-    // voice it can follow (voiceSettings()). Otherwise they are pYIN's
-    // own, LocalCandidatePYIN's, as in a test of plain analysis
+    // Whether a selection's pitch candidates are the voices, cut from
+    // the voice tracks: the reference's. Otherwise they are pYIN's own,
+    // LocalCandidatePYIN's
     bool offersVoices() const;
 
-    // What each of those runs sets besides the reference's parameters
-    static std::vector<std::vector<std::pair<QString, float>>> voiceSettings();
+    // The candidates of the selection being re-analysed, from the voice
+    // tracks, if they are there: each voice's track within it, those
+    // that are the same line there given once (see the definition)
+    void makeVoiceCandidates();
 
-    // Drop the candidates that are the same line in the selection as one
-    // before them
-    void dropRepeatedCandidates();
+    // A pitch candidate's layer into the pane, as one: see the definition
+    void adoptCandidate(sv::TimeValueLayer *layer);
 
     // Document::LayerCreationHandler method
     void layersCreated(sv::Document::LayerCreationAsyncHandle,

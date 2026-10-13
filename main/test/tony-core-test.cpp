@@ -28,6 +28,7 @@
 #include "TestSingingTakes.h"
 #include "TestAnalysisSettings.h"
 #include "TestTakesFile.h"
+#include "TestVoiceTracks.h"
 #include "TestTakeTiming.h"
 #include "TestVerticalZoom.h"
 #include "TestSongScroll.h"
@@ -178,6 +179,12 @@ int main(int argc, char *argv[])
 
     {
         TestTakesFile t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestVoiceTracks t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

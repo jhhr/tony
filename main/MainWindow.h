@@ -760,9 +760,12 @@ protected:
     // restored one alone: restoreTakes() deals with it
     bool m_restoringSession;
 
-    // The <analysis> element of the session being read, while it is
-    // read: analyseNewMainModel() gives the song its options from it
+    // The <analysis> and <voicetracks> elements of the session being
+    // read, while it is read: analyseNewMainModel() gives the song its
+    // options from the one, and the reference its voice tracks from the
+    // other
     AnalysisSettings::Stored m_sessionAnalysis;
+    VoiceTracks m_sessionVoiceTracks;
 
     // Name the layers the singing analyser holds after the active take,
     // which is what says whose they are (spec 6.4)
@@ -1038,6 +1041,10 @@ protected:
     QAction       *m_rwdAction;
     QAction       *m_editSelectAction;
     QAction       *m_showCandidatesAction;
+    // Prefer Higher Voice and Prefer Lower Voice: greyed out until the
+    // reference's analysis has made its voice tracks (updateMenuStates())
+    QAction       *m_preferHigherVoiceAction = nullptr;
+    QAction       *m_preferLowerVoiceAction = nullptr;
     QAction       *m_toggleIntelligenceAction;
     bool           m_intelligentActionOn; // GF: !!! temporary
 
@@ -1093,15 +1100,8 @@ protected:
 
     Analyser::FrequencyRange m_pendingConstraint;
 
-    // A Prefer Lower Voice (-1) or Prefer Higher Voice (1) asked for
-    // before the selection's candidates were there, and the selection
-    // it is for; 0 for none
-    int m_pendingVoice;
-    sv::Selection m_pendingVoiceSelection;
     void switchPitch(bool up);
     void preferVoice(bool lower);
-    void applyVoicePreference(bool lower);
-    void pitchCandidatesReady();
 
     QString exportToSVL(QString path, sv::Layer *layer);
     FileOpenStatus importPitchLayer(sv::FileSource source);

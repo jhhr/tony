@@ -129,6 +129,9 @@ public:
     void doPreferVoice(bool lower) {
         if (lower) preferLowerVoice(); else preferHigherVoice();
     }
+    QAction *preferVoiceAction(bool lower) const {
+        return lower ? m_preferLowerVoiceAction : m_preferHigherVoiceAction;
+    }
     // Analysis > Voice to Follow, as chosen in the menu
     void doChooseVoiceToFollow(bool lower) {
         (lower ? m_followLower : m_followStrongest)->trigger();

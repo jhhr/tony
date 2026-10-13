@@ -18,13 +18,14 @@
 #include <QString>
 
 #include <functional>
+#include <map>
 
 class QXmlStreamReader;
 
 /**
  * The XML of a session file, for the passes of Tony's own that pick its
  * own elements out of it once the session reader has read the document
- * (TakesFile, AnalysisSettings).
+ * (TakesFile, AnalysisSettings, VoiceTracks).
  */
 namespace SessionXml
 {
@@ -35,6 +36,18 @@ namespace SessionXml
      */
     bool read(QString sessionPath,
               const std::function<void(QXmlStreamReader &)> &pass);
+
+    /// What reads an element, from its start on
+    typedef std::function<void(QXmlStreamReader &)> ElementReader;
+
+    /**
+     * One pass over the file's XML that hands each element named in
+     * readers (in lower case) to its reader as the element starts, so
+     * that elements in any order are read with the file decompressed
+     * once. False if there is no file to open.
+     */
+    bool readElements(QString sessionPath,
+                      const std::map<QString, ElementReader> &readers);
 }
 
 #endif
