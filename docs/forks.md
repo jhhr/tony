@@ -283,18 +283,46 @@ On the fork branch `tony-customizations`, which upstream's `default` does not ha
     pitch.
   - `voicehold`: an unvoiced state's moves to another pitch cost 1 + this times more, so
     that after a gap the track comes back near the voice it left.
+  - `voicefollow` (with `salmode` only): where two or three voices sing, the track follows
+    one of them, 1 the lower, 2 the higher, 3 the middle, rather than whichever is the
+    loudest from note to note (`VoiceFollower`). A second pitch HMM decodes the same
+    frames, each with the candidates of the ten either side filled in, every candidate
+    likely to be a voice of its own (`HarmonicSalience::voiceLikelihoods()`) made as
+    probable as the strongest, then kept as far as no voice sings below it (above it,
+    for the higher; for the middle, as far as it is the middle one of three). The track
+    takes that path's pitch only inside the passages a gate finds: two seconds in which
+    four fifths of the voiced frames have a second voice 1 to 9.5 semitones from the
+    first path's, widened by a second each way. Its voicing is the first path's
+    everywhere, so that a solo's echo or bleed below the voice is not taken for a lower
+    voice. An entry comes out at most 2.6 s after its frame, so that a host still sees
+    the track grow as the analysis runs.
 
   Tony sets them for the reference's analysis only ([architecture.md](architecture.md#who-owns-what)):
   `salmode` 1, `candidaterule` 1, `commonf0` 0.8, `levelfloor` 13, `voicedfloor` 0.2,
-  `voicehold` 3. These values and the fixed tuning in the code were chosen in the pitch
-  lab (`tools/pitchlab/`) on a test set of real and synthetic singing with harmonies,
-  echo, reverb and separation damage, and checked on three songs' separated vocals
-  annotated by hand: the share of sung frames within 50 cents of a sung voice went from
-  0.72 to 0.97 on the test set and from 0.24, 0.58 and 0.46 to 0.93, 0.96 and 0.96 on the
-  songs, for about twice pYIN's time. `TestPYinVamp` checks them end to end on a fifth, a
-  third, a period-doubled tone and an echo, each of which pYIN's own analysis gets
-  wrong; `TestHarmonicSalience`, `TestLevelGate`, `TestMonoPitchHMM` and `TestYinUtil`
-  check the parts.
+  `voicehold` 3, and `voicefollow` 0 or 1 by Analysis > Voice to Follow; a selection's
+  pitch candidates are its analysis with `voicefollow` 0, 1 and 2. These values and the
+  fixed tuning in the code were chosen in the pitch lab (`tools/pitchlab/`) on a test
+  set of real and synthetic singing with harmonies, echo, reverb and separation damage,
+  and checked on three songs' separated vocals annotated by hand: the share of sung
+  frames within 50 cents of a sung voice went from 0.72 to 0.97 on the test set and from
+  0.24, 0.58 and 0.46 to 0.93, 0.96 and 0.96 on the songs, for about twice pYIN's time.
+  `TestPYinVamp` checks them end to end on a fifth, a third, a period-doubled tone and an
+  echo, each of which pYIN's own analysis gets wrong; `TestHarmonicSalience`,
+  `TestLevelGate`, `TestMonoPitchHMM` and `TestYinUtil` check the parts.
+
+  `voicefollow` was worked out in the same lab, on synthetic singing in two and three
+  parts whose levels cross (`make_voicesets.py`), judged by the share of the frames where
+  several sing that the track spends on the voice asked for, and its changes of voice a
+  minute (`voice_follow.py`). Following the lower voice, the two songs with harmonies kept
+  it in 0.92 and 0.91 of those frames, against 0.34 and 0.05 following the strongest, and
+  changed voice 10 and 21 times a minute there rather than 51 and 77; the one-voice
+  song's scores are the same, and the test set's share of sung frames on a voice is
+  within 0.01. The higher keeps the upper of two voices less well (0.87 on the first
+  song), and neither it nor the middle holds where three sing
+  ([open-points.md](open-points.md)). It costs about a quarter more time (2.7 times
+  pYIN's own) and 6 MB more memory. `TestVoiceFollower` checks the follower on
+  candidates made up frame by frame, and `TestPYinVamp` a third whose levels cross, end
+  to end.
 
 A `pyin/` cloned from `c4dm` before the fork does not have the pin: `git remote add jhhr
 https://github.com/jhhr/pyin`, `git fetch jhhr`, then `git checkout -B tony-customizations

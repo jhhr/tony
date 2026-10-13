@@ -33,11 +33,14 @@ if [ ! -d "$sdk/vamp-sdk" ]; then
     exit 1
 fi
 
-# The fork's harmonic salience, which upstream's pYIN does not have
+# The fork's harmonic salience and voice follower, which upstream's pYIN
+# does not have
 fork=()
-if [ -f "$src/HarmonicSalience.cpp" ]; then
-    fork=("$src"/HarmonicSalience.cpp)
-fi
+for extra in HarmonicSalience.cpp VoiceFollower.cpp; do
+    if [ -f "$src/$extra" ]; then
+        fork+=("$src/$extra")
+    fi
+done
 
 c++ -O2 -std=c++17 -w \
     -I"$src" -I"$sdk" \

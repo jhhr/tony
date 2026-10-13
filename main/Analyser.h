@@ -209,6 +209,24 @@ public:
      * group in QSettings.
      */
     static std::map<QString, QVariant> getAnalysisSettings();
+
+    /**
+     * Which voice the reference's pitch track follows where two or
+     * three sing, as the pyin fork's voicefollow parameter numbers
+     * them: the setting "voice-to-follow" of the group "Analyser", read
+     * as one of the two the menu offers, the strongest and the lower.
+     * The fork can also follow the higher one, which a selection's pitch
+     * candidates offer, and the middle one, which Tony does not offer:
+     * neither holds through a whole song well enough to choose for one
+     * (docs/open-points.md).
+     */
+    enum VoiceToFollow {
+        FollowStrongest = 0,
+        FollowLower = 1,
+        FollowHigher = 2,
+        FollowMiddle = 3
+    };
+    static int voiceToFollow();
     
     /**
      * Analyse the selection and schedule asynchronous adds of

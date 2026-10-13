@@ -133,8 +133,21 @@ Analyser::getAnalysisSettings()
     return { { "precision-analysis", false },
              { "lowamp-analysis", true },
              { "onset-analysis", true },
-             { "prune-analysis", true }
+             { "prune-analysis", true },
+             { "voice-to-follow", int(FollowStrongest) }
     };
+}
+
+int
+Analyser::voiceToFollow()
+{
+    QSettings settings;
+    settings.beginGroup("Analyser");
+    int follow = settings.value("voice-to-follow", int(FollowStrongest)).toInt();
+    settings.endGroup();
+    // Only what Analysis > Voice to Follow offers, so that the menu
+    // shows what the analysis does
+    return follow == FollowLower ? FollowLower : FollowStrongest;
 }
 
 QString
@@ -724,6 +737,8 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
         t.setParameter("levelfloor", 13);
         t.setParameter("voicedfloor", 0.2f);
         t.setParameter("voicehold", 3);
+        // where two or three voices sing, which one to follow
+        t.setParameter("voicefollow", voiceToFollow());
     }
 
     transforms.push_back(t);
@@ -1245,8 +1260,17 @@ Analyser::offersVoices() const
 std::vector<std::vector<std::pair<QString, float>>>
 Analyser::voiceSettings()
 {
-    // The reference's analysis as it is, following the strongest voice
-    return { {} };
+    // The voices the pyin fork follows where two or three sing: the
+    // strongest, the lower and the higher. In a solo, or where the fork
+    // finds no passage of voices together, all three are the same line,
+    // and one of them is left (dropRepeatedCandidates()). Not its middle
+    // voice: where three sing it finds the one the higher does (neither
+    // finds a top voice an octave above the lowest), and where two sing
+    // it takes now one, now the other, a line just above the strongest
+    // that Choose Higher Pitch would go to first
+    return { { { "voicefollow", Analyser::FollowStrongest } },
+             { { "voicefollow", Analyser::FollowLower } },
+             { { "voicefollow", Analyser::FollowHigher } } };
 }
 
 QString

@@ -9,7 +9,7 @@ commands are in [AGENTS.md](../AGENTS.md).
 | `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestPitchCandidates`, `TestVoiceThreshold`, `TestInputChannel`, `TestInputDevice`, `TestInputLevel`, `TestRecordingAlignment`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`, and Tony's icons (`tony.qrc`: without them every toolbar button is as wide as its text, and `TestCompactLayout` needs the real sizes). | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestPlotSize`, `TestRecordWorkflow`, `TestTouchGestures`, `TestUiChecks`, `TestCompactLayout`, `TestTouchMenuStyle`, `TestAudioCheck` | on Linux about 10.5 minutes in one process, under two in eight; on Windows about 12 in one process, measured before the touch and compact-layout suites came. Nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`, then `TestTouchGestures`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`, without the icons; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 9 minutes in one process, two in eight (Linux): each test records a dev run's takes, or part of them, in real time |
-| `test-pyin` | pYIN's sources and its own tests, from the fork's `test/` ([forks.md](forks.md#pyin)): Boost.Test's header-only variant, no Qt | `TestMeanFilter`, `TestFFT`, `TestYin`, `TestYinUtil`, `TestMonoNote`, `TestMonoPitchHMM`, `TestHarmonicSalience`, `TestLevelGate`, `TestPYinVamp` (the parameters for vocals with harmonies and echoes, end to end on synthetic voices), `TestRegression` (the plugin on its `testdata/bob_02.wav`, its pitch track and notes against `test/regression`) | seconds |
+| `test-pyin` | pYIN's sources and its own tests, from the fork's `test/` ([forks.md](forks.md#pyin)): Boost.Test's header-only variant, no Qt | `TestMeanFilter`, `TestFFT`, `TestYin`, `TestYinUtil`, `TestMonoNote`, `TestMonoPitchHMM`, `TestHarmonicSalience`, `TestLevelGate`, `TestVoiceFollower`, `TestPYinVamp` (the parameters for vocals with harmonies and echoes, end to end on synthetic voices), `TestRegression` (the plugin on its `testdata/bob_02.wav`, its pitch track and notes against `test/regression`) | seconds |
 
 `meson test` / `build.bat test` runs these four (`test-tony-dev` where it is built) plus
 four svcore suites. No suite uses the
@@ -30,9 +30,11 @@ it when a change touches what the development checks drive (see
   even when every test passes. Running the executable by hand has no timeout.
 - `main()` of the app and dev suites replaces `VAMP_PATH` with the executable's directory,
   so an installed pYIN is never the one tested; their meson tests `depends:` on
-  `pyin_plugin` because nothing else builds `pyin.dll`. Build `pyin.dll` (`pyin.so` on
-  Linux) too when running by hand after a clean: without it every test that waits for an
-  analysis hangs until QtTest's five-minute watchdog aborts the run.
+  `pyin_plugin` because no test executable links `pyin.dll`. Build `pyin.dll` (`pyin.so`
+  on Linux) too when running by hand after a clean or a change in `pyin/`. Without it
+  every test that waits for an analysis hangs until QtTest's five-minute watchdog
+  aborts the run; with an old one, a test of a new analysis parameter fails as if the
+  parameter did nothing, since a plugin ignores a parameter it does not have.
 - The mains set the organisation/application names to `tony-tests` / `test-tony-*` (a
   shard's name with a suffix of its own, see "Running") and every suite works in a
   `QTemporaryDir`, so the user's QSettings and record directory are never touched.

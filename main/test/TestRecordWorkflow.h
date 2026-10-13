@@ -985,6 +985,30 @@ class TestRecordWorkflow : public QObject
         return found;
     }
 
+    // Two voices a just major third apart (whole numbers of samples per
+    // period), the upper the louder for the first two seconds and the
+    // lower for the last two, so that the strongest changes voice at 2 s
+    static constexpr double thirdHz = lowHz * 5 / 4;
+    static std::vector<float> crossingThird() {
+        std::vector<float> lower = tone(lowHz, 4.0), upper = tone(thirdHz, 4.0);
+        std::vector<float> m(lower.size());
+        for (size_t i = 0; i < m.size(); ++i) {
+            const bool first = i < m.size() / 2;
+            m[i] = (first ? 0.25f : 0.6f) * lower[i] + (first ? 0.6f : 0.25f) * upper[i];
+        }
+        return m;
+    }
+
+    // The share of pitches near hz
+    static double shareNear(const std::vector<double> &pitches, double hz) {
+        if (pitches.empty()) return 0.0;
+        int onIt = 0;
+        for (double p : pitches) {
+            if (std::abs(TestSignals::centsBetween(p, hz)) < 50.0) ++onIt;
+        }
+        return double(onIt) / pitches.size();
+    }
+
     // Selects from start to end, in seconds, alone, as the user does
     sv::Selection selectSeconds(double start, double end) {
         m_window->clearSelections();
@@ -2168,6 +2192,8 @@ private slots:
         // A round trip a test stored would place the next test's takes.
         // First, as the waits below return early when they fail
         QSettings().remove("LatencyCalibration");
+        // Nor a voice to follow: the other suites analyse references
+        QSettings().remove("Analyser/voice-to-follow");
         // Nor a voice threshold: the other suites of this process record
         setVoiceThreshold(VoiceThreshold::kOff);
         // Nor an input channel, for the same reason, nor input device
@@ -7752,6 +7778,100 @@ private slots:
         QVERIFY2(error.isEmpty(), qPrintable(error));
         QTRY_VERIFY_WITH_TIMEOUT(a->havePitchCandidatesFor(second), 30000);
         QVERIFY(!candidateLayers(a).empty());
+    }
+
+    // Over a selection where two voices sing and the track changes voice
+    // with their levels, Prefer Lower Voice and Prefer Higher Voice put
+    // the one voice in all through, each in one step that an undo takes
+    // back; and Choose Higher Pitch and Choose Lower Pitch go from that
+    // track to the upper and the lower voice
+    void prefer_voice_holds_a_voice_through_a_crossing() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        sv::Layer *pitch = a->getLayer(Analyser::PitchTrack);
+
+        const sv::Selection sel = selectSeconds(0.5, 3.5);
+        QVERIFY(!sel.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(a->havePitchCandidatesFor(sel), 60000);
+
+        // The reference follows the louder: both voices, each a while
+        const std::vector<double> strongest = pitchesIn(pitch, sel);
+        const int hops = int((sel.getEndFrame() - sel.getStartFrame()) / hop);
+        QVERIFY(int(strongest.size()) >= hops * 9 / 10);
+        QVERIFY2(shareNear(strongest, lowHz) > 0.3 && shareNear(strongest, thirdHz) > 0.3,
+                 qPrintable(QString("the strongest: %1 on the lower, %2 on the upper")
+                            .arg(shareNear(strongest, lowHz))
+                            .arg(shareNear(strongest, thirdHz))));
+
+        for (bool lower : { true, false }) {
+            m_window->doPreferVoice(lower);
+            const std::vector<double> preferred = pitchesIn(pitch, sel);
+            const double share = shareNear(preferred, lower ? lowHz : thirdHz);
+            QVERIFY2(share >= 0.9 && int(preferred.size()) >= hops * 9 / 10,
+                     qPrintable(QString("prefer %1: %2 of %3 pitches on it")
+                                .arg(lower ? "lower" : "higher").arg(share)
+                                .arg(preferred.size())));
+            QCOMPARE(undoOnce(), lower ? QString("Prefer Lower Voice") :
+                     QString("Prefer Higher Voice"));
+            QVERIFY(pitchesIn(pitch, sel) == strongest);
+        }
+
+        m_window->doTogglePitchCandidates();
+        QVERIFY(a->arePitchCandidatesShown());
+        for (bool up : { true, false }) {
+            m_window->doSwitchPitch(up);
+            const double share = shareNear(pitchesIn(pitch, sel), up ? thirdHz : lowHz);
+            QVERIFY2(share >= 0.9, qPrintable(QString("choose %1: %2 on it")
+                                              .arg(up ? "higher" : "lower").arg(share)));
+            QCOMPARE(undoOnce(), up ? QString("Choose Higher Pitch Candidate") :
+                     QString("Choose Lower Pitch Candidate"));
+        }
+    }
+
+    // Analysis > Voice to Follow: with the lower voice chosen, the
+    // reference analysed again follows the lower voice through the
+    // crossing, where the strongest, the default, changes voice. The
+    // choice is kept as the other analysis options are, analyses nothing
+    // by itself, and Reset Options to Defaults takes it back
+    void voice_to_follow_lower() {
+        makeWindow(FakeAudioIO::Config());
+        QVERIFY(!m_window->followingLowerChecked());
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        const sv::Selection whole(sv::sv_frame_t(0.5 * rate),
+                                  sv::sv_frame_t(3.5 * rate));
+        const std::vector<double> strongest =
+            pitchesIn(a->getLayer(Analyser::PitchTrack), whole);
+        QVERIFY(shareNear(strongest, lowHz) < 0.7);
+
+        m_window->doChooseVoiceToFollow(true);
+        QVERIFY(m_window->followingLowerChecked());
+        QCOMPARE(QSettings().value("Analyser/voice-to-follow").toInt(),
+                 int(Analyser::FollowLower));
+        QCOMPARE(Analyser::voiceToFollow(), int(Analyser::FollowLower));
+        QVERIFY(pitchesIn(a->getLayer(Analyser::PitchTrack), whole) == strongest);
+
+        m_window->discardModifications();
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 60000);
+        a = m_window->analyser();
+        const std::vector<double> lower =
+            pitchesIn(a->getLayer(Analyser::PitchTrack), whole);
+        QVERIFY2(shareNear(lower, lowHz) >= 0.9,
+                 qPrintable(QString("following the lower: %1 on it")
+                            .arg(shareNear(lower, lowHz))));
+
+        m_window->doResetAnalyseOptions();
+        QVERIFY(!m_window->followingLowerChecked());
+        QCOMPARE(Analyser::voiceToFollow(), int(Analyser::FollowStrongest));
+
+        // Only what the menu offers: the higher voice, which the fork
+        // follows but the menu does not offer, reads as the strongest
+        QSettings().setValue("Analyser/voice-to-follow", int(Analyser::FollowHigher));
+        QCOMPARE(Analyser::voiceToFollow(), int(Analyser::FollowStrongest));
     }
 
     void load_background_music() {

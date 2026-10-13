@@ -74,6 +74,13 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   end of each note, and a take's ranged run must give what a whole-file run gives, which
   the level floor, judged on the ten seconds before each frame, would not. A recording
   made with no reference becomes the reference, and is analysed as one.
+- **Analysis > Voice to Follow** sets one of those parameters, `voicefollow`, from the
+  setting `Analyser/voice-to-follow`: the strongest voice, as pYIN, or the lower one where
+  two or three sing. Like the analysis options above it in the menu it is kept between
+  launches, not in the session, and applies when a reference is next analysed (Analyse
+  Now, a new audio file): choosing it re-analyses nothing. The menu offers no higher or
+  middle voice, which the fork has but which do not hold through a whole song
+  ([open-points.md](open-points.md)); a selection's pitch candidates offer the higher.
 - **Both analysers share pane 0.** Pane 1 is the time ruler. Never put the singing track
   in a pane of its own.
 - An `Analyser` recognises a pitch or notes layer as its own when the layer's model has
@@ -315,10 +322,11 @@ volume and the background music in `MainWindow`.
   `!haveRunningTransformers()` after selecting.
 - **The reference's pitch candidates are its own analysis**, run over the selection and a
   quarter of a second either side, once for each of `Analyser::voiceSettings()`
-  (`reAnalyseVoices()`); only a Shift-drag's range, and a test of plain analysis, still
-  use pYIN's `LocalCandidatePYIN` and CHP. Each setting has a creation of derived layers
-  of its own: one creation runs all its transforms in one plugin instance, which takes
-  transforms that differ in output only.
+  (`reAnalyseVoices()`): following the strongest voice, the lower and the higher,
+  whatever Voice to Follow is set to. Only a Shift-drag's range, and a test of plain
+  analysis, still use pYIN's `LocalCandidatePYIN` and CHP. Each setting has a creation
+  of derived layers of its own: one creation runs all its transforms in one plugin
+  instance, which takes transforms that differ in output only.
   - A creation's handle is gone once it has reported back to `layersCreated()`, wanted or
     not (a cancelled one still reports, with layers that have no models): the analyser
     lets go of it there, or the next selection cancels a deleted creation.

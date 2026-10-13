@@ -352,6 +352,7 @@ protected slots:
     virtual void lowampAnalysisToggled();
     virtual void onsetAnalysisToggled();
     virtual void pruneAnalysisToggled();
+    virtual void voiceToFollowChosen();
     virtual void updateAnalyseStates();
 
     virtual void doubleClickSelectInvoked(sv::sv_frame_t);
@@ -1041,6 +1042,10 @@ protected:
     QAction       *m_lowamp;
     QAction       *m_onset;
     QAction       *m_prune;
+    // Analysis > Voice to Follow: which voice the reference's pitch
+    // track follows where two or three sing (Analyser::voiceToFollow())
+    QAction       *m_followStrongest;
+    QAction       *m_followLower;
         
     QAction       *m_showAudio;
     QAction       *m_showSpect;

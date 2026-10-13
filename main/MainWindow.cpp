@@ -272,6 +272,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_ffwdAction(0),
     m_rwdAction(0),
     m_intelligentActionOn(true), //GF: !!! temporary
+    m_followStrongest(nullptr),
+    m_followLower(nullptr),
     m_activityLog(new ActivityLog()),
     m_keyReference(new HotkeyReference()),
     m_hotkeys(nullptr),
@@ -1388,6 +1390,22 @@ MainWindow::setupAnalysisMenu()
     connect(m_prune, SIGNAL(triggered()), this, SLOT(pruneAnalysisToggled()));
     menu->addAction(m_prune);
 
+    // The reference's analysis only: the singing of a take is one voice
+    QMenu *follow = menu->addMenu(tr("&Voice to Follow"));
+    QActionGroup *followGroup = new QActionGroup(this);
+    m_followStrongest = new QAction(tr("&Strongest Voice"), this);
+    m_followStrongest->setStatusTip(tr("Where two or three voices sing at once, make the reference's pitch track follow the loudest of them, which changes where their levels cross"));
+    m_followStrongest->setData(Analyser::FollowStrongest);
+    m_followLower = new QAction(tr("&Lower Voice"), this);
+    m_followLower->setStatusTip(tr("Where two or three voices sing at once, make the reference's pitch track follow the lowest of them all through; where one voice sings, the track is as with the strongest"));
+    m_followLower->setData(Analyser::FollowLower);
+    for (QAction *a : { m_followStrongest, m_followLower }) {
+        a->setCheckable(true);
+        followGroup->addAction(a);
+        follow->addAction(a);
+        connect(a, &QAction::triggered, this, &MainWindow::voiceToFollowChosen);
+    }
+
     menu->addSeparator();
 
     action = new QAction(tr("Reset Options to Defaults"), this);
@@ -1514,6 +1532,10 @@ MainWindow::updateAnalyseStates()
     }
 
     settings.endGroup();
+
+    const bool lower = Analyser::voiceToFollow() == Analyser::FollowLower;
+    m_followStrongest->setChecked(!lower);
+    m_followLower->setChecked(lower);
 }
 
 void
@@ -1549,6 +1571,22 @@ MainWindow::precisionAnalysisToggled()
     // don't run analyseNow() automatically -- it's a destructive operation
 
     // make result visible explicitly, in case e.g. we just set the wrong key
+    updateAnalyseStates();
+}
+
+void
+MainWindow::voiceToFollowChosen()
+{
+    QAction *a = qobject_cast<QAction *>(sender());
+    if (!a) return;
+
+    QSettings settings;
+    settings.beginGroup("Analyser");
+    settings.setValue("voice-to-follow", a->data().toInt());
+    settings.endGroup();
+
+    // don't run analyseNow() automatically -- it's a destructive operation
+
     updateAnalyseStates();
 }
 

@@ -129,6 +129,12 @@ public:
     void doPreferVoice(bool lower) {
         if (lower) preferLowerVoice(); else preferHigherVoice();
     }
+    // Analysis > Voice to Follow, as chosen in the menu
+    void doChooseVoiceToFollow(bool lower) {
+        (lower ? m_followLower : m_followStrongest)->trigger();
+    }
+    bool followingLowerChecked() const { return m_followLower->isChecked(); }
+    void doResetAnalyseOptions() { resetAnalyseOptions(); }
     QAction *eraseSingingAction() { return m_eraseSingingAction; }
     QAction *selectRecordingAction() { return m_selectRecordingAction; }
     void doUpdateMenuStates() { updateMenuStates(); }
