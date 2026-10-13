@@ -74,13 +74,24 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   end of each note, and a take's ranged run must give what a whole-file run gives, which
   the level floor, judged on the ten seconds before each frame, would not. A recording
   made with no reference becomes the reference, and is analysed as one.
-- **Analysis > Voice to Follow** sets one of those parameters, `voicefollow`, from the
-  setting `Analyser/voice-to-follow`: the strongest voice, as pYIN, or the lower one where
-  two or three sing. Like the analysis options above it in the menu it is kept between
-  launches, not in the session, and applies when a reference is next analysed (Analyse
-  Now, a new audio file): choosing it re-analyses nothing. The menu offers no higher or
-  middle voice, which the fork has but which do not hold through a whole song
-  ([open-points.md](open-points.md)); a selection's pitch candidates offer the higher.
+- **The analysis options are the song's.** The Analysis menu shows those of the song that
+  is open (`MainWindow::m_songAnalysis`), and every analysis of the song is made with
+  them: the reference's, its pitch candidates and the takes' (both analysers read them,
+  `Analyser::setAnalysisOptions()`).
+  - A session keeps the options its reference was analysed with, in an `<analysis>`
+    element (`AnalysisSettings`). They are `Analyser::getAnalysedWith()`, which an
+    analysis of the whole file sets, and a choice in the menu does not: it has analysed
+    nothing yet. So the element says how the track was made (but for edits to it), and
+    choosing re-analyses nothing.
+  - Opening the session puts them in the menu, for Analyse Now and the takes. A new
+    song, and a session saved before they were kept, get the user's, from the settings,
+    which a choice in the menu writes as well, for the next new song. A load writes
+    none, and a window with no song shows the user's.
+  - Voice to Follow is one of them, the fork's `voicefollow`, for the reference only: the
+    strongest voice, as pYIN, or the lower one where two or three sing. The menu offers
+    no higher or middle voice, which the fork has but which do not hold through a whole
+    song ([open-points.md](open-points.md)); a selection's pitch candidates offer the
+    higher.
 - **Both analysers share pane 0.** Pane 1 is the time ruler. Never put the singing track
   in a pane of its own.
 - An `Analyser` recognises a pitch or notes layer as its own when the layer's model has
@@ -270,8 +281,9 @@ volume and the background music in `MainWindow`.
   session's for its own layers. The background music is the exception (below).
 - **Each analyser has its own group** (`getSettingsGroup()`, from the colour scheme), so
   that the singing toggles never change what the reference shows or plays, nor the other
-  way round. The analysis options stay in `Analyser`, for both. The singing analyser keeps
-  no level or pan (there is no control for them), and its pitch and notes are silenced by
+  way round. The analysis options' settings stay in `Analyser`, for both: they are what a
+  new song is analysed with (see "Who owns what"). The singing analyser keeps no level
+  or pan (there is no control for them), and its pitch and notes are silenced by
   `silenceSecondaryAnalysisLayers()`, never through the settings. Play Singing Audio
   pressed while a take has the singing muted is written at once, and applied when the
   take stops.
@@ -379,7 +391,8 @@ volume and the background music in `MainWindow`.
 - A layer with `setSavedInSession(false)` (svgui/svapp forks) is left out, as is a model
   that only such layers show. Used for layers Tony makes again by itself on load.
 - `SVFileReader` only warns about unknown elements, which is what lets the `.ton` carry
-  Tony's `<takes>` element.
+  Tony's `<takes>` and `<analysis>` elements, read afterwards by passes of Tony's own
+  (`SessionXml`).
 - An event's value is written with six significant figures. After a round trip compare
   frames exactly and values with a tolerance.
 - Layer **object names carry identity** across a save: `"Alternate Pitch Track -1"` holds

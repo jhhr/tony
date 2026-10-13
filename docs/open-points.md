@@ -50,11 +50,6 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **The thresholds** of the sweep finder, the verdicts and the dev checks are starting
   values, to be tuned from the report files of real runs (what to send back:
   [calibrate-audio.md](calibrate-audio.md), §8).
-- **Voice to Follow is one setting for every song**, kept between launches as the
-  analysis options beside it are, rather than in each song's session. A session keeps its
-  track as it was analysed; the setting counts when a song is analysed anew (Analyse Now,
-  opening its audio). Should a session remember the voice its track follows, so that
-  Analyse Now on it gives the same line?
 - **After a leap a take's pitch reaches the new note later than the reference's.** The
   pitch HMM moves at most a semitone a frame: the reference's analysis glides across a
   leap and reaches the new note within a hop of where it is sung, while pYIN's own, the

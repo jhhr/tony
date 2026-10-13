@@ -1192,6 +1192,7 @@ tony_entry_files = [
 
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
+  'main/AnalysisSettings.cpp',
   'main/AndroidFiles.cpp',
   'main/AudioRoute.cpp',
   'main/AudioDriverSettings.cpp',
@@ -1216,6 +1217,7 @@ tony_core_files = [
   'main/PopupArea.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/RecordingAlignment.cpp',
+  'main/SessionXml.cpp',
   'main/SettingsKey.cpp',
   'main/SingingTakes.cpp',
   'main/SongScroll.cpp',
@@ -1663,6 +1665,7 @@ if system != 'android'
     'main/test/TestTakeAudio.h',
     'main/test/TestTakeEvents.h',
     'main/test/TestSingingTakes.h',
+    'main/test/TestAnalysisSettings.h',
     'main/test/TestTakesFile.h',
     'main/test/TestTakeTiming.h',
     'main/test/TestVerticalZoom.h',

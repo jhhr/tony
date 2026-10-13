@@ -101,6 +101,7 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedGate(VoiceThreshold::kOff, VoiceGate::windowOffset()),
     m_rangedMergeHeld(false),
     m_plainAnalysis(false),
+    m_analysisOptions(nullptr),
     m_waveformFaded(false)
 {
     QSettings settings;
@@ -138,16 +139,29 @@ Analyser::getAnalysisSettings()
     };
 }
 
-int
-Analyser::voiceToFollow()
+AnalysisSettings::Values
+Analyser::getUserAnalysisSettings()
 {
     QSettings settings;
-    settings.beginGroup("Analyser");
-    int follow = settings.value("voice-to-follow", int(FollowStrongest)).toInt();
-    settings.endGroup();
+    return AnalysisSettings::fromSettings(settings, getAnalysisSettings());
+}
+
+int
+Analyser::voiceToFollow(const AnalysisSettings::Values &options)
+{
+    auto it = options.find("voice-to-follow");
+    int follow = (it == options.end() ? int(FollowStrongest)
+                  : it->second.toInt());
     // Only what Analysis > Voice to Follow offers, so that the menu
     // shows what the analysis does
     return follow == FollowLower ? FollowLower : FollowStrongest;
+}
+
+AnalysisSettings::Values
+Analyser::getAnalysisOptions() const
+{
+    if (m_analysisOptions) return *m_analysisOptions;
+    return getUserAnalysisSettings();
 }
 
 QString
@@ -201,6 +215,10 @@ Analyser::analyseExistingFile()
         m_document->removeLayerFromView(m_pane, m_layers[Notes]);
         m_layers[Notes] = 0;
     }
+
+    // Until the analysis below has made the track again, should it
+    // fail
+    m_analysedWith.reset();
 
     return doAllAnalyses(true);
 }
@@ -280,6 +298,7 @@ Analyser::fileClosed()
     cerr << "Analyser::fileClosed" << endl;
     cancelAnalyses();
     m_layers.clear();
+    m_analysedWith.reset();
     m_reAnalysisCandidates.clear();
     m_currentCandidate = -1;
     m_reAnalysingSelection = Selection();
@@ -660,8 +679,7 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
 	return notFound.arg(base + noteout).arg(plugname);
     }
 
-    QSettings settings;
-    settings.beginGroup("Analyser");
+    const AnalysisSettings::Values options = getAnalysisOptions();
 
     bool precise = false, lowamp = true, onset = true, prune = true;
 
@@ -672,18 +690,14 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
         { "prune-analysis", prune }
     };
 
-    auto keyMap = getAnalysisSettings();
-
     for (auto p: flags) {
-        auto ki = keyMap.find(p.first);
-        if (ki != keyMap.end()) {
-            p.second = settings.value(ki->first, ki->second).toBool();
+        auto oi = options.find(p.first);
+        if (oi != options.end()) {
+            p.second = oi->second.toBool();
         } else {
             throw std::logic_error("Internal error: One or more analysis settings keys not found in map: check buildAnalysisTransforms and getAnalysisSettings");
         }
     }
-
-    settings.endGroup();
 
     Transform t = tf->getDefaultTransformFor
         (base + f0out, waveFileModel->getSampleRate());
@@ -738,7 +752,7 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
         t.setParameter("voicedfloor", 0.2f);
         t.setParameter("voicehold", 3);
         // where two or three voices sing, which one to follow
-        t.setParameter("voicefollow", voiceToFollow());
+        t.setParameter("voicefollow", voiceToFollow(options));
     }
 
     transforms.push_back(t);
@@ -765,6 +779,10 @@ Analyser::addAnalyses()
     Transforms transforms;
     QString error = buildAnalysisTransforms(transforms);
     if (error != "") return error;
+
+    // What the layers made below are made with, for the session to
+    // keep (claimed layers keep what the session that had them said)
+    m_analysedWith = getAnalysisOptions();
 
 /*!!! we could have more than one pitch track...
     QString cx = "vamp:cepstral-pitchtracker:cepstral-pitchtracker:f0";

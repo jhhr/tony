@@ -760,6 +760,10 @@ protected:
     // restored one alone: restoreTakes() deals with it
     bool m_restoringSession;
 
+    // The <analysis> element of the session being read, while it is
+    // read: analyseNewMainModel() gives the song its options from it
+    AnalysisSettings::Stored m_sessionAnalysis;
+
     // Name the layers the singing analyser holds after the active take,
     // which is what says whose they are (spec 6.4)
     void nameActiveTakeLayers();
@@ -1046,6 +1050,16 @@ protected:
     // track follows where two or three sing (Analyser::voiceToFollow())
     QAction       *m_followStrongest;
     QAction       *m_followLower;
+
+    // The analysis options of the song open in the window, which the
+    // Analysis menu shows and every analysis of the song is made with:
+    // both analysers read them here (Analyser::setAnalysisOptions()).  A
+    // session's own, which its file keeps with the analysis they made;
+    // for anything else the user's, which a choice in the menu writes
+    // too, so that the next new song starts from it
+    AnalysisSettings::Values m_songAnalysis;
+    void setSongAnalysis(const AnalysisSettings::Values &options);
+    void chooseAnalysisOption(QString key, QVariant value);
         
     QAction       *m_showAudio;
     QAction       *m_showSpect;

@@ -380,4 +380,4 @@ cloud session.
 - `Document::setModelSource()` (or any way to set or clear a derivation record) would
   replace `MainWindow::adoptTakeLayers()` setting source models by hand.
 - A hook in `MainWindowBase::toXml()` would save `MainWindow::toXml()` buffering the whole
-  document to insert `<takes>`.
+  document to insert `<takes>` and `<analysis>`.

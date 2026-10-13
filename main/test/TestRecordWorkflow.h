@@ -650,6 +650,18 @@ class TestRecordWorkflow : public QObject
     // it.  The file is bzip2, as the session reader and writer leave it
     // "" on success, else what went wrong
     QString removeTakesElement(QString path) {
+        return removeFromSession(path, "<takes", "</takes>");
+    }
+
+    // The same for the <analysis> element: a .ton written before the
+    // analysis options were kept
+    QString removeAnalysisElement(QString path) {
+        return removeFromSession(path, "<analysis ", "/>");
+    }
+
+    // Take what runs from the first start to the end of the first end
+    // after it out of a saved session file
+    QString removeFromSession(QString path, QByteArray start, QByteArray end) {
         QByteArray document;
         {
             sv::BZipFileDevice file(path);
@@ -661,10 +673,12 @@ class TestRecordWorkflow : public QObject
         }
         if (document.isEmpty()) return "read nothing from " + path;
 
-        int from = document.indexOf("<takes");
-        int to = document.indexOf("</takes>");
-        if (from < 0 || to < from) return "no takes element in " + path;
-        document.remove(from, to + int(strlen("</takes>")) - from);
+        int from = document.indexOf(start);
+        int to = from < 0 ? -1 : document.indexOf(end, from);
+        if (from < 0 || to < from) {
+            return "no " + QString(start) + " in " + path;
+        }
+        document.remove(from, to + int(end.size()) - from);
 
         sv::BZipFileDevice out(path);
         if (!out.open(QIODevice::WriteOnly)) {
@@ -2192,8 +2206,11 @@ private slots:
         // A round trip a test stored would place the next test's takes.
         // First, as the waits below return early when they fail
         QSettings().remove("LatencyCalibration");
-        // Nor a voice to follow: the other suites analyse references
-        QSettings().remove("Analyser/voice-to-follow");
+        // Nor an analysis option chosen in the menu: the other suites
+        // analyse references and takes
+        for (const auto &option : Analyser::getAnalysisSettings()) {
+            QSettings().remove("Analyser/" + option.first);
+        }
         // Nor a voice threshold: the other suites of this process record
         setVoiceThreshold(VoiceThreshold::kOff);
         // Nor an input channel, for the same reason, nor input device
@@ -7851,7 +7868,8 @@ private slots:
         QVERIFY(m_window->followingLowerChecked());
         QCOMPARE(QSettings().value("Analyser/voice-to-follow").toInt(),
                  int(Analyser::FollowLower));
-        QCOMPARE(Analyser::voiceToFollow(), int(Analyser::FollowLower));
+        QCOMPARE(Analyser::voiceToFollow(m_window->songAnalysis()),
+                 int(Analyser::FollowLower));
         QVERIFY(pitchesIn(a->getLayer(Analyser::PitchTrack), whole) == strongest);
 
         m_window->discardModifications();
@@ -7866,12 +7884,155 @@ private slots:
 
         m_window->doResetAnalyseOptions();
         QVERIFY(!m_window->followingLowerChecked());
-        QCOMPARE(Analyser::voiceToFollow(), int(Analyser::FollowStrongest));
+        QCOMPARE(Analyser::voiceToFollow(m_window->songAnalysis()),
+                 int(Analyser::FollowStrongest));
+        QCOMPARE(Analyser::voiceToFollow(Analyser::getUserAnalysisSettings()),
+                 int(Analyser::FollowStrongest));
 
         // Only what the menu offers: the higher voice, which the fork
         // follows but the menu does not offer, reads as the strongest
         QSettings().setValue("Analyser/voice-to-follow", int(Analyser::FollowHigher));
-        QCOMPARE(Analyser::voiceToFollow(), int(Analyser::FollowStrongest));
+        QCOMPARE(Analyser::voiceToFollow(Analyser::getUserAnalysisSettings()),
+                 int(Analyser::FollowStrongest));
+    }
+
+    // A song's session keeps the analysis options its reference was
+    // analysed with, and opening it brings them back without writing a
+    // setting: the menu shows them, and Analyse Now and a take's
+    // analysis use them, while a new song starts from the user's.
+    // Options chosen after the analysis, and not analysed with, are the
+    // user's and the song's, but not what the session keeps
+    void session_keeps_its_analysis_options() {
+        FakeAudioIO::Config config;
+        config.input = tone(highHz, 3.0);
+        makeWindow(config);
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        const sv::Selection whole(sv::sv_frame_t(0.5 * rate),
+                                  sv::sv_frame_t(3.5 * rate));
+        auto lowerShare = [&]() {
+            return shareNear(pitchesIn(m_window->analyser()->getLayer
+                                       (Analyser::PitchTrack), whole), lowHz);
+        };
+
+        // Analysed following the lower voice, keeping short notes
+        m_window->doChooseVoiceToFollow(true);
+        m_window->doChooseAnalysisOption("prune-analysis", false);
+        m_window->discardModifications();
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 60000);
+        const AnalysisSettings::Values analysedWith = m_window->songAnalysis();
+        QCOMPARE(Analyser::voiceToFollow(analysedWith), int(Analyser::FollowLower));
+        QCOMPARE(analysedWith.at("prune-analysis"), QVariant(false));
+        const QString session = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(session));
+
+        // Chosen since, and saved, but not analysed with
+        m_window->doChooseVoiceToFollow(false);
+        m_window->doChooseAnalysisOption("prune-analysis", true);
+        const AnalysisSettings::Values users = Analyser::getUserAnalysisSettings();
+        QCOMPARE(Analyser::voiceToFollow(users), int(Analyser::FollowStrongest));
+        QCOMPARE(users.at("prune-analysis"), QVariant(true));
+        QVERIFY(m_window->songAnalysis() == users);
+        const QString chosenSince = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(chosenSince));
+        AnalysisSettings::Stored stored = AnalysisSettings::read
+            (chosenSince, Analyser::getAnalysisSettings());
+        QVERIFY(stored.found);
+        QVERIFY2(stored.values == analysedWith,
+                 "the session keeps options its reference was not analysed with");
+
+        // Opened: the session's options, which the settings do not hear of
+        const auto before = allSettings();
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->songAnalysis() == analysedWith);
+        QVERIFY(m_window->followingLowerChecked());
+        QVERIFY(!m_window->analysisOptionAction("prune-analysis")->isChecked());
+        QVERIFY(lowerShare() >= 0.9);
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+
+        // Analyse Now gives the same line, though the user's settings
+        // would follow the strongest voice
+        m_window->discardModifications();
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 60000);
+        QVERIFY2(lowerShare() >= 0.9,
+                 qPrintable(QString("Analyse Now on the session: %1 on the lower")
+                            .arg(lowerShare())));
+        QCOMPARE(settingsChangedByOpening(before), QStringList());
+
+        // A take of the song is analysed with the song's options
+        m_window->seekTo(0);
+        take(600);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->analyser2());
+        QVERIFY2(m_window->analyser2()->getAnalysisOptions() == analysedWith,
+                 "the take is analysed with options other than the song's");
+
+        // The session saved with options chosen since opens with those of
+        // its analysis
+        reopenSession(chosenSince);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->songAnalysis() == analysedWith);
+        QVERIFY(m_window->followingLowerChecked());
+
+        // A new song starts from the user's, and so does a window with no
+        // song in it
+        openReference(writeWav(crossingThird()));
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->songAnalysis() == users);
+        QVERIFY(!m_window->followingLowerChecked());
+        QVERIFY(m_window->analysisOptionAction("prune-analysis")->isChecked());
+        QVERIFY(lowerShare() < 0.7);
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        m_window->doCloseSession();
+        QVERIFY(m_window->songAnalysis() == users);
+        QVERIFY(!m_window->followingLowerChecked());
+    }
+
+    // A session saved before the analysis options were kept: nothing is
+    // known of how its reference was analysed, so it opens with the
+    // user's options and is saved again without any, until it is
+    // analysed again
+    void session_without_analysis_options() {
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 1.0)));
+        if (QTest::currentTestFailed()) return;
+        const QString session = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(session));
+        QVERIFY(AnalysisSettings::read(session, Analyser::getAnalysisSettings()).found);
+        QString stripped = removeAnalysisElement(session);
+        QVERIFY2(stripped == "", qPrintable(stripped));
+        QVERIFY(!AnalysisSettings::read(session, Analyser::getAnalysisSettings()).found);
+
+        m_window->doChooseVoiceToFollow(true);
+        m_window->doChooseAnalysisOption("onset-analysis", false);
+        const AnalysisSettings::Values users = Analyser::getUserAnalysisSettings();
+        reopenSession(session);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY(m_window->songAnalysis() == users);
+        QVERIFY(m_window->followingLowerChecked());
+        QVERIFY(!m_window->analysisOptionAction("onset-analysis")->isChecked());
+
+        const QString again = m_dir.filePath
+            (QString("session-%1.ton").arg(++m_fileCounter));
+        QVERIFY(m_window->saveSessionFile(again));
+        QVERIFY2(!AnalysisSettings::read(again, Analyser::getAnalysisSettings()).found,
+                 "options the reference was not analysed with were saved as its own");
+
+        m_window->discardModifications();
+        m_window->doAnalyseNow();
+        QTRY_VERIFY_WITH_TIMEOUT(analysed(m_window->analyser()), 30000);
+        QVERIFY(m_window->saveSessionFile(again));
+        AnalysisSettings::Stored stored =
+            AnalysisSettings::read(again, Analyser::getAnalysisSettings());
+        QVERIFY(stored.found);
+        QVERIFY(stored.values == users);
     }
 
     void load_background_music() {

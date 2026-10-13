@@ -537,7 +537,11 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     frame->setLayout(layout);
 
+    // Until a song is open, the options a new one is analysed with
+    m_songAnalysis = Analyser::getUserAnalysisSettings();
+
     m_analyser = new Analyser();
+    m_analyser->setAnalysisOptions(&m_songAnalysis);
     connect(m_analyser, SIGNAL(layersChanged()),
             this, SLOT(updateLayerStatuses()));
     connect(m_analyser, SIGNAL(layersChanged()),
@@ -1500,7 +1504,9 @@ MainWindow::resetAnalyseOptions()
     }
 
     settings.endGroup();
-    updateAnalyseStates();
+
+    // The open song's too, for its next analysis
+    setSongAnalysis(keyMap);
 }
 
 void
@@ -1512,6 +1518,9 @@ MainWindow::updateAnalyseStates()
     bool autoAnalyse = settings.value("auto-analysis", true).toBool();
     m_autoAnalyse->setChecked(autoAnalyse);
 
+    settings.endGroup();
+
+    // The rest are the open song's (m_songAnalysis)
     std::map<QString, QAction *> actions {
         { "precision-analysis", m_precise },
         { "lowamp-analysis", m_lowamp },
@@ -1519,23 +1528,42 @@ MainWindow::updateAnalyseStates()
         { "prune-analysis", m_prune }
     };
 
-    auto keyMap = Analyser::getAnalysisSettings();
-    
     for (auto p: actions) {
-        auto ki = keyMap.find(p.first);
-        if (ki != keyMap.end()) {
-            p.second->setChecked(settings.value
-                                 (ki->first, ki->second).toBool());
+        auto oi = m_songAnalysis.find(p.first);
+        if (oi != m_songAnalysis.end()) {
+            p.second->setChecked(oi->second.toBool());
         } else {
             throw std::logic_error("Internal error: One or more analysis settings keys not found in map returned by Analyser: check updateAnalyseStates and getAnalysisSettings");
         }
     }
 
-    settings.endGroup();
-
-    const bool lower = Analyser::voiceToFollow() == Analyser::FollowLower;
+    const bool lower =
+        Analyser::voiceToFollow(m_songAnalysis) == Analyser::FollowLower;
     m_followStrongest->setChecked(!lower);
     m_followLower->setChecked(lower);
+}
+
+void
+MainWindow::setSongAnalysis(const AnalysisSettings::Values &options)
+{
+    m_songAnalysis = options;
+    if (m_mainMenusCreated) updateAnalyseStates();
+}
+
+void
+MainWindow::chooseAnalysisOption(QString key, QVariant value)
+{
+    // The user's, for the next new song, and the open song's
+    QSettings settings;
+    settings.beginGroup("Analyser");
+    settings.setValue(key, value);
+    settings.endGroup();
+
+    m_songAnalysis[key] = value;
+
+    // don't run analyseNow() automatically -- it's a destructive operation
+
+    updateAnalyseStates();
 }
 
 void
@@ -1561,17 +1589,7 @@ MainWindow::precisionAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
-
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("precision-analysis", set);
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("precision-analysis", a->isChecked());
 }
 
 void
@@ -1580,14 +1598,7 @@ MainWindow::voiceToFollowChosen()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("voice-to-follow", a->data().toInt());
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    updateAnalyseStates();
+    chooseAnalysisOption("voice-to-follow", a->data().toInt());
 }
 
 void
@@ -1596,17 +1607,7 @@ MainWindow::lowampAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
-
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("lowamp-analysis", set);
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("lowamp-analysis", a->isChecked());
 }
 
 void
@@ -1615,17 +1616,7 @@ MainWindow::onsetAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
-
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("onset-analysis", set);
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("onset-analysis", a->isChecked());
 }
 
 void
@@ -1634,17 +1625,7 @@ MainWindow::pruneAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
-
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("prune-analysis", set);
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("prune-analysis", a->isChecked());
 }
 
 void
@@ -3656,6 +3637,9 @@ MainWindow::closeSession()
 
     m_analyser->fileClosed();
 
+    // With no song open, the menu shows what a new one is analysed with
+    setSongAnalysis(Analyser::getUserAnalysisSettings());
+
     while (m_paneStack->getPaneCount() > 0) {
 
         Pane *pane = m_paneStack->getPane(m_paneStack->getPaneCount() - 1);
@@ -5451,6 +5435,10 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
 
     // Create the secondary analyser with the singing-track colour scheme
     m_analyser2 = new Analyser(Analyser::SecondaryColors);
+
+    // The singing is analysed with the song's options, as the reference
+    // is (all but the voice to follow apply to it)
+    m_analyser2->setAnalysisOptions(&m_songAnalysis);
 
     connect(m_analyser2, SIGNAL(layersChanged()),
             this, SLOT(updateLayerStatuses()));
@@ -7966,12 +7954,13 @@ MainWindow::toXml(QTextStream &out, bool asTemplate)
         return;
     }
 
-    // The takes of the session are one element of Tony's own inside the
-    // <sv> document (spec 6.4), which SVFileReader passes over with a
-    // warning on the terminal and nothing else.  The base class writes the
-    // document from <?xml?> to </sv> in one call and has no hook in the
-    // middle, so it writes into a string here and the element goes in
-    // before the closing tag.  A hook in the fork would save the copy.
+    // The takes of the session, and the options its reference was
+    // analysed with, are elements of Tony's own inside the <sv> document
+    // (spec 6.4), which SVFileReader passes over with a warning on the
+    // terminal and nothing else.  The base class writes the document from
+    // <?xml?> to </sv> in one call and has no hook in the middle, so it
+    // writes into a string here and the elements go in before the closing
+    // tag.  A hook in the fork would save the copy.
     QString document;
     {
         QTextStream buffer(&document);
@@ -7983,26 +7972,42 @@ MainWindow::toXml(QTextStream &out, bool asTemplate)
 
     if (closing < 0) {
         // Not a document we know where to write in: better saved without
-        // its takes than not saved at all
+        // its takes and options than not saved at all
         cerr << "MainWindow::toXml: no </sv> to write the takes before" << endl;
         out << document;
         return;
     }
 
     out << document.left(closing)
-        << TakesFile::toXml(*m_takes, m_savingSessionPath)
-        << document.mid(closing);
+        << TakesFile::toXml(*m_takes, m_savingSessionPath);
+
+    // The options the reference was analysed with, where they are known
+    // (AnalysisSettings): not those chosen since without analysing again
+    if (m_analyser) {
+        if (auto options = m_analyser->getAnalysedWith()) {
+            out << AnalysisSettings::toXml(*options);
+        }
+    }
+
+    out << document.mid(closing);
 }
 
 MainWindow::FileOpenStatus
 MainWindow::openSession(FileSource source)
 {
+    // The options the session's reference was analysed with, for
+    // analyseNewMainModel(), which the base class calls before it
+    // returns (sessionLoaded())
+    m_sessionAnalysis = AnalysisSettings::read
+        (source.getLocalFilename(), Analyser::getAnalysisSettings());
+
     // m_restoringSession: modelAdded() queues a call that would make a take
     // of the audio model the document carries, and restoreTakes() is what
     // deals with that model instead
     m_restoringSession = true;
     FileOpenStatus status = MainWindowBase::openSession(source);
     m_restoringSession = false;
+    m_sessionAnalysis = AnalysisSettings::Stored();
 
     if (status != FileOpenSucceeded) return status;
 
@@ -10754,6 +10759,19 @@ MainWindow::analyseNewMainModel()
                    pane, SLOT(zoomToRegion(QRect)));
         connect(pane, SIGNAL(regionOutlined(QRect)),
                 this, SLOT(regionOutlined(QRect)));
+
+        // The options of the song, before anything of it is analysed: a
+        // session's own, with which its file says its reference was
+        // analysed; otherwise, a new song or a session from before the
+        // options were kept, the user's.  Neither writes a setting: a
+        // load is no choice of the user's
+        if (m_restoringSession && m_sessionAnalysis.found) {
+            setSongAnalysis(m_sessionAnalysis.values);
+            m_analyser->setAnalysedWith(m_sessionAnalysis.values);
+        } else {
+            setSongAnalysis(Analyser::getUserAnalysisSettings());
+            m_analyser->setAnalysedWith(std::nullopt);
+        }
 
         QString error = m_analyser->newFileLoaded
             (m_document, getMainModelId(), m_paneStack, pane);

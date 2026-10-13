@@ -21,9 +21,11 @@
 #include <QMutex>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <vector>
 
+#include "AnalysisSettings.h"
 #include "TakeEvents.h"
 #include "VoiceGate.h"
 #include "VoiceThreshold.h"
@@ -211,13 +213,20 @@ public:
     static std::map<QString, QVariant> getAnalysisSettings();
 
     /**
+     * The user's own options, which a new song is analysed with: each
+     * setting of getAnalysisSettings(), or its default where the user
+     * has never chosen one.
+     */
+    static AnalysisSettings::Values getUserAnalysisSettings();
+
+    /**
      * Which voice the reference's pitch track follows where two or
      * three sing, as the pyin fork's voicefollow parameter numbers
-     * them: the setting "voice-to-follow" of the group "Analyser", read
-     * as one of the two the menu offers, the strongest and the lower.
-     * The fork can also follow the higher one, which a selection's pitch
-     * candidates offer, and the middle one, which Tony does not offer:
-     * neither holds through a whole song well enough to choose for one
+     * them: the option "voice-to-follow", read as one of the two the
+     * menu offers, the strongest and the lower.  The fork can also
+     * follow the higher one, which a selection's pitch candidates offer,
+     * and the middle one, which Tony does not offer: neither holds
+     * through a whole song well enough to choose for one
      * (docs/open-points.md).
      */
     enum VoiceToFollow {
@@ -226,8 +235,34 @@ public:
         FollowHigher = 2,
         FollowMiddle = 3
     };
-    static int voiceToFollow();
-    
+    static int voiceToFollow(const AnalysisSettings::Values &options);
+
+    /**
+     * The options this analyser's analyses are made with: those of the
+     * song open in the window, which owns them and keeps them for as
+     * long as this analyser lives.  Without them, the user's own, from
+     * the settings (an analyser of a test, on its own).
+     */
+    void setAnalysisOptions(const AnalysisSettings::Values *options) {
+        m_analysisOptions = options;
+    }
+    AnalysisSettings::Values getAnalysisOptions() const;
+
+    /**
+     * The options the pitch track and notes of our audio were made with:
+     * set when an analysis of the whole file makes them, and by the
+     * window from the session that brings them back.  None where that is
+     * not known -- a session saved before the options were kept -- or
+     * nothing has been analysed.  Edits made to the track since do not
+     * change it.
+     */
+    std::optional<AnalysisSettings::Values> getAnalysedWith() const {
+        return m_analysedWith;
+    }
+    void setAnalysedWith(std::optional<AnalysisSettings::Values> options) {
+        m_analysedWith = options;
+    }
+
     /**
      * Analyse the selection and schedule asynchronous adds of
      * candidate layers for the region it contains. Returns "" on
@@ -546,6 +581,10 @@ protected:
 
     // Set only by a test (setPlainAnalysis())
     bool m_plainAnalysis;
+
+    // See setAnalysisOptions() and getAnalysedWith()
+    const AnalysisSettings::Values *m_analysisOptions;
+    std::optional<AnalysisSettings::Values> m_analysedWith;
 
     // What the last merge did, for the undo command of the recording
     // that asked for the analysis (see getRangedPitchChange())

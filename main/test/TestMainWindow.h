@@ -135,6 +135,21 @@ public:
     }
     bool followingLowerChecked() const { return m_followLower->isChecked(); }
     void doResetAnalyseOptions() { resetAnalyseOptions(); }
+    // The open song's analysis options, which the analysers read
+    AnalysisSettings::Values songAnalysis() const { return m_songAnalysis; }
+    // One of the Analysis menu's four checkable options, by its key
+    QAction *analysisOptionAction(QString key) const {
+        if (key == "precision-analysis") return m_precise;
+        if (key == "lowamp-analysis") return m_lowamp;
+        if (key == "onset-analysis") return m_onset;
+        if (key == "prune-analysis") return m_prune;
+        return nullptr;
+    }
+    // Chosen in the menu, as the user does: triggered if not so already
+    void doChooseAnalysisOption(QString key, bool on) {
+        QAction *action = analysisOptionAction(key);
+        if (action && action->isChecked() != on) action->trigger();
+    }
     QAction *eraseSingingAction() { return m_eraseSingingAction; }
     QAction *selectRecordingAction() { return m_selectRecordingAction; }
     void doUpdateMenuStates() { updateMenuStates(); }

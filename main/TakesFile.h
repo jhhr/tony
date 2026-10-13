@@ -23,8 +23,9 @@ class SingingTakes;
 class QXmlStreamReader;
 
 /**
- * The takes of a session in the session file: the one element of Tony's
- * own that a `.ton` carries (spec 6.4).
+ * The takes of a session in the session file: an element of Tony's own
+ * that a `.ton` carries (spec 6.4), as it does the options its reference
+ * was analysed with (AnalysisSettings).
  *
  *     <takes active="Take 2">
  *       <take name="Take 1" audio="C:/songs/take-1.wav"/>
