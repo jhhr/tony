@@ -763,7 +763,10 @@ Analyser::buildAnalysisTransforms(Transforms &transforms, bool voiceTracks)
     // tracks the period two voices share, an octave or two below both,
     // and tracks the echo tails as if sung: the fork's parameters for
     // such vocals (docs/forks.md).  The singing is one clean voice, which
-    // they would only cut a little short at the end of each note, so its
+    // they would only cut a little short at the end of each note, and
+    // whose lowest partials a small speaker may have lost (Calibrate
+    // Audio's tones through a phone's): their harmonic salience tracks
+    // the lowest partial left, where pYIN's own finds the period.  So its
     // analyser keeps pYIN's own (and so a take's ranged run,
     // analyseRange(), still gives what the whole-file run gives)
     if (m_colorScheme != SecondaryColors && !m_plainAnalysis) {

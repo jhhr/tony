@@ -55,9 +55,17 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   leap and reaches the new note within a hop of where it is sung, while pYIN's own, the
   takes', goes unvoiced over it and comes back two or three hops (12 to 17 ms) later. A
   take sung exactly in time so shows its leaps that much behind the reference's.
-  Analysing takes as the reference is would remove it, at the cost on a clean voice that
-  the weak spot on the reference's analysis gives; the latency tests compare the two
-  analysed alike (`Analyser::setPlainAnalysis()`).
+  Analysing takes as the reference is, but for the level floor and the voice to follow,
+  would remove it: in the pitch lab such a take reaches the latency tests' leap 4.6 ms
+  after it is sung, as the reference does, against 16.3 ms. It is the harmonic salience
+  that does it; the voiced floor and the voice hold without it gain nothing. But the
+  salience tracks a tone whose lowest partials a small speaker lost at the lowest partial
+  left, where pYIN's own finds the period: Calibrate Audio's 196 Hz tone through a phone's
+  speaker comes out at 588 Hz (`reference_tones_found_without_their_fundamental`, small
+  speaker), with or without `commonf0`. Such a take also voices a note after silence
+  three hops before it, where the window first holds some of it (`shift_aligns_onset`).
+  So takes keep pYIN's own until the salience finds such a period; the latency tests
+  compare the two analysed alike (`Analyser::setPlainAnalysis()`).
 
 ## Not built
 
@@ -127,7 +135,12 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   low voice whose fundamental the separation took away was tracked two octaves up (the
   third song, 57 to 59 s). A rough low note whose partials between the harmonics come
   within about 16 dB of them is tracked an octave down, as pYIN's own analysis does.
-  Echoes less than 13 dB below the singing's level are still tracked. And on one clean
+  Echoes less than 13 dB below the singing's level are still tracked. A passage sung about
+  20 dB softer than the singing of the ten seconds before it is not voiced until those
+  ten seconds have passed (in the pitch lab, a phrase 22 dB softer straight after a loud
+  one: 0 of 172 hops voiced, against all of them by pYIN's own). The level floor's
+  reference counts only sung frames, so rests do not lower it, but a soft passage is
+  sung. And on one clean
   voice it does a little worse than pYIN's own analysis (in the pitch lab, 0.984 of sung
   frames on the voice against 0.998, half of it the level floor cutting the quiet ends of
   notes short), which is why takes keep pYIN's own.

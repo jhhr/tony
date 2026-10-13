@@ -72,8 +72,11 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   a song's vocals separated from a mix have; the secondary one runs pYIN's own analysis.
   A take is one clean voice, which those parameters would only cut a little short at the
   end of each note, and a take's ranged run must give what a whole-file run gives, which
-  the level floor, judged on the ten seconds before each frame, would not. A recording
-  made with no reference becomes the reference, and is analysed as one.
+  the level floor, judged on the ten seconds before each frame, would not. Their harmonic
+  salience also tracks a tone whose lowest partials a small speaker lost at the lowest
+  partial left, where pYIN's own finds the period: Calibrate Audio's 196 Hz tone through
+  a phone's speaker at 588 Hz. A recording made with no reference becomes the reference,
+  and is analysed as one.
 - **The analysis options are the song's.** The Analysis menu shows those of the song that
   is open (`MainWindow::m_songAnalysis`), and every analysis of the song is made with
   them: the reference's, its pitch candidates and the takes' (both analysers read them,
