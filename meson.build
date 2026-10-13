@@ -1778,7 +1778,7 @@ if system != 'android'
   test('tony-core', tony_core_test_exe,
        timeout: 300)
   test('tony-app', tony_app_test_exe,
-       depends: pyin_plugin,
+       depends: [ pyin_plugin, chp_plugin ],
        timeout: 1800,
        # A suite of its own, which the Windows CI job leaves out of
        # meson test (--no-suite app) and runs as shards instead

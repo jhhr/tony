@@ -35,7 +35,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 4 -C build_mingw Tony.exe pyin.dll test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe pyin.dll chp.dll test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -66,7 +66,9 @@ Each part of that is there because of something that went wrong:
 - **`pyin.dll` is named too.** `Tony.exe` and the app tests load the pYIN plugin beside
   them, and none of them links it, so nothing else rebuilds it: after a change in
   `pyin/` they would run the old one, which ignores, without a word, an analysis
-  parameter it does not have. `build.bat` builds it with `Tony.exe`.
+  parameter it does not have. `build.bat` builds it with `Tony.exe`. So is `chp.dll`,
+  the CHP plugin a frequency range's re-analysis runs: the app suite's test of one skips
+  without it.
 - `Tony.exe` cannot be relinked while it is running. Close the app first.
 
 Success is `[N/N] Linking target ...` and `exit:0`; nothing to do is `ninja: no work to
@@ -171,7 +173,7 @@ The environment's settings:
 Then, from the repository root:
 
 ```sh
-ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-tony-dev test-pyin > tmp/build.log 2>&1
+ninja -j 4 -C build tony pyin.so chp.so test-tony-core test-tony-app test-tony-dev test-pyin > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 deploy/linux/run-tests.sh test-tony-core     # a few seconds
 deploy/linux/run-tests.sh test-tony-app      # under two minutes
@@ -179,7 +181,7 @@ deploy/linux/run-tests.sh test-tony-dev      # when AGENTS.md says to run it; tw
 build/test-pyin > tmp/test-pyin.log 2>&1; echo "exit:$?"   # when pyin/ changed; seconds
 ```
 
-No `.exe` on Linux; the plugin target is `pyin.so`. `run-tests.sh` runs an executable as
+No `.exe` on Linux; the plugin targets are `pyin.so` and `chp.so`. `run-tests.sh` runs an executable as
 several processes, each with a shard of every suite ([testing.md](testing.md#running));
 `test-pyin` is Boost.Test, not QtTest, and is run as it is.
 The one-process runs of AGENTS.md work too, from `build/`.

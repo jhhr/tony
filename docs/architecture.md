@@ -360,7 +360,9 @@ volume and the background music in `MainWindow`.
   - A creation's handle (a frequency range's) is gone once it has reported back to
     `layersCreated()`, wanted or not (a cancelled one still reports, with layers that have
     no models): the analyser lets go of it there, or the next selection cancels a deleted
-    creation.
+    creation. Closing the song cancels and forgets it, for the document, deleted, tells a
+    creation still running that it is gone, and the creation then reports to nobody (the
+    svapp fork's `Document::createDerivedLayersAsync()`).
   - Choose Higher Pitch and Choose Lower Pitch go to the next candidate above or below
     what the track holds in the selection now, not after the last one chosen
     (`PitchCandidates::step()`): the track may have been edited, and from a track that

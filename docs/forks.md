@@ -86,6 +86,11 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   `RemoveLayerCommand`, which forced deletes never run.
 - `Document::toXml()` leaves out layers with `setSavedInSession(false)` and any model only
   such layers show; what was derived from it is written as not derived.
+- `~Document` tells the layer creations still running (`createDerivedLayersAsync()`) that
+  it is gone, and they then report to nobody, releasing the models their transforms
+  finish with. Upstream's reported to the deleted document and its handler, which Tony's
+  analyser answered by deleting the layers through that document (closing a song while a
+  selection's frequency range was still being analysed).
 - `MainWindowBase::RecordCreateUnshownModel`: record into a model with no pane, layer or
   "Import Recorded Audio" command. Before it, that command referred to a pane Tony had
   deleted, so the history had to be cleared before every take (undo depth one).

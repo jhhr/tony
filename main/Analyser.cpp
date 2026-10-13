@@ -306,6 +306,18 @@ Analyser::fileClosed()
 {
     cerr << "Analyser::fileClosed" << endl;
     cancelAnalyses();
+    {
+        // A re-analysis of a frequency range still on its way: cancelled
+        // while the document is still here, and forgotten. When the
+        // document is deleted it tells the creation so, and the creation
+        // reports to nobody (Document::createDerivedLayersAsync()): kept,
+        // the handle would be left to a creation that has deleted itself
+        QMutexLocker locker(&m_asyncMutex);
+        if (m_currentAsyncHandle && m_document) {
+            m_document->cancelAsyncLayerCreation(m_currentAsyncHandle);
+        }
+        m_currentAsyncHandle = 0;
+    }
     clearVoiceTracks();
     m_layers.clear();
     m_analysedWith.reset();

@@ -31,7 +31,7 @@ from sh. A Linux cloud session builds otherwise: see the end of this section.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 4 -C build_mingw Tony.exe pyin.dll test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe pyin.dll chp.dll test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 ```
 

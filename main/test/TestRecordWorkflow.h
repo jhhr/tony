@@ -72,6 +72,7 @@
 #include "base/PlayParameters.h"
 #include "base/RecordDirectory.h"
 #include "transform/ModelTransformerFactory.h"
+#include "transform/TransformFactory.h"
 #include "widgets/CommandHistory.h"
 #include "widgets/InteractiveFileFinder.h"
 #include "widgets/LevelPanToolButton.h"
@@ -8283,6 +8284,73 @@ private slots:
                  "the voice tracks made again are not those of the analysis");
         QVERIFY2(pitchesIn(a->getLayer(Analyser::PitchTrack), edited).empty(),
                  "making the voice tracks changed the session's pitch track");
+    }
+
+    // A layer creation still running when its document is deleted reports
+    // to nobody: the layers it would have given its handler were the
+    // document's, and went with it, and the handler may have gone too
+    // (svapp's Document::createDerivedLayersAsync()). It called the
+    // handler, which deleted the layers again through the deleted document
+    void document_deleted_during_a_layer_creation() {
+        struct Handler : public sv::Document::LayerCreationHandler {
+            int calls = 0;
+            void layersCreated(sv::Document::LayerCreationAsyncHandle,
+                               std::vector<sv::Layer *>,
+                               std::vector<sv::Layer *>) override {
+                ++calls;
+            }
+        } handler;
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 30.0)));
+        if (QTest::currentTestFailed()) return;
+        sv::Transform t = sv::TransformFactory::getInstance()->getDefaultTransformFor
+            ("vamp:pyin:pyin:smoothedpitchtrack", rate);
+        t.setStepSize(hop);
+        t.setBlockSize(2048);
+        m_window->document()->createDerivedLayersAsync
+            ({ t }, m_window->analyser()->getMainModelId(), &handler);
+        QVERIFY2(sv::ModelTransformerFactory::getInstance()->haveRunningTransformers(),
+                 "the race was not set up: the transform had finished");
+        m_window->doCloseSession();
+        QTRY_VERIFY_WITH_TIMEOUT(!sv::ModelTransformerFactory::getInstance()
+                                 ->haveRunningTransformers(), 60000);
+        QTest::qWait(200);
+        QCOMPARE(handler.calls, 0);
+    }
+
+    // The re-analysis of a frequency range (a box drawn on the
+    // spectrogram) still on its way when the song is closed: cancelled
+    // and forgotten, as the document will tell it nothing more. A handle
+    // kept was left pending for good, and the next re-analysis cancelled
+    // a creation that had gone
+    void closing_forgets_a_re_analysis_on_its_way() {
+        if (!sv::TransformFactory::getInstance()->haveTransform
+            ("vamp:chp:constrainedharmonicpeak:peak")) {
+            QSKIP("the CHP plugin is not built beside the tests");
+        }
+        makeWindow(FakeAudioIO::Config());
+        openReference(writeWav(tone(lowHz, 30.0)));
+        if (QTest::currentTestFailed()) return;
+        Analyser *a = m_window->analyser();
+        QString error = a->reAnalyseSelection
+            (sv::Selection(sv::sv_frame_t(0.5 * rate), sv::sv_frame_t(29.5 * rate)),
+             Analyser::FrequencyRange(150, 300));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(a->isReAnalysing());
+        m_window->doCloseSession();
+        QVERIFY2(!a->isReAnalysing(), "the closed song's re-analysis is still "
+                 "pending");
+        QTRY_VERIFY_WITH_TIMEOUT(!sv::ModelTransformerFactory::getInstance()
+                                 ->haveRunningTransformers(), 60000);
+
+        openReference(writeWav(tone(lowHz, 2.0)));
+        if (QTest::currentTestFailed()) return;
+        a = m_window->analyser();
+        error = a->reAnalyseSelection
+            (sv::Selection(sv::sv_frame_t(0.5 * rate), sv::sv_frame_t(1.5 * rate)),
+             Analyser::FrequencyRange(150, 300));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(!a->isReAnalysing(), 30000);
     }
 
     // A song's session keeps the analysis options its reference was

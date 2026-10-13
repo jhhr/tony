@@ -30,11 +30,13 @@ it when a change touches what the development checks drive (see
   even when every test passes. Running the executable by hand has no timeout.
 - `main()` of the app and dev suites replaces `VAMP_PATH` with the executable's directory,
   so an installed pYIN is never the one tested; their meson tests `depends:` on
-  `pyin_plugin` because no test executable links `pyin.dll`. Build `pyin.dll` (`pyin.so`
-  on Linux) too when running by hand after a clean or a change in `pyin/`. Without it
-  every test that waits for an analysis hangs until QtTest's five-minute watchdog
-  aborts the run; with an old one, a test of a new analysis parameter fails as if the
-  parameter did nothing, since a plugin ignores a parameter it does not have.
+  `pyin_plugin` because no test executable links `pyin.dll`, and the app suite's on
+  `chp_plugin` too, for its test of a frequency range's re-analysis, which skips without
+  it. Build `pyin.dll` (`pyin.so` on Linux) too when running by hand after a clean or a
+  change in `pyin/`. Without it every test that waits for an analysis hangs until
+  QtTest's five-minute watchdog aborts the run; with an old one, a test of a new analysis
+  parameter fails as if the parameter did nothing, since a plugin ignores a parameter it
+  does not have.
 - The mains set the organisation/application names to `tony-tests` / `test-tony-*` (a
   shard's name with a suffix of its own, see "Running") and every suite works in a
   `QTemporaryDir`, so the user's QSettings and record directory are never touched.
