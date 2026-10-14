@@ -6,7 +6,7 @@ forks under `github.com/jhhr` that exist only for this Tony fork:
 
 | Directory | Fork branch | Why it is forked |
 | --- | --- | --- |
-| `svcore/` | `jhhr/svcore` `tony-customizations` | Qt 6.11 build fixes, and one of its own tests made to pass on macOS. No behaviour change. |
+| `svcore/` | `jhhr/svcore` `tony-customizations` | One of its own tests made to pass on macOS. No behaviour change. |
 | `svgui/` | `jhhr/svgui` `tony-customizations` | See below. |
 | `svapp/` | `jhhr/svapp` `tony-customizations` | See below. |
 | `bqaudiostream/` | `jhhr/bqaudiostream` `master` | `<shobjidl.h>` instead of `<shobjidl_core.h>` under MinGW, needed for `-DHAVE_MEDIAFOUNDATION`. |
@@ -21,6 +21,27 @@ made for Tony's feature branches are merged there: svgui's `feat/tonyandroid` (t
 scale, the record frame ratio, the lyrics' text scale) and svapp's and bqaudioio's
 `feat/wasapi` (the stream kept running, the drivers). A checkout left on one of those is
 not what the lock file names: move it to `tony-customizations`.
+
+svcore, svgui and svapp keep up with upstream's `default` by merging it into
+`tony-customizations` (never by rebasing, which would leave the pins in Tony's history
+unreachable), then building Tony and running its whole suites against the merge before
+the pins move. On the development machine upstream is `origin`; in a cloud session,
+where `origin` is the fork, add it first:
+`git remote add upstream https://github.com/sonic-visualiser/<library>`. What upstream
+does that Tony has to allow for:
+
+- svgui paints a view on a thread of its own on macOS by default, and elsewhere when
+  `SV_USE_THREADED_PAINT` is set. Tony's `main()`, and the app and dev suites' mains,
+  set `SV_NO_THREADED_PAINT` unless `SV_USE_THREADED_PAINT` is set, so that a pane paints
+  on the GUI thread everywhere. The fork's additions and Tony's own layers were made for
+  that: what they keep between paints has no lock, and the GUI thread writes the models
+  they draw. With threaded painting on, the app suite crashes within seconds, in the
+  lyrics: their layout, which the layer caches, made again by one thread while another
+  reads it.
+- A model's change signals reach its layers, and through them the views, by the event
+  loop (svgui's `Layer::connectSignals()` queues them, against a mutex deadlock): a view
+  drops its cache for a change only once control is back in the event loop. Code that
+  changes a model and paints at once (`TestViewCache`) has to deliver them first.
 
 ## Changing a fork
 
@@ -111,7 +132,10 @@ gitignored. Pass the directory as the search path explicitly, or use `grep -rn` 
   the device, true by default as upstream behaves: Tony's is false on every platform, so
   the stream runs on between takes, and Tony suspends it itself once it has idled (on
   Android) or when Android sends it to the background
-  ([recording.md](recording.md#latency)).
+  ([recording.md](recording.md#latency)). Upstream's `stop()` also closes the device's
+  input (`suppressRecordSide(true)`), and its `record()` opens it again; the fork closes
+  it only along with the suspend, as PortAudio's closes and reopens the whole stream to
+  do it, which moves the alignment the takes share.
 
 ### svgui
 

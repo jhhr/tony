@@ -49,6 +49,11 @@ int main(int argc, char *argv[])
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
 
+    // Panes painted on the GUI thread, as main() has them
+    if (qEnvironmentVariableIsEmpty("SV_USE_THREADED_PAINT")) {
+        qputenv("SV_NO_THREADED_PAINT", "1");
+    }
+
     // Names distinct from the application's, so that nothing here reads
     // or writes the user's real Tony settings, and a shard's distinct
     // from the other shards', so that shards running at once keep apart

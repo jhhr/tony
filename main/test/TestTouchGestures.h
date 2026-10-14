@@ -131,7 +131,7 @@ class TestTouchGestures : public QObject
     sv::Pane *strip() { return m_window->paneStack()->getPane(1); }
 
     double framesPerPixel() {
-        return PinchZoom::framesPerPixel(pane()->getZoomLevel());
+        return PinchZoom::framesPerPixel(pane()->getRoundedZoomLevel());
     }
 
     sv::MultiSelection::SelectionList selections() {
@@ -290,9 +290,12 @@ class TestTouchGestures : public QObject
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
             m_dialogs.push_back(description);
+            // Cancel: see TestRecordWorkflow::dismissDialog()
+            QAbstractButton *cancel = box->escapeButton();
             QList<QAbstractButton *> buttons = box->buttons();
-            if (!buttons.isEmpty()) {
-                buttons.last()->click();
+            if (!cancel && !buttons.isEmpty()) cancel = buttons.last();
+            if (cancel) {
+                cancel->click();
                 return;
             }
         } else {
@@ -678,7 +681,7 @@ private slots:
                            startLevel).decremented(),
              sv::ZoomConstraint::RoundDown);
         QVERIFY(framesPerPixel() < startLevel);
-        QVERIFY(p->getZoomLevel() == expected);
+        QVERIFY(p->getRoundedZoomLevel() == expected);
         QCOMPARE(p->getCentreFrame(), centre);
     }
 

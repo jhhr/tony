@@ -84,7 +84,13 @@ class TestPlotSize : public QObject
                      QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::white);
         QPainter painter(&image);
-        sv::ViewProxy proxy(m_pane, ratio);
+        sv::ViewProxy::Parameters params;
+        params.view = m_pane;
+        params.centreFrame = m_pane->getCentreFrame();
+        params.zoomLevel = m_pane->getRawZoomLevel();
+        params.scaleFactor = ratio;
+        params.alignmentModelId = {};
+        sv::ViewProxy proxy(params);
         layer->paint(&proxy, painter, image.rect());
         painter.end();
         return image;
