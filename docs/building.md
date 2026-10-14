@@ -12,7 +12,10 @@ Linux and macOS ones build the upstream way. All three run the test suites
 next (`actions/cache`): the libraries, about two thirds of the build, rarely change. The
 Android one builds the APK with the scripts a cloud session uses, and runs no tests. The
 workflows run on pull requests, and on `default` once one is merged into it; a branch with
-no pull request is not built.
+no pull request is not built. MSYS2's `mingw64` repository dropped `rubberband` and
+`libid3tag` in October 2026, as it has many other packages (`ucrt64` still has them): the
+Windows workflow installs their last `mingw64` builds by URL with `pacman -U`, and a
+machine set up afresh needs the same.
 
 # Building on Windows (MSYS2 MinGW-w64)
 

@@ -59,7 +59,6 @@ jobs:
           mingw-w64-x86_64-zlib
           mingw-w64-x86_64-fftw
           mingw-w64-x86_64-libsamplerate
-          mingw-w64-x86_64-rubberband
           mingw-w64-x86_64-libsndfile
           mingw-w64-x86_64-flac
           mingw-w64-x86_64-libogg
@@ -67,10 +66,20 @@ jobs:
           mingw-w64-x86_64-opus
           mingw-w64-x86_64-opusfile
           mingw-w64-x86_64-libmad
-          mingw-w64-x86_64-libid3tag
           mingw-w64-x86_64-portaudio
           mingw-w64-x86_64-serd
           mingw-w64-x86_64-sord
+
+    # MSYS2's mingw64 repository dropped these two in October 2026, as it
+    # has many other packages (ucrt64 still has them). Their last builds
+    # are still in the repository, and what they depend on is installed
+    # above: by URL
+    - name: dropped-packages
+      shell: msys2 {0}
+      run: |
+        pacman -U --noconfirm --needed \
+          https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-rubberband-3.3.0-2-any.pkg.tar.zst \
+          https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libid3tag-0.16.4-1-any.pkg.tar.zst
 
     # The libraries, about two thirds of the build, rarely change. A pull
     # request's run starts from its own last run's cache, or else from
