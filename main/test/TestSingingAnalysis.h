@@ -45,9 +45,11 @@
 #include <QObject>
 #include <QtTest>
 #include <QSignalSpy>
+#include <QElapsedTimer>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QThread>
 
 #include <algorithm>
 #include <map>
@@ -781,6 +783,36 @@ private slots:
                  qPrintable(QString("primary median %1 Hz").arg(p)));
         QVERIFY2(std::abs(TestSignals::centsBetween(s, singingHz)) < 10.0,
                  qPrintable(QString("secondary median %1 Hz").arg(s)));
+    }
+
+    void analysis_finished_before_its_layers_is_reported() {
+        // The document starts a transform before it gives the layers
+        // that show it their models, so a short one can finish in
+        // between, and then says so to no layer: seen on a busy CI
+        // machine. Made to happen here: the document's notice of the
+        // analysis's first model holds the GUI thread until that model
+        // is complete
+        sv::ModelId audio = addSingingModel(tone(singingHz, 1.0));
+        bool held = false, finishedFirst = false;
+        auto holder = connect(m_document, &sv::Document::modelAdded,
+                              this, [&](sv::ModelId id) {
+            auto model = sv::ModelById::get(id);
+            if (held || !model || model->getSourceModel() != audio) return;
+            held = true;
+            QElapsedTimer timer;
+            timer.start();
+            while (!model->isReady() && timer.elapsed() < 30000) {
+                QThread::msleep(5);
+            }
+            finishedFirst = model->isReady();
+        });
+
+        Analyser analyser(Analyser::SecondaryColors);
+        analyse(analyser, audio);
+        disconnect(holder);
+        if (QTest::currentTestFailed()) return;
+        QVERIFY2(held && finishedFirst,
+                 "the analysis did not finish before its layers were made");
     }
 
     void harmony_tracked_in_the_reference_only() {

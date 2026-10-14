@@ -868,6 +868,14 @@ Analyser::addAnalyses()
     configureAnalysisLayers();
     connectAnalysisLayers();
 
+    // The transform runs from the moment the document makes it, before
+    // the layers above are given their models: one that finished in
+    // between has said so to nobody. Looked at from the event loop, as
+    // startVoiceRun() does, where its notices would have come
+    QMetaObject::invokeMethod(this, [this]() {
+        layerCompletionChanged({});
+    }, Qt::QueuedConnection);
+
     if (withVoices) {
         startVoiceRun(std::vector<Layer *>(layers.begin() + shown, layers.end()));
     }

@@ -101,6 +101,11 @@ follow. `MainWindow` then only fills the struct in and puts the answer on screen
   the analyser's audio model as its **source model**. This one rule is what session
   restore, the audio swap and take switching all rest on, and it is why layers of
   inactive takes have their source model cleared (see [takes.md](takes.md)).
+- **Once an analysis's layers are made, its completion is looked at again from the event
+  loop**: the whole file's, a range's and the voice tracks' alike. The document starts a
+  transform before it gives the layers their models, and a short one can finish in
+  between: its notice then reaches no layer, and `initialAnalysisCompleted()`, which the
+  live dots after a take and the wait for an analysis wait on, would never come.
 - `Analyser::fileClosed()` clears the layers but **not** `m_fileModel`.
 - Helper objects that own one layer each and are only wired by `MainWindow`:
   `AlternatePitchTrack`, `CoverageStrip`, `LyricsTrack`. All three watch
