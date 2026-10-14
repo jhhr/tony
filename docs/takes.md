@@ -150,7 +150,9 @@ call returns, and waits for the merge the same way whatever pYIN took.
 - **pYIN stamps one frame of every run twice** in fixed-lag mode: the last frame of
   `process()` comes again first from `getRemainingFeatures()`, 100 hops before the end.
   Whole-file tracks have it too, harmlessly. In a ranged run it falls inside W, so the
-  merge drops the second copy. `pyin` is upstream and untouched.
+  merge drops the second copy, as the reference's voice tracks keep it once
+  ([architecture.md](architecture.md#selection-and-tools)). The pyin fork stamps it as
+  upstream does.
 - Every remove and add is recorded (`getRangedPitchChange()` / `getRangedNotesChange()`)
   for undo.
 - One ranged run at a time. A second `analyseRange()` abandons the first; so do

@@ -19,10 +19,10 @@ no pull request is not built.
 ## From cmd or PowerShell: `build.bat`
 
 ```
-.\build.bat           build Tony.exe
+.\build.bat           build Tony.exe and pyin.dll
 .\build.bat run       build, then launch
 .\build.bat launch    launch without building
-.\build.bat test      meson test: tony-core, tony-app, tony-dev and four svcore suites
+.\build.bat test      meson test: tony-core, tony-app, tony-dev, pyin and four svcore suites
 .\build.bat clean     wipe build_mingw and reconfigure (only for a broken build directory)
 ```
 
@@ -35,7 +35,7 @@ From PowerShell its output is safe to capture: `.\build.bat *> tmp\build.log`.
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-ninja -j 4 -C build_mingw Tony.exe test-tony-core.exe test-tony-app.exe test-tony-dev.exe > tmp/build.log 2>&1
+ninja -j 4 -C build_mingw Tony.exe pyin.dll chp.dll test-tony-core.exe test-tony-app.exe test-tony-dev.exe test-pyin.exe > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 tail -20 tmp/build.log
 ```
@@ -63,6 +63,12 @@ Each part of that is there because of something that went wrong:
 - **Write ninja's exit status into the log.** The status of a `ninja ...; tail ...` chain
   is that of `tail`.
 - **Targets carry the extension**: `test-tony-app.exe`, not `test-tony-app`.
+- **`pyin.dll` is named too.** `Tony.exe` and the app tests load the pYIN plugin beside
+  them, and none of them links it, so nothing else rebuilds it: after a change in
+  `pyin/` they would run the old one, which ignores, without a word, an analysis
+  parameter it does not have. `build.bat` builds it with `Tony.exe`. So is `chp.dll`,
+  the CHP plugin a frequency range's re-analysis runs: the app suite's test of one skips
+  without it.
 - `Tony.exe` cannot be relinked while it is running. Close the app first.
 
 Success is `[N/N] Linking target ...` and `exit:0`; nothing to do is `ninja: no work to
@@ -75,7 +81,7 @@ Reconfigure from scratch (rarely needed):
 
 ```sh
 export PATH="/c/msys64/mingw64/bin:$PATH" MINGW_PREFIX="C:/msys64/mingw64"
-meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 4 -C build_mingw Tony.exe >> tmp/build.log 2>&1
+meson setup --wipe build_mingw > tmp/build.log 2>&1 && ninja -j 4 -C build_mingw Tony.exe pyin.dll >> tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log
 ```
 
@@ -104,7 +110,8 @@ echo "exit:$?" >> tmp/build.log
   and build it: it must compile with no `main/dev/` file
   ([calibrate-audio.md](calibrate-audio.md), §6).
 - Windows headers define macros named `near` and `far` (empty), `min`, `max`, `ERROR`, `IN`
-  and `OUT`. Do not use them as identifiers: a build on Linux does not catch it.
+  and `OUT`. Do not use them as identifiers: a build on Linux does not catch it, but
+  compiling a file there with `-Dnear= -Dfar=` does, for those two.
 - The macOS SDK's `MacTypes.h` declares `normal`, `bold`, `italic`, `underline`,
   `outline`, `shadow`, `condense` and `extend` in the global namespace. A function of one
   of those names, even in an anonymous namespace, makes each unqualified call to it
@@ -124,7 +131,7 @@ reached. Three scripts in `deploy/linux/` do the work:
   and NDK when `dl.google.com` is reachable, and spends what is left of four minutes filling
   ccache from a build of the libraries. Qt for Android and the Android build's C libraries
   are not in the snapshot: they take far longer than it allows. It also writes an
-  `autoMode` entry to `/root/.claude/settings.json` by which auto mode trusts four of the
+  `autoMode` entry to `/root/.claude/settings.json` by which auto mode trusts five of the
   library forks (all but `bqaudioio`) as it does Tony's own repository
   ([forks.md](forks.md#changing-a-fork)): auto mode reads that from the user's settings,
   never from the repository's `.claude/settings.json`. The snapshot is kept only when the
@@ -166,15 +173,17 @@ The environment's settings:
 Then, from the repository root:
 
 ```sh
-ninja -j 4 -C build tony pyin.so test-tony-core test-tony-app test-tony-dev > tmp/build.log 2>&1
+ninja -j 4 -C build tony pyin.so chp.so test-tony-core test-tony-app test-tony-dev test-pyin > tmp/build.log 2>&1
 echo "exit:$?" >> tmp/build.log; tail -20 tmp/build.log
 deploy/linux/run-tests.sh test-tony-core     # a few seconds
 deploy/linux/run-tests.sh test-tony-app      # under two minutes
 deploy/linux/run-tests.sh test-tony-dev      # when AGENTS.md says to run it; two minutes
+build/test-pyin > tmp/test-pyin.log 2>&1; echo "exit:$?"   # when pyin/ changed; seconds
 ```
 
-No `.exe` on Linux; the plugin target is `pyin.so`. `run-tests.sh` runs an executable as
-several processes, each with a shard of every suite ([testing.md](testing.md#running)).
+No `.exe` on Linux; the plugin targets are `pyin.so` and `chp.so`. `run-tests.sh` runs an executable as
+several processes, each with a shard of every suite ([testing.md](testing.md#running));
+`test-pyin` is Boost.Test, not QtTest, and is run as it is.
 The one-process runs of AGENTS.md work too, from `build/`.
 
 Measured on 2026-09-26 (the sharded runs on 2026-09-27 as well):

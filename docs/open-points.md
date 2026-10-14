@@ -50,9 +50,40 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
 - **The thresholds** of the sweep finder, the verdicts and the dev checks are starting
   values, to be tuned from the report files of real runs (what to send back:
   [calibrate-audio.md](calibrate-audio.md), §8).
+- **After a leap a take's pitch reaches the new note later than the reference's.** The
+  pitch HMM moves at most a semitone a frame: the reference's analysis glides across a
+  leap and reaches the new note within a hop of where it is sung, while pYIN's own, the
+  takes', goes unvoiced over it and comes back two or three hops (12 to 17 ms) later. A
+  take sung exactly in time so shows its leaps that much behind the reference's.
+  Analysing takes as the reference is, but for the level floor and the voice to follow,
+  would remove it: in the pitch lab such a take reaches the latency tests' leap 4.6 ms
+  after it is sung, as the reference does, against 16.3 ms. It is the harmonic salience
+  that does it; the voiced floor and the voice hold without it gain nothing. But the
+  salience tracks a tone whose lowest partials a small speaker lost at the lowest partial
+  left, where pYIN's own finds the period: Calibrate Audio's 196 Hz tone through a phone's
+  speaker comes out at 588 Hz (`reference_tones_found_without_their_fundamental`, small
+  speaker), with or without `commonf0`. Such a take also voices a note after silence
+  three hops before it, where the window first holds some of it (`shift_aligns_onset`).
+  So takes keep pYIN's own until the salience finds such a period; the latency tests
+  compare the two analysed alike (`Analyser::setPlainAnalysis()`).
 
 ## Not built
 
+- **No higher or middle voice to follow through a whole song.** The pyin fork follows
+  either ([forks.md](forks.md#pyin)), but neither holds through a song: where three
+  voices sing, the higher takes the middle one, as it finds no top voice an octave above
+  the lowest, and where two sing, the middle takes now one, now the other. On the pitch
+  lab's second song the higher kept the top voice in 0.44 of the frames where several
+  sang (the lower: the lowest in 0.91). So Analysis > Voice to Follow offers the
+  strongest and the lower, and the higher is offered per selection, by the pitch
+  candidates and Prefer Higher Voice, where one can see whether it found the voice.
+- **An echo canceller ahead of pYIN**: the pitch lab's front end found the wrong delay on
+  the second song (0.16 s, where the repeats are at 0.48 and 0.96 s) and made its track a
+  little worse. It would need a delay estimate that holds first.
+- **FCPE**, a neural pitch tracker (MIT licence, 22 MB of weights, about 500 lines to port
+  to C++), did as well as the fork's analysis in the pitch lab (0.96 of sung frames on a
+  voice on the test set, 0.92 to 0.97 on the songs), but tracks reverb tails and changes
+  voice two or three times a second. A candidate for an optional analysis.
 - **Beyond the three drivers** ([audio-drivers.md](audio-drivers.md), §8): WASAPI's
   exclusive mode and WDM-KS, lower still but taking the device from every other program.
 - Showing two takes at once, or any comparison of takes other than switching.
@@ -98,6 +129,31 @@ library forks are in [forks.md](forks.md). Remove an item when it is dealt with.
   is not known. `TestUiChecks::grabPaneRedrawn()` works around it.
 - With no audio device at all, "Couldn't open audio device" is shown again for every file
   opened (`MainWindowBase::createAudioIO()` tries each time).
+- **The reference's analysis of separated vocals** ([forks.md](forks.md#pyin)) still goes
+  wrong in places. Across a leap, and where the voiced floor carries the track from one
+  voice to another across a gap, it draws a short line through the pitches between. A
+  low voice whose fundamental the separation took away was tracked two octaves up (the
+  third song, 57 to 59 s). A rough low note whose partials between the harmonics come
+  within about 16 dB of them is tracked an octave down, as pYIN's own analysis does.
+  Echoes less than 13 dB below the singing's level are still tracked. A passage sung about
+  20 dB softer than the singing of the ten seconds before it is not voiced until those
+  ten seconds have passed (in the pitch lab, a phrase 22 dB softer straight after a loud
+  one: 0 of 172 hops voiced, against all of them by pYIN's own). The level floor's
+  reference counts only sung frames, so rests do not lower it, but a soft passage is
+  sung. And on one clean
+  voice it does a little worse than pYIN's own analysis (in the pitch lab, 0.984 of sung
+  frames on the voice against 0.998, half of it the level floor cutting the quiet ends of
+  notes short), which is why takes keep pYIN's own.
+- **Following the lower voice** ([forks.md](forks.md#pyin)) needs a second voice 1 to
+  9.5 semitones from the track for most of two seconds. A voice an octave below, or one
+  that joins for a note or two, is not followed: the track there is the strongest
+  voice's. In the pitch lab it kept the lower voice in 0.92 and 0.91 of the two songs'
+  frames where several sang, but in only 0.6 to 0.77 where the lower voice was the lead
+  itself shifted down a third or a fourth, as loud (the test set), and in 0.77 where it
+  was 4 dB quieter throughout, on one of the two synthetic singers (0.99 on the other).
+  A reverb tail holding one note under the next can look like a second voice: on the
+  one-voice song the gate opened over about 2% of the singing, there without moving the
+  track off the voice.
 - **If pYIN fails part-way, the live dots wait for ever**: they are removed on
   `initialAnalysisCompleted`, which then never comes.
 - **`Analyser::newFileLoaded()` error path for the singing track** (pYIN plugin missing):

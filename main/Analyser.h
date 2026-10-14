@@ -21,10 +21,13 @@
 #include <QMutex>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <vector>
 
+#include "AnalysisSettings.h"
 #include "TakeEvents.h"
+#include "VoiceTracks.h"
 #include "VoiceGate.h"
 #include "VoiceThreshold.h"
 
@@ -209,13 +212,105 @@ public:
      * group in QSettings.
      */
     static std::map<QString, QVariant> getAnalysisSettings();
-    
+
     /**
-     * Analyse the selection and schedule asynchronous adds of
-     * candidate layers for the region it contains. Returns "" on
-     * success or a user-readable error string on failure. If the
-     * frequency range isConstrained(), analysis will be constrained
-     * to that range.
+     * The user's own options, which a new song is analysed with: each
+     * setting of getAnalysisSettings(), or its default where the user
+     * has never chosen one.
+     */
+    static AnalysisSettings::Values getUserAnalysisSettings();
+
+    /**
+     * Which voice the reference's pitch track follows where two or
+     * three sing, as the pyin fork's voicefollow parameter numbers
+     * them: the option "voice-to-follow", read as one of the two the
+     * menu offers, the strongest and the lower.  The fork can also
+     * follow the higher one, which a selection's pitch candidates offer,
+     * and the middle one, which Tony does not offer: neither holds
+     * through a whole song well enough to choose for one
+     * (docs/open-points.md).
+     */
+    enum VoiceToFollow {
+        FollowStrongest = 0,
+        FollowLower = 1,
+        FollowHigher = 2,
+        FollowMiddle = 3
+    };
+    static int voiceToFollow(const AnalysisSettings::Values &options);
+
+    /**
+     * The options this analyser's analyses are made with: those of the
+     * song open in the window, which owns them and keeps them for as
+     * long as this analyser lives.  Without them, the user's own, from
+     * the settings (an analyser of a test, on its own).
+     */
+    void setAnalysisOptions(const AnalysisSettings::Values *options) {
+        m_analysisOptions = options;
+    }
+    AnalysisSettings::Values getAnalysisOptions() const;
+
+    /**
+     * The options the pitch track and notes of our audio were made with:
+     * set when an analysis of the whole file makes them, and by the
+     * window from the session that brings them back.  None where that is
+     * not known -- a session saved before the options were kept -- or
+     * nothing has been analysed.  Edits made to the track since do not
+     * change it.
+     */
+    std::optional<AnalysisSettings::Values> getAnalysedWith() const {
+        return m_analysedWith;
+    }
+    void setAnalysedWith(std::optional<AnalysisSettings::Values> options) {
+        m_analysedWith = options;
+    }
+
+    /**
+     * The reference's voice tracks (VoiceTracks.h): its pitch track as
+     * the whole-file analysis gave it following each voice, made in the
+     * same run, or kept by the session that brought the track back.
+     * They are there once that run has finished; until then, and for the
+     * singing's analyser always, a selection has no candidates of its
+     * own and there is no voice to prefer.
+     */
+    bool haveVoiceTracks() const { return m_voiceTracks.isComplete(); }
+    const VoiceTracks &getVoiceTracks() const { return m_voiceTracks; }
+
+    /**
+     * The voice tracks a session kept, for the pitch track and notes
+     * this analyser has just claimed from it.
+     */
+    void setVoiceTracks(const VoiceTracks &tracks);
+
+    /**
+     * Make the voice tracks of a pitch track that was analysed before
+     * they were kept, as a session saved then brings it back: a run of
+     * the whole-file analysis that gives the voices' tracks alone, and
+     * leaves the pitch track and notes as they are. Nothing if there are
+     * tracks, a run is on its way, or there is no pitch track. "" or a
+     * user-readable error string.
+     */
+    QString analyseVoiceTracks();
+
+    /// A run that makes the voice tracks is on its way
+    bool isMakingVoiceTracks() const { return !m_voiceLayers.empty(); }
+
+    /**
+     * Put a voice's track into the pitch track within the selection, in
+     * place of what it held there: Prefer Lower Voice and Prefer Higher
+     * Voice. Nothing without the voice tracks. Makes the edit commands
+     * of the pitch track's layer: the caller wraps them in a compound
+     * command.
+     */
+    void chooseVoice(sv::Selection sel, VoiceTracks::Voice voice);
+
+    /**
+     * Make the pitch candidates for a selection, and keep what the pitch
+     * track holds there for abandonReAnalysis(). Those of the reference
+     * are its voice tracks within the selection, made at once (or as
+     * soon as the voice tracks are, if they are still being made); those
+     * of a frequency range (isConstrained()) are analysed, and come
+     * asynchronously. Returns "" on success or a user-readable error
+     * string on failure.
      */
     QString reAnalyseSelection(sv::Selection sel, FrequencyRange range);
 
@@ -296,6 +391,17 @@ public:
     void setRangedMergeHeld(bool held);
 
     /**
+     * For the tests only: analyse with pYIN's own parameters, as the
+     * singing's analyser does, though this is the reference's.  A test
+     * that checks where a take was placed by comparing its pitch steps
+     * with the reference's needs the two analysed alike: at a leap the
+     * reference's analysis glides to the new note and reaches it two or
+     * three hops before pYIN's own (docs/open-points.md).  Never set in
+     * the application.
+     */
+    void setPlainAnalysis(bool plain) { m_plainAnalysis = plain; }
+
+    /**
      * What the last ranged merge took out of and put into the pitch
      * track and the notes.  Reversing these two changes undoes the
      * merge, which is how the recording that asked for it is made
@@ -332,10 +438,42 @@ public:
 
     /**
      * If a re-analysis has been activated, switch the selected area
-     * of the main pitch track to a different candidate from the
-     * analysis results.
+     * of the main pitch track to the candidate a step up or down from
+     * what it holds now (pitchCandidateStep()). Nothing changes if
+     * there is none.
      */
     void switchPitchCandidate(sv::Selection sel, bool up);
+
+    /**
+     * The candidate a step up (or down) from what the pitch track holds
+     * in the selection: the lowest of the candidates above it (the
+     * highest of those below), as PitchCandidates::step() compares
+     * them. -1 if there is none, or no candidates yet.
+     */
+    int pitchCandidateStep(sv::Selection sel, bool up) const;
+
+    /**
+     * Put candidate index into the pitch track within the selection, in
+     * place of what it held there, as far as the selection is the one
+     * the candidates are of: they hold nothing elsewhere. Makes the edit
+     * commands of the pitch track's layer: the caller wraps them in a
+     * compound command.
+     */
+    void chooseCandidate(sv::Selection sel, int index);
+
+    /**
+     * True once the re-analysis of this selection has finished, with
+     * candidates or without; pitchCandidatesReady() is emitted then.
+     */
+    bool havePitchCandidatesFor(sv::Selection sel) const;
+
+    /**
+     * A re-analysis of a frequency range is on its way: the layers of
+     * its transform have not come back yet.
+     */
+    bool isReAnalysing() const {
+        return m_currentAsyncHandle != 0;
+    }
 
     /**
      * Return true if it is possible to switch up to another pitch
@@ -416,12 +554,22 @@ signals:
     // changed.  Emitted before initialAnalysisCompleted()
     void rangedAnalysisMerged();
 
+    // The re-analysis of the selection has finished: its pitch
+    // candidates, if it found any, are there to choose from
+    void pitchCandidatesReady();
+
+    // The voice tracks have been made, or set from a session, or have
+    // gone with the analysis they were of (haveVoiceTracks())
+    void voiceTracksChanged();
+
 protected slots:
     void layerAboutToBeDeleted(sv::Layer *);
     void layerCompletionChanged(sv::ModelId);
     void reAnalyseRegion(sv::sv_frame_t, sv::sv_frame_t, float, float);
     void materialiseReAnalysis();
     void rangedAnalysisCompletionChanged(sv::ModelId);
+    void candidateCompletionChanged(sv::ModelId);
+    void voiceTracksCompletionChanged(sv::ModelId);
 
 protected:
     ColorScheme m_colorScheme;
@@ -438,9 +586,19 @@ protected:
     FrequencyRange m_reAnalysingRange;
     std::vector<sv::Layer *> m_reAnalysisCandidates;
     int m_currentCandidate;
+    bool m_reAnalysisDone;
     bool m_candidatesVisible;
     sv::Document::LayerCreationAsyncHandle m_currentAsyncHandle;
     QMutex m_asyncMutex;
+
+    // See haveVoiceTracks()
+    VoiceTracks m_voiceTracks;
+
+    // The voices' outputs of a run that is making the voice tracks, by
+    // VoiceTracks::Voice: registered with the document, so that deleting
+    // them releases their models, and in no view, as a ranged
+    // analysis's are. Empty when no run is on its way
+    std::vector<sv::Layer *> m_voiceLayers;
 
     // A ranged analysis in progress (analyseRange()). The layers are
     // registered with the document but added to no view, so nothing
@@ -465,6 +623,13 @@ protected:
 
     // Set only by a test (setRangedMergeHeld())
     bool m_rangedMergeHeld;
+
+    // Set only by a test (setPlainAnalysis())
+    bool m_plainAnalysis;
+
+    // See setAnalysisOptions() and getAnalysedWith()
+    const AnalysisSettings::Values *m_analysisOptions;
+    std::optional<AnalysisSettings::Values> m_analysedWith;
 
     // What the last merge did, for the undo command of the recording
     // that asked for the analysis (see getRangedPitchChange())
@@ -499,8 +664,23 @@ protected:
     // The two pYIN transforms of a full analysis (smoothed pitch track
     // and notes) with the parameters the settings ask for. Shared with
     // analyseRange(), which must produce within its range just what a
-    // whole-file analysis produces. "" on success, else an error string
-    QString buildAnalysisTransforms(sv::Transforms &transforms);
+    // whole-file analysis produces. With voiceTracks, for the reference,
+    // the three voices' track outputs follow, from the same run, where
+    // the plugin has them (see VoiceTracks). "" on success, else an error
+    // string
+    QString buildAnalysisTransforms(sv::Transforms &transforms,
+                                    bool voiceTracks = false);
+
+    // Take the layers of the voices' outputs of a run just started, by
+    // VoiceTracks::Voice, and listen for its end
+    void startVoiceRun(const std::vector<sv::Layer *> &layers);
+
+    // Stop a run making the voice tracks, if one is going, and delete
+    // its layers
+    void discardVoiceRun();
+
+    // Forget the voice tracks, saying so if there were any
+    void clearVoiceTracks();
 
     // Merge a finished ranged analysis into the pitch and notes models
     // and delete the temporaries
@@ -526,7 +706,20 @@ protected:
     void connectAnalysisLayers();
 
     void discardPitchCandidates();
-    
+
+    // Whether a selection's pitch candidates are the voices, cut from
+    // the voice tracks: the reference's. Otherwise they are pYIN's own,
+    // LocalCandidatePYIN's
+    bool offersVoices() const;
+
+    // The candidates of the selection being re-analysed, from the voice
+    // tracks, if they are there: each voice's track within it, those
+    // that are the same line there given once (see the definition)
+    void makeVoiceCandidates();
+
+    // A pitch candidate's layer into the pane, as one: see the definition
+    void adoptCandidate(sv::TimeValueLayer *layer);
+
     // Document::LayerCreationHandler method
     void layersCreated(sv::Document::LayerCreationAsyncHandle,
                        std::vector<sv::Layer *>, std::vector<sv::Layer *>);

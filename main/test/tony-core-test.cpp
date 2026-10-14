@@ -15,6 +15,7 @@
 #include "TestRealtimeYin.h"
 #include "TestRealtimePitchTracker.h"
 #include "TestOctaveSlips.h"
+#include "TestPitchCandidates.h"
 #include "TestLatencyShift.h"
 #include "TestCoverage.h"
 #include "TestDecodedPcm.h"
@@ -25,7 +26,9 @@
 #include "TestTakeAudio.h"
 #include "TestTakeEvents.h"
 #include "TestSingingTakes.h"
+#include "TestAnalysisSettings.h"
 #include "TestTakesFile.h"
+#include "TestVoiceTracks.h"
 #include "TestTakeTiming.h"
 #include "TestVerticalZoom.h"
 #include "TestSongScroll.h"
@@ -103,6 +106,12 @@ int main(int argc, char *argv[])
     }
 
     {
+        TestPitchCandidates t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestLatencyShift t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
@@ -163,7 +172,19 @@ int main(int argc, char *argv[])
     }
 
     {
+        TestAnalysisSettings t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
         TestTakesFile t;
+        if (runSuite(&t, argc, argv)) ++good;
+        else ++bad;
+    }
+
+    {
+        TestVoiceTracks t;
         if (runSuite(&t, argc, argv)) ++good;
         else ++bad;
     }

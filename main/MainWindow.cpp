@@ -33,6 +33,7 @@
 #include "PlaybackSettings.h"
 #include "TakeEvents.h"
 #include "TakeLayers.h"
+#include "SessionXml.h"
 #include "TakesFile.h"
 #include "TouchGestures.h"
 #include "VoiceThreshold.h"
@@ -272,6 +273,8 @@ MainWindow::MainWindow(AudioMode audioMode,
     m_ffwdAction(0),
     m_rwdAction(0),
     m_intelligentActionOn(true), //GF: !!! temporary
+    m_followStrongest(nullptr),
+    m_followLower(nullptr),
     m_activityLog(new ActivityLog()),
     m_keyReference(new HotkeyReference()),
     m_hotkeys(nullptr),
@@ -534,7 +537,11 @@ MainWindow::MainWindow(AudioMode audioMode,
 
     frame->setLayout(layout);
 
+    // Until a song is open, the options a new one is analysed with
+    m_songAnalysis = Analyser::getUserAnalysisSettings();
+
     m_analyser = new Analyser();
+    m_analyser->setAnalysisOptions(&m_songAnalysis);
     connect(m_analyser, SIGNAL(layersChanged()),
             this, SLOT(updateLayerStatuses()));
     connect(m_analyser, SIGNAL(layersChanged()),
@@ -552,6 +559,10 @@ MainWindow::MainWindow(AudioMode audioMode,
             this, &MainWindow::syncSongScrollBar);
     connect(m_analyser, &Analyser::rangedAnalysisMerged,
             this, &MainWindow::syncSongScrollBar);
+    // Prefer Lower Voice and Prefer Higher Voice wait for the voice
+    // tracks, which the analysis makes as it finishes
+    connect(m_analyser, &Analyser::voiceTracksChanged,
+            this, [this]() { updateMenuStates(); });
 
     m_takes = new SingingTakes(this);
     m_coverageStrip = new CoverageStrip(this);
@@ -1082,6 +1093,28 @@ MainWindow::setupEditMenu()
     menu->addAction(action);
     m_rightButtonMenu->addAction(action);
 
+    // Enabled in updateMenuStates(): with a selection, once the
+    // reference's voice tracks are there
+    action = new QAction(tr("Prefer Higher Voice"), this);
+    action->setShortcut(tr("Ctrl+Shift+Up"));
+    action->setStatusTip(tr("Make the pitch track follow the highest voice all through the selected region"));
+    m_hotkeys->add("prefer-higher-voice", action);
+    connect(action, &QAction::triggered, this, &MainWindow::preferHigherVoice);
+    action->setEnabled(false);
+    m_preferHigherVoiceAction = action;
+    menu->addAction(action);
+    m_rightButtonMenu->addAction(action);
+
+    action = new QAction(tr("Prefer Lower Voice"), this);
+    action->setShortcut(tr("Ctrl+Shift+Down"));
+    action->setStatusTip(tr("Make the pitch track follow the lowest voice all through the selected region"));
+    m_hotkeys->add("prefer-lower-voice", action);
+    connect(action, &QAction::triggered, this, &MainWindow::preferLowerVoice);
+    action->setEnabled(false);
+    m_preferLowerVoiceAction = action;
+    menu->addAction(action);
+    m_rightButtonMenu->addAction(action);
+
     m_showCandidatesAction = new QAction(tr("Show Pitch Candidates"), this);
     m_showCandidatesAction->setShortcut(tr("Ctrl+Return"));
     m_showCandidatesAction->setStatusTip(tr("Toggle the display of alternative pitch candidates for the selected region"));
@@ -1367,6 +1400,22 @@ MainWindow::setupAnalysisMenu()
     connect(m_prune, SIGNAL(triggered()), this, SLOT(pruneAnalysisToggled()));
     menu->addAction(m_prune);
 
+    // The reference's analysis only: the singing of a take is one voice
+    QMenu *follow = menu->addMenu(tr("&Voice to Follow"));
+    QActionGroup *followGroup = new QActionGroup(this);
+    m_followStrongest = new QAction(tr("&Strongest Voice"), this);
+    m_followStrongest->setStatusTip(tr("Where two or three voices sing at once, make the reference's pitch track follow the loudest of them, which changes where their levels cross"));
+    m_followStrongest->setData(Analyser::FollowStrongest);
+    m_followLower = new QAction(tr("&Lower Voice"), this);
+    m_followLower->setStatusTip(tr("Where two or three voices sing at once, make the reference's pitch track follow the lowest of them all through; where one voice sings, the track is as with the strongest"));
+    m_followLower->setData(Analyser::FollowLower);
+    for (QAction *a : { m_followStrongest, m_followLower }) {
+        a->setCheckable(true);
+        followGroup->addAction(a);
+        follow->addAction(a);
+        connect(a, &QAction::triggered, this, &MainWindow::voiceToFollowChosen);
+    }
+
     menu->addSeparator();
 
     action = new QAction(tr("Reset Options to Defaults"), this);
@@ -1461,7 +1510,9 @@ MainWindow::resetAnalyseOptions()
     }
 
     settings.endGroup();
-    updateAnalyseStates();
+
+    // The open song's too, for its next analysis
+    setSongAnalysis(keyMap);
 }
 
 void
@@ -1473,6 +1524,9 @@ MainWindow::updateAnalyseStates()
     bool autoAnalyse = settings.value("auto-analysis", true).toBool();
     m_autoAnalyse->setChecked(autoAnalyse);
 
+    settings.endGroup();
+
+    // The rest are the open song's (m_songAnalysis)
     std::map<QString, QAction *> actions {
         { "precision-analysis", m_precise },
         { "lowamp-analysis", m_lowamp },
@@ -1480,19 +1534,42 @@ MainWindow::updateAnalyseStates()
         { "prune-analysis", m_prune }
     };
 
-    auto keyMap = Analyser::getAnalysisSettings();
-    
     for (auto p: actions) {
-        auto ki = keyMap.find(p.first);
-        if (ki != keyMap.end()) {
-            p.second->setChecked(settings.value
-                                 (ki->first, ki->second).toBool());
+        auto oi = m_songAnalysis.find(p.first);
+        if (oi != m_songAnalysis.end()) {
+            p.second->setChecked(oi->second.toBool());
         } else {
             throw std::logic_error("Internal error: One or more analysis settings keys not found in map returned by Analyser: check updateAnalyseStates and getAnalysisSettings");
         }
     }
 
+    const bool lower =
+        Analyser::voiceToFollow(m_songAnalysis) == Analyser::FollowLower;
+    m_followStrongest->setChecked(!lower);
+    m_followLower->setChecked(lower);
+}
+
+void
+MainWindow::setSongAnalysis(const AnalysisSettings::Values &options)
+{
+    m_songAnalysis = options;
+    if (m_mainMenusCreated) updateAnalyseStates();
+}
+
+void
+MainWindow::chooseAnalysisOption(QString key, QVariant value)
+{
+    // The user's, for the next new song, and the open song's
+    QSettings settings;
+    settings.beginGroup("Analyser");
+    settings.setValue(key, value);
     settings.endGroup();
+
+    m_songAnalysis[key] = value;
+
+    // don't run analyseNow() automatically -- it's a destructive operation
+
+    updateAnalyseStates();
 }
 
 void
@@ -1518,17 +1595,16 @@ MainWindow::precisionAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
+    chooseAnalysisOption("precision-analysis", a->isChecked());
+}
 
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("precision-analysis", set);
-    settings.endGroup();
+void
+MainWindow::voiceToFollowChosen()
+{
+    QAction *a = qobject_cast<QAction *>(sender());
+    if (!a) return;
 
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("voice-to-follow", a->data().toInt());
 }
 
 void
@@ -1537,17 +1613,7 @@ MainWindow::lowampAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
-
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("lowamp-analysis", set);
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("lowamp-analysis", a->isChecked());
 }
 
 void
@@ -1556,17 +1622,7 @@ MainWindow::onsetAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
-
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("onset-analysis", set);
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("onset-analysis", a->isChecked());
 }
 
 void
@@ -1575,17 +1631,7 @@ MainWindow::pruneAnalysisToggled()
     QAction *a = qobject_cast<QAction *>(sender());
     if (!a) return;
 
-    bool set = a->isChecked();
-
-    QSettings settings;
-    settings.beginGroup("Analyser");
-    settings.setValue("prune-analysis", set);
-    settings.endGroup();
-
-    // don't run analyseNow() automatically -- it's a destructive operation
-
-    // make result visible explicitly, in case e.g. we just set the wrong key
-    updateAnalyseStates();
+    chooseAnalysisOption("prune-analysis", a->isChecked());
 }
 
 void
@@ -3028,6 +3074,17 @@ MainWindow::updateMenuStates()
     emit canExportNotes(haveNotes);
     emit canSnapNotes(haveSelection && haveNotes);
 
+    // The voices to prefer are the reference's voice tracks, which its
+    // analysis makes as it finishes: before that, a voice put into the
+    // pitch track would be added to by the analysis still writing there
+    bool canPreferVoice = haveSelection && m_analyser->haveVoiceTracks();
+    if (m_preferHigherVoiceAction) {
+        m_preferHigherVoiceAction->setEnabled(canPreferVoice);
+    }
+    if (m_preferLowerVoiceAction) {
+        m_preferLowerVoiceAction->setEnabled(canPreferVoice);
+    }
+
     emit canPlayWaveform(haveWaveform && haveMainModel && havePlayTarget);
     emit canPlayPitch(havePitchTrack && haveMainModel && havePlayTarget);
     emit canPlayNotes(haveNotes && haveMainModel && havePlayTarget);
@@ -3596,6 +3653,9 @@ MainWindow::closeSession()
     updateTakeCombo();
 
     m_analyser->fileClosed();
+
+    // With no song open, the menu shows what a new one is analysed with
+    setSongAnalysis(Analyser::getUserAnalysisSettings());
 
     while (m_paneStack->getPaneCount() > 0) {
 
@@ -5392,6 +5452,10 @@ MainWindow::setupSingingTrackAnalyser(sv::ModelId singingModelId, bool deferAnal
 
     // Create the secondary analyser with the singing-track colour scheme
     m_analyser2 = new Analyser(Analyser::SecondaryColors);
+
+    // The singing is analysed with the song's options, as the reference
+    // is (all but the voice to follow apply to it)
+    m_analyser2->setAnalysisOptions(&m_songAnalysis);
 
     connect(m_analyser2, SIGNAL(layersChanged()),
             this, SLOT(updateLayerStatuses()));
@@ -7907,12 +7971,13 @@ MainWindow::toXml(QTextStream &out, bool asTemplate)
         return;
     }
 
-    // The takes of the session are one element of Tony's own inside the
-    // <sv> document (spec 6.4), which SVFileReader passes over with a
-    // warning on the terminal and nothing else.  The base class writes the
-    // document from <?xml?> to </sv> in one call and has no hook in the
-    // middle, so it writes into a string here and the element goes in
-    // before the closing tag.  A hook in the fork would save the copy.
+    // The takes of the session, and the options its reference was
+    // analysed with, are elements of Tony's own inside the <sv> document
+    // (spec 6.4), which SVFileReader passes over with a warning on the
+    // terminal and nothing else.  The base class writes the document from
+    // <?xml?> to </sv> in one call and has no hook in the middle, so it
+    // writes into a string here and the elements go in before the closing
+    // tag.  A hook in the fork would save the copy.
     QString document;
     {
         QTextStream buffer(&document);
@@ -7924,26 +7989,55 @@ MainWindow::toXml(QTextStream &out, bool asTemplate)
 
     if (closing < 0) {
         // Not a document we know where to write in: better saved without
-        // its takes than not saved at all
+        // its takes and options than not saved at all
         cerr << "MainWindow::toXml: no </sv> to write the takes before" << endl;
         out << document;
         return;
     }
 
     out << document.left(closing)
-        << TakesFile::toXml(*m_takes, m_savingSessionPath)
-        << document.mid(closing);
+        << TakesFile::toXml(*m_takes, m_savingSessionPath);
+
+    // The options the reference was analysed with, where they are known
+    // (AnalysisSettings): not those chosen since without analysing again.
+    // And its voice tracks, once they are made (VoiceTracks): a session
+    // saved during the analysis has them made again when it is opened
+    if (m_analyser) {
+        if (auto options = m_analyser->getAnalysedWith()) {
+            out << AnalysisSettings::toXml(*options);
+        }
+        out << m_analyser->getVoiceTracks().toXml();
+    }
+
+    out << document.mid(closing);
 }
 
 MainWindow::FileOpenStatus
 MainWindow::openSession(FileSource source)
 {
+    // The options the session's reference was analysed with, and its
+    // voice tracks, in one reading of the file, for analyseNewMainModel(),
+    // which the base class calls before it returns (sessionLoaded())
+    const AnalysisSettings::Values defaults = Analyser::getAnalysisSettings();
+    m_sessionAnalysis = AnalysisSettings::Stored();
+    m_sessionAnalysis.values = defaults;
+    m_sessionVoiceTracks = VoiceTracks();
+    SessionXml::readElements(source.getLocalFilename(), {
+        { "analysis", [&](QXmlStreamReader &reader) {
+            m_sessionAnalysis = AnalysisSettings::fromElement(reader, defaults);
+        } },
+        { "voicetracks", [&](QXmlStreamReader &reader) {
+            m_sessionVoiceTracks = VoiceTracks::fromElement(reader);
+        } } });
+
     // m_restoringSession: modelAdded() queues a call that would make a take
     // of the audio model the document carries, and restoreTakes() is what
     // deals with that model instead
     m_restoringSession = true;
     FileOpenStatus status = MainWindowBase::openSession(source);
     m_restoringSession = false;
+    m_sessionAnalysis = AnalysisSettings::Stored();
+    m_sessionVoiceTracks = VoiceTracks();
 
     if (status != FileOpenSucceeded) return status;
 
@@ -9968,49 +10062,83 @@ MainWindow::togglePitchCandidates()
 void
 MainWindow::switchPitchUp()
 {
-    if (m_analyser->arePitchCandidatesShown()) {
-        if (m_analyser->haveHigherPitchCandidate()) {
-
-            CommandHistory::getInstance()->startCompoundOperation
-                (tr("Choose Higher Pitch Candidate"), true);
-
-            MultiSelection::SelectionList selections = m_viewManager->getSelections();
-
-            for (MultiSelection::SelectionList::iterator k = selections.begin();
-                 k != selections.end(); ++k) {
-                m_analyser->switchPitchCandidate(*k, true);
-                auxSnapNotes(*k);
-            }
-
-            CommandHistory::getInstance()->endCompoundOperation();
-        }
-    } else {
-        octaveShift(true);
-    }
+    switchPitch(true);
 }
 
 void
 MainWindow::switchPitchDown()
 {
-    if (m_analyser->arePitchCandidatesShown()) {
-        if (m_analyser->haveLowerPitchCandidate()) {
+    switchPitch(false);
+}
 
-            CommandHistory::getInstance()->startCompoundOperation
-                (tr("Choose Lower Pitch Candidate"), true);
+void
+MainWindow::switchPitch(bool up)
+{
+    MultiSelection::SelectionList selections = m_viewManager->getSelections();
 
-            MultiSelection::SelectionList selections = m_viewManager->getSelections();
-            
-            for (MultiSelection::SelectionList::iterator k = selections.begin();
-                 k != selections.end(); ++k) {
-                m_analyser->switchPitchCandidate(*k, false);
-                auxSnapNotes(*k);
-            }
-
-            CommandHistory::getInstance()->endCompoundOperation();
-        }
-    } else {
-        octaveShift(false);
+    // The next candidate up (down) from what the track holds in the
+    // selection the candidates are of. With none there -- the candidates
+    // hidden, or none above (below) the track, as in a solo, whose one
+    // candidate is the track itself -- the pitches go up (down) an octave.
+    // With the candidates shown but not yet there (the voice tracks still
+    // being made, or a frequency range still being analysed) there is
+    // nothing to step to, and no octave either: the step would have
+    // been to a voice
+    int index = -1;
+    if (m_analyser->arePitchCandidatesShown() && !selections.empty()) {
+        if (!m_analyser->havePitchCandidatesFor(*selections.begin())) return;
+        index = m_analyser->pitchCandidateStep(*selections.begin(), up);
     }
+    if (index < 0) {
+        octaveShift(up);
+        return;
+    }
+
+    CommandHistory::getInstance()->startCompoundOperation
+        (up ? tr("Choose Higher Pitch Candidate") :
+         tr("Choose Lower Pitch Candidate"), true);
+
+    for (MultiSelection::SelectionList::iterator k = selections.begin();
+         k != selections.end(); ++k) {
+        m_analyser->chooseCandidate(*k, index);
+        auxSnapNotes(*k);
+    }
+
+    CommandHistory::getInstance()->endCompoundOperation();
+}
+
+void
+MainWindow::preferLowerVoice()
+{
+    preferVoice(true);
+}
+
+void
+MainWindow::preferHigherVoice()
+{
+    preferVoice(false);
+}
+
+void
+MainWindow::preferVoice(bool lower)
+{
+    // The voices are the reference's voice tracks, the whole song's, from
+    // its analysis: until it has made them there is none, and the action
+    // is greyed out
+    if (!m_analyser->haveVoiceTracks()) return;
+
+    MultiSelection::SelectionList selections = m_viewManager->getSelections();
+    if (selections.empty()) return;
+
+    CommandHistory::getInstance()->startCompoundOperation
+        (lower ? tr("Prefer Lower Voice") : tr("Prefer Higher Voice"), true);
+    for (MultiSelection::SelectionList::iterator k = selections.begin();
+         k != selections.end(); ++k) {
+        m_analyser->chooseVoice(*k, lower ? VoiceTracks::Lower :
+                                VoiceTracks::Higher);
+        auxSnapNotes(*k);
+    }
+    CommandHistory::getInstance()->endCompoundOperation();
 }
 
 void
@@ -10631,8 +10759,35 @@ MainWindow::analyseNewMainModel()
         connect(pane, SIGNAL(regionOutlined(QRect)),
                 this, SLOT(regionOutlined(QRect)));
 
+        // The options of the song, before anything of it is analysed: a
+        // session's own, with which its file says its reference was
+        // analysed; otherwise, a new song or a session from before the
+        // options were kept, the user's.  Neither writes a setting: a
+        // load is no choice of the user's
+        if (m_restoringSession && m_sessionAnalysis.found) {
+            setSongAnalysis(m_sessionAnalysis.values);
+            m_analyser->setAnalysedWith(m_sessionAnalysis.values);
+        } else {
+            setSongAnalysis(Analyser::getUserAnalysisSettings());
+            m_analyser->setAnalysedWith(std::nullopt);
+        }
+
         QString error = m_analyser->newFileLoaded
             (m_document, getMainModelId(), m_paneStack, pane);
+
+        // The voice tracks of the pitch track a session brought back: as
+        // it kept them, or, from a session saved before they were kept or
+        // while they were still being made, made again in the background.
+        // A new song's analysis is making them already
+        if (error == "" && m_restoringSession &&
+            !m_analyser->isMakingVoiceTracks()) {
+            if (m_sessionVoiceTracks.isComplete()) {
+                m_analyser->setVoiceTracks(m_sessionVoiceTracks);
+            } else {
+                error = m_analyser->analyseVoiceTracks();
+            }
+        }
+
         if (error != "") {
             QMessageBox::warning
                 (this,

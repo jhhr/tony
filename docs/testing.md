@@ -6,11 +6,12 @@ commands are in [AGENTS.md](../AGENTS.md).
 
 | Executable | Links | Suites | Time |
 | --- | --- | --- | --- |
-| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestVoiceThreshold`, `TestInputChannel`, `TestInputDevice`, `TestInputLevel`, `TestRecordingAlignment`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestTakesFile`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
+| `test-tony-core` | `tony_core`, svcore, pyin's `YinUtil.cpp` as the YIN reference. `QCoreApplication`, no GUI. | `TestAndroidFiles`, `TestRealtimeYin`, `TestRealtimePitchTracker`, `TestOctaveSlips`, `TestPitchCandidates`, `TestVoiceThreshold`, `TestInputChannel`, `TestInputDevice`, `TestInputLevel`, `TestRecordingAlignment`, `TestVoiceGate`, `TestLatencyShift`, `TestCoverage`, `TestDecodedPcm`, `TestLogFile`, `TestPinchZoom`, `TestPopupArea`, `TestStreamLatency`, `TestTakeAudio`, `TestTakeEvents`, `TestSingingTakes`, `TestAnalysisSettings`, `TestTakesFile`, `TestVoiceTracks`, `TestTakeTiming`, `TestVerticalZoom`, `TestSongScroll`, `TestLyrics`, `TestLyricsTtml`, `TestLyricsEdit`, `TestLatencyCheck`, `TestLatencyCalibration`, `TestAudioDriverSettings`, `TestPlaybackSettings`, `TestTakeDiff`, `TestLiveDotsFeed`, `TestRunSuite` | seconds |
 | `test-tony-app` | `tony_app` + `tony_core`, a real `MainWindow` on the offscreen platform, the real pYIN plugin, `FakeAudioIO`, and Tony's icons (`tony.qrc`: without them every toolbar button is as wide as its text, and `TestCompactLayout` needs the real sizes). | `TestSingingDocument`, `TestViewCache`, `TestSingingAnalysis`, `TestLyricsLayer`, `TestPlotSize`, `TestRecordWorkflow`, `TestTouchGestures`, `TestUiChecks`, `TestCompactLayout`, `TestTouchMenuStyle`, `TestAudioCheck` | on Linux about 10.5 minutes in one process, under two in eight; on Windows about 12 in one process, measured before the touch and compact-layout suites came. Nearly all of it `TestRecordWorkflow`, `TestAudioCheck` and `TestUiChecks`, then `TestTouchGestures`: takes are recorded in real time |
 | `test-tony-dev` | as `test-tony-app`, without the icons; built only where the development checks are (any build type but `release`, `TONY_DEV_CHECKS`) | `TestDevChecks` | about 9 minutes in one process, two in eight (Linux): each test records a dev run's takes, or part of them, in real time |
+| `test-pyin` | pYIN's sources and its own tests, from the fork's `test/` ([forks.md](forks.md#pyin)): Boost.Test's header-only variant, no Qt | `TestMeanFilter`, `TestFFT`, `TestYin`, `TestYinUtil`, `TestMonoNote`, `TestMonoPitchHMM`, `TestHarmonicSalience`, `TestLevelGate`, `TestVoiceFollower`, `TestPYinVamp` (the parameters for vocals with harmonies and echoes, end to end on synthetic voices), `TestRegression` (the plugin on its `testdata/bob_02.wav`, its pitch track and notes against `test/regression`) | seconds |
 
-`meson test` / `build.bat test` runs these three (`test-tony-dev` where it is built) plus
+`meson test` / `build.bat test` runs these four (`test-tony-dev` where it is built) plus
 four svcore suites. No suite uses the
 real audio device: that is checked in the app itself, by Calibrate Audio with the
 development checks (section 1 of the [manual checklist](manual-checklist.md)).
@@ -29,9 +30,13 @@ it when a change touches what the development checks drive (see
   even when every test passes. Running the executable by hand has no timeout.
 - `main()` of the app and dev suites replaces `VAMP_PATH` with the executable's directory,
   so an installed pYIN is never the one tested; their meson tests `depends:` on
-  `pyin_plugin` because nothing else builds `pyin.dll`. Build `pyin.dll` (`pyin.so` on
-  Linux) too when running by hand after a clean: without it every test that waits for an
-  analysis hangs until QtTest's five-minute watchdog aborts the run.
+  `pyin_plugin` because no test executable links `pyin.dll`, and the app suite's on
+  `chp_plugin` too, for its test of a frequency range's re-analysis, which skips without
+  it. Build `pyin.dll` (`pyin.so` on Linux) too when running by hand after a clean or a
+  change in `pyin/`. Without it every test that waits for an analysis hangs until
+  QtTest's five-minute watchdog aborts the run; with an old one, a test of a new analysis
+  parameter fails as if the parameter did nothing, since a plugin ignores a parameter it
+  does not have.
 - The mains set the organisation/application names to `tony-tests` / `test-tony-*` (a
   shard's name with a suffix of its own, see "Running") and every suite works in a
   `QTemporaryDir`, so the user's QSettings and record directory are never touched.
@@ -403,6 +408,12 @@ it first, or break the code for a moment (mark the line `MUTATION`, and check
   on every build (`swelling()` in `TestSingingAnalysis`); one that grows quieter does not,
   as pYIN's off-by-one in the power term (below) then makes the further multiples look the
   closer.
+- **The reference and a take are analysed differently**
+  ([architecture.md](architecture.md#who-owns-what)): at a leap the reference's track
+  reaches the new note two or three hops before a take's of the same audio. A test that
+  checks where a take was placed by comparing its pitch steps with the reference's has the
+  reference analysed as a take is (`Analyser::setPlainAnalysis()`), as the latency tests
+  do.
 - **A repaint from elsewhere can hide a missing connection.** The song scroll bar's
   contour, rebuilt late, repainted the strip and so hid that it was never told of the
   playback frame, until the test first waited for the rebuild

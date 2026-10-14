@@ -14,10 +14,10 @@
 
 #include "TakesFile.h"
 
+#include "SessionXml.h"
 #include "SingingTakes.h"
 
 #include "base/XmlExportable.h"
-#include "data/fileio/BZipFileDevice.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -99,31 +99,9 @@ TakesFile::Takes
 TakesFile::read(QString sessionPath)
 {
     Takes takes;
-    if (sessionPath == "") return takes;
-
-    // A session file is bzip2, but the session reader takes a plain XML
-    // one as well, so the first bytes say which this is rather than the
-    // extension
-    bool compressed = false;
-    {
-        QFile probe(sessionPath);
-        if (!probe.open(QIODevice::ReadOnly)) return takes;
-        compressed = (probe.read(3) == QByteArray("BZh"));
-    }
-
-    if (compressed) {
-        BZipFileDevice file(sessionPath);
-        if (!file.open(QIODevice::ReadOnly)) return takes;
-        QXmlStreamReader reader(&file);
+    SessionXml::read(sessionPath, [&](QXmlStreamReader &reader) {
         takes = readFrom(reader);
-        file.close();
-    } else {
-        QFile file(sessionPath);
-        if (!file.open(QIODevice::ReadOnly)) return takes;
-        QXmlStreamReader reader(&file);
-        takes = readFrom(reader);
-    }
-
+    });
     return takes;
 }
 

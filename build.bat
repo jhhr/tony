@@ -53,8 +53,10 @@ if not exist "%BUILD_DIR%\build.ninja" (
     if errorlevel 1 exit /b %errorlevel%
 )
 
-echo Building Tony.exe ...
-ninja -C "%BUILD_DIR%" Tony.exe
+:: pyin.dll too: Tony.exe loads the one beside it, and an old one
+:: ignores the analysis parameters it does not have
+echo Building Tony.exe and pyin.dll ...
+ninja -C "%BUILD_DIR%" Tony.exe pyin.dll
 if errorlevel 1 (
     echo.
     echo BUILD FAILED. See errors above.

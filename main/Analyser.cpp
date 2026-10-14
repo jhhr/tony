@@ -14,6 +14,7 @@
 */
 
 #include "Analyser.h"
+#include "PitchCandidates.h"
 #include "PlaybackSettings.h"
 
 #include "transform/TransformFactory.h"
@@ -62,12 +63,39 @@ static const QString pyinPitchOutput = "smoothedpitchtrack";
 static const QString pyinNotesOutput = "notes";
 static const int analysisStepSize = 256;
 
+// The pyin fork's voice track outputs (voicetracks), by VoiceTracks::Voice
+static const QString pyinVoiceOutputs[VoiceTracks::voiceCount] = {
+    "strongestvoice", "lowervoice", "highervoice"
+};
+
+namespace {
+
+// A layer's voiced pitches within the selection
+PitchCandidates::Track
+trackWithin(const Layer *layer, Selection sel)
+{
+    PitchCandidates::Track track;
+    if (!layer) return track;
+    auto model = ModelById::getAs<SparseTimeValueModel>(layer->getModel());
+    if (!model) return track;
+    for (const Event &e : model->getEventsStartingWithin
+             (sel.getStartFrame(), sel.getEndFrame() - sel.getStartFrame())) {
+        if (e.getValue() > 0) {
+            track.push_back({ e.getFrame(), e.getValue() });
+        }
+    }
+    return track;
+}
+
+}
+
 Analyser::Analyser(ColorScheme colorScheme) :
     m_colorScheme(colorScheme),
     m_document(0),
     m_paneStack(0),
     m_pane(0),
     m_currentCandidate(-1),
+    m_reAnalysisDone(false),
     m_candidatesVisible(false),
     m_currentAsyncHandle(0),
     m_rangedStart(0),
@@ -77,6 +105,8 @@ Analyser::Analyser(ColorScheme colorScheme) :
     m_rangedClippedEnd(false),
     m_rangedGate(VoiceThreshold::kOff, VoiceGate::windowOffset()),
     m_rangedMergeHeld(false),
+    m_plainAnalysis(false),
+    m_analysisOptions(nullptr),
     m_waveformFaded(false)
 {
     QSettings settings;
@@ -109,8 +139,34 @@ Analyser::getAnalysisSettings()
     return { { "precision-analysis", false },
              { "lowamp-analysis", true },
              { "onset-analysis", true },
-             { "prune-analysis", true }
+             { "prune-analysis", true },
+             { "voice-to-follow", int(FollowStrongest) }
     };
+}
+
+AnalysisSettings::Values
+Analyser::getUserAnalysisSettings()
+{
+    QSettings settings;
+    return AnalysisSettings::fromSettings(settings, getAnalysisSettings());
+}
+
+int
+Analyser::voiceToFollow(const AnalysisSettings::Values &options)
+{
+    auto it = options.find("voice-to-follow");
+    int follow = (it == options.end() ? int(FollowStrongest)
+                  : it->second.toInt());
+    // Only what Analysis > Voice to Follow offers, so that the menu
+    // shows what the analysis does
+    return follow == FollowLower ? FollowLower : FollowStrongest;
+}
+
+AnalysisSettings::Values
+Analyser::getAnalysisOptions() const
+{
+    if (m_analysisOptions) return *m_analysisOptions;
+    return getUserAnalysisSettings();
 }
 
 QString
@@ -164,6 +220,11 @@ Analyser::analyseExistingFile()
         m_document->removeLayerFromView(m_pane, m_layers[Notes]);
         m_layers[Notes] = 0;
     }
+
+    // Until the analysis below has made the track again, should it
+    // fail; and the voice tracks are those of the analysis it replaces
+    m_analysedWith.reset();
+    clearVoiceTracks();
 
     return doAllAnalyses(true);
 }
@@ -233,8 +294,11 @@ Analyser::cancelAnalyses()
     }
 
     // A ranged analysis is cancelled the same way, and there is then
-    // nothing worth merging from it, so its temporary layers go too
+    // nothing worth merging from it, so its temporary layers go too; and
+    // so does a run making the voice tracks, which is either of the
+    // analysis cancelled above or a run of its own
     discardRangedAnalysis();
+    discardVoiceRun();
 }
 
 void
@@ -242,7 +306,21 @@ Analyser::fileClosed()
 {
     cerr << "Analyser::fileClosed" << endl;
     cancelAnalyses();
+    {
+        // A re-analysis of a frequency range still on its way: cancelled
+        // while the document is still here, and forgotten. When the
+        // document is deleted it tells the creation so, and the creation
+        // reports to nobody (Document::createDerivedLayersAsync()): kept,
+        // the handle would be left to a creation that has deleted itself
+        QMutexLocker locker(&m_asyncMutex);
+        if (m_currentAsyncHandle && m_document) {
+            m_document->cancelAsyncLayerCreation(m_currentAsyncHandle);
+        }
+        m_currentAsyncHandle = 0;
+    }
+    clearVoiceTracks();
     m_layers.clear();
+    m_analysedWith.reset();
     m_reAnalysisCandidates.clear();
     m_currentCandidate = -1;
     m_reAnalysingSelection = Selection();
@@ -601,7 +679,7 @@ Analyser::setWaveformFaded(bool faded)
 }
 
 QString
-Analyser::buildAnalysisTransforms(Transforms &transforms)
+Analyser::buildAnalysisTransforms(Transforms &transforms, bool voiceTracks)
 {
     auto waveFileModel = ModelById::getAs<WaveFileModel>(m_fileModel);
     if (!waveFileModel) {
@@ -623,8 +701,7 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
 	return notFound.arg(base + noteout).arg(plugname);
     }
 
-    QSettings settings;
-    settings.beginGroup("Analyser");
+    const AnalysisSettings::Values options = getAnalysisOptions();
 
     bool precise = false, lowamp = true, onset = true, prune = true;
 
@@ -635,18 +712,14 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
         { "prune-analysis", prune }
     };
 
-    auto keyMap = getAnalysisSettings();
-
     for (auto p: flags) {
-        auto ki = keyMap.find(p.first);
-        if (ki != keyMap.end()) {
-            p.second = settings.value(ki->first, ki->second).toBool();
+        auto oi = options.find(p.first);
+        if (oi != options.end()) {
+            p.second = oi->second.toBool();
         } else {
             throw std::logic_error("Internal error: One or more analysis settings keys not found in map: check buildAnalysisTransforms and getAnalysisSettings");
         }
     }
-
-    settings.endGroup();
 
     Transform t = tf->getDefaultTransformFor
         (base + f0out, waveFileModel->getSampleRate());
@@ -685,11 +758,52 @@ Analyser::buildAnalysisTransforms(Transforms &transforms)
         t.setParameter("prunethresh", 0.0f);
     }
 
+    // The reference is a song's vocals, often separated from a mix, with
+    // harmonies, doubled parts and echoes, in which pYIN's own analysis
+    // tracks the period two voices share, an octave or two below both,
+    // and tracks the echo tails as if sung: the fork's parameters for
+    // such vocals (docs/forks.md).  The singing is one clean voice, which
+    // they would only cut a little short at the end of each note, and
+    // whose lowest partials a small speaker may have lost (Calibrate
+    // Audio's tones through a phone's): their harmonic salience tracks
+    // the lowest partial left, where pYIN's own finds the period.  So its
+    // analyser keeps pYIN's own (and so a take's ranged run,
+    // analyseRange(), still gives what the whole-file run gives)
+    if (m_colorScheme != SecondaryColors && !m_plainAnalysis) {
+        t.setParameter("salmode", 1);
+        t.setParameter("candidaterule", 1);
+        t.setParameter("commonf0", 0.8f);
+        t.setParameter("levelfloor", 13);
+        t.setParameter("voicedfloor", 0.2f);
+        t.setParameter("voicehold", 3);
+        // where two or three voices sing, which one to follow
+        t.setParameter("voicefollow", voiceToFollow(options));
+    }
+
+    // Each voice's track as well, from the same run, which costs a
+    // second path for each voice the track does not follow (a quarter
+    // to a third more time): a plugin from before the fork had them
+    // makes none
+    bool withVoices = voiceTracks && offersVoices();
+    for (const QString &output : pyinVoiceOutputs) {
+        if (!tf->haveTransform(base + output)) withVoices = false;
+    }
+    if (withVoices) {
+        t.setParameter("voicetracks", 1);
+    }
+
     transforms.push_back(t);
 
     t.setOutput(noteout);
 
     transforms.push_back(t);
+
+    if (withVoices) {
+        for (const QString &output : pyinVoiceOutputs) {
+            t.setOutput(output);
+            transforms.push_back(t);
+        }
+    }
 
     return "";
 }
@@ -707,8 +821,15 @@ Analyser::addAnalyses()
     if (claimExistingAnalyses(true)) return "";
 
     Transforms transforms;
-    QString error = buildAnalysisTransforms(transforms);
+    QString error = buildAnalysisTransforms(transforms, true);
     if (error != "") return error;
+
+    // What the layers made below are made with, for the session to
+    // keep (claimed layers keep what the session that had them said)
+    m_analysedWith = getAnalysisOptions();
+
+    // A new analysis's voice tracks come from its own run
+    clearVoiceTracks();
 
 /*!!! we could have more than one pitch track...
     QString cx = "vamp:cepstral-pitchtracker:cepstral-pitchtracker:f0";
@@ -725,7 +846,15 @@ Analyser::addAnalyses()
     std::vector<Layer *> layers =
         m_document->createDerivedLayers(transforms, m_fileModel);
 
+    // The layers come in the order of the transforms: the pitch track and
+    // the notes, then the voices' tracks, which go into no view
+    const int shown = 2;
+    const bool withVoices = (int(transforms.size()) > shown &&
+                             layers.size() == transforms.size());
+
     for (int i = 0; i < (int)layers.size(); ++i) {
+
+        if (withVoices && i >= shown) break;
 
         FlexiNoteLayer *f = qobject_cast<FlexiNoteLayer *>(layers[i]);
         TimeValueLayer *t = qobject_cast<TimeValueLayer *>(layers[i]);
@@ -738,6 +867,10 @@ Analyser::addAnalyses()
 
     configureAnalysisLayers();
     connectAnalysisLayers();
+
+    if (withVoices) {
+        startVoiceRun(std::vector<Layer *>(layers.begin() + shown, layers.end()));
+    }
 
     return "";
 }
@@ -1013,8 +1146,11 @@ Analyser::reAnalyseRegion(sv_frame_t frame0, sv_frame_t frame1, float freq0, flo
 void
 Analyser::materialiseReAnalysis()
 {
+    // The end of a note's drag: the constrained re-analysis it started
+    // has one candidate, which goes in whether above or below
     if (m_reAnalysingSelection.isEmpty()) return;
-    switchPitchCandidate(m_reAnalysingSelection, true); // or false, doesn't matter
+    if (m_reAnalysisCandidates.empty()) return;
+    chooseCandidate(m_reAnalysingSelection, 0);
 }
 
 QString
@@ -1036,8 +1172,12 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
 
     if (sel.isEmpty()) return "";
 
+    // What is still on its way is of no use now. A cancelled creation
+    // still reports back, with layers that have no models, and
+    // layersCreated() deletes them as unwanted
     if (m_currentAsyncHandle) {
         m_document->cancelAsyncLayerCreation(m_currentAsyncHandle);
+        m_currentAsyncHandle = 0;
     }
 
     if (!m_reAnalysisCandidates.empty()) {
@@ -1046,11 +1186,19 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
 
     m_reAnalysingSelection = sel;
     m_reAnalysingRange = range;
+    m_reAnalysisDone = false;
 
     m_preAnalysis = Clipboard();
     Layer *myLayer = m_layers[PitchTrack];
     if (myLayer) {
         myLayer->copy(m_pane, sel, m_preAnalysis);
+    }
+
+    if (!range.isConstrained() && offersVoices()) {
+        // Cut from the voice tracks, at once; or, if they are still
+        // being made, when they are (voiceTracksCompletionChanged())
+        makeVoiceCandidates();
+        return "";
     }
 
     TransformFactory *tf = TransformFactory::getInstance();
@@ -1070,6 +1218,8 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
 
     QString notFound = tr("Transform \"%1\" not found. Unable to perform interactive analysis.<br><br>Are the %2 and %3 Vamp plugins correctly installed?");
     if (!tf->haveTransform(base + out)) {
+        // Finished, with no candidates: nothing is to wait for them
+        m_reAnalysisDone = true;
 	return notFound.arg(base + out).arg(plugname1).arg(plugname2);
     }
 
@@ -1109,6 +1259,7 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
 
     if (duration <= RealTime::zeroTime) {
         cerr << "Analyser::reAnalyseSelection: duration <= 0, not analysing" << endl;
+        m_reAnalysisDone = true;
         return "";
     }
     
@@ -1121,6 +1272,265 @@ Analyser::reAnalyseSelection(Selection sel, FrequencyRange range)
         m_document->createDerivedLayersAsync(transforms, m_fileModel, this);
 
     return "";
+}
+
+bool
+Analyser::offersVoices() const
+{
+    return m_colorScheme != SecondaryColors && !m_plainAnalysis;
+}
+
+void
+Analyser::makeVoiceCandidates()
+{
+    if (m_reAnalysingSelection.isEmpty() || !haveVoiceTracks()) return;
+    auto waveFileModel = ModelById::getAs<WaveFileModel>(m_fileModel);
+    if (!waveFileModel || !m_document || !m_pane) return;
+
+    const Selection sel = m_reAnalysingSelection;
+    const sv_samplerate_t rate = waveFileModel->getSampleRate();
+
+    // Each voice's track within the selection, the lower and the higher
+    // first: where one of them is the same line there as the strongest,
+    // it is the one kept (PitchCandidates::distinct() keeps the first of
+    // a line). The strongest's may have left it for a moment, for the
+    // other voice, where the two agree on all but a tenth of the frames
+    const VoiceTracks::Voice order[] = {
+        VoiceTracks::Lower, VoiceTracks::Higher, VoiceTracks::Strongest
+    };
+    std::vector<PitchCandidates::Track> tracks;
+    for (VoiceTracks::Voice voice : order) {
+        PitchCandidates::Track track;
+        for (const VoiceTracks::Point &p : m_voiceTracks.within
+                 (voice, sel.getStartFrame(), sel.getEndFrame())) {
+            track.push_back({ p.frame, p.hz });
+        }
+        tracks.push_back(track);
+    }
+
+    // Drawn a quarter of a second past the selection each side, for
+    // what leads into it and out of it: only what lies within it goes
+    // into the pitch track (chooseCandidate())
+    const sv_frame_t margin = sv_frame_t(rate / 4);
+
+    for (int index : PitchCandidates::distinct(tracks)) {
+
+        // A layer and model of our own, as addEmptyAnalyses() makes
+        // them, but on no source model: claimExistingAnalyses() is not
+        // to take it for a pitch track
+        Layer *layer = m_document->createLayer(LayerFactory::TimeValues);
+        TimeValueLayer *t = qobject_cast<TimeValueLayer *>(layer);
+        if (!t) {
+            if (layer) m_document->deleteLayer(layer, true);
+            continue;
+        }
+        auto model = std::make_shared<SparseTimeValueModel>
+            (rate, analysisStepSize, true);
+        model->setScaleUnits("Hz");
+        for (const VoiceTracks::Point &p : m_voiceTracks.within
+                 (order[index], sel.getStartFrame() - margin,
+                  sel.getEndFrame() + margin)) {
+            model->add(Event(p.frame, float(p.hz), ""));
+        }
+        ModelId modelId = ModelById::add(model);
+        m_document->addNonDerivedModel(modelId);
+        m_document->setModel(t, modelId);
+        adoptCandidate(t);
+    }
+
+    m_reAnalysisDone = true;
+
+    bool show = m_candidatesVisible;
+    m_candidatesVisible = !show; // to ensure the following takes effect
+    showPitchCandidates(show);
+
+    emit layersChanged();
+    emit pitchCandidatesReady();
+}
+
+void
+Analyser::adoptCandidate(TimeValueLayer *t)
+{
+    // Like every layer of our own, a candidate makes no undo commands.
+    // An undo could otherwise take it out of the pane while it stays on
+    // our list, and removing it again later left a command holding a
+    // layer already deleted. Nor is it saved: it is of a selection, and
+    // a session claiming it would have two pitch tracks
+    auto params = t->getPlayParameters();
+    if (params) {
+        params->setPlayAudible(false);
+    }
+    t->setBaseColour
+        (ColourDatabase::getInstance()->getColourIndex(tr("Bright Orange")));
+    t->setPresentationName("candidate");
+    t->setSavedInSession(false);
+    m_document->attachLayerToView(m_pane, t);
+    m_reAnalysisCandidates.push_back(t);
+}
+
+void
+Analyser::startVoiceRun(const std::vector<Layer *> &layers)
+{
+    m_voiceLayers = layers;
+
+    // By member pointer, as in connectAnalysisLayers(): emitted on the
+    // transform's thread, so delivered here queued
+    for (Layer *layer : m_voiceLayers) {
+        auto model = ModelById::get(layer->getModel());
+        if (!model) continue;
+        connect(model.get(), &Model::completionChanged,
+                this, &Analyser::voiceTracksCompletionChanged);
+    }
+
+    // A run over a short file may have finished already, and says so no
+    // more. Looked at from the event loop, as analyseRange() does
+    QMetaObject::invokeMethod(this, [this]() {
+        voiceTracksCompletionChanged({});
+    }, Qt::QueuedConnection);
+}
+
+void
+Analyser::voiceTracksCompletionChanged(ModelId)
+{
+    if (m_voiceLayers.empty()) return;
+
+    // A transform sets its outputs' completion to 100 whether it ran to
+    // the end or was abandoned, but an abandoned one has been discarded
+    // (discardVoiceRun()), so all three at 100 is a result
+    std::vector<std::shared_ptr<SparseTimeValueModel>> models;
+    for (Layer *layer : m_voiceLayers) {
+        auto model = layer ?
+            ModelById::getAs<SparseTimeValueModel>(layer->getModel()) : nullptr;
+        if (!model) {
+            cerr << "Analyser::voiceTracksCompletionChanged: a voice's "
+                 << "track has gone, making none" << endl;
+            discardVoiceRun();
+            return;
+        }
+        if (!model->isReady()) return;
+        models.push_back(model);
+    }
+
+    VoiceTracks tracks;
+    for (int v = 0; v < VoiceTracks::voiceCount; ++v) {
+        VoiceTracks::Track points;
+        for (const Event &e : models[v]->getAllEvents()) {
+            points.push_back({ e.getFrame(), double(e.getValue()) });
+        }
+        tracks.set(VoiceTracks::Voice(v), points);
+    }
+
+    // Finished, so nothing to cancel: the layers only go, and with them
+    // their models
+    std::vector<Layer *> done;
+    done.swap(m_voiceLayers);
+    for (Layer *layer : done) {
+        if (m_document) m_document->deleteLayer(layer, true);
+    }
+
+    m_voiceTracks = tracks;
+    cerr << "Analyser::voiceTracksCompletionChanged: the voice tracks are "
+         << "made: " << tracks.get(VoiceTracks::Strongest).size() << ", "
+         << tracks.get(VoiceTracks::Lower).size() << " and "
+         << tracks.get(VoiceTracks::Higher).size() << " voiced frames" << endl;
+    emit voiceTracksChanged();
+
+    // A selection made while they were being made has its candidates now
+    if (!m_reAnalysingSelection.isEmpty() && !m_reAnalysisDone &&
+        !m_reAnalysingRange.isConstrained()) {
+        makeVoiceCandidates();
+    }
+}
+
+void
+Analyser::discardVoiceRun()
+{
+    if (m_voiceLayers.empty()) return;
+
+    // Cleared before anything is cancelled or deleted, as in
+    // discardRangedAnalysis(): a completion that arrives from the
+    // transform finds no run to finish
+    std::vector<Layer *> doomed;
+    doomed.swap(m_voiceLayers);
+
+    // Before the models are released: see cancelAnalyses()
+    auto mtf = ModelTransformerFactory::getInstance();
+    for (Layer *layer : doomed) {
+        if (!layer) continue;
+        ModelId modelId = layer->getModel();
+        if (!modelId.isNone()) mtf->cancel(modelId);
+    }
+
+    for (Layer *layer : doomed) {
+        if (layer && m_document) m_document->deleteLayer(layer, true);
+    }
+}
+
+void
+Analyser::clearVoiceTracks()
+{
+    discardVoiceRun();
+    bool had = m_voiceTracks.isComplete();
+    m_voiceTracks.clear();
+    if (had) emit voiceTracksChanged();
+}
+
+void
+Analyser::setVoiceTracks(const VoiceTracks &tracks)
+{
+    discardVoiceRun();
+    m_voiceTracks = tracks;
+    emit voiceTracksChanged();
+}
+
+QString
+Analyser::analyseVoiceTracks()
+{
+    if (!offersVoices() || haveVoiceTracks() || isMakingVoiceTracks()) {
+        return "";
+    }
+    if (!m_document || !m_layers[PitchTrack]) return "";
+
+    Transforms transforms;
+    QString error = buildAnalysisTransforms(transforms, true);
+    if (error != "") return error;
+
+    // The voices' outputs alone: the pitch track and notes are the
+    // session's, edits and all
+    const int shown = 2;
+    if (int(transforms.size()) <= shown) return "";
+    Transforms voices(transforms.begin() + shown, transforms.end());
+
+    std::vector<Layer *> layers =
+        m_document->createDerivedLayers(voices, m_fileModel);
+    if (layers.size() != voices.size()) {
+        for (Layer *layer : layers) m_document->deleteLayer(layer, true);
+        return tr("Transform \"pYIN\" did not run correctly (no voice tracks)");
+    }
+
+    cerr << "Analyser::analyseVoiceTracks: making the voice tracks of a "
+         << "pitch track analysed without them" << endl;
+    startVoiceRun(layers);
+    return "";
+}
+
+void
+Analyser::chooseVoice(Selection sel, VoiceTracks::Voice voice)
+{
+    if (!haveVoiceTracks()) return;
+
+    Layer *pitchTrack = m_layers[PitchTrack];
+    if (!pitchTrack) return;
+
+    Clipboard clip;
+    for (const VoiceTracks::Point &p : m_voiceTracks.within
+             (voice, sel.getStartFrame(), sel.getEndFrame())) {
+        clip.addPoint(Event(p.frame, float(p.hz), ""));
+    }
+    pitchTrack->deleteSelection(sel);
+    pitchTrack->paste(m_pane, clip, 0, false);
+
+    stackLayers();
 }
 
 QString
@@ -1693,8 +2103,12 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
     {
         QMutexLocker locker(&m_asyncMutex);
 
-        if (handle != m_currentAsyncHandle || 
-            m_reAnalysingSelection == Selection()) {
+        // The handle is gone once this returns: whatever happens to the
+        // layers, it is no longer ours to cancel
+        const bool isCurrent = (handle && handle == m_currentAsyncHandle);
+        if (isCurrent) m_currentAsyncHandle = 0;
+
+        if (!isCurrent || m_reAnalysingSelection == Selection()) {
             // We don't want these!
             for (int i = 0; i < (int)primary.size(); ++i) {
                 m_document->deleteLayer(primary[i]);
@@ -1704,12 +2118,7 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
             }
             return;
         }
-        m_currentAsyncHandle = 0;
 
-        // Like every layer of our own, the candidates make no undo
-        // commands. An undo could otherwise take them out of the pane
-        // while they stay on our list, and removing them again later
-        // left a command holding a layer already deleted
         m_reAnalysisCandidates.clear();
 
         vector<Layer *> all;
@@ -1722,21 +2131,7 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
 
         for (int i = 0; i < (int)all.size(); ++i) {
             TimeValueLayer *t = qobject_cast<TimeValueLayer *>(all[i]);
-            if (t) {
-                auto params = t->getPlayParameters();
-                if (params) {
-                    params->setPlayAudible(false);
-                }
-                t->setBaseColour
-                    (ColourDatabase::getInstance()->getColourIndex(tr("Bright Orange")));
-                t->setPresentationName("candidate");
-                m_document->attachLayerToView(m_pane, t);
-                m_reAnalysisCandidates.push_back(t);
-                /*
-                cerr << "New re-analysis candidate model has "
-                     << ((SparseTimeValueModel *)t->getModel())->getAllEvents().size() << " point(s)" << endl;
-                */
-            }
+            if (t) adoptCandidate(t);
         }
 
         if (!all.empty()) {
@@ -1744,9 +2139,41 @@ Analyser::layersCreated(Document::LayerCreationAsyncHandle handle,
             m_candidatesVisible = !show; // to ensure the following takes effect
             showPitchCandidates(show);
         }
+
+        // The candidates fill in as their transforms run: they are
+        // ready to choose from when all have finished. By member
+        // pointer, as in connectAnalysisLayers(); emitted on the
+        // transform's thread, so delivered here queued
+        for (Layer *layer : m_reAnalysisCandidates) {
+            auto model = ModelById::get(layer->getModel());
+            if (!model) continue;
+            connect(model.get(), &Model::completionChanged,
+                    this, &Analyser::candidateCompletionChanged,
+                    Qt::UniqueConnection);
+        }
     }
 
     emit layersChanged();
+
+    // They may have finished already, and then say so no more
+    candidateCompletionChanged({});
+}
+
+void
+Analyser::candidateCompletionChanged(ModelId)
+{
+    if (m_reAnalysisDone || m_reAnalysingSelection.isEmpty() ||
+        isReAnalysing()) {
+        return;
+    }
+
+    for (Layer *layer : m_reAnalysisCandidates) {
+        auto model = ModelById::get(layer->getModel());
+        if (model && !model->isReady()) return;
+    }
+
+    m_reAnalysisDone = true;
+    emit pitchCandidatesReady();
 }
 
 bool
@@ -1767,29 +2194,56 @@ Analyser::haveLowerPitchCandidate() const
 void
 Analyser::switchPitchCandidate(Selection sel, bool up)
 {
-    if (m_reAnalysisCandidates.empty()) return;
+    int index = pitchCandidateStep(sel, up);
+    if (index < 0) return;
+    chooseCandidate(sel, index);
+}
 
-    if (up) {
-        m_currentCandidate = m_currentCandidate + 1;
-        if (m_currentCandidate >= (int)m_reAnalysisCandidates.size()) {
-            m_currentCandidate = 0;
-        }
-    } else {
-        m_currentCandidate = m_currentCandidate - 1;
-        if (m_currentCandidate < 0) {
-            m_currentCandidate = (int)m_reAnalysisCandidates.size() - 1;
-        }
+int
+Analyser::pitchCandidateStep(Selection sel, bool up) const
+{
+    if (m_reAnalysisCandidates.empty()) return -1;
+
+    std::vector<PitchCandidates::Track> candidates;
+    for (const Layer *layer : m_reAnalysisCandidates) {
+        candidates.push_back(trackWithin(layer, sel));
     }
+    return PitchCandidates::step(candidates, trackWithin(m_layers[PitchTrack], sel), up);
+}
+
+void
+Analyser::chooseCandidate(Selection sel, int index)
+{
+    if (index < 0 || index >= int(m_reAnalysisCandidates.size())) return;
 
     Layer *pitchTrack = m_layers[PitchTrack];
     if (!pitchTrack) return;
 
+    // Only where the candidates are: they are of the selection that was
+    // re-analysed, and hold nothing of another (a second selection, made
+    // with Ctrl), which their pitches would otherwise be taken out of
+    // and nothing put into
+    sv_frame_t from = std::max(sel.getStartFrame(),
+                               m_reAnalysingSelection.getStartFrame());
+    sv_frame_t to = std::min(sel.getEndFrame(),
+                             m_reAnalysingSelection.getEndFrame());
+    if (m_reAnalysingSelection.isEmpty() || to <= from) return;
+    Selection within(from, to);
+
+    m_currentCandidate = index;
+
     Clipboard clip;
-    pitchTrack->deleteSelection(sel);
-    m_reAnalysisCandidates[m_currentCandidate]->copy(m_pane, sel, clip);
+    m_reAnalysisCandidates[index]->copy(m_pane, within, clip);
+    pitchTrack->deleteSelection(within);
     pitchTrack->paste(m_pane, clip, 0, false);
 
     stackLayers();
+}
+
+bool
+Analyser::havePitchCandidatesFor(Selection sel) const
+{
+    return m_reAnalysisDone && sel == m_reAnalysingSelection;
 }
 
 void
@@ -1877,6 +2331,7 @@ Analyser::discardPitchCandidates()
 
     m_currentCandidate = -1;
     m_reAnalysingSelection = Selection();
+    m_reAnalysisDone = false;
     m_candidatesVisible = false;
 }
 
@@ -1897,6 +2352,13 @@ Analyser::layerAboutToBeDeleted(Layer *doomed)
         m_reAnalysisCandidates = notDoomed;
         // The index no longer means the candidate it did
         m_currentCandidate = -1;
+    }
+
+    // A layer of a run making the voice tracks, deleted by someone else:
+    // that run cannot finish (voiceTracksCompletionChanged() finds it
+    // gone). We clear m_voiceLayers before deleting them ourselves
+    for (Layer *&layer : m_voiceLayers) {
+        if (layer == doomed) layer = nullptr;
     }
 
     // A temporary layer of a ranged analysis, deleted by someone else --

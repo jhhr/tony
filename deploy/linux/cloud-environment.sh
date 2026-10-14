@@ -101,17 +101,26 @@ path = os.environ["TONY_AUTOMODE_SETTINGS"]
 entries = [
     "Trusted repo: besides the working repository github.com/jhhr/tony, the user's own "
     "forks of its libraries, github.com/jhhr/svcore, github.com/jhhr/svgui, "
-    "github.com/jhhr/svapp and github.com/jhhr/bqaudiostream, checked out inside the "
-    "working directory as svcore/, svgui/, svapp/ and bqaudiostream/",
-    "Source control: github.com/jhhr/tony and those four forks. Committing in the fork "
+    "github.com/jhhr/svapp, github.com/jhhr/bqaudiostream and github.com/jhhr/pyin, "
+    "checked out inside the working directory as svcore/, svgui/, svapp/, "
+    "bqaudiostream/ and pyin/",
+    "Source control: github.com/jhhr/tony and those five forks. Committing in the fork "
     "checkouts, attaching the forks to the session with push access and pushing branches "
     "to them is routine work on Tony (docs/forks.md)",
+]
+# What this script wrote before, in an older wording (fewer forks),
+# gives way to the entries above: each begins as its successor does
+earlier = [
+    "Trusted repo: besides the working repository github.com/jhhr/tony,",
+    "Source control: github.com/jhhr/tony and those ",
 ]
 settings = {}
 if os.path.exists(path):
     with open(path) as f:
         settings = json.load(f)
 environment = settings.setdefault("autoMode", {}).setdefault("environment", [])
+environment[:] = [e for e in environment
+                  if e in entries or not any(e.startswith(p) for p in earlier)]
 if not environment:
     environment.append("$defaults")
 for entry in entries:
@@ -243,7 +252,7 @@ fill_ccache() {
             # svcore, then svgui and svapp (in libtonyapp.a with main/),
             # then the rest; each step until the deadline
             svlibs=$(ninja -t targets all | sed -n 's/^\(libtonyapp\.a\.p\/sv\(gui\|app\)_[^:]*\.o\):.*/\1/p')
-            for step in libsvcore.a "$svlibs" "tony pyin.so test-tony-core test-tony-app test-tony-dev"; do
+            for step in libsvcore.a "$svlibs" "tony pyin.so test-tony-core test-tony-app test-tony-dev test-pyin"; do
                 [ -n "$step" ] || continue
                 [ "$(left)" -gt 10 ] || break
                 until_deadline nice ninja -j "$(nproc)" $step > /dev/null

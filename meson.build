@@ -1132,6 +1132,8 @@ pyin_files = [
   'pyin/libmain.cpp',
   'pyin/YinVamp.cpp',
   'pyin/PYinVamp.cpp',
+  'pyin/HarmonicSalience.cpp',
+  'pyin/VoiceFollower.cpp',
   'pyin/LocalCandidatePYIN.cpp',
   'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
   'vamp-plugin-sdk/src/vamp-sdk/PluginAdapter.cpp',
@@ -1190,6 +1192,7 @@ tony_entry_files = [
 
 # No GUI dependencies: usable from a QCoreApplication test.
 tony_core_files = [
+  'main/AnalysisSettings.cpp',
   'main/AndroidFiles.cpp',
   'main/AudioRoute.cpp',
   'main/AudioDriverSettings.cpp',
@@ -1209,10 +1212,12 @@ tony_core_files = [
   'main/LyricsTtml.cpp',
   'main/OctaveSlips.cpp',
   'main/PinchZoom.cpp',
+  'main/PitchCandidates.cpp',
   'main/PlaybackSettings.cpp',
   'main/PopupArea.cpp',
   'main/RealtimePitchTracker.cpp',
   'main/RecordingAlignment.cpp',
+  'main/SessionXml.cpp',
   'main/SettingsKey.cpp',
   'main/SingingTakes.cpp',
   'main/SongScroll.cpp',
@@ -1222,6 +1227,7 @@ tony_core_files = [
   'main/TakeDiff.cpp',
   'main/TakeEvents.cpp',
   'main/TakesFile.cpp',
+  'main/VoiceTracks.cpp',
   'main/TakeReplacement.cpp',
   'main/TakeTiming.cpp',
   'main/UserText.cpp',
@@ -1589,6 +1595,55 @@ if system != 'android'
     win_subsystem: 'console'
   )
 
+  # pYIN's own tests, from the fork's test/: its unit tests and the
+  # regression test that runs the plugin on testdata/bob_02.wav and
+  # compares its pitch track and notes with test/regression. Boost.Test,
+  # header-only, so nothing beyond the Boost headers the plugin already
+  # needs. PYIN_SOURCE_DIR is where it finds testdata/ and test/.
+
+  pyin_test_exe = executable(
+    'test-pyin',
+    'pyin/test/TestMain.cpp',
+    'pyin/test/TestMeanFilter.cpp',
+    'pyin/test/TestFFT.cpp',
+    'pyin/test/TestYin.cpp',
+    'pyin/test/TestYinUtil.cpp',
+    'pyin/test/TestMonoNote.cpp',
+    'pyin/test/TestMonoPitchHMM.cpp',
+    'pyin/test/TestHarmonicSalience.cpp',
+    'pyin/test/TestLevelGate.cpp',
+    'pyin/test/TestVoiceFollower.cpp',
+    'pyin/test/TestPYinVamp.cpp',
+    'pyin/test/TestRegression.cpp',
+    'pyin/YinUtil.cpp',
+    'pyin/Yin.cpp',
+    'pyin/SparseHMM.cpp',
+    'pyin/MonoPitchHMM.cpp',
+    'pyin/MonoNoteParameters.cpp',
+    'pyin/MonoNoteHMM.cpp',
+    'pyin/MonoNote.cpp',
+    'pyin/YinVamp.cpp',
+    'pyin/PYinVamp.cpp',
+    'pyin/HarmonicSalience.cpp',
+    'pyin/VoiceFollower.cpp',
+    'pyin/LocalCandidatePYIN.cpp',
+    'vamp-plugin-sdk/src/vamp-sdk/FFT.cpp',
+    'vamp-plugin-sdk/src/vamp-sdk/RealTime.cpp',
+    include_directories: [
+      'pyin',
+      'vamp-plugin-sdk',
+    ],
+    cpp_args: [
+      general_defines,
+      '-DPYIN_SOURCE_DIR="' + import('fs').as_posix(meson.current_source_dir() / 'pyin') + '"',
+    ],
+    link_args: [
+      general_link_args,
+    ],
+    dependencies: boost_dep,
+    win_subsystem: 'console'
+  )
+
   # Tony's own tests. Two executables here, because they differ in cost
   # and in what they link: test-tony-core needs no GUI and no audio
   # device; test-tony-app creates widgets (offscreen) and links svgui and
@@ -1600,6 +1655,7 @@ if system != 'android'
     'main/test/TestRealtimeYin.h',
     'main/test/TestRealtimePitchTracker.h',
     'main/test/TestOctaveSlips.h',
+    'main/test/TestPitchCandidates.h',
     'main/test/TestLatencyShift.h',
     'main/test/TestCoverage.h',
     'main/test/TestDecodedPcm.h',
@@ -1610,7 +1666,9 @@ if system != 'android'
     'main/test/TestTakeAudio.h',
     'main/test/TestTakeEvents.h',
     'main/test/TestSingingTakes.h',
+    'main/test/TestAnalysisSettings.h',
     'main/test/TestTakesFile.h',
+    'main/test/TestVoiceTracks.h',
     'main/test/TestTakeTiming.h',
     'main/test/TestVerticalZoom.h',
     'main/test/TestSongScroll.h',
@@ -1720,7 +1778,7 @@ if system != 'android'
   test('tony-core', tony_core_test_exe,
        timeout: 300)
   test('tony-app', tony_app_test_exe,
-       depends: pyin_plugin,
+       depends: [ pyin_plugin, chp_plugin ],
        timeout: 1800,
        # A suite of its own, which the Windows CI job leaves out of
        # meson test (--no-suite app) and runs as shards instead
@@ -1776,6 +1834,8 @@ if system != 'android'
        args: [
          '--testdir', meson.current_source_dir() / 'svcore/data/fileio/test'
        ])
+  test('pyin', pyin_test_exe,
+       timeout: 120)
 
 endif # system
 

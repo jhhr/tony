@@ -91,7 +91,8 @@
         "pyin": {
             "vcs": "git",
             "service": "github",
-            "owner": "c4dm"
+            "owner": "jhhr",
+            "branch": "tony-customizations"
         },
         "chp": {
             "vcs": "git",

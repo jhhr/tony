@@ -284,6 +284,13 @@ protected slots:
     virtual void switchPitchUp();
     virtual void switchPitchDown();
 
+    // Edit > Prefer Lower Voice / Prefer Higher Voice: the reference's
+    // pitch track in the selection becomes its lowest (highest) pitch
+    // candidate, which in a harmony follows the lower (upper) voice all
+    // through, however often the track changed voice there
+    virtual void preferLowerVoice();
+    virtual void preferHigherVoice();
+
     // Editing the singing of a take: what is in the selection is erased
     // from its audio, and the coverage range at the playhead can be
     // selected to erase a whole recording (spec 5.2)
@@ -345,6 +352,7 @@ protected slots:
     virtual void lowampAnalysisToggled();
     virtual void onsetAnalysisToggled();
     virtual void pruneAnalysisToggled();
+    virtual void voiceToFollowChosen();
     virtual void updateAnalyseStates();
 
     virtual void doubleClickSelectInvoked(sv::sv_frame_t);
@@ -752,6 +760,13 @@ protected:
     // restored one alone: restoreTakes() deals with it
     bool m_restoringSession;
 
+    // The <analysis> and <voicetracks> elements of the session being
+    // read, while it is read: analyseNewMainModel() gives the song its
+    // options from the one, and the reference its voice tracks from the
+    // other
+    AnalysisSettings::Stored m_sessionAnalysis;
+    VoiceTracks m_sessionVoiceTracks;
+
     // Name the layers the singing analyser holds after the active take,
     // which is what says whose they are (spec 6.4)
     void nameActiveTakeLayers();
@@ -1026,6 +1041,10 @@ protected:
     QAction       *m_rwdAction;
     QAction       *m_editSelectAction;
     QAction       *m_showCandidatesAction;
+    // Prefer Higher Voice and Prefer Lower Voice: greyed out until the
+    // reference's analysis has made its voice tracks (updateMenuStates())
+    QAction       *m_preferHigherVoiceAction = nullptr;
+    QAction       *m_preferLowerVoiceAction = nullptr;
     QAction       *m_toggleIntelligenceAction;
     bool           m_intelligentActionOn; // GF: !!! temporary
 
@@ -1034,6 +1053,20 @@ protected:
     QAction       *m_lowamp;
     QAction       *m_onset;
     QAction       *m_prune;
+    // Analysis > Voice to Follow: which voice the reference's pitch
+    // track follows where two or three sing (Analyser::voiceToFollow())
+    QAction       *m_followStrongest;
+    QAction       *m_followLower;
+
+    // The analysis options of the song open in the window, which the
+    // Analysis menu shows and every analysis of the song is made with:
+    // both analysers read them here (Analyser::setAnalysisOptions()).  A
+    // session's own, which its file keeps with the analysis they made;
+    // for anything else the user's, which a choice in the menu writes
+    // too, so that the next new song starts from it
+    AnalysisSettings::Values m_songAnalysis;
+    void setSongAnalysis(const AnalysisSettings::Values &options);
+    void chooseAnalysisOption(QString key, QVariant value);
         
     QAction       *m_showAudio;
     QAction       *m_showSpect;
@@ -1066,6 +1099,9 @@ protected:
     bool m_withSpectrogram;
 
     Analyser::FrequencyRange m_pendingConstraint;
+
+    void switchPitch(bool up);
+    void preferVoice(bool lower);
 
     QString exportToSVL(QString path, sv::Layer *layer);
     FileOpenStatus importPitchLayer(sv::FileSource source);
