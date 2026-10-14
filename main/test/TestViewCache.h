@@ -54,9 +54,12 @@ class TestViewCache : public QObject
     std::vector<CountedLayer *> m_layers;
     std::vector<sv::ModelId> m_models;
 
+    // The layer hears of the change through the event loop (svgui's
+    // Layer::connectSignals() queues it), before any paint that follows
     void changeModelOf(int layer) {
         auto model = sv::ModelById::get(m_models[layer]);
         emit model->modelChangedWithin(m_models[layer], 0, 44100);
+        QCoreApplication::sendPostedEvents(m_layers[layer], QEvent::MetaCall);
     }
 
     // Painted until the pane has nothing left to settle, then counted

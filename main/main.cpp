@@ -337,6 +337,15 @@ main(int argc, char **argv)
 
     svSystemSpecificInitialisation();
 
+    // svgui paints a pane on a thread of its own by default on macOS, and
+    // on the GUI thread elsewhere unless SV_USE_THREADED_PAINT is set.
+    // Tony's own layers and the svgui fork's additions keep what they
+    // draw without locks, and the GUI thread changes it: paint there on
+    // macOS too, unless asked otherwise as elsewhere (docs/forks.md)
+    if (qEnvironmentVariableIsEmpty("SV_USE_THREADED_PAINT")) {
+        qputenv("SV_NO_THREADED_PAINT", "1");
+    }
+
     TonyApplication application(argc, argv);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)

@@ -431,9 +431,12 @@ class TestDevChecks : public QObject
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
             m_dialogs.push_back(description);
+            // Cancel: see TestRecordWorkflow::dismissDialog()
+            QAbstractButton *cancel = box->escapeButton();
             QList<QAbstractButton *> buttons = box->buttons();
-            if (!buttons.isEmpty()) {
-                buttons.last()->click();
+            if (!cancel && !buttons.isEmpty()) cancel = buttons.last();
+            if (cancel) {
+                cancel->click();
                 return;
             }
         } else {

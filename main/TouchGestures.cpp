@@ -416,10 +416,10 @@ TouchGestures::beginPinch()
     m_travelY = PinchZoom::AxisMovement(deadZone);
 
     m_startFramesPerPixel =
-        PinchZoom::framesPerPixel(m_pane->getZoomLevel());
+        PinchZoom::framesPerPixel(m_pane->getRoundedZoomLevel());
 
     m_anchorFrame = PinchZoom::frameAtX
-        (m_pane->getCentreFrame(), m_pane->getZoomLevel(),
+        (m_pane->getCentreFrame(), m_pane->getRoundedZoomLevel(),
          m_pane->width(), m_startCentre.x());
 
     // The range the fingers start from, within its limits (one typed
@@ -481,7 +481,7 @@ TouchGestures::updatePinch()
     double travelY = m_travelY.update(travel.y(), travel.x());
 
     if (m_spreadX.isCounting()) {
-        ZoomLevel current = m_pane->getZoomLevel();
+        ZoomLevel current = m_pane->getRoundedZoomLevel();
         ZoomLevel level = PinchZoom::pinchedLevel
             (current, m_startFramesPerPixel * m_startSpreadX / spreadX);
         if (!(level == current)) {
@@ -490,7 +490,7 @@ TouchGestures::updatePinch()
     }
 
     // The frame that was under the middle of the fingers stays there
-    ZoomLevel level = m_pane->getZoomLevel();
+    ZoomLevel level = m_pane->getRoundedZoomLevel();
     int width = m_pane->width();
     sv_frame_t wanted = PinchZoom::centreFor(m_anchorFrame, level, width, x);
 

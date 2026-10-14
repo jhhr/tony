@@ -2116,11 +2116,15 @@ class TestRecordWorkflow : public QObject
             // A question with buttons of its own is not answered by
             // rejecting it: the session reader's "do you want to locate
             // this file?" asks again until one of its buttons is pressed
-            // (InteractiveFileFinder::locateInteractive()).  The last
-            // button is Cancel in every question Tony can show
+            // (InteractiveFileFinder::locateInteractive()).  That question
+            // names its Cancel as the escape button, and Cancel is not the
+            // last of its buttons; in every other question Tony can show
+            // there is no escape button named and the last is Cancel
+            QAbstractButton *cancel = box->escapeButton();
             QList<QAbstractButton *> buttons = box->buttons();
-            if (!buttons.isEmpty()) {
-                buttons.last()->click();
+            if (!cancel && !buttons.isEmpty()) cancel = buttons.last();
+            if (cancel) {
+                cancel->click();
                 return;
             }
         } else {

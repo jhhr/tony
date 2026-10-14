@@ -285,7 +285,10 @@ slashes: the backslash of a Windows path would start an escape in the C string.
   an exception: its tests open it, drive it and close it; so is Configure Hotkeys'.
   `init()` forgets the hotkeys chosen, there and in `TestUiChecks`, as a test that changed
   one and failed would leave the next suite's keys changed. Replace Take Audio's progress
-  dialog is another: its search closes it. `dialogsMatching()` is for the
+  dialog is another: its search closes it. A message box is answered with its escape
+  button where it names one, else with its last button, Cancel or No in every question
+  Tony asks: the session reader's "locate this file?" asks again until one of its own
+  buttons is pressed, and its Cancel is not the last. `dialogsMatching()` is for the
   dialogs a test does expect; `messagesMatching(title, text)` for a message box, whose
   title macOS does not keep, so that there its text alone must tell it apart.
 - `analysed()` waits for analysis completion, no running transformers **and** no ranged

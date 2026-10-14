@@ -224,7 +224,7 @@ class TestUiChecks : public QObject
     // otherwise be taken for a change to the layers
     QImage grabPaneRedrawn() {
         sv::Pane *pane = pane0();
-        sv::ZoomLevel zoom = pane->getZoomLevel();
+        sv::ZoomLevel zoom = pane->getRoundedZoomLevel();
         sv::sv_frame_t centre = pane->getCentreFrame();
         // (a zoom level only one step away snaps back to this one)
         pane->setZoomLevel(sv::ZoomLevel(zoom.zone, zoom.level * 2));
@@ -458,7 +458,7 @@ class TestUiChecks : public QObject
                 s.extents[key] = { min, max };
             }
         }
-        s.zoom = pane->getZoomLevel();
+        s.zoom = pane->getRoundedZoomLevel();
         s.selections = m_window->selections();
         s.undo = undoText();
         return s;
@@ -494,11 +494,14 @@ class TestUiChecks : public QObject
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
             m_dialogs.push_back(description);
-            // The last button is Cancel (or No) in every question Tony
-            // asks; see TestRecordWorkflow::dismissDialog()
+            // The escape button, or else the last, is Cancel (or No) in
+            // every question Tony asks; see
+            // TestRecordWorkflow::dismissDialog()
+            QAbstractButton *cancel = box->escapeButton();
             QList<QAbstractButton *> buttons = box->buttons();
-            if (!buttons.isEmpty()) {
-                buttons.last()->click();
+            if (!cancel && !buttons.isEmpty()) cancel = buttons.last();
+            if (cancel) {
+                cancel->click();
                 return;
             }
         } else {
@@ -777,7 +780,7 @@ private slots:
             // Never ahead of the cursor; how far behind it, and the
             // newest dot the model has, for the worst moment
             sv::sv_frame_t newest = pane->getFrameForX(dots.second);
-            QVERIFY2(newest <= cursor + pane->getZoomLevel().level * 3,
+            QVERIFY2(newest <= cursor + pane->getRoundedZoomLevel().level * 3,
                      qPrintable(QString("%1 ms into the take a dot is drawn at "
                                         "frame %2, ahead of the cursor at %3")
                                 .arg(timer.elapsed()).arg(newest)

@@ -336,9 +336,12 @@ class TestCompactLayout : public QObject
         if (auto box = qobject_cast<QMessageBox *>(modal)) {
             description += ": " + box->text();
             m_dialogs.push_back(description);
+            // Cancel: see TestRecordWorkflow::dismissDialog()
+            QAbstractButton *cancel = box->escapeButton();
             QList<QAbstractButton *> buttons = box->buttons();
-            if (!buttons.isEmpty()) {
-                buttons.last()->click();
+            if (!cancel && !buttons.isEmpty()) cancel = buttons.last();
+            if (cancel) {
+                cancel->click();
                 return;
             }
         } else {
@@ -1026,7 +1029,7 @@ private slots:
         double wide = strip->getPaintedThumb().width();
 
         m_window->zoomInAction()->trigger();
-        QVERIFY(p->getZoomLevel().level < 32);
+        QVERIFY(p->getRoundedZoomLevel().level < 32);
         QTRY_VERIFY(paintedAsNow());
         QVERIFY2(strip->getPaintedThumb().width() < wide - 10.0,
                  qPrintable(QString("%1 wide, was %2")
